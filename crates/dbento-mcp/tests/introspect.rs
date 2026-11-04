@@ -32,8 +32,8 @@ async fn sqlite_schemas_tables_and_columns() {
             )
             .await,
         json!({"columns": [
-            {"name": "id", "type": "INTEGER", "nullable": false, "primary_key": 1, "default": null},
-            {"name": "note", "type": "TEXT", "nullable": false, "primary_key": null, "default": "'x'"}
+            {"name": "id", "type": "INTEGER", "nullable": false, "primary_key": 1, "default": null, "inferred": false},
+            {"name": "note", "type": "TEXT", "nullable": false, "primary_key": null, "default": "'x'", "inferred": false}
         ]})
     );
 }
@@ -121,8 +121,8 @@ async fn postgres_schemas_tables_and_columns() {
             )
             .await,
         json!({"columns": [
-            {"name": "id", "type": "bigint", "nullable": false, "primary_key": 1, "default": null},
-            {"name": "note", "type": "text", "nullable": true, "primary_key": null, "default": "'x'::text"}
+            {"name": "id", "type": "bigint", "nullable": false, "primary_key": 1, "default": null, "inferred": false},
+            {"name": "note", "type": "text", "nullable": true, "primary_key": null, "default": "'x'::text", "inferred": false}
         ]})
     );
 }

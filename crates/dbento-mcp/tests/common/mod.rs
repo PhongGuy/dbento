@@ -7,12 +7,15 @@ use std::sync::Arc;
 
 use dbento_core::MemoryStore;
 use dbento_mcp::{DbentoServer, McpOptions};
-use dbento_testkit::{MS_SECRET_VAR, MY_SECRET_VAR, MsDb, MyDb, PgDb, SECRET_VAR};
+use dbento_testkit::{MS_SECRET_VAR, MY_SECRET_VAR, MsDb, MyDb, PgDb, SECRET_VAR, SrDb};
 use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, Tool};
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService};
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::Value;
 use tempfile::TempDir;
+
+/// The environment variable a SurrealDB test connection reads its secret from.
+pub const SR_SECRET_VAR: &str = "DBENTO_TEST_SR_SECRET";
 
 /// A server on a temporary workspace and a connected client.
 pub struct TestServer {
@@ -114,6 +117,20 @@ impl TestServer {
         let password = db.password().to_owned();
         TestServer::start_with(&toml, move |o| {
             o.env_lookup(move |v| (v == MS_SECRET_VAR).then(|| password.clone()))
+        })
+        .await
+    }
+
+    /// Serve a workspace whose connection `sr` is `db` as `login` (user, auth_level).
+    pub async fn surreal(db: &SrDb, login: (&str, &str), extra_toml: &str) -> TestServer {
+        let extra = format!("secret = {{ env = \"{SR_SECRET_VAR}\" }}\n{extra_toml}");
+        let toml = format!(
+            "dbento = 1\n{}",
+            db.connection_toml("sr", Some(login), &extra)
+        );
+        let password = db.password().to_owned();
+        TestServer::start_with(&toml, move |o| {
+            o.env_lookup(move |v| (v == SR_SECRET_VAR).then(|| password.clone()))
         })
         .await
     }

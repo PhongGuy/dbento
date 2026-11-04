@@ -139,9 +139,9 @@ async fn the_catalog_tools_read_mysql_schemas_tables_and_columns() {
                 )
                 .await,
             json!({"columns": [
-                {"name": "id", "type": "int", "nullable": false, "primary_key": 2, "default": null},
-                {"name": "code", "type": "varchar(10)", "nullable": false, "primary_key": 1, "default": "'x'"},
-                {"name": "n", "type": "int", "nullable": true, "primary_key": null, "default": "0"}
+                {"name": "id", "type": "int", "nullable": false, "primary_key": 2, "default": null, "inferred": false},
+                {"name": "code", "type": "varchar(10)", "nullable": false, "primary_key": 1, "default": "'x'", "inferred": false},
+                {"name": "n", "type": "int", "nullable": true, "primary_key": null, "default": "0", "inferred": false}
             ]}),
             "{label}"
         );

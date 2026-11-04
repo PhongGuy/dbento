@@ -168,6 +168,8 @@ struct ColumnEntry {
     /// the column has a default this login may not read, and a leading `/* cut */` that the
     /// expression may be incomplete.
     default: Option<String>,
+    /// True when the column was read from up to 100 sampled rows or documents, not declared.
+    inferred: bool,
 }
 
 impl ColumnEntry {
@@ -178,6 +180,7 @@ impl ColumnEntry {
             nullable: c.nullable(),
             primary_key: c.primary_key(),
             default: c.default().map(str::to_owned),
+            inferred: c.inferred(),
         }
     }
 }
@@ -437,7 +440,8 @@ impl DbentoServer {
                        rows (default 100, at most 1000) and about 64 KiB are returned; \
                        `truncated_by` names the bound that cut the result. Only the first result \
                        is returned; `extra_results` counts the later ones. Writes and DDL are \
-                       refused.",
+                       refused. On SurrealDB one statement, so a LET or BEGIN script is \
+                       refused; `rolled_back` marks a result whose changes did not persist.",
         output_schema = schema_for_output::<QueryResult>(),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
