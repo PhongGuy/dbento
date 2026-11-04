@@ -9,9 +9,10 @@ use crate::introspect::{
 };
 use crate::objects::{IndexInfo, RelationObjects, TriggerInfo, TriggerState};
 
-const NS: &str = "INFO FOR NS";
-const DB: &str = "INFO FOR DB STRUCTURE";
-const TABLE: &str = "INFO FOR TABLE STRUCTURE";
+// The calls the serving task sends; they also name the call in a changed-shape error.
+pub(crate) const INFO_NS: &str = "INFO FOR NS";
+pub(crate) const INFO_DB: &str = "INFO FOR DB STRUCTURE";
+pub(crate) const INFO_TABLE: &str = "INFO FOR TABLE $t STRUCTURE";
 
 /// A catalog question for the serving task.
 pub(crate) enum Ask {
@@ -69,7 +70,7 @@ pub(crate) struct TableInfo {
 /// `INFO FOR NS`: the keys of `databases`, in name order.
 pub(crate) fn schema_names(ns: &Wire) -> Result<Vec<SchemaInfo>, IntrospectError> {
     let Some(Wire::Object(databases)) = field(ns, "databases") else {
-        return Err(changed(NS, "databases", "an object"));
+        return Err(changed(INFO_NS, "databases", "an object"));
     };
     let mut names: Vec<&str> = databases.iter().map(|(name, _)| name.as_str()).collect();
     names.sort_unstable();
@@ -79,12 +80,12 @@ pub(crate) fn schema_names(ns: &Wire) -> Result<Vec<SchemaInfo>, IntrospectError
 /// `INFO FOR DB STRUCTURE`: `tables`, a `view` key making a View, in name order, capped.
 pub(crate) fn relation_list(db: &Wire) -> Result<RelationList, IntrospectError> {
     let mut items = Vec::new();
-    for entry in list_of(db, "tables", DB)? {
+    for entry in list_of(db, "tables", INFO_DB)? {
         let kind = match field(entry, "view") {
             Some(_) => RelationKind::View,
             None => RelationKind::Table,
         };
-        items.push(Relation::new(text_of(entry, "name", DB)?, kind));
+        items.push(Relation::new(text_of(entry, "name", INFO_DB)?, kind));
     }
     items.sort_by(|a, b| a.name().cmp(b.name()));
     Ok(capped(items))
@@ -92,12 +93,12 @@ pub(crate) fn relation_list(db: &Wire) -> Result<RelationList, IntrospectError> 
 
 /// The `tables` entry named `name`; None when there is none.
 pub(crate) fn table_info(db: &Wire, name: &str) -> Result<Option<TableInfo>, IntrospectError> {
-    for entry in list_of(db, "tables", DB)? {
-        if text_of(entry, "name", DB)? != name {
+    for entry in list_of(db, "tables", INFO_DB)? {
+        if text_of(entry, "name", INFO_DB)? != name {
             continue;
         }
         let Some(Wire::Bool(schemafull)) = field(entry, "schemafull") else {
-            return Err(changed(DB, "schemafull", "a bool"));
+            return Err(changed(INFO_DB, "schemafull", "a bool"));
         };
         let view = field(entry, "view").is_some();
         return Ok(Some(TableInfo {
@@ -116,8 +117,8 @@ pub(crate) fn declared_columns(
 ) -> Result<Vec<ColumnMeta>, IntrospectError> {
     let mut id_kind = None;
     let mut columns = Vec::new();
-    for entry in list_of(table, "fields", TABLE)? {
-        let column = text_of(entry, "name", TABLE)?;
+    for entry in list_of(table, "fields", INFO_TABLE)? {
+        let column = text_of(entry, "name", INFO_TABLE)?;
         let kind = optional_text(entry, "kind");
         if column == "id" {
             id_kind = kind;
@@ -164,16 +165,16 @@ pub(crate) fn relation_objects(
     table: &Wire,
 ) -> Result<RelationObjects, IntrospectError> {
     let mut indexes = Vec::new();
-    for entry in list_of(table, "indexes", TABLE)? {
-        let name = text_of(entry, "name", TABLE)?;
-        let columns = list_of(entry, "cols", TABLE)?
+    for entry in list_of(table, "indexes", INFO_TABLE)? {
+        let name = text_of(entry, "name", INFO_TABLE)?;
+        let columns = list_of(entry, "cols", INFO_TABLE)?
             .iter()
             .map(|col| match col {
                 Wire::Text(col) => Ok(col.clone()),
-                _ => Err(changed(TABLE, "cols", "a list of text")),
+                _ => Err(changed(INFO_TABLE, "cols", "a list of text")),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let kind = text_of(entry, "index", TABLE)?;
+        let kind = text_of(entry, "index", INFO_TABLE)?;
         let unique = kind == "UNIQUE";
         let method = (!kind.is_empty() && !unique).then(|| kind.to_owned());
         indexes.push(IndexInfo::new(
@@ -187,8 +188,8 @@ pub(crate) fn relation_objects(
         ));
     }
     let mut triggers = Vec::new();
-    for entry in list_of(table, "events", TABLE)? {
-        let name = text_of(entry, "name", TABLE)?;
+    for entry in list_of(table, "events", INFO_TABLE)? {
+        let name = text_of(entry, "name", INFO_TABLE)?;
         triggers.push(TriggerInfo::new(rel.clone(), name, TriggerState::Enabled));
     }
     Ok(RelationObjects::new(indexes, vec![], triggers))

@@ -82,10 +82,7 @@ pub(crate) fn enforcement_name(level: ReadOnlyEnforcement) -> &'static str {
 }
 
 /// What a read-only session at `level` on `engine` does and does not stop, in words for a client.
-pub(crate) fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static str {
-    if engine == Engine::Surrealdb {
-        return SURREALDB.as_str();
-    }
+fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static str {
     match level {
         ReadOnlyEnforcement::Database if engine == Engine::Mssql => SQL_SERVER_READER,
         ReadOnlyEnforcement::Database if engine == Engine::Mysql => MYSQL,
@@ -94,6 +91,18 @@ pub(crate) fn session_description(engine: Engine, level: ReadOnlyEnforcement) ->
         ReadOnlyEnforcement::BestEffort => BEST_EFFORT,
         _ => UNKNOWN,
     }
+}
+
+/// The level name and text `list_connections` shows for a connection configured at `level`.
+/// SurrealDB's level follows the login, which only a connection reveals.
+pub(crate) fn listed_level(
+    engine: Engine,
+    level: ReadOnlyEnforcement,
+) -> (&'static str, &'static str) {
+    if engine == Engine::Surrealdb {
+        return ("unknown", SURREALDB.as_str());
+    }
+    (enforcement_name(level), session_description(engine, level))
 }
 
 /// The server's timeout or the connection's own, whichever is shorter.

@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::cancel::{Stop, SurrealCancel};
-use super::catalog::{self, Answer, Ask, Statement, TableInfo};
+use super::catalog::{self, Answer, Ask, INFO_DB, INFO_NS, INFO_TABLE, Statement, TableInfo};
 use super::classify::surreal_classification;
 use super::decode::Wire;
 use super::lex::quote_ident;
@@ -1004,9 +1004,6 @@ impl Served {
     }
 }
 
-const INFO_NS: &str = "INFO FOR NS";
-const INFO_DB: &str = "INFO FOR DB STRUCTURE";
-const INFO_TABLE: &str = "INFO FOR DB STRUCTURE; INFO FOR TABLE $t STRUCTURE";
 const SAMPLE: &str = "SELECT * FROM type::table($t) LIMIT 100";
 
 /// Catalog calls. They read with `Reading::default()`, so a refused read is a `Database` error.
@@ -1077,8 +1074,9 @@ impl Served {
             return Ok(None);
         };
         let vars = Param::Object(vec![("t", Param::Text(rel.name()))]);
+        let text = format!("{INFO_DB}; {INFO_TABLE}");
         let reply = self
-            .catalog_query(&prefix, INFO_TABLE, 2, Some(vars), None)
+            .catalog_query(&prefix, &text, 2, Some(vars), None)
             .await?;
         let info = catalog::table_info(&reply[0], rel.name())?;
         Ok(info.map(|info| (prefix, info, reply)))

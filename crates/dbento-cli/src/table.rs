@@ -165,13 +165,11 @@ impl<W: Write, E: Write> Sink for TableSink<W, E> {
         let had_columns = !self.headers.is_empty();
         self.flush_table()?;
         let ms = elapsed.as_millis();
-        let more =
+        let mut more =
             more_results(outcome.extra_results).map_or_else(String::new, |m| format!(", {m}"));
-        let more = if outcome.rolled_back {
-            format!("{more}, any changes were rolled back")
-        } else {
-            more
-        };
+        if outcome.rolled_back {
+            more.push_str(", any changes were rolled back");
+        }
         if had_columns {
             let cut = if outcome.truncated && self.default_cap {
                 ", showing the first 1000 rows; pass --max-rows to change"

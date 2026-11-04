@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dbento_core::{
-    ColumnMeta, ConnectionConfig, Engine, RelationKind, RelationRef, SecretStore, SessionOptions,
+    ColumnMeta, ConnectionConfig, RelationKind, RelationRef, SecretStore, SessionOptions,
     Workspace, connect, resolve_key_passphrase, resolve_secret,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -22,9 +22,7 @@ use crate::explain::{ExplainArgs, ExplainResult};
 use crate::fence::{Fenced, caught};
 use crate::query::{QueryArgs, QueryResult};
 use crate::saved::{ReadArgs, SavedList, SavedText};
-use crate::session::{
-    Opened, effective_timeout, enforcement_name, session_description, until_cancelled,
-};
+use crate::session::{Opened, effective_timeout, listed_level, until_cancelled};
 use crate::{McpError, McpOptions};
 
 /// What the client is told at the handshake, before it calls any tool.
@@ -85,18 +83,14 @@ struct ConnectionInfo {
 
 impl ConnectionInfo {
     fn of(c: &ConnectionConfig) -> Self {
+        let (read_only_enforcement, session) = listed_level(c.engine(), c.read_only_enforcement());
         ConnectionInfo {
             name: c.name().to_owned(),
             engine: c.engine().name(),
             language: c.engine().capabilities().language.name(),
             read_only: c.read_only(),
-            // SurrealDB's level follows the login, which only a connection reveals.
-            read_only_enforcement: if c.engine() == Engine::Surrealdb {
-                "unknown"
-            } else {
-                enforcement_name(c.read_only_enforcement())
-            },
-            session: session_description(c.engine(), c.read_only_enforcement()),
+            read_only_enforcement,
+            session,
             production: c.is_production(),
             folder: c.folder().map(ToString::to_string),
         }

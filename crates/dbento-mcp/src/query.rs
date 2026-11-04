@@ -53,7 +53,7 @@ pub(crate) struct QueryResult {
     extra_results: u32,
     /// The statement's changes did not persist: SurrealDB ran it in a transaction it cancelled.
     rolled_back: bool,
-    /// Who enforced this read-only session: "database" or "best_effort".
+    /// Who enforced this read-only session: "database", "best_effort" or "unknown".
     read_only_enforcement: &'static str,
     duration_ms: u64,
 }
