@@ -218,8 +218,8 @@ from_sql!(
 mod tests {
     use super::*;
 
-    // Regression test for #316: a `datetime` value with a date before 1900 has
-    // a negative day offset from the 1900 base date. This must round-trip
+    // Regression: a `datetime` value with a date before 1900 has a negative
+    // day offset from the 1900 base date. This must round-trip
     // without a "multiply with overflow" panic.
     #[test]
     fn from_days_handles_negative_offsets() {

@@ -1,4 +1,4 @@
-//! End-to-end coverage for special-character passwords (issue #313).
+//! End-to-end coverage for special-character passwords.
 //!
 //! The unit tests in `src/client/config` prove the connection-string *parser*;
 //! these prove the whole path — parse, LOGIN7, real SQL Server authentication —
@@ -82,7 +82,7 @@ async fn assert_login_roundtrip(
 
 #[tokio::test]
 async fn base64_equals_password_authenticates() -> anyhow::Result<()> {
-    // The #313 case: `=` padding, written unquoted in the connection string.
+    // The base64 case: `=` padding, written unquoted in the connection string.
     assert_login_roundtrip("eqpad", "Ab1!Zm9vYmFy==", "Ab1!Zm9vYmFy==").await
 }
 

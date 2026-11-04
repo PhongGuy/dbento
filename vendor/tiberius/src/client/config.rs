@@ -499,7 +499,7 @@ impl Config {
     ///
     /// This is useful when connecting through an IP address, a tunnel, or a
     /// load balancer whose certificate carries a different subject/SAN than the
-    /// address used to reach it (see issue #340).
+    /// address used to reach it.
     ///
     /// - Defaults to the value of [`host`].
     ///
@@ -1418,7 +1418,7 @@ pub(crate) trait ConfigString {
         feature = "vendored-openssl"
     )))]
     fn encrypt(&self) -> crate::Result<EncryptionLevel> {
-        // Security (#305): a no-TLS build cannot encrypt, so an explicit request
+        // Security: a no-TLS build cannot encrypt, so an explicit request
         // to do so must fail loudly rather than silently downgrade to plaintext.
         // Token classification follows the with-TLS `encrypt()`: the values that
         // mean "encryption on" (`true`/`yes`/`strict`) become the TLS-missing
