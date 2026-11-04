@@ -1162,11 +1162,16 @@ impl Render for ConnectionForm {
             &[
                 "Postgres",
                 "SQLite",
-                "MySQL / MariaDB",
+                "MySQL",
                 "DuckDB",
                 "SQL Server",
+                "SurrealDB",
             ],
-            ENGINES.iter().position(|e| *e == self.engine).unwrap_or(0),
+            // An engine the picker does not offer highlights no option.
+            ENGINES
+                .iter()
+                .position(|e| *e == self.engine)
+                .unwrap_or(ENGINES.len()),
             cx.listener(|this, ix: &usize, window, cx| {
                 this.set_engine(ENGINES[*ix], window, cx);
                 this.touched(cx);
@@ -1425,12 +1430,13 @@ impl Shown {
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 5] = [
+const ENGINES: [Engine; 6] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
     Engine::Duckdb,
     Engine::Mssql,
+    Engine::Surrealdb,
 ];
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {

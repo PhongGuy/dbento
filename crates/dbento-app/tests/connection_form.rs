@@ -285,10 +285,7 @@ fn the_ca_field_edits_tls_ca_and_hides_when_tls_is_off(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn the_third_engine_is_mysql_and_writes_only_its_keys(cx: &mut TestAppContext) {
     let (win, f) = open(cx, None);
-    assert_eq!(
-        engine_option(cx, win, 2).0.as_deref(),
-        Some("MySQL / MariaDB")
-    );
+    assert_eq!(engine_option(cx, win, 2).0.as_deref(), Some("MySQL"));
     radio(cx, win, "conn-engine", 2);
     for id in [
         "conn-host",
@@ -754,4 +751,71 @@ fn leaving_surrealdb_drops_its_namespace_and_auth_level(cx: &mut TestAppContext)
     let mut want = sr();
     (want.engine, want.namespace, want.auth_level) = (Engine::Postgres, None, None);
     assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
+}
+
+#[gpui_kit::test]
+fn the_sixth_engine_is_surrealdb_and_writes_only_its_keys(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(engine_option(cx, win, 5).0.as_deref(), Some("SurrealDB"));
+    radio(cx, win, "conn-engine", 5);
+    assert!(present(cx, win, "conn-namespace"));
+    assert_eq!(value_and_hint(cx, &f, Field::Port).1, "8000");
+    set(cx, win, &f, Field::Name, "sr");
+    set(cx, win, &f, Field::Host, "db.example");
+    set(cx, win, &f, Field::Namespace, "app");
+    set(cx, win, &f, Field::Database, "main");
+    let mut want = ConnectionSpec::new(Engine::Surrealdb);
+    (want.host, want.namespace, want.database) = (
+        Some("db.example".into()),
+        Some("app".into()),
+        Some("main".into()),
+    );
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
+}
+
+#[gpui_kit::test]
+fn a_loaded_surrealdb_connection_selects_surrealdb(cx: &mut TestAppContext) {
+    let (win, _f) = open(cx, Some(("sr", sr())));
+    assert_eq!(engine_option(cx, win, 5).1, Some(true));
+    assert_eq!(engine_option(cx, win, 0).1, Some(false));
+}
+
+#[gpui_kit::test]
+fn an_engine_the_picker_does_not_offer_selects_no_option(cx: &mut TestAppContext) {
+    let mut mongo = ConnectionSpec::new(Engine::Mongodb);
+    mongo.uri = Some("mongodb://db.example/app".into());
+    let (win, _f) = open(cx, Some(("mg", mongo)));
+    for ix in 0..6 {
+        assert_eq!(engine_option(cx, win, ix).1, Some(false), "{ix}");
+    }
+}
+
+#[gpui_kit::test]
+fn surrealdb_to_postgres_and_back_restores_namespace_and_auth_level(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    radio(cx, win, "conn-engine", 0);
+    radio(cx, win, "conn-engine", 5);
+    assert_eq!(value_and_hint(cx, &f, Field::Namespace).0, "app");
+    assert_eq!(value_and_hint(cx, &f, Field::AuthLevel).0, "database");
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), sr())));
+}
+
+#[gpui_kit::test]
+fn a_client_certificate_stays_with_postgres_when_switching_to_surrealdb(cx: &mut TestAppContext) {
+    let mut pg = nopg();
+    (pg.tls, pg.tls_cert, pg.tls_key) = (
+        Some(TlsMode::Verify),
+        Some("certs/me.crt".into()),
+        Some("certs/me.key".into()),
+    );
+    let (win, f) = open(cx, Some(("pg", pg.clone())));
+    radio(cx, win, "conn-engine", 5);
+    for id in ["conn-tls-cert", "conn-tls-key", "conn-tls-key-passphrase"] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    let mut want = pg.clone();
+    (want.engine, want.tls_cert, want.tls_key) = (Engine::Surrealdb, None, None);
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), want)));
+    radio(cx, win, "conn-engine", 0);
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), pg)));
 }
