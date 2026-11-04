@@ -32,6 +32,8 @@ pub(crate) struct Unit {
     /// The unit holds a `USE` that `execute` must refuse: inside a multi-statement unit, nested,
     /// or with a target the literal grammar does not wholly consume.
     pub(crate) refused_use: bool,
+    /// The unit starts with `BEGIN`, so a failure ends what follows it.
+    pub(crate) transaction: bool,
     /// An unterminated token ended the unit.
     pub(crate) lex_error: bool,
 }
@@ -207,6 +209,7 @@ fn unit(
         range,
         statements,
         refused_use,
+        transaction: toks.first().is_some_and(|tok| tok.is_word("begin")),
         kind: target.map_or(UnitKind::Text, UnitKind::Use),
         lex_error: last.lex_error,
     }

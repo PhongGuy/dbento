@@ -80,6 +80,7 @@ fn statement_ranges_returns_units_and_statement_count_counts_statements() {
     }
 }
 
+#[cfg(not(feature = "surrealdb"))]
 async fn connect_error(toml: &str) -> String {
     let (_d, ws) = ws_with(toml);
     let ws = ws.unwrap();
@@ -99,10 +100,17 @@ async fn connect_error(toml: &str) -> String {
 
 #[cfg(feature = "surrealdb")]
 #[tokio::test]
-async fn connect_waits_for_the_driver() {
-    assert_eq!(
-        connect_error(SR).await,
-        "SurrealDB sessions are not available yet"
+async fn connect_reaches_the_driver() {
+    let toml = "dbento = 1\n[connections.graph]\nengine = \"surrealdb\"\nhost = \"127.0.0.1\"\n\
+                port = 1\nnamespace = \"app\"\ndatabase = \"main\"\ntls = \"off\"\n";
+    let (_d, ws) = ws_with(toml);
+    let ws = ws.unwrap();
+    let conn = ws.connection("graph").unwrap();
+    let opened = connect(&ws, conn, None, SessionOptions::default()).await;
+    assert!(
+        matches!(opened, Err(ConnectError::Open { .. })),
+        "{:?}",
+        opened.err()
     );
 }
 

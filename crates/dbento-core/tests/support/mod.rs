@@ -630,3 +630,120 @@ pub async fn ms_reader(setup: &[&str], extra: &str) -> MsFixture {
     drop(c);
     ms_fixture(db, &format!("tls = \"off\"\n{extra}"))
 }
+
+/// A session on `db` as `login` (user, auth_level), or anonymous for `None`, through a workspace
+/// that lasts only for the connect; `extra` joins the connection's table.
+pub async fn sr_try(
+    db: &dbento_testkit::SrDb,
+    login: Option<(&str, &str)>,
+    extra: &str,
+    opts: SessionOptions,
+) -> Result<Session, ConnectError> {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        format!("dbento = 1\n{}", db.connection_toml("sr", login, extra)),
+    )
+    .unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let conn = ws.connection("sr").unwrap();
+    let secret = login.map(|_| Secret::new(db.password()));
+    connect(&ws, conn, secret, opts).await
+}
+
+/// [`sr_try`] that must connect.
+pub async fn sr_session(
+    db: &dbento_testkit::SrDb,
+    login: Option<(&str, &str)>,
+    extra: &str,
+    opts: SessionOptions,
+) -> Session {
+    sr_try(db, login, extra, opts).await.unwrap()
+}
+
+/// A session as the server's own root user.
+pub async fn sr_root(db: &dbento_testkit::SrDb, extra: &str, opts: SessionOptions) -> Session {
+    sr_session(db, Some(("root", "root")), extra, opts).await
+}
+
+/// The local proxy behind [`sr_proxied`].
+pub struct SrPipe {
+    tasks: tokio::task::JoinSet<()>,
+    frozen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SrPipe {
+    /// Cuts the session's socket.
+    pub fn cut(&mut self) {
+        self.tasks.abort_all();
+    }
+    /// The socket stays open and nothing more passes either way: a server gone quiet.
+    pub fn freeze(&self) {
+        self.frozen
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+// Holds a chunk it has read until the pipe thaws, so a freeze drops nothing and passes nothing.
+async fn relay(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    frozen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut buffer = vec![0u8; 64 * 1024];
+    while let Ok(read @ 1..) = from.read(&mut buffer).await {
+        while frozen.load(std::sync::atomic::Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        if to.write_all(&buffer[..read]).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// A root session on `db`, with `extra` and `opts`, through a local proxy the test controls.
+pub async fn sr_proxied(
+    db: &dbento_testkit::SrDb,
+    extra: &str,
+    opts: SessionOptions,
+) -> (Session, SrPipe) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = listener.local_addr().unwrap().port();
+    let (host, port) = (db.host().to_owned(), db.port());
+    let frozen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut tasks = tokio::task::JoinSet::new();
+    let thaw = frozen.clone();
+    tasks.spawn(async move {
+        let (client, _) = listener.accept().await.unwrap();
+        let server = tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .unwrap();
+        let (client_read, client_write) = client.into_split();
+        let (server_read, server_write) = server.into_split();
+        tokio::join!(
+            relay(client_read, server_write, thaw.clone()),
+            relay(server_read, client_write, thaw),
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let toml = db
+        .connection_toml("sr", Some(("root", "root")), extra)
+        .replace(&format!("port = {port}"), &format!("port = {local}"));
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        format!("dbento = 1\n{toml}"),
+    )
+    .unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let conn = ws.connection("sr").unwrap();
+    let secret = Some(Secret::new(db.password()));
+    let session = connect(&ws, conn, secret, opts).await.unwrap();
+    (session, SrPipe { tasks, frozen })
+}
+
+/// The namespaces and this namespace's databases, as a root connection of the testkit sees them.
+pub async fn sr_targets(db: &dbento_testkit::SrDb) -> (serde_json::Value, serde_json::Value) {
+    let info = db.admin("INFO FOR ROOT; INFO FOR NS").await;
+    (info[0]["namespaces"].clone(), info[1]["databases"].clone())
+}
