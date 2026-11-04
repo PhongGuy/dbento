@@ -3,6 +3,10 @@
 //! A finished batch keeps every cell in one byte arena, column after column, with one end offset
 //! per cell and three bitmaps (null, bytes, number). It costs a handful of allocations however
 //! many columns it has, since Postgres can close tens of thousands of small batches per result.
+//! MongoDB rows also keep their exact document in a side arena, which costs SQL engines nothing.
+
+#[cfg(feature = "mongodb")]
+use crate::mongo::render;
 
 /// A borrowed view of one result cell.
 #[non_exhaustive]
@@ -139,6 +143,64 @@ pub struct ResultBatch {
     nulls: Vec<u64>,
     bytes: Vec<u64>,
     numbers: Vec<u64>,
+    /// The exact stored form of each row back to back; empty unless the engine has documents.
+    documents: Vec<u8>,
+    /// Each row's end in `documents`: one per row, or none at all.
+    document_ends: Vec<u32>,
+}
+
+/// The exact stored document behind a row. Rendering needs the `mongodb` feature, without which
+/// no batch holds a document.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocumentRef<'a> {
+    bytes: &'a [u8],
+}
+
+impl DocumentRef<'_> {
+    /// Mongosh syntax; one field per line when `pretty`.
+    pub fn to_shell(&self, pretty: bool) -> String {
+        #[cfg(feature = "mongodb")]
+        {
+            self.rendered(|document| {
+                if pretty {
+                    render::shell_pretty(&document)
+                } else {
+                    render::shell(&bson::Bson::Document(document))
+                }
+            })
+        }
+        #[cfg(not(feature = "mongodb"))]
+        {
+            let _ = pretty;
+            String::new()
+        }
+    }
+
+    /// Extended JSON in field order; `canonical` keeps every type, relaxed reads as plain JSON.
+    pub fn to_extended_json(&self, canonical: bool) -> String {
+        #[cfg(feature = "mongodb")]
+        {
+            self.rendered(|document| render::extended_json(document, canonical))
+        }
+        #[cfg(not(feature = "mongodb"))]
+        {
+            let _ = canonical;
+            String::new()
+        }
+    }
+
+    // These return text with no error path, so a document that will not decode gives its reason.
+    #[cfg(feature = "mongodb")]
+    fn rendered(&self, write: impl FnOnce(bson::Document) -> String) -> String {
+        bson::RawDocument::from_bytes(self.bytes)
+            .map_err(|e| e.to_string())
+            .and_then(render::decode)
+            .map_or_else(
+                |reason| format!("/* undecodable document: {reason} */"),
+                write,
+            )
+    }
 }
 
 impl ResultBatch {
@@ -192,14 +254,31 @@ impl ResultBatch {
         col < self.cols && row < self.rows && bit(&self.numbers, col * self.rows + row)
     }
 
-    /// The bytes this batch owns on the heap: its arena, column starts, end offsets and bitmaps
-    /// at their capacity. Excludes the struct itself.
+    /// The exact document behind `row`; `None` for an engine without documents or past the end.
+    pub fn document(&self, row: usize) -> Option<DocumentRef<'_>> {
+        // Every row has its document or none does; anything else would show a neighbour's.
+        if self.document_ends.len() != self.rows {
+            return None;
+        }
+        let end = *self.document_ends.get(row)?;
+        let start = row
+            .checked_sub(1)
+            .map_or(0, |prev| self.document_ends[prev]);
+        Some(DocumentRef {
+            bytes: &self.documents[start as usize..end as usize],
+        })
+    }
+
+    /// The bytes this batch owns on the heap: its arena, column starts, end offsets, bitmaps and
+    /// documents at their capacity. Excludes the struct itself.
     pub fn heap_bytes(&self) -> usize {
         self.arena.capacity()
             + self.starts.capacity() * size_of::<usize>()
             + self.ends.capacity() * size_of::<u32>()
             + (self.nulls.capacity() + self.bytes.capacity() + self.numbers.capacity())
                 * size_of::<u64>()
+            + self.documents.capacity()
+            + self.document_ends.capacity() * size_of::<u32>()
     }
 
     /// The rows from `n` on, same columns; empty when `n >= len`.
@@ -240,6 +319,12 @@ impl ResultBatch {
             }
         }
         out.shrink_bitmaps();
+        // Documents keep their tail the same way; a batch without them has no ends to cut.
+        if !self.document_ends.is_empty() {
+            let cut = n.checked_sub(1).map_or(0, |last| self.document_ends[last]);
+            out.documents = self.documents[cut as usize..].to_vec();
+            out.document_ends = self.document_ends[n..].iter().map(|e| e - cut).collect();
+        }
         out
     }
 
@@ -256,6 +341,8 @@ impl ResultBatch {
             nulls: Vec::new(),
             bytes: Vec::new(),
             numbers: Vec::new(),
+            documents: Vec::new(),
+            document_ends: Vec::new(),
         }
     }
 
@@ -317,8 +404,10 @@ pub(crate) struct BatchBuilder {
     columns: Vec<Column>,
     rows: usize,
     data_bytes: usize,
-    /// Cell bytes of every row pushed so far; `finish` leaves it alone.
+    /// Cell and document bytes of every row pushed so far; `finish` leaves it alone.
     total: u64,
+    documents: Vec<u8>,
+    document_ends: Vec<u32>,
 }
 
 impl BatchBuilder {
@@ -328,10 +417,12 @@ impl BatchBuilder {
             rows: 0,
             data_bytes: 0,
             total: 0,
+            documents: Vec::new(),
+            document_ends: Vec::new(),
         }
     }
 
-    /// Cell bytes of every row pushed since creation, across batches.
+    /// Cell and document bytes of every row pushed since creation, across batches.
     pub(crate) fn total_bytes(&self) -> u64 {
         self.total
     }
@@ -348,8 +439,28 @@ impl BatchBuilder {
         row: &[CellRef<'_>],
         number: impl Fn(usize) -> bool,
     ) -> Option<ResultBatch> {
+        self.push_cells(row, number, None)
+    }
+
+    /// `push_typed_row` plus the raw document, whose bytes count toward the caps and the total.
+    #[cfg_attr(not(feature = "mongodb"), allow(dead_code))]
+    pub(crate) fn push_document_row(
+        &mut self,
+        row: &[CellRef<'_>],
+        number: impl Fn(usize) -> bool,
+        document: &[u8],
+    ) -> Option<ResultBatch> {
+        self.push_cells(row, number, Some(document))
+    }
+
+    fn push_cells(
+        &mut self,
+        row: &[CellRef<'_>],
+        number: impl Fn(usize) -> bool,
+        document: Option<&[u8]>,
+    ) -> Option<ResultBatch> {
         debug_assert_eq!(row.len(), self.columns.len());
-        let size: usize = row
+        let cells: usize = row
             .iter()
             .map(|c| match c {
                 CellRef::Null => 0,
@@ -357,6 +468,7 @@ impl BatchBuilder {
                 CellRef::Bytes(b) => b.len(),
             })
             .sum();
+        let size = cells + document.map_or(0, <[u8]>::len);
         let closed =
             (self.rows > 0 && self.data_bytes + size > MAX_BATCH_BYTES).then(|| self.finish());
         let i = self.rows;
@@ -374,7 +486,13 @@ impl BatchBuilder {
             }
             col.ends.push(end_offset(col.arena.len()));
         }
+        if let Some(document) = document {
+            self.documents.extend_from_slice(document);
+            self.document_ends.push(end_offset(self.documents.len()));
+        }
         self.rows += 1;
+        // A row without its document would hand every later row its neighbour's.
+        debug_assert!(self.document_ends.is_empty() || self.document_ends.len() == self.rows);
         self.data_bytes += size;
         self.total += size as u64;
         closed
@@ -394,7 +512,12 @@ impl BatchBuilder {
         let built = std::mem::replace(&mut self.columns, fresh);
         let rows = std::mem::take(&mut self.rows);
         self.data_bytes = 0;
-        ResultBatch::pack(rows, &built)
+        let mut batch = ResultBatch::pack(rows, &built);
+        batch.documents = std::mem::take(&mut self.documents);
+        batch.documents.shrink_to_fit();
+        batch.document_ends = std::mem::take(&mut self.document_ends);
+        batch.document_ends.shrink_to_fit();
+        batch
     }
 }
 
@@ -571,8 +694,10 @@ mod tests {
             nulls: Vec::with_capacity(3),
             bytes: Vec::with_capacity(2),
             numbers: Vec::with_capacity(4),
+            documents: Vec::with_capacity(7),
+            document_ends: Vec::with_capacity(1),
         };
-        let want = 10 + 6 * size_of::<usize>() + 5 * 4 + (3 + 2 + 4) * 8;
+        let want = 10 + 6 * size_of::<usize>() + 5 * 4 + (3 + 2 + 4) * 8 + 7 + 4;
         assert_eq!(batch.heap_bytes(), want);
     }
 
@@ -623,5 +748,118 @@ mod tests {
                 .is_none()
         );
         assert_eq!(b.total_bytes(), 6);
+    }
+
+    #[test]
+    fn a_document_row_keeps_its_bytes_and_counts_them() {
+        let mut b = BatchBuilder::new(1);
+        assert!(
+            b.push_document_row(&[CellRef::Text("a")], |_| false, b"one")
+                .is_none()
+        );
+        assert!(
+            b.push_document_row(&[CellRef::Null], |_| false, b"three")
+                .is_none()
+        );
+        assert_eq!(b.total_bytes(), 9);
+        let batch = b.finish();
+        assert_eq!(batch.document(0).unwrap().bytes, b"one");
+        assert_eq!(batch.document(1).unwrap().bytes, b"three");
+        assert!(batch.document(2).is_none());
+    }
+
+    #[test]
+    fn a_batch_without_documents_answers_none() {
+        let mut b = BatchBuilder::new(1);
+        assert!(b.push_row(&[CellRef::Text("a")]).is_none());
+        assert!(b.finish().document(0).is_none());
+    }
+
+    #[test]
+    fn skip_keeps_rows_and_documents_aligned() {
+        let mut b = BatchBuilder::new(1);
+        for (cell, document) in [("a", &b"one"[..]), ("b", b"three"), ("c", b"")] {
+            assert!(
+                b.push_document_row(&[CellRef::Text(cell)], |_| false, document)
+                    .is_none()
+            );
+        }
+        let tail = b.finish().skip(1);
+        assert_eq!(tail.cell(0, 0), CellRef::Text("b"));
+        assert_eq!(tail.document(0).unwrap().bytes, b"three");
+        assert_eq!(tail.document(1).unwrap().bytes, b"");
+        assert!(tail.document(2).is_none());
+    }
+
+    #[test]
+    fn skip_on_a_batch_without_documents_stays_without() {
+        let mut b = BatchBuilder::new(1);
+        assert!(b.push_row(&[CellRef::Text("a")]).is_none());
+        assert!(b.push_row(&[CellRef::Text("b")]).is_none());
+        let tail = b.finish().skip(1);
+        assert_eq!(tail.cell(0, 0), CellRef::Text("b"));
+        assert!(tail.document(0).is_none());
+    }
+
+    #[test]
+    fn a_batch_whose_documents_do_not_match_its_rows_hands_out_none() {
+        let mut b = BatchBuilder::new(1);
+        b.push_document_row(&[CellRef::Text("x")], |_| false, b"one");
+        let mut batch = b.finish();
+        assert!(batch.document(0).is_some());
+        // The state a release build reaches if a row ever lands without its document.
+        batch.rows = 2;
+        assert!(batch.document(0).is_none());
+    }
+
+    #[test]
+    fn documents_count_toward_heap_bytes_and_close_a_batch_at_the_cap() {
+        let big = vec![1u8; MAX_BATCH_BYTES];
+        let mut b = BatchBuilder::new(1);
+        assert!(
+            b.push_document_row(&[CellRef::Text("x")], |_| false, b"small")
+                .is_none()
+        );
+        let before = b.push_document_row(&[CellRef::Text("y")], |_| false, &big);
+        assert_eq!(before.expect("the small row closes first").len(), 1);
+        assert!(b.is_full());
+        let own = b.finish();
+        assert!(own.heap_bytes() >= MAX_BATCH_BYTES);
+        assert_eq!(own.document(0).unwrap().bytes.len(), MAX_BATCH_BYTES);
+    }
+
+    #[cfg(feature = "mongodb")]
+    #[test]
+    fn a_document_renders_in_the_shell_and_as_extended_json() {
+        let raw = bson::rawdoc! { "b": 5_i64, "a": [1] };
+        let document = DocumentRef {
+            bytes: raw.as_bytes(),
+        };
+        assert_eq!(document.to_shell(false), "{ b: Long('5'), a: [ 1 ] }");
+        assert_eq!(
+            document.to_shell(true),
+            "{\n  b: Long('5'),\n  a: [\n    1\n  ]\n}"
+        );
+        assert_eq!(document.to_extended_json(false), r#"{"b":5,"a":[1]}"#);
+        assert_eq!(
+            document.to_extended_json(true),
+            r#"{"b":{"$numberLong":"5"},"a":[{"$numberInt":"1"}]}"#
+        );
+    }
+
+    #[cfg(feature = "mongodb")]
+    #[test]
+    fn an_undecodable_document_says_so_and_why() {
+        // Too short to be a document, then a sound frame around an element type BSON lacks.
+        for bytes in [&b"one"[..], &[8, 0, 0, 0, 0x42, b'a', 0, 0]] {
+            let document = DocumentRef { bytes };
+            for text in [document.to_shell(false), document.to_extended_json(true)] {
+                let reason = text
+                    .strip_prefix("/* undecodable document: ")
+                    .and_then(|t| t.strip_suffix(" */"))
+                    .unwrap_or_else(|| panic!("{text}"));
+                assert!(!reason.is_empty());
+            }
+        }
     }
 }

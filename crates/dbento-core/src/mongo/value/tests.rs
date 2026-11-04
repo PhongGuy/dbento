@@ -35,6 +35,7 @@ fn an_integer_in_32_bit_range_is_int32_and_anything_else_double() {
         ("3000000000", Bson::Double(3e9)),
         ("1.5", Bson::Double(1.5)),
         ("1e-3", Bson::Double(0.001)),
+        ("1e+300", Bson::Double(1e300)),
     ] {
         assert_eq!(ok(src), want, "{src}");
     }
@@ -151,6 +152,37 @@ fn javascript_beyond_literals_is_refused_with_one_message_at_its_token() {
     ] {
         let e = err(src);
         assert_eq!((e.message.as_str(), e.at), (NOT_JS, at), "{src}");
+    }
+}
+
+#[test]
+fn iso_date_takes_mongoshs_other_forms() {
+    for (form, want) in [
+        ("2024-01-02 03:04:05", "2024-01-02T03:04:05Z"),
+        ("20240102", "2024-01-02T00:00:00Z"),
+        ("2024-01-02T03", "2024-01-02T03:00:00Z"),
+        ("2024-01-02T03:04", "2024-01-02T03:04:00Z"),
+        ("2024-01-02 03:04:05.123", "2024-01-02T03:04:05.123Z"),
+        ("20240102T030405Z", "2024-01-02T03:04:05Z"),
+        ("2024-01-02T03:04:05+0200", "2024-01-02T01:04:05Z"),
+    ] {
+        let want = DateTime::parse_rfc3339_str(want).unwrap();
+        assert_eq!(
+            ok(&format!("ISODate('{form}')")),
+            Bson::DateTime(want),
+            "{form}"
+        );
+    }
+    for refused in [
+        "2024-1-2",
+        "2024-13-40",
+        "2024-01-02T03:04:05+02",
+        "2024-01-02t03:04:05Z",
+    ] {
+        assert!(
+            parse(&format!("ISODate('{refused}')")).is_err(),
+            "{refused}"
+        );
     }
 }
 

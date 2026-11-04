@@ -2286,10 +2286,13 @@ dependencies = [
 name = "dbento-testkit"
 version = "0.1.0"
 dependencies = [
+ "bson",
  "duckdb",
  "futures-util",
+ "mongodb",
  "mysql_async",
  "rcgen",
+ "serde_json",
  "testcontainers-modules",
  "tiberius",
  "tokio",

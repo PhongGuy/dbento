@@ -487,3 +487,19 @@ fn a_sort_option_goes_into_the_update_statement() {
         }
     );
 }
+
+#[test]
+fn return_document_before_sets_new_false_and_array_filters_join_the_statement() {
+    let (_, before) =
+        cmd("db.t.findOneAndUpdate({a: 1}, {$inc: {n: 1}}, {returnDocument: 'before'})");
+    assert!(!before.get_bool("new").unwrap());
+    let (_, updated) = cmd(
+        "db.t.updateOne({a: 1}, {$set: {'g.$[e]': 0}}, {arrayFilters: [{e: {$gt: 4}}], upsert: true})",
+    );
+    let statement = updated.get_array("updates").unwrap()[0]
+        .as_document()
+        .unwrap();
+    assert!(statement.get_array("arrayFilters").is_ok());
+    assert!(statement.get_bool("upsert").unwrap());
+    assert!(updated.get("arrayFilters").is_none());
+}
