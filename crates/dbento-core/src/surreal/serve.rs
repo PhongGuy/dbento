@@ -682,54 +682,25 @@ impl Served {
         if e.stopped() {
             return self.end_error(run, e);
         }
-        match self.heard(statement_error(e, self.rules.reading())) {
-            ExecuteError::Database {
-                code,
-                sqlstate,
-                message,
-                detail,
-                hint,
-                position,
-            } => ExecuteError::Database {
-                code,
-                sqlstate,
-                message: format!(
-                    "{message}; this failed in a statement Dbento read as part of the one \
-                     before it"
-                ),
-                detail,
-                hint,
-                position,
-            },
-            other => other,
+        let mut error = self.heard(statement_error(e, self.rules.reading()));
+        if let ExecuteError::Database { message, .. } = &mut error {
+            message
+                .push_str("; this failed in a statement Dbento read as part of the one before it");
         }
+        error
     }
 
     // Later statements of a unit run whatever an earlier one did, unless a transaction ends them.
-    fn later_note(run: &Run, error: ExecuteError) -> ExecuteError {
+    fn later_note(run: &Run, mut error: ExecuteError) -> ExecuteError {
         let later = run.index + 1 < run.statements && !run.transaction;
-        match error {
-            ExecuteError::Database {
-                code,
-                sqlstate,
-                message,
-                detail,
-                hint,
-                position,
-            } if later => ExecuteError::Database {
-                code,
-                sqlstate,
-                message: if run.fence.is_some() {
-                    format!("{message}; the later statements of this unit ran, then rolled back")
-                } else {
-                    format!("{message}; the later statements of this unit ran")
-                },
-                detail,
-                hint,
-                position,
-            },
-            other => other,
+        if later && let ExecuteError::Database { message, .. } = &mut error {
+            message.push_str(if run.fence.is_some() {
+                "; the later statements of this unit ran, then rolled back"
+            } else {
+                "; the later statements of this unit ran"
+            });
         }
+        error
     }
 
     // A statement failed: the rest of the unit drains first, so the note about it holds.
@@ -1033,6 +1004,8 @@ fn unreadable(message: &str) -> ExecuteError {
     ExecuteError::Database {
         code: "reply".to_owned(),
         sqlstate: None,
+        class: None,
+        state: None,
         message: format!("Dbento cannot read this reply: {message}; the statement ran"),
         detail: None,
         hint: Some(STRING_CAST.to_owned()),

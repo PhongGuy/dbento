@@ -71,7 +71,7 @@ icons = [
 resources = ["../../licenses/*.txt"]
 
 [package.metadata.packager.deb]
-depends = ["libxcb1", "libxkbcommon0", "libxkbcommon-x11-0", "libvulkan1", "libwayland-client0", "libwayland-egl1", "libegl1"]
+depends = ["libxcb1", "libxkbcommon0", "libxkbcommon-x11-0", "libvulkan1", "libwayland-client0", "libwayland-egl1", "libegl1", "libstdc++6"]
 section = "devel"
 # cargo-packager's default template plus StartupWMClass, so the shell matches the window to it.
 desktopTemplate = "packaging/dbento-app.desktop"

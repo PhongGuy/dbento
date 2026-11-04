@@ -4,6 +4,8 @@ use dbento_core::{
     EditTarget, EditValue, ExecuteError, Limits, Outcome, Pending, RelationRef, RowKey, Secret,
     Session, SessionOptions, Workspace, apply, connect,
 };
+#[cfg(feature = "mongodb")]
+use dbento_testkit::{MgDb, MgUser};
 
 /// 5,000 rows: enough to fill several batches.
 pub const MANY: &str = "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 5000) SELECT x FROM r";
@@ -455,6 +457,108 @@ impl MsFixture {
     pub async fn session(&self, opts: SessionOptions) -> Session {
         self.try_session(opts).await.unwrap()
     }
+}
+
+#[cfg(feature = "mongodb")]
+pub struct MgFixture {
+    pub db: MgDb,
+    pub dir: tempfile::TempDir,
+    pub ws: Workspace,
+}
+
+#[cfg(feature = "mongodb")]
+fn mg_name(user: MgUser) -> &'static str {
+    match user {
+        MgUser::Root => "root",
+        MgUser::Reader => "reader",
+        MgUser::Writer => "writer",
+        MgUser::Anonymous => "anonymous",
+    }
+}
+
+/// A fresh seeded database with one connection per user; `extra_toml` joins each table.
+#[cfg(feature = "mongodb")]
+pub async fn mg(extra_toml: &str) -> MgFixture {
+    let db = dbento_testkit::mongo_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut toml = "dbento = 1\n".to_owned();
+    for user in [
+        MgUser::Root,
+        MgUser::Reader,
+        MgUser::Writer,
+        MgUser::Anonymous,
+    ] {
+        toml.push_str(&db.connection_toml(mg_name(user), user, extra_toml));
+    }
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    MgFixture { db, dir, ws }
+}
+
+#[cfg(feature = "mongodb")]
+impl MgFixture {
+    pub fn conn(&self, user: MgUser) -> &ConnectionConfig {
+        self.ws.connection(mg_name(user)).unwrap()
+    }
+    pub async fn session(&self, user: MgUser, opts: SessionOptions) -> Session {
+        let secret = self.db.password(user).map(Secret::new);
+        connect(&self.ws, self.conn(user), secret, opts)
+            .await
+            .unwrap()
+    }
+}
+
+/// Options that force a read-only session.
+#[cfg(feature = "mongodb")]
+pub fn forced() -> SessionOptions {
+    let mut o = SessionOptions::default();
+    o.force_read_only = true;
+    o
+}
+
+/// One statement that must succeed.
+#[cfg(feature = "mongodb")]
+pub async fn one(s: &mut Session, text: &str, limits: Limits) -> Ran {
+    run(s, text, limits).await.remove(0).unwrap()
+}
+
+/// `one` with no limits.
+#[cfg(feature = "mongodb")]
+pub async fn read(s: &mut Session, text: &str) -> Ran {
+    one(s, text, Limits::default()).await
+}
+
+/// One statement that must fail.
+#[cfg(feature = "mongodb")]
+pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
+    match run(s, text, Limits::default()).await.remove(0) {
+        Ok(ran) => panic!("{text}: {:?}", ran.outcome),
+        Err(e) => e,
+    }
+}
+
+/// A `Database` error's code.
+#[cfg(feature = "mongodb")]
+pub fn code_of(e: ExecuteError) -> String {
+    match e {
+        ExecuteError::Database { code, .. } => code,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Waits until the server's open cursors fall back to `baseline`.
+#[cfg(feature = "mongodb")]
+pub async fn cursors_back_to(db: &MgDb, baseline: i64) {
+    for _ in 0..100 {
+        if db.open_cursors().await == baseline {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!(
+        "{} cursors open, wanted {baseline}",
+        db.open_cursors().await
+    );
 }
 
 /// The session's server process id as text.

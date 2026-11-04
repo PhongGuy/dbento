@@ -5,6 +5,8 @@ mod lex;
 mod props;
 
 use crate::Engine;
+use crate::ranges::{MssqlBatch, mssql_ranges};
+use crate::tsql::{TsqlKind, tsql_tokens};
 use lex::{Kind, Tok};
 use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
@@ -49,6 +51,32 @@ const KEYWORDS: &str = "after all alter and any as asc before begin between by c
     returns right rollback row rows select set skip some table then trigger true unbounded \
     union unique update using values view when where window with within";
 
+// Microsoft's reserved keyword table for T-SQL; WITHIN is reserved only as WITHIN GROUP. A
+// case-sensitive database tells `Rows` from `ROWS`, so no other word is recased on SQL Server.
+const TSQL_RESERVED: &str = "add all alter and any as asc authorization backup begin between break browse bulk by \
+    cascade case check checkpoint close clustered coalesce collate column commit compute \
+    constraint contains containstable continue convert create cross current current_date \
+    current_time current_timestamp current_user cursor database dbcc deallocate declare \
+    default delete deny desc disk distinct distributed double drop dump else end errlvl \
+    escape except exec execute exists exit external fetch file fillfactor for foreign \
+    freetext freetexttable from full function goto grant group having holdlock identity \
+    identity_insert identitycol if in index inner insert intersect into is join key kill \
+    left like lineno load merge national nocheck nonclustered not null nullif of off offsets \
+    on open opendatasource openquery openrowset openxml option or order outer over percent \
+    pivot plan precision primary print proc procedure public raiserror read readtext \
+    reconfigure references replication restore restrict return revert revoke right rollback \
+    rowcount rowguidcol rule save schema securityaudit select semantickeyphrasetable \
+    semanticsimilaritydetailstable semanticsimilaritytable session_user set setuser shutdown \
+    some statistics system_user table tablesample textsize then to top tran transaction \
+    trigger truncate try_convert tsequal union unique unpivot update updatetext use user \
+    values varying view waitfor when where while with writetext";
+
+fn tsql_reserved(word: &str) -> bool {
+    TSQL_RESERVED
+        .split_whitespace()
+        .any(|k| k.eq_ignore_ascii_case(word))
+}
+
 /// Byte offsets where each `--` line comment (and on MySQL each `#` one) of `sql` starts,
 /// outside strings, quoted identifiers, dollar quotes and block comments; None when `sql`
 /// does not lex.
@@ -79,8 +107,64 @@ pub fn splits_token(engine: Engine, sql: &str, range: std::ops::Range<usize>) ->
 /// `sql` in Dbento's house style: one clause per line, list items and `AND`/`OR` aligned
 /// under the clause's first item, keywords recased per `options` and function names as
 /// written. Comments, literals and quoted identifiers are untouched, no token boundary
-/// moves, and input that does not lex comes back unchanged.
+/// moves, and input that does not lex comes back unchanged. On SQL Server each GO batch is
+/// laid out alone, GO lines and the text between batches are kept, and text whose layout would
+/// change its batches, their GO counts or their tokens comes back unchanged.
 pub fn format_sql(engine: Engine, sql: &str, options: &FormatOptions) -> String {
+    if engine != Engine::Mssql {
+        return format_text(engine, sql, options);
+    }
+    if lex::lex(engine, sql).is_none() {
+        return sql.to_owned();
+    }
+    let (mut out, mut copied) = (String::new(), 0);
+    for batch in mssql_ranges(sql) {
+        out.push_str(&sql[copied..batch.range.start]);
+        out.push_str(&format_text(engine, &sql[batch.range.clone()], options));
+        copied = batch.range.end;
+    }
+    out.push_str(&sql[copied..]);
+    if same_batches(sql, &out) {
+        out
+    } else {
+        sql.to_owned()
+    }
+}
+
+/// Whether two scripts run the same: the same batches with the same GO counts, and the same
+/// tokens in each, where only a reserved word's case may differ. A break can leave a word
+/// alone on its line, and a bare `go` there is a separator, so this holds for any word a
+/// layout moves.
+fn same_batches(before: &str, after: &str) -> bool {
+    let (old, new) = (mssql_ranges(before), mssql_ranges(after));
+    old.len() == new.len()
+        && old.iter().zip(&new).all(|(a, b)| {
+            let (a_code, b_code) = (batch_code(before, a), batch_code(after, b));
+            a.repeat == b.repeat
+                && a_code.len() == b_code.len()
+                && a_code.iter().zip(&b_code).all(|(x, y)| {
+                    let word = x.0 == TsqlKind::Word && y.0 == x.0 && tsql_reserved(x.1);
+                    x == y || (word && x.1.eq_ignore_ascii_case(y.1))
+                })
+        })
+}
+
+/// The kind and text of each token of `batch` past whitespace, except the whitespace after a
+/// `\`: a newline there continues a binary constant, so it is code the layout must not touch.
+fn batch_code<'a>(sql: &'a str, batch: &MssqlBatch) -> Vec<(TsqlKind, &'a str)> {
+    let text = &sql[batch.range.clone()];
+    let mut code: Vec<(TsqlKind, &str)> = Vec::new();
+    for t in tsql_tokens(text) {
+        let continued = code.last().is_some_and(|last| last.1 == "\\");
+        if t.kind != TsqlKind::Space || continued {
+            code.push((t.kind, &text[t.range]));
+        }
+    }
+    code
+}
+
+/// One piece of text in the house style, with no notion of a batch.
+fn format_text(engine: Engine, sql: &str, options: &FormatOptions) -> String {
     let Some(toks) = lex::lex(engine, sql) else {
         return sql.to_owned();
     };
@@ -96,6 +180,7 @@ pub fn format_sql(engine: Engine, sql: &str, options: &FormatOptions) -> String 
         return sql.to_owned();
     };
     let mut l = Layout {
+        engine,
         sql,
         toks: body,
         case: options.keyword_case,
@@ -197,6 +282,7 @@ impl Frame {
 }
 
 struct Layout<'a> {
+    engine: Engine,
     sql: &'a str,
     toks: &'a [Tok],
     case: KeywordCase,
@@ -561,6 +647,9 @@ impl<'a> Layout<'a> {
             return false;
         }
         let w = self.text(i).to_ascii_lowercase();
+        if self.engine == Engine::Mssql && !tsql_reserved(&w) {
+            return false;
+        }
         let prev_word = self.prev_word(i);
         let paren_next = self
             .toks
@@ -621,4 +710,34 @@ fn clause_at(w: &[String], first: bool) -> Option<(usize, Clause)> {
             return is(n, "join").then_some((n + 1, Join));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_batches;
+
+    #[test]
+    fn batches_compare_by_count_go_count_and_tokens_with_only_word_case_free() {
+        assert!(same_batches(
+            "select a\nGO 3\nselect 'x' -- c",
+            "SELECT\n  a\nGO 3\nSELECT 'x' -- c"
+        ));
+        assert!(same_batches("select 'a\\\nb'", "SELECT 'a\\\nb'"));
+        for (before, after) in [
+            ("select a, go from t", "select a,\ngo\nfrom t"),
+            ("select 1\nGO 2", "select 1\nGO 3"),
+            ("select 1\nGO", "select 1 GO"),
+            ("select a", "select b"),
+            ("select a b", "select ab"),
+            ("select 'x'", "select 'X'"),
+            ("select [x]", "select [X]"),
+            ("select 1 -- c", "select 1 -- C"),
+            ("select @a", "select @A"),
+            ("select a", "select A"),
+            ("select 0xAB\\\nCD from t", "select 0xAB\\ CD from t"),
+            ("select 0xAB\\ from t", "select 0xAB\\\nfrom t"),
+        ] {
+            assert!(!same_batches(before, after), "{before:?} {after:?}");
+        }
+    }
 }

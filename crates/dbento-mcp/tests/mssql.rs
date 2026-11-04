@@ -67,14 +67,15 @@ async fn the_query_tool_cuts_a_plain_select_without_a_report() {
     assert_eq!(ok["truncated"], true, "{ok}");
 }
 
+// A later item with rows is cut at once and drained under the cap, so a slow one stops the batch.
 // The batch is stopped, so no verdict exists, but the row is kept and success would be a lie.
 #[tokio::test]
 async fn the_query_tool_fails_when_closing_stopped_the_batch_at_the_drain_cap() {
     dbento_testkit::skip_without_mssql!();
     let (db, server) = with_table().await;
-    let sql = "SELECT 1 AS one EXEC('INSERT dbo.t (v) VALUES (N''m3'') COMMIT COMMIT') \
-               RAISERROR('f', 0, 1) WITH NOWAIT WAITFOR DELAY '00:00:20'";
-    let e = server.err("query", q(sql)).await;
+    let sql =
+        format!("SELECT 1 AS one EXEC('INSERT dbo.t (v) VALUES (N''m4'') COMMIT COMMIT') {CUBE}");
+    let e = server.err("query", q(&sql)).await;
     assert_eq!(e["code"], "session_closed", "{e}");
     assert!(
         e["message"]
@@ -84,9 +85,77 @@ async fn the_query_tool_fails_when_closing_stopped_the_batch_at_the_drain_cap() 
         "{e}"
     );
     let kept = db
+        .scalar("SELECT COUNT(*) FROM dbo.t WHERE v = N'm4'")
+        .await;
+    assert_eq!(kept.as_deref(), Some("1"));
+}
+
+// The tool reads the batch to its end, so the commit behind the first result is judged.
+#[tokio::test]
+async fn the_query_tool_reports_a_commit_behind_a_slow_rest_of_the_batch() {
+    dbento_testkit::skip_without_mssql!();
+    let (db, server) = with_table().await;
+    let sql = "SELECT 1 AS one EXEC('INSERT dbo.t (v) VALUES (N''m3'') COMMIT COMMIT') \
+               RAISERROR('f', 0, 1) WITH NOWAIT WAITFOR DELAY '00:00:02'";
+    let e = server.err("query", q(sql)).await;
+    assert_eq!(e["code"], "read_only", "{e}");
+    let kept = db
         .scalar("SELECT COUNT(*) FROM dbo.t WHERE v = N'm3'")
         .await;
     assert_eq!(kept.as_deref(), Some("1"));
+}
+
+#[tokio::test]
+async fn the_query_tool_returns_the_first_result_and_counts_the_rest_of_the_batch() {
+    dbento_testkit::skip_without_mssql!();
+    let (_db, server) = with_table().await;
+    let ok = server
+        .ok("query", q("SELECT 1 AS a SELECT 2 AS b SELECT 3 AS c"))
+        .await;
+    assert_eq!(ok["rows"], json!([["1"]]), "{ok}");
+    assert_eq!(ok["extra_results"], 2, "{ok}");
+    let ok = server.ok("query", q("SELECT 1 AS a")).await;
+    assert_eq!(ok["extra_results"], 0, "{ok}");
+}
+
+// A cut sends Attention, so the rest of the batch never runs and there is nothing to count.
+#[tokio::test]
+async fn a_cut_first_result_stops_the_batch_and_counts_nothing() {
+    dbento_testkit::skip_without_mssql!();
+    let (db, server) = with_table().await;
+    let sql = "SET NOCOUNT ON SELECT a.object_id FROM sys.all_objects a \
+               CROSS JOIN sys.all_objects b SELECT 9 AS b";
+    let ok = server.ok("query", q(sql)).await;
+    assert_eq!(ok["rows"].as_array().unwrap().len(), 2, "{ok}");
+    assert_eq!(
+        (&ok["truncated"], &ok["extra_results"]),
+        (&json!(true), &json!(0)),
+        "{ok}"
+    );
+    assert_eq!(db.scalar("SELECT 1").await.as_deref(), Some("1"));
+}
+
+#[tokio::test]
+async fn a_single_query_cut_stops_with_no_count() {
+    dbento_testkit::skip_without_mssql!();
+    let (_db, server) = with_table().await;
+    let ok = server.ok("query", q(CUBE)).await;
+    assert_eq!(
+        (&ok["truncated"], &ok["extra_results"]),
+        (&json!(true), &json!(0)),
+        "{ok}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_count_runs_each_repeat_and_counts_them() {
+    dbento_testkit::skip_without_mssql!();
+    let (_db, server) = with_table().await;
+    let ok = server
+        .ok("query", q("SELECT COUNT(*) AS n FROM dbo.t\nGO 3"))
+        .await;
+    assert_eq!(ok["rows"], json!([["0"]]), "{ok}");
+    assert_eq!(ok["extra_results"], 2, "{ok}");
 }
 
 #[tokio::test]
@@ -97,7 +166,13 @@ async fn the_query_tool_fails_when_the_rest_of_the_batch_failed() {
         .err("query", q("SELECT 1 AS a SELECT 1/0 AS b"))
         .await;
     assert_eq!(e["code"], "database", "{e}");
-    assert_eq!(e["sqlstate"], "8134", "{e}");
+    assert_eq!(e["error_number"], "8134", "{e}");
+    assert_eq!(
+        (e["class"].as_u64(), e["state"].as_u64()),
+        (Some(16), Some(1)),
+        "{e}"
+    );
+    assert!(e.get("sqlstate").is_none(), "{e}");
 }
 
 // With a reader principal the database refuses the writes, so these pin the same tools on it.
@@ -118,6 +193,20 @@ async fn with_reader() -> (MsDb, TestServer) {
 }
 
 #[tokio::test]
+async fn a_refused_write_behind_the_first_result_fails_the_call_on_a_reader() {
+    dbento_testkit::skip_without_mssql!();
+    let (db, server) = with_reader().await;
+    let e = server
+        .err("query", q("SELECT 1 AS a INSERT dbo.t (v) VALUES (N'r1')"))
+        .await;
+    assert_eq!(e["code"], "read_only", "{e}");
+    let kept = db
+        .scalar("SELECT COUNT(*) FROM dbo.t WHERE v = N'r1'")
+        .await;
+    assert_eq!(kept.as_deref(), Some("0"));
+}
+
+#[tokio::test]
 async fn the_query_tool_runs_as_the_reader_and_the_database_refuses_its_writes() {
     dbento_testkit::skip_without_mssql!();
     let (db, server) = with_reader().await;
@@ -131,7 +220,7 @@ async fn the_query_tool_runs_as_the_reader_and_the_database_refuses_its_writes()
         e["message"].as_str().unwrap().contains("permission"),
         "the server's own words: {e}"
     );
-    // A refusal behind the first result only shows as the session closes.
+    // A refusal behind the first result still fails the call.
     let e = server
         .err("query", q("SELECT 1 AS a INSERT dbo.t (v) VALUES (N'r2')"))
         .await;
@@ -142,7 +231,7 @@ async fn the_query_tool_runs_as_the_reader_and_the_database_refuses_its_writes()
     );
 }
 
-// These two fail under best effort, where a close error leaves the writes unknown. Here the
+// These two fail under best effort, where a later error leaves the writes unknown. Here the
 // database refused every write, so the first result stands, as on every other engine.
 #[tokio::test]
 async fn a_database_enforced_query_keeps_its_result_when_the_rest_of_the_batch_failed() {
@@ -324,4 +413,47 @@ async fn the_execute_tool_fails_when_the_timeout_stopped_the_batch_behind_its_fi
     assert_eq!(e["code"], "timeout", "{e}");
     assert_eq!(count(&db, "x3").await.as_deref(), Some("1"));
     assert_eq!(count(&db, "x4").await.as_deref(), Some("0"));
+}
+
+// The forms the best-effort description quotes, on a server that can spare them. SHUTDOWN is
+// classified only, in classify/mssql/tests.rs: it would stop the fixture's server.
+#[tokio::test]
+async fn the_hidden_commits_the_description_quotes_do_what_it_says() {
+    dbento_testkit::skip_without_mssql!();
+    let (db, server) = with_table().await;
+    db.scalar("CREATE DATABASE dbento_p4_victim").await;
+    let e = server
+        .err(
+            "query",
+            q("SELECT 1 AS one EXEC('COMMIT COMMIT DROP DATABASE dbento_p4_victim')"),
+        )
+        .await;
+    assert_eq!(e["code"], "read_only", "{e}");
+    let gone = db.scalar("SELECT DB_ID(N'dbento_p4_victim')").await;
+    assert_eq!(gone, None);
+    let e = server
+        .err("query", q("SELECT 1 AS one EXEC('COMMIT COMMIT KILL 999')"))
+        .await;
+    assert_eq!(e["error_number"], "6106", "{e}");
+}
+
+#[tokio::test]
+async fn a_reader_refuses_the_hidden_commits_the_description_says_it_fixes() {
+    dbento_testkit::skip_without_mssql!();
+    let (db, server) = with_reader().await;
+    db.scalar("CREATE DATABASE dbento_p4_kept").await;
+    let e = server
+        .err(
+            "query",
+            q("SELECT 1 AS one EXEC('COMMIT COMMIT DROP DATABASE dbento_p4_kept')"),
+        )
+        .await;
+    assert_eq!(e["code"], "read_only", "{e}");
+    let kept = db.scalar("SELECT DB_ID(N'dbento_p4_kept')").await;
+    assert!(kept.is_some());
+    db.scalar("DROP DATABASE dbento_p4_kept").await;
+    let e = server
+        .err("query", q("SELECT 1 AS one EXEC('COMMIT COMMIT KILL 1')"))
+        .await;
+    assert_eq!(e["code"], "read_only", "{e}");
 }

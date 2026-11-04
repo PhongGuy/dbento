@@ -3,7 +3,7 @@ use dbento_core::{
     ConnectionSpec, Edit, EditValue, Engine, ExecuteError, ExplainError, ExplainMode, Flavor,
     FormatOptions, MemoryStore, OpenError, SecretSource, TlsMode, Workspace, default_schema,
     explain_request, explain_text, format_sql, key_filter, line_comment_starts, plan_edit,
-    quote_ident, quote_literal, secret_hint, single_source, splits_token,
+    quote_ident, quote_literal, secret_hint, single_source, splits_token, statement_ranges,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -67,32 +67,219 @@ fn a_sql_server_keychain_connection_gets_the_secret_hint() {
 }
 
 #[test]
-fn names_and_literals_are_t_sql_and_nothing_guesses_a_source() {
+fn names_and_literals_are_t_sql() {
     assert_eq!(quote_ident(Engine::Mssql, "users"), "[users]");
     assert_eq!(quote_ident(Engine::Mssql, "a]b"), "[a]]b]");
     assert_eq!(quote_literal(Engine::Mssql, "it's"), "N'it''s'");
     assert_eq!(quote_literal(Engine::Mssql, "a\\b é"), "N'a\\b é'");
     let bytes_key = [("k".to_owned(), EditValue::Bytes(vec![1, 2]))];
     assert_eq!(key_filter(Engine::Mssql, &bytes_key), None);
-    assert_eq!(
-        single_source(Engine::Mssql, "SELECT * FROM users", Some("dbo")),
-        None
-    );
     let (_dir, ws) = ws_with(MS);
     let ws = ws.unwrap();
     let schema = default_schema(Engine::Mssql, ws.connection("ms").unwrap());
     assert_eq!(schema.as_deref(), Some("dbo"));
 }
 
+fn src(sql: &str) -> Option<dbento_core::RelationRef> {
+    single_source(Engine::Mssql, sql, Some("dbo"))
+}
+
 #[test]
-fn the_formatter_and_explain_leave_sql_server_alone() {
-    let sql = "select [a b] from t /* x /* y */ z */ -- c";
+fn a_plain_t_sql_select_names_its_table() {
+    use dbento_core::RelationRef;
+    for (sql, schema, name) in [
+        ("SELECT * FROM users", "dbo", "users"),
+        (
+            "SELECT TOP (5) id FROM sales.Orders o WHERE id > 1 ORDER BY id",
+            "sales",
+            "Orders",
+        ),
+        (
+            "select a from [my schema].[odd]]name];",
+            "my schema",
+            "odd]name",
+        ),
+        ("SELECT a FROM \"Sales\".\"Orders\"", "Sales", "Orders"),
+        ("SELECT a FROM t WITH (NOLOCK)", "dbo", "t"),
+        ("SELECT a FROM [#t]", "dbo", "#t"),
+    ] {
+        assert_eq!(src(sql), Some(RelationRef::new(schema, name)), "{sql}");
+    }
+}
+
+#[test]
+fn a_t_sql_select_that_is_not_one_plain_table_names_nothing() {
+    for sql in [
+        "SELECT 1",
+        "SELECT a FROM t JOIN u ON t.a = u.a",
+        "SELECT a FROM t, u",
+        "SELECT a FROM (SELECT a FROM t) s",
+        "SELECT a FROM t WHERE a IN (SELECT a FROM u)",
+        "WITH c AS (SELECT 1 AS a) SELECT a FROM c",
+        "SELECT a INTO x FROM t",
+        "SELECT a FROM t UNION SELECT a FROM u",
+        "SELECT a FROM t FOR XML PATH",
+        "SELECT a FROM t FOR JSON AUTO",
+        "SELECT a FROM other.dbo.t",
+        "SELECT a FROM srv.other.dbo.t",
+        "SELECT a FROM #t",
+        "SELECT a FROM ##t",
+        "SELECT a FROM @t",
+        "SELECT a FROM dbo.f(1)",
+        "SELECT a FROM OPENJSON(@j)",
+        "SELECT 1 AS a SELECT 2 AS b",
+        "SELECT a FROM t; SELECT b FROM u",
+        "DELETE FROM t",
+        "SELECT a FROM",
+        "SELECT 'select' FROM /* SELECT */ t -- SELECT",
+    ] {
+        let want = sql
+            .contains("'select'")
+            .then(|| dbento_core::RelationRef::new("dbo", "t"));
+        assert_eq!(src(sql), want, "{sql}");
+    }
+    assert_eq!(single_source(Engine::Mssql, "SELECT a FROM t", None), None);
+}
+
+fn ms(sql: &str) -> String {
+    format_sql(Engine::Mssql, sql, &FormatOptions::default())
+}
+
+#[test]
+fn the_formatter_lays_out_t_sql_and_keeps_its_tokens_whole() {
     assert_eq!(
-        format_sql(Engine::Mssql, sql, &FormatOptions::default()),
-        sql
+        ms("select [a b], N'x''y' from [dbo].[t]] u] /* x /* y */ z */ where a<>@p and b=1.5e3"),
+        "SELECT [a b],\n       N'x''y'\nFROM [dbo].[t]] u] /* x /* y */ z */\nWHERE a<>@p\n      AND b=1.5e3"
     );
-    assert_eq!(line_comment_starts(Engine::Mssql, sql), None);
-    assert!(splits_token(Engine::Mssql, sql, 0..3));
+    assert_eq!(ms("select top (5) a from t"), "SELECT top (5) a\nFROM t");
+    assert_eq!(
+        ms("select #t.a, $5, 1.5, .5 from #t"),
+        "SELECT #t.a,\n       $5,\n       1.5,\n       .5\nFROM #t"
+    );
+}
+
+/// The formatter's keyword list split by Microsoft's reserved keyword table.
+const NOT_RESERVED: &str = "after before conflict do each explain false filter following ilike interval language lateral limit locked natural next nothing nowait nulls offset only partition preceding recursive replace returning returns row rows skip true unbounded using window within";
+const RESERVED: &str = "all alter and any as asc begin between by case commit constraint create cross current default delete desc distinct drop else end escape except execute exists fetch for foreign from full function group having if in index inner insert intersect into is join left like not null on or order outer over primary references right rollback select set some table then trigger union unique update values view when where with";
+
+#[test]
+fn a_case_sensitive_database_keeps_every_word_it_could_read_as_a_name() {
+    // None of these is reserved in T-SQL, so each may be a bare column on a CS collation.
+    for word in NOT_RESERVED.split_whitespace() {
+        let formatted = ms(&format!("select a {word} b from t"));
+        assert!(formatted.contains(word), "{formatted}");
+    }
+    assert_eq!(
+        ms("select Rows, Next from t"),
+        "SELECT Rows,
+       Next
+FROM t"
+    );
+}
+
+#[test]
+fn reserved_words_are_recased_and_key_only_in_a_key_clause() {
+    for word in RESERVED.split_whitespace() {
+        let upper = word.to_ascii_uppercase();
+        let formatted = ms(&format!("select a {word} b from t"));
+        assert!(formatted.contains(&upper), "{formatted}");
+    }
+    assert_eq!(
+        ms("create table t (id int primary key)"),
+        "CREATE TABLE t (id int PRIMARY KEY)"
+    );
+    assert_eq!(ms("alter table t add key b"), "ALTER TABLE t add key b");
+}
+
+#[test]
+fn go_lines_stay_their_own_lines_and_each_batch_is_laid_out_alone() {
+    assert_eq!(
+        ms("select a from t\nGO\n\nselect b from u\ngo 3 -- twice more\nselect c from v"),
+        "SELECT a\nFROM t\nGO\n\nSELECT b\nFROM u\ngo 3 -- twice more\nSELECT c\nFROM v"
+    );
+}
+
+// The layout would leave `go` alone on its line, which is a batch separator.
+#[test]
+fn a_column_named_go_stays_in_its_batch() {
+    for sql in ["select a, go from t", "select a, go -- c\nfrom t"] {
+        assert_eq!(ms(sql), sql);
+        assert_eq!(statement_ranges(Engine::Mssql, &ms(sql)).len(), 1, "{sql}");
+    }
+}
+
+// GO is not reserved, so a case-sensitive database may read it as a name in any case.
+#[test]
+fn a_column_named_go_is_not_recased() {
+    assert_eq!(ms("SELECT a, GO FROM t"), "SELECT a, GO FROM t");
+    assert_eq!(
+        ms("select a, Go, b from t"),
+        "SELECT a,\n       Go,\n       b\nFROM t"
+    );
+}
+
+// A backslash before a newline continues a binary constant, so that newline is code.
+#[test]
+fn a_continued_binary_constant_keeps_its_line_break() {
+    let sql = "select 0xAB\\\nCD from t";
+    assert_eq!(ms(sql), sql);
+    assert_eq!(
+        ms("select 'a\\\nb' from t"),
+        "SELECT 'a\\\nb'\nFROM t",
+        "inside a string the same two characters are text"
+    );
+}
+
+// `@` leads a word to the T-SQL lexer, and no variable is a reserved word.
+#[test]
+fn a_variable_is_never_recased() {
+    assert_eq!(
+        ms("select @Rows, @select, @@RowCount from t"),
+        "SELECT @Rows,\n       @select,\n       @@RowCount\nFROM t"
+    );
+}
+
+#[test]
+fn a_script_keeps_its_batches_and_counts_through_the_formatter() {
+    let sql = "select a from t\nGO 3\nselect b from u\ngo";
+    let formatted = ms(sql);
+    assert_eq!(formatted, "SELECT a\nFROM t\nGO 3\nSELECT b\nFROM u\ngo");
+    assert_eq!(statement_ranges(Engine::Mssql, &formatted).len(), 2);
+    // One batch the layout would split sends the whole script back, its real GO included.
+    let mixed = "select a, go from t\nGO 3\nselect b from u";
+    assert_eq!(ms(mixed), mixed);
+}
+
+#[test]
+fn unterminated_t_sql_comes_back_unchanged() {
+    for sql in [
+        "select 'a",
+        "select N'a",
+        "select [a",
+        "select \"a",
+        "select 1 /* a /* b */",
+    ] {
+        assert_eq!(ms(sql), sql);
+        assert_eq!(line_comment_starts(Engine::Mssql, sql), None);
+    }
+}
+
+#[test]
+fn comment_toggling_and_selection_splits_read_t_sql_tokens() {
+    let sql = "select [a -- b] -- c\n, N'-- d' /* -- e /* f */ -- g */ -- h";
+    assert_eq!(line_comment_starts(Engine::Mssql, sql), Some(vec![16, 55]));
+    let name = sql.find("-- b").unwrap();
+    assert!(splits_token(Engine::Mssql, sql, name..name + 2));
+    assert!(!splits_token(Engine::Mssql, sql, 0..6));
+    assert!(
+        !splits_token(Engine::Mssql, "select 'a", 0..6),
+        "text past the range is not read"
+    );
+    assert!(splits_token(Engine::Mssql, "select 'a", 0..9));
+}
+
+#[test]
+fn explain_leaves_sql_server_alone() {
     let explained = explain_request(Engine::Mssql, "SELECT 1", ExplainMode::Plan);
     assert_eq!(explained.err(), Some(ExplainError::UnsupportedEngine));
     assert_eq!(

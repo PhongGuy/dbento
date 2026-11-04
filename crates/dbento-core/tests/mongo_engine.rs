@@ -1,9 +1,10 @@
 //! The MongoDB engine as the workspace, capability and dialect layers see it, before any server.
+#[cfg(not(feature = "mongodb"))]
+use dbento_core::{ConnectError, SessionOptions, connect};
 use dbento_core::{
-    ConnectError, ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions,
-    OpenError, QueryLanguage, SecretSource, SessionOptions, Workspace, connect, default_schema,
-    explain_request, explain_text, format_sql, line_comment_starts, plan_edit, quote_ident,
-    quote_literal, single_source,
+    ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions, OpenError,
+    QueryLanguage, SecretSource, Workspace, default_schema, explain_request, explain_text,
+    format_sql, line_comment_starts, plan_edit, quote_ident, quote_literal, single_source,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -24,6 +25,7 @@ const MG: &str = "dbento = 1\n[connections.shop]\nengine = \"mongodb\"\n\
                   uri = \"mongodb://app@db.internal:27017/shop?authSource=admin\"\n";
 const HEAD: &str = "dbento = 1\n[connections.c]\nengine = \"mongodb\"\n";
 
+#[cfg(not(feature = "mongodb"))]
 async fn connect_error(toml: &str) -> String {
     let (_d, ws) = ws_with(toml);
     let ws = ws.unwrap();
@@ -182,15 +184,6 @@ fn capabilities_and_the_sql_helpers_fit_a_shell_language() {
         unsupported
     );
     assert_eq!(explain_text(Engine::Mongodb, q).err(), unsupported);
-}
-
-#[cfg(feature = "mongodb")]
-#[tokio::test]
-async fn connect_waits_for_the_driver() {
-    assert_eq!(
-        connect_error(MG).await,
-        "MongoDB sessions are not available yet"
-    );
 }
 
 #[cfg(not(feature = "mongodb"))]

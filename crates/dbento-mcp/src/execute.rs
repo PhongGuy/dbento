@@ -129,7 +129,7 @@ async fn run_granted(
     let engine = opened.session.engine();
     let cancel = opened.session.cancel_handle();
     let work = run_once(&mut opened.session, &args.sql);
-    let ran = until_cancelled(context, &cancel, work).await;
+    let ran = until_cancelled(context, &cancel, engine, work).await;
     let elapsed = started.elapsed();
     // A write's failed commit can surface only as close drains it, and then the call failed.
     let closed = opened.session.close().await;
@@ -180,6 +180,7 @@ async fn classify(
     context: &RequestContext<RoleServer>,
 ) -> Result<Classification, ToolError> {
     let mut opened = server.open(found).await?;
+    let engine = opened.session.engine();
     let cancel = opened.session.cancel_handle();
     let work = async {
         let mut script = opened.session.script(&args.sql);
@@ -193,7 +194,7 @@ async fn classify(
             }
         }
     };
-    let classified = until_cancelled(context, &cancel, work).await;
+    let classified = until_cancelled(context, &cancel, engine, work).await;
     // A skipped statement leaves nothing for close to report.
     let _ = opened.session.close().await;
     classified

@@ -125,6 +125,8 @@ pub(crate) fn statement_error(e: &WireError, reading: Reading) -> ExecuteError {
         return ExecuteError::Database {
             code: e.code.to_string(),
             sqlstate: None,
+            class: None,
+            state: None,
             message: "a value in this result has no CBOR form, usually a regex; the statement \
                       may have run"
                 .to_owned(),
@@ -136,6 +138,8 @@ pub(crate) fn statement_error(e: &WireError, reading: Reading) -> ExecuteError {
     ExecuteError::Database {
         code: e.code.to_string(),
         sqlstate: None,
+        class: None,
+        state: None,
         message: e.message.clone(),
         detail: Some(e.kind.clone()),
         hint: None,

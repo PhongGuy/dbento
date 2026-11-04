@@ -1807,6 +1807,8 @@ fn execute_error(e: tokio_postgres::Error, cancel: &PgCancel, sql: Option<&str>)
             ExecuteError::Database {
                 code: db.code().code().to_owned(),
                 sqlstate: None,
+                class: None,
+                state: None,
                 message: db.message().to_owned(),
                 detail: db.detail().map(str::to_owned),
                 hint: db.hint().map(str::to_owned),

@@ -127,6 +127,7 @@ soname_package() {
     libwayland-client.so.0) echo libwayland-client0 ;;
     libwayland-egl.so.1) echo libwayland-egl1 ;;
     libEGL.so.1) echo libegl1 ;;
+    libstdc++.so.6) echo libstdc++6 ;;
     libc.so.6 | libm.so.6 | libgcc_s.so.1 | ld-linux-*.so.[12]) echo essential ;;
     *) echo unknown ;;
   esac

@@ -63,7 +63,7 @@ fn nothing_secret_or_derived_is_committed() {
 }
 
 #[test]
-fn deb_declares_gpui_libraries() {
+fn deb_declares_the_gpui_libraries_and_the_cpp_runtime() {
     let (c, _) = section();
     assert_eq!(
         c["deb"]["depends"],
@@ -74,7 +74,8 @@ fn deb_declares_gpui_libraries() {
             "libvulkan1",
             "libwayland-client0",
             "libwayland-egl1",
-            "libegl1"
+            "libegl1",
+            "libstdc++6"
         ])
     );
     assert_eq!(c["deb"]["section"], "devel");

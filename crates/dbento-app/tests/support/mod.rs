@@ -447,6 +447,25 @@ pub fn my_spec(db: &dbento_testkit::MyDb, extra: &str) -> (tempfile::TempDir, Ru
     (dir, spec)
 }
 
+/// A runner spec on `db` as connection `ms` with `extra` TOML lines; the env closure answers
+/// the fixture's secret variable, as the app's environment would.
+pub fn ms_spec(db: &dbento_testkit::MsDb, extra: &str) -> (tempfile::TempDir, RunnerSpec) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        format!("dbento = 1\n{}", db.connection_toml("ms", extra)),
+    )
+    .unwrap();
+    let password = db.password().to_owned();
+    let spec = RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir.path()).unwrap()),
+        connection: "ms".into(),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(move |v| (v == dbento_testkit::MS_SECRET_VAR).then(|| password.clone())),
+    };
+    (dir, spec)
+}
+
 /// Rewrites the fixture's dbento.toml: `lite` with `lite_extra`, then `nopg`, then `more`.
 pub fn rewrite(fx: &Fx, lite_extra: &str, more: &str) {
     std::fs::write(

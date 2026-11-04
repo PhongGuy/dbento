@@ -29,6 +29,28 @@ user = "me"
 color = "green"
 "#;
 
+const ENFORCED: &str = "Read-only sessions on this connection are enforced by the database.";
+const POSTGRES: &str = "Read-only sessions on this connection are enforced by the database: each \
+    statement runs in `BEGIN READ ONLY`. The server still lets a few things through: functions \
+    that open their own connections, such as `dblink_exec` where the dblink extension is \
+    installed, and admin functions whose effect is not transactional, such as \
+    `pg_terminate_backend`, `pg_cancel_backend` and `pg_stat_reset`. For a production database, \
+    use a role without the privileges the rest need; it can still cancel or terminate backends of \
+    its own role.";
+
+// No server at these hosts: list_connections reads the workspace and never connects.
+const MS: &str = r#"dbento = 1
+[connections.bare]
+engine = "mssql"
+host = "db.invalid"
+user = "app"
+[connections.fenced]
+engine = "sqlserver"
+host = "db.invalid"
+user = "app"
+read_only_user = "dbento_reader"
+"#;
+
 /// The `connections` array sorted by name.
 fn by_name(list: &Value) -> Vec<Value> {
     let mut v = list["connections"].as_array().expect("connections").clone();
@@ -43,9 +65,9 @@ async fn lists_every_connection_with_engine_flags_and_folder() {
     assert_eq!(
         by_name(&list),
         vec![
-            json!({"name": "dev", "engine": "postgres", "read_only": false, "production": false, "folder": null}),
-            json!({"name": "lite", "engine": "sqlite", "read_only": true, "production": false, "folder": null}),
-            json!({"name": "shop", "engine": "postgres", "read_only": false, "production": true, "folder": "Prod/EU"}),
+            json!({"name": "dev", "engine": "postgres", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": false, "folder": null}),
+            json!({"name": "lite", "engine": "sqlite", "read_only": true, "read_only_enforcement": "database", "session": ENFORCED, "production": false, "folder": null}),
+            json!({"name": "shop", "engine": "postgres", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": true, "folder": "Prod/EU"}),
         ]
     );
 }
@@ -133,4 +155,57 @@ fn a_folder_without_dbento_toml_does_not_start() {
     let empty = tempfile::TempDir::new().unwrap();
     let opened = DbentoServer::new(McpOptions::new(empty.path()), Arc::new(MemoryStore::new()));
     assert!(matches!(opened, Err(McpError::Open(_))));
+}
+
+#[tokio::test]
+async fn a_sql_server_connection_states_its_level_without_connecting() {
+    let server = TestServer::start(MS).await;
+    let list = server.ok("list_connections", json!({})).await;
+    let found = by_name(&list);
+    assert_eq!(
+        (&found[0]["engine"], &found[0]["read_only_enforcement"]),
+        (&json!("mssql"), &json!("best_effort"))
+    );
+    let bare = found[0]["session"].as_str().unwrap();
+    assert!(
+        bare.starts_with("Read-only sessions on this connection are best effort"),
+        "{bare}"
+    );
+    assert!(bare.contains("`read_only_user` is the answer"), "{bare}");
+    assert_eq!(found[1]["read_only_enforcement"], "database");
+    let fenced = found[1]["session"].as_str().unwrap();
+    assert!(!fenced.contains("best effort"), "{fenced}");
+}
+
+#[tokio::test]
+async fn the_tools_name_sql_server_where_they_list_engines() {
+    let server = TestServer::start(MS).await;
+    let tools = server.tools().await;
+    let about = |name: &str| {
+        let tool = tools.iter().find(|t| t.name == name).unwrap();
+        tool.description.as_deref().unwrap().to_owned()
+    };
+    assert!(about("list_connections").contains("mssql"));
+    assert!(about("list_schemas").contains("SQL Server"));
+    assert!(about("explain").contains("SQL Server"));
+    assert!(about("query").contains("one batch"));
+    assert!(about("query").contains("extra_results"));
+    assert!(server.instructions().unwrap().contains("`session`"));
+}
+
+// `mariadb` is an alias of the `mysql` engine, so it answers the same level and text.
+#[tokio::test]
+async fn a_mariadb_connection_states_what_the_server_still_lets_through() {
+    let toml = r#"dbento = 1
+[connections.maria]
+engine = "mariadb"
+host = "db.invalid"
+user = "app"
+"#;
+    let server = TestServer::start(toml).await;
+    let list = server.ok("list_connections", json!({})).await;
+    let found = by_name(&list);
+    assert_eq!(found[0]["read_only_enforcement"], "database");
+    let text = found[0]["session"].as_str().unwrap();
+    assert!(text.contains("`SELECT ... INTO OUTFILE`"), "{text}");
 }

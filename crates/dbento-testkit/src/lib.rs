@@ -21,11 +21,15 @@ use tokio_postgres::{Client, Config, NoTls, config::Host};
 
 #[cfg(feature = "duckdb")]
 mod duck;
+#[cfg(feature = "mongodb")]
+mod mongo;
 mod mssql;
 mod mysql;
 mod surreal;
 #[cfg(feature = "duckdb")]
 pub use duck::duckdb_file;
+#[cfg(feature = "mongodb")]
+pub use mongo::*;
 pub use mssql::*;
 pub use mysql::*;
 pub use surreal::*;

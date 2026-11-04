@@ -1747,6 +1747,8 @@ fn execute_error(e: &mysql_async::Error, stop: Option<Stop>) -> ExecuteError {
         mysql_async::Error::Server(s) => ExecuteError::Database {
             code: s.code.to_string(),
             sqlstate: Some(s.state.clone()),
+            class: None,
+            state: None,
             message: s.message.clone(),
             detail: None,
             hint: None,
