@@ -76,8 +76,8 @@ async fn an_approved_write_then_reads_on_the_locked_instance() {
             )
             .await,
         json!({"columns": [
-            {"name": "a", "type": "INTEGER", "nullable": false, "primary_key": 1, "default": null},
-            {"name": "l", "type": "INTEGER[]", "nullable": true, "primary_key": null, "default": null}
+            {"name": "a", "type": "INTEGER", "nullable": false, "primary_key": 1, "default": null, "inferred": false},
+            {"name": "l", "type": "INTEGER[]", "nullable": true, "primary_key": null, "default": null, "inferred": false}
         ]})
     );
 }

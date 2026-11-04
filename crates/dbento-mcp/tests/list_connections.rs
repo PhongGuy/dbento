@@ -65,9 +65,9 @@ async fn lists_every_connection_with_engine_flags_and_folder() {
     assert_eq!(
         by_name(&list),
         vec![
-            json!({"name": "dev", "engine": "postgres", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": false, "folder": null}),
-            json!({"name": "lite", "engine": "sqlite", "read_only": true, "read_only_enforcement": "database", "session": ENFORCED, "production": false, "folder": null}),
-            json!({"name": "shop", "engine": "postgres", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": true, "folder": "Prod/EU"}),
+            json!({"name": "dev", "engine": "postgres", "language": "SQL", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": false, "folder": null}),
+            json!({"name": "lite", "engine": "sqlite", "language": "SQL", "read_only": true, "read_only_enforcement": "database", "session": ENFORCED, "production": false, "folder": null}),
+            json!({"name": "shop", "engine": "postgres", "language": "SQL", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": true, "folder": "Prod/EU"}),
         ]
     );
 }
@@ -208,4 +208,52 @@ user = "app"
     assert_eq!(found[0]["read_only_enforcement"], "database");
     let text = found[0]["session"].as_str().unwrap();
     assert!(text.contains("`SELECT ... INTO OUTFILE`"), "{text}");
+}
+
+const SR: &str = r#"dbento = 1
+[connections.graph]
+engine = "surrealdb"
+host = "db.invalid"
+namespace = "app"
+database = "main"
+user = "reader"
+auth_level = "database"
+"#;
+
+#[tokio::test]
+async fn a_surrealdb_connection_states_its_language_and_residual_but_not_its_level() {
+    let server = TestServer::start(SR).await;
+    let list = server.ok("list_connections", json!({})).await;
+    let found = by_name(&list);
+    assert_eq!(
+        (
+            &found[0]["engine"],
+            &found[0]["language"],
+            &found[0]["read_only_enforcement"]
+        ),
+        (&json!("surrealdb"), &json!("SurrealQL"), &json!("unknown"))
+    );
+    let text = found[0]["session"].as_str().unwrap();
+    for word in [
+        "VIEWER",
+        "after connecting",
+        "`query`",
+        "ALTER SYSTEM",
+        "sequences",
+    ] {
+        assert!(text.contains(word), "{word}: {text}");
+    }
+}
+
+#[tokio::test]
+async fn the_tools_name_surrealdb_where_they_list_engines() {
+    let server = TestServer::start(SR).await;
+    let tools = server.tools().await;
+    let about = |name: &str| {
+        let tool = tools.iter().find(|t| t.name == name).unwrap();
+        tool.description.as_deref().unwrap().to_owned()
+    };
+    assert!(about("list_connections").contains("surrealdb"));
+    assert!(about("list_connections").contains("language"));
+    assert!(about("query").contains("SurrealDB"));
 }

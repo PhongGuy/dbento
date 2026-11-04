@@ -81,7 +81,7 @@ mod numtext;
 mod postgres;
 mod ranges;
 mod tsql;
-pub use ranges::{statement_count, statement_ranges};
+pub use ranges::{result_ranges, statement_count, statement_ranges};
 mod session;
 mod split;
 mod surreal;
@@ -89,6 +89,7 @@ pub use session::{
     CancelHandle, Capabilities, Classification, ConnectError, ExecuteError, ExtendError, Flavor,
     Limits, OnTruncate, Outcome, Pending, QueryLanguage, ReadOnlyEnforcement, ResultStream, Script,
     ServerInfo, Session, SessionOptions, TruncatedBy, Unguarded, Writes, connect,
+    read_only_residual,
 };
 
 mod source;

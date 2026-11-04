@@ -97,6 +97,13 @@ impl<W: Write, E: Write> Sink for CsvSink<W, E> {
         if let Some(more) = more_results(outcome.extra_results) {
             writeln!(self.err, "statement {}: {more}", self.index + 1)?;
         }
+        if outcome.rolled_back {
+            writeln!(
+                self.err,
+                "statement {}: any changes were rolled back",
+                self.index + 1
+            )?;
+        }
         Ok(())
     }
 

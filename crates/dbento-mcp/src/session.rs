@@ -1,11 +1,12 @@
 //! What every tool call shares: the session it opened, cancellation and the history.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use dbento_core::{
     CancelHandle, ConnectionConfig, Engine, ExecuteError, History, HistoryEntry,
-    ReadOnlyEnforcement, Session,
+    ReadOnlyEnforcement, Session, read_only_residual,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -55,6 +56,19 @@ const BEST_EFFORT: &str = "Read-only sessions on this connection are best effort
     By decision SHUTDOWN stays out of Dbento's refusals (layer 3): `read_only_user` is the \
     answer. The session then runs as a reader principal, which holds none of those rights.";
 
+// The level follows the login, so the text names both and leaves the answer to each `query`;
+// the residual is core's, shared with the CLI and the app.
+static SURREALDB: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "The level of a read-only session on this connection depends on its login and is known \
+         only after connecting: `database` for a VIEWER login, whose writes the server refuses, \
+         and `best_effort` for any other, where Dbento runs each statement in a transaction it \
+         cancels and refuses statements it reads as writes. Each `query` result carries the \
+         level. {}",
+        read_only_residual(Engine::Surrealdb).unwrap_or_default()
+    )
+});
+
 const UNKNOWN: &str = "The enforcement of read-only sessions on this connection is unknown to \
     this server.";
 
@@ -68,7 +82,7 @@ pub(crate) fn enforcement_name(level: ReadOnlyEnforcement) -> &'static str {
 }
 
 /// What a read-only session at `level` on `engine` does and does not stop, in words for a client.
-pub(crate) fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static str {
+fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static str {
     match level {
         ReadOnlyEnforcement::Database if engine == Engine::Mssql => SQL_SERVER_READER,
         ReadOnlyEnforcement::Database if engine == Engine::Mysql => MYSQL,
@@ -77,6 +91,18 @@ pub(crate) fn session_description(engine: Engine, level: ReadOnlyEnforcement) ->
         ReadOnlyEnforcement::BestEffort => BEST_EFFORT,
         _ => UNKNOWN,
     }
+}
+
+/// The level name and text `list_connections` shows for a connection configured at `level`.
+/// SurrealDB's level follows the login, which only a connection reveals.
+pub(crate) fn listed_level(
+    engine: Engine,
+    level: ReadOnlyEnforcement,
+) -> (&'static str, &'static str) {
+    if engine == Engine::Surrealdb {
+        return ("unknown", SURREALDB.as_str());
+    }
+    (enforcement_name(level), session_description(engine, level))
 }
 
 /// The server's timeout or the connection's own, whichever is shorter.

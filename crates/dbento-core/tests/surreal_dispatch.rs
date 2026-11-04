@@ -2,8 +2,8 @@
 use dbento_core::{
     ConnectError, Engine, ExplainError, ExplainMode, FormatOptions, OpenError, QueryLanguage,
     SessionOptions, Workspace, connect, default_schema, explain_request, explain_text, format_sql,
-    line_comment_starts, quote_ident, quote_literal, single_source, statement_count,
-    statement_ranges,
+    line_comment_starts, quote_ident, quote_literal, read_only_residual, result_ranges,
+    single_source, statement_count, statement_ranges,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -121,4 +121,51 @@ async fn without_the_feature_a_surrealdb_connection_parses_but_does_not_connect(
         connect_error(SR).await,
         "SurrealDB is not available in this build"
     );
+}
+
+#[test]
+fn result_ranges_give_each_result_its_units_range() {
+    let e = Engine::Surrealdb;
+    let src = "USE DB b; BEGIN; CREATE a:1; COMMIT; LET $x = 1; RETURN $x";
+    let got: Vec<&str> = result_ranges(e, src).into_iter().map(|r| &src[r]).collect();
+    let tx = "BEGIN; CREATE a:1; COMMIT;";
+    let lets = "LET $x = 1; RETURN $x";
+    assert_eq!(got, ["USE DB b;", tx, tx, tx, lets, lets]);
+    assert_eq!(result_ranges(e, src).len(), statement_count(e, src));
+    for (engine, sql) in [
+        (Engine::Postgres, "SELECT 1; SELECT 2"),
+        (Engine::Sqlite, "SELECT 1; SELECT 2"),
+        (Engine::Mssql, "SELECT 1 SELECT 2\nGO\nSELECT 3"),
+        (Engine::Mongodb, "db.t.find(); db.u.find()"),
+    ] {
+        assert_eq!(
+            result_ranges(engine, sql),
+            statement_ranges(engine, sql),
+            "{engine:?}"
+        );
+    }
+}
+
+#[test]
+fn only_surrealdb_states_a_read_only_residual() {
+    let text = read_only_residual(Engine::Surrealdb).unwrap();
+    for word in [
+        "sequences",
+        "http::",
+        "ALTER SYSTEM",
+        "computed field",
+        "query text",
+    ] {
+        assert!(text.contains(word), "{word}: {text}");
+    }
+    for engine in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Duckdb,
+        Engine::Mongodb,
+    ] {
+        assert_eq!(read_only_residual(engine), None, "{engine:?}");
+    }
 }

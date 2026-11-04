@@ -696,6 +696,20 @@ pub enum ReadOnlyEnforcement {
     BestEffort,
 }
 
+/// What a read-only session on `engine` does not undo, in words for a user; None where the
+/// level's own description says it all.
+pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
+    match engine {
+        Engine::Surrealdb => Some(
+            "Not undone at either level: stored logic, which a plain SELECT reaches through a \
+             computed field, can advance sequences and, on servers that allow them, call http::* \
+             functions and write files; a root OWNER or anonymous login can also run ALTER \
+             SYSTEM. The query text cannot reveal these.",
+        ),
+        _ => None,
+    }
+}
+
 /// An open connection to one database.
 pub struct Session {
     inner: SessionInner,
@@ -971,9 +985,7 @@ impl Session {
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(RelationObjects::new(Vec::new(), Vec::new(), Vec::new())),
             #[cfg(feature = "surrealdb")]
-            SessionInner::Surreal(_) => Err(IntrospectError::Unsupported {
-                what: "relation objects",
-            }),
+            SessionInner::Surreal(d) => d.relation_objects(rel).await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => crate::mongo::catalog::relation_objects(d, rel).await,
         }

@@ -22,9 +22,7 @@ use crate::explain::{ExplainArgs, ExplainResult};
 use crate::fence::{Fenced, caught};
 use crate::query::{QueryArgs, QueryResult};
 use crate::saved::{ReadArgs, SavedList, SavedText};
-use crate::session::{
-    Opened, effective_timeout, enforcement_name, session_description, until_cancelled,
-};
+use crate::session::{Opened, effective_timeout, listed_level, until_cancelled};
 use crate::{McpError, McpOptions};
 
 /// What the client is told at the handshake, before it calls any tool.
@@ -66,10 +64,14 @@ struct ConnectionList {
 #[derive(Serialize, JsonSchema)]
 struct ConnectionInfo {
     name: String,
-    /// `"sqlite"`, `"postgres"`, `"mysql"` (MySQL and MariaDB), `"mssql"` or `"duckdb"`.
+    /// `"sqlite"`, `"postgres"`, `"mysql"` (MySQL and MariaDB), `"mssql"`, `"duckdb"`,
+    /// `"mongodb"` or `"surrealdb"`.
     engine: &'static str,
+    /// The query language: `"SQL"`, `"MongoDB shell"` or `"SurrealQL"`.
+    language: &'static str,
     read_only: bool,
-    /// Who enforces a read-only session: `"database"`, `"best_effort"` or `"unknown"`.
+    /// Who enforces a read-only session: `"database"`, `"best_effort"` or `"unknown"`, the last
+    /// for SurrealDB, whose level is known only after connecting.
     read_only_enforcement: &'static str,
     /// What a read-only session here does and does not stop, in plain words.
     session: &'static str,
@@ -81,12 +83,14 @@ struct ConnectionInfo {
 
 impl ConnectionInfo {
     fn of(c: &ConnectionConfig) -> Self {
+        let (read_only_enforcement, session) = listed_level(c.engine(), c.read_only_enforcement());
         ConnectionInfo {
             name: c.name().to_owned(),
             engine: c.engine().name(),
+            language: c.engine().capabilities().language.name(),
             read_only: c.read_only(),
-            read_only_enforcement: enforcement_name(c.read_only_enforcement()),
-            session: session_description(c.engine(), c.read_only_enforcement()),
+            read_only_enforcement,
+            session,
             production: c.is_production(),
             folder: c.folder().map(ToString::to_string),
         }
@@ -168,6 +172,8 @@ struct ColumnEntry {
     /// the column has a default this login may not read, and a leading `/* cut */` that the
     /// expression may be incomplete.
     default: Option<String>,
+    /// True when the column was read from up to 100 sampled rows or documents, not declared.
+    inferred: bool,
 }
 
 impl ColumnEntry {
@@ -178,6 +184,7 @@ impl ColumnEntry {
             nullable: c.nullable(),
             primary_key: c.primary_key(),
             default: c.default().map(str::to_owned),
+            inferred: c.inferred(),
         }
     }
 }
@@ -304,9 +311,10 @@ impl DbentoServer {
 impl DbentoServer {
     #[tool(
         description = "List the workspace's connections: name, engine (sqlite, postgres, \
-                       mysql, mssql or duckdb; mysql also covers MariaDB), whether it is \
-                       read-only, how far its read-only session goes (`read_only_enforcement`, \
-                       `session`), whether it is tagged production, and its folder.",
+                       mysql, mssql, duckdb, mongodb or surrealdb; mysql also covers MariaDB), \
+                       its query `language`, whether it is read-only, how far its read-only \
+                       session goes (`read_only_enforcement`, `session`), whether it is tagged \
+                       production, and its folder.",
         output_schema = schema_for_output::<ConnectionList>(),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -437,7 +445,8 @@ impl DbentoServer {
                        rows (default 100, at most 1000) and about 64 KiB are returned; \
                        `truncated_by` names the bound that cut the result. Only the first result \
                        is returned; `extra_results` counts the later ones. Writes and DDL are \
-                       refused.",
+                       refused. On SurrealDB one statement, so a LET or BEGIN script is \
+                       refused; `rolled_back` marks a result whose changes did not persist.",
         output_schema = schema_for_output::<QueryResult>(),
         annotations(read_only_hint = true, open_world_hint = false)
     )]

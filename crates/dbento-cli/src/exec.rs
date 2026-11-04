@@ -1,12 +1,13 @@
 //! The statement loop shared by `query` and `run`, reporting each event to a [`Sink`].
 
 use std::io;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use dbento_core::{
     CancelHandle, ColumnInfo, ConnectionConfig, Engine, ExecuteError, Limits, Outcome,
     ReadOnlyEnforcement, ResultBatch, Session, SessionOptions, Unguarded, Workspace, connect,
-    resolve_key_passphrase, resolve_secret, statement_ranges,
+    read_only_residual, resolve_key_passphrase, resolve_secret, result_ranges,
 };
 
 use crate::Exit;
@@ -104,8 +105,13 @@ pub(crate) async fn execute(
             return Err(crate::secret::with_hint(e, hint));
         }
     };
-    if session.read_only_enforcement() == Some(ReadOnlyEnforcement::BestEffort) {
-        eprintln!("{}", best_effort_note(session.engine(), conn.name()));
+    if let Some(w) = session.server_warning() {
+        eprintln!("warning: {w}");
+    }
+    if let Some(level) = session.read_only_enforcement() {
+        for note in read_only_notes(session.engine(), conn.name(), level) {
+            eprintln!("{note}");
+        }
     }
     let cancel = session.cancel_handle();
     interrupt.arm(cancel.clone());
@@ -217,7 +223,7 @@ async fn run_script(
     let ask = !session.is_read_only();
     let mut exit = Exit::Ok;
     // A statement that fails to prepare has no `Pending`, so its text comes from the ranges.
-    let ranges = statement_ranges(session.engine(), sql);
+    let ranges = result_ranges(session.engine(), sql);
     let mut script = session.script(sql);
     let mut index = 0;
     let mut settled = None;
@@ -233,10 +239,11 @@ async fn run_script(
             Ok(p) => p,
             Err(e) => {
                 exit = Exit::Failed;
-                // Past the script's end, or stopped at the drain cap (only a drain raises it),
-                // the error came from settling the previous statement, not from this one.
-                let text = ranges.get(index).map(|r| sql[r.clone()].trim());
-                let settling = text.is_none() || matches!(e, ExecuteError::StoppedAtDrainCap);
+                // Past the script's end, inside the previous result's unit, or stopped at the
+                // drain cap (only a drain raises it), the error settled what came before.
+                let (text, continues) = prepare_failure(sql, &ranges, index);
+                let settling =
+                    text.is_none() || continues || matches!(e, ExecuteError::StoppedAtDrainCap);
                 if settling && index > 0 {
                     settled = Some(Settled {
                         after: index,
@@ -312,12 +319,46 @@ async fn run_script(
     Ok((exit, settled))
 }
 
+/// The text of result `index` when preparing it failed, and whether that result continues the
+/// previous result's unit, whose call the failure then belongs to.
+fn prepare_failure<'s>(
+    sql: &'s str,
+    ranges: &[Range<usize>],
+    index: usize,
+) -> (Option<&'s str>, bool) {
+    let Some(range) = ranges.get(index) else {
+        return (None, false);
+    };
+    let continues = index > 0 && ranges.get(index - 1) == Some(range);
+    (Some(sql[range.clone()].trim()), continues)
+}
+
+/// The stderr notes for a read-only session at `level`: the best-effort note, then on an engine
+/// with a residual `note: <residual>`; at `Database` level only engines with a residual print,
+/// first `note: '<name>' is read-only, enforced by the database for this login`.
+fn read_only_notes(engine: Engine, connection: &str, level: ReadOnlyEnforcement) -> Vec<String> {
+    let residual = read_only_residual(engine);
+    let mut notes = match level {
+        ReadOnlyEnforcement::BestEffort => vec![best_effort_note(engine, connection)],
+        _ if residual.is_some() => vec![format!(
+            "note: '{connection}' is read-only, enforced by the database for this login"
+        )],
+        _ => Vec::new(),
+    };
+    notes.extend(residual.map(|r| format!("note: {r}")));
+    notes
+}
+
 /// The warning for a best-effort read-only session, naming the engine's own remedy.
 fn best_effort_note(engine: Engine, connection: &str) -> String {
     let remedy = match engine {
         Engine::Mongodb => {
             "MongoDB refuses writes in the database only for a user whose privileges only read; \
              use such a user for production"
+        }
+        Engine::Surrealdb => {
+            "SurrealDB refuses writes in the database only for a VIEWER login; use one for \
+             production"
         }
         _ => {
             "SQL Server refuses writes in the database only with read_only_user; set \
@@ -330,6 +371,47 @@ fn best_effort_note(engine: Engine, connection: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbento_core::result_ranges;
+
+    #[test]
+    fn a_failure_preparing_a_later_statement_of_a_unit_belongs_to_that_unit() {
+        let sql = "BEGIN; CREATE a:1; COMMIT; RETURN 1";
+        let ranges = result_ranges(Engine::Surrealdb, sql);
+        let tx = Some("BEGIN; CREATE a:1; COMMIT;");
+        assert_eq!(prepare_failure(sql, &ranges, 0), (tx, false));
+        assert_eq!(prepare_failure(sql, &ranges, 1), (tx, true));
+        assert_eq!(prepare_failure(sql, &ranges, 3), (Some("RETURN 1"), false));
+        assert_eq!(prepare_failure(sql, &ranges, 4), (None, false));
+        let pg = "SELECT 1; SELECT 2";
+        let ranges = result_ranges(Engine::Postgres, pg);
+        assert_eq!(prepare_failure(pg, &ranges, 1), (Some("SELECT 2"), false));
+    }
+
+    #[test]
+    fn a_surrealdb_session_states_its_level_and_the_residual() {
+        let best = read_only_notes(Engine::Surrealdb, "sr", ReadOnlyEnforcement::BestEffort);
+        assert_eq!(best.len(), 2, "{best:?}");
+        assert!(
+            best[0].contains("best effort") && best[0].contains("VIEWER"),
+            "{best:?}"
+        );
+        assert!(
+            best[1].starts_with("note: ") && best[1].contains("ALTER SYSTEM"),
+            "{best:?}"
+        );
+        let viewer = read_only_notes(Engine::Surrealdb, "sr", ReadOnlyEnforcement::Database);
+        assert_eq!(viewer.len(), 2, "{viewer:?}");
+        assert!(
+            viewer[0].contains("'sr'") && viewer[0].contains("enforced by the database"),
+            "{viewer:?}"
+        );
+        assert!(viewer[1].contains("sequences"), "{viewer:?}");
+        assert!(read_only_notes(Engine::Postgres, "pg", ReadOnlyEnforcement::Database).is_empty());
+        assert_eq!(
+            read_only_notes(Engine::Mssql, "ms", ReadOnlyEnforcement::BestEffort).len(),
+            1
+        );
+    }
 
     #[test]
     fn the_best_effort_note_names_the_engine_s_own_remedy() {

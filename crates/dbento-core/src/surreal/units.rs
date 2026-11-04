@@ -92,6 +92,14 @@ pub(crate) fn statement_ranges(src: &str) -> Vec<Range<usize>> {
     units(src).into_iter().map(|unit| unit.range).collect()
 }
 
+/// Each unit's range once per statement it holds, so result `i` of a script maps to its unit.
+pub(crate) fn result_ranges(src: &str) -> Vec<Range<usize>> {
+    units(src)
+        .into_iter()
+        .flat_map(|unit| std::iter::repeat_n(unit.range, unit.statements))
+        .collect()
+}
+
 /// How many top-level statements the script holds, by the lexer reading that finds more; the
 /// reading the server took agrees with `statements` in its `begin` frame.
 pub(crate) fn statement_count(src: &str) -> usize {

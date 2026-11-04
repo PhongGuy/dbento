@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime};
 
 use dbento_core::{
     ApprovalRequest, ApprovalStore, Claim, Classification, ExecuteError, HistoryEntry,
-    HistorySource, Limits, Outcome, Session, Writes, statement_ranges,
+    HistorySource, Limits, Outcome, Session, Writes, statement_count,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -51,7 +51,7 @@ pub(crate) async fn run(
             ),
         ));
     }
-    if statement_ranges(found.conn.engine(), &args.sql).len() != 1 {
+    if statement_count(found.conn.engine(), &args.sql) != 1 {
         return Err(one_statement("execute"));
     }
     let classification = classify(server, &found, &args, context).await?;

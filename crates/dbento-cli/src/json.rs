@@ -188,6 +188,9 @@ impl<W: Write> Sink for JsonSink<W> {
         if outcome.extra_results > 0 {
             write!(self.out, ",\"extra_results\":{}", outcome.extra_results)?;
         }
+        if outcome.rolled_back {
+            self.out.write_all(b",\"rolled_back\":true")?;
+        }
         self.out.write_all(b",\"status\":\"ok\"}")?;
         self.out.flush()
     }

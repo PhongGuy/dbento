@@ -4,7 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use dbento_core::{
     CellRef, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome, HistorySource, Limits,
-    OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy, statement_ranges,
+    OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy, statement_count,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::error::ToolError;
 use crate::server::{DbentoServer, Found};
-use crate::session::{record, until_cancelled};
+use crate::session::{enforcement_name, record, until_cancelled};
 
 /// Rows returned when the client names no `max_rows`.
 pub(crate) const DEFAULT_ROWS: u64 = 100;
@@ -51,6 +51,10 @@ pub(crate) struct QueryResult {
     /// Results after the first that ran to their end and are not returned; 0 after a cut, which
     /// stops the batch.
     extra_results: u32,
+    /// The statement's changes did not persist: SurrealDB ran it in a transaction it cancelled.
+    rolled_back: bool,
+    /// Who enforced this read-only session: "database", "best_effort" or "unknown".
+    read_only_enforcement: &'static str,
     duration_ms: u64,
 }
 
@@ -81,7 +85,7 @@ pub(crate) async fn run(
 ) -> Result<QueryResult, ToolError> {
     // The engine decides the split, so the lookup comes first; neither one connects.
     let found = server.find(&args.connection).await?;
-    if statement_ranges(found.conn.engine(), &args.sql).len() != 1 {
+    if statement_count(found.conn.engine(), &args.sql) != 1 {
         return Err(one_statement("query"));
     }
     run_read(server, &found, &args.sql, args.max_rows, context).await
@@ -155,6 +159,8 @@ pub(crate) async fn run_read(
         truncated: outcome.truncated,
         truncated_by,
         extra_results: outcome.extra_results,
+        rolled_back: outcome.rolled_back,
+        read_only_enforcement: enforcement.map_or("unknown", enforcement_name),
         duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
     })
 }

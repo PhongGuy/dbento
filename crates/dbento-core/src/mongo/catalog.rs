@@ -169,6 +169,7 @@ fn inferred_columns(documents: &[Document]) -> Vec<ColumnMeta> {
             let types: Vec<_> = types.into_iter().map(|(name, _)| name).collect();
             let primary_key = (field.name == "_id").then_some(1);
             ColumnMeta::new(field.name, types.join(" | "), nullable, primary_key, None)
+                .mark_inferred()
         })
         .collect()
 }
