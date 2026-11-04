@@ -410,7 +410,7 @@ pub enum ExecuteError {
 
 impl ExecuteError {
     /// The error's text for a session on `engine`: MySQL's drain-cap stop warns that a
-    /// non-transactional write may be kept, SQL Server's that the batch's finished statements
+    /// non-transactional write may be kept, SQL Server's and SurrealDB's that finished statements
     /// keep their writes; everything else is the `Display` text.
     pub fn message_for(&self, engine: Engine) -> String {
         match (self, engine) {
@@ -424,6 +424,12 @@ impl ExecuteError {
                 "the statement was still running when its result was cut short or abandoned, so \
                  it was stopped and the session closed; statements of the batch that already \
                  finished keep what they wrote, and only an open transaction was rolled back"
+                    .to_owned()
+            }
+            (ExecuteError::StoppedAtDrainCap, Engine::Surrealdb) => {
+                "the statement was still running past the drain bound, so the socket was closed \
+                 to stop it and the session ended; earlier statements of a multi-statement unit \
+                 stand, and only an open transaction was rolled back"
                     .to_owned()
             }
             // Attention ends the batch; what it already ran stays unless a transaction undoes it.
@@ -1364,5 +1370,12 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("keep what they wrote"), "{text}");
+    }
+
+    #[test]
+    fn the_surrealdb_drain_cap_text_says_earlier_statements_stand() {
+        let text = ExecuteError::StoppedAtDrainCap.message_for(Engine::Surrealdb);
+        assert!(text.contains("earlier statements"), "{text}");
+        assert!(text.contains("socket was closed"), "{text}");
     }
 }

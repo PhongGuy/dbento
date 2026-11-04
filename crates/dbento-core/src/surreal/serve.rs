@@ -1,6 +1,6 @@
 //! The session's serving task: it runs one script at a time over the socket task, splitting a
-//! unit's frames into one result per statement. Draining lives here, so it happens whether or
-//! not the caller is polling, and the driver only talks to it by channel.
+//! unit's frames into one result per statement. Drain, cut and park live here, so they happen
+//! whether or not the caller is polling, and the driver only talks to it by channel.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use super::cancel::SurrealCancel;
+use super::cancel::{Stop, SurrealCancel};
 use super::classify::surreal_classification;
 use super::decode::Wire;
 use super::login::{Missing, Place, pre_check};
@@ -17,7 +17,9 @@ use super::rpc::{Frame, Frames, Param, Rpc, RpcError};
 use super::shape::Shape;
 use super::units::{Unit, UnitKind, UseTarget, units};
 use super::wire::{WireError, field, statement_error};
-use crate::session::{Classification, ExecuteError, Limits, Outcome, Prepared, Writes};
+use crate::session::{
+    Classification, ExecuteError, Limits, OnTruncate, Outcome, Prepared, TruncatedBy, Writes,
+};
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ResultBatch};
 
 /// Rows that fix a result's columns, unless a limit is reached first.
@@ -140,6 +142,17 @@ impl Run {
     fn rolled_back(&self) -> bool {
         self.fence.is_some() && self.writes != Writes::No
     }
+
+    fn outcome(&self, rows: u64, by: Option<TruncatedBy>) -> Outcome {
+        Outcome {
+            rows,
+            truncated: by.is_some(),
+            rows_affected: None,
+            truncated_by: by,
+            extra_results: 0,
+            rolled_back: self.rolled_back(),
+        }
+    }
 }
 
 /// Where the caller is in the script.
@@ -155,6 +168,7 @@ struct Out {
     reply: Option<ColumnsReply>,
     events: mpsc::Sender<Event>,
     limits: Limits,
+    resume: Option<mpsc::UnboundedReceiver<Option<u64>>>,
 }
 
 impl Out {
@@ -264,12 +278,13 @@ impl Served {
                     reply,
                     events,
                     limits,
-                    ..
+                    resume,
                 } => {
                     let mut out = Out {
                         reply: Some(reply),
                         events,
                         limits,
+                        resume,
                     };
                     let after = if later {
                         later = false;
@@ -471,11 +486,24 @@ impl Served {
         run.index += 1;
     }
 
-    // Nobody reads the rest, so it drains under the bound.
+    // Nobody reads the rest: a read is stopped, since nothing it does is wanted, and a unit that
+    // may write runs on, because stopping it would stop the write.
     async fn abandon(&mut self, run: &mut Run) {
-        if !run.ended {
+        if run.ended {
+            return;
+        }
+        if run.writes == Writes::No {
+            self.give_up(run);
+        } else {
             self.read_past(run, None).await;
         }
+    }
+
+    // Stops the stream and throws away its frames, so nothing unread can stall a later reply.
+    fn give_up(&self, run: &mut Run) {
+        self.cancel.stop(run.id, Stop::Quiet);
+        run.frames.discard();
+        run.ended = true;
     }
 
     // Later statements of a unit run whatever an earlier one did, unless a transaction ends them.
@@ -582,10 +610,20 @@ impl Served {
         let mut builder = BatchBuilder::new(shape.width());
         let mut delivered = 0u64;
         loop {
-            while let Some(row) = rows.pop_front() {
-                let cells = shape.cells(&row);
+            // The limit is read afresh for every row, since `extend` moves it while parked.
+            while let Some(row) = rows.front() {
+                if let Some(by) = out.limits.cut(delivered, builder.total_bytes()) {
+                    match self.cut(run, out, &mut builder, delivered, by).await {
+                        Cut::Resume => continue,
+                        Cut::Over(after) => return after,
+                    }
+                }
+                let cells = shape.cells(row);
                 let refs: Vec<CellRef<'_>> = cells.iter().map(|c| c.as_ref()).collect();
                 let closed = builder.push_typed_row(&refs, |i| cells[i].is_number());
+                drop(refs);
+                drop(cells);
+                rows.pop_front();
                 delivered += 1;
                 if let Some(batch) = closed
                     && !out.send(Event::Batch(batch)).await
@@ -692,4 +730,76 @@ impl Served {
         out.send(Event::Done(done)).await;
         After::Next
     }
+
+    // A result reached its limit. Rows of a read can park; anything else reports `Done` at once
+    // and then drains, unless `Close` may end the session because the statement only reads.
+    async fn cut(
+        &mut self,
+        run: &mut Run,
+        out: &mut Out,
+        builder: &mut BatchBuilder,
+        delivered: u64,
+        by: TruncatedBy,
+    ) -> Cut {
+        if !builder.is_empty() && !out.send(Event::Batch(builder.finish())).await {
+            return Cut::Over(self.dropped(run).await);
+        }
+        let reads = run.writes == Writes::No;
+        match out.limits.on_truncate {
+            OnTruncate::Park if reads && by == TruncatedBy::Rows => {
+                if !out
+                    .send(Event::Parked(run.outcome(delivered, Some(by))))
+                    .await
+                {
+                    return Cut::Over(self.dropped(run).await);
+                }
+                self.park(run, out).await
+            }
+            OnTruncate::Close if reads => {
+                out.send(Event::Done(run.outcome(delivered, Some(by))))
+                    .await;
+                self.close_quietly("the session was closed at a cut result");
+                run.ended = true;
+                Cut::Over(After::Stop)
+            }
+            _ => {
+                out.send(Event::Done(run.outcome(delivered, Some(by))))
+                    .await;
+                // One read alone is stopped; its table may be far longer than the drain bound.
+                if reads && run.statements == 1 {
+                    self.give_up(run);
+                } else {
+                    let index = run.index;
+                    self.read_past(run, Some(index)).await;
+                }
+                run.index += 1;
+                if self.rpc.ended().is_some() {
+                    return Cut::Over(After::Stop);
+                }
+                Cut::Over(After::Next)
+            }
+        }
+    }
+
+    // Holds a parked read until `extend` raises or lifts the row limit, or the stream goes.
+    async fn park(&mut self, run: &mut Run, out: &mut Out) -> Cut {
+        let Some(resume) = out.resume.as_mut() else {
+            return Cut::Over(self.dropped(run).await);
+        };
+        match resume.recv().await {
+            Some(more) => {
+                out.limits.max_rows =
+                    more.and_then(|more| out.limits.max_rows.map(|max| max.saturating_add(more)));
+                Cut::Resume
+            }
+            None => Cut::Over(self.dropped(run).await),
+        }
+    }
+}
+
+/// What a cut left the result doing.
+enum Cut {
+    /// The limit moved, so the same row is tested again.
+    Resume,
+    Over(After),
 }
