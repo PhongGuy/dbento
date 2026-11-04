@@ -14,12 +14,12 @@ license = "MIT OR Apache-2.0"
 log = "0.4.34"
 roxmltree = "0.21.1"
 percent-encoding = "2.3.2"
-rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype", "limits", "hooks", "column_metadata"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "column_decltype", "limits", "hooks", "column_metadata"] }
 sqlite3-parser = "0.17.0"
 tokio = { version = "1.53.2", features = ["sync"] }
 tokio-util = { version = "0.7.20", features = ["compat"] }
 tokio-postgres = "0.7.18"
-pg_query = "6.2.1"
+pg_query = "18.1.0"
 tiberius = { version = "=0.13.0", default-features = false, features = ["rustls", "tds80", "exact-money"] }
 duckdb = { version = "=1.20000.1", default-features = false, features = ["bundled"] }
 mongodb = { version = "=3.9.1", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0", "dns-resolver"] }
@@ -58,17 +58,17 @@ sha2 = "0.11.0"
 gpui-kit = { version = "=0.7.1", features = ["tree-sitter", "tree-sitter-sql"] }
 async-channel = "2.5.0"
 rust-embed = { version = "=8.13.0", features = ["debug-embed"] }
-dirs = "6.0.0"
-rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+dirs = "7.0.0"
+rmcp = { version = "=3.8.0", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1.2.2"
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 zeroize = "1.9.1"
-aes = "0.8.4"
-cbc = { version = "0.1.2", features = ["block-padding"] }
+aes = "0.9.3"
+cbc = { version = "0.2.1", features = ["block-padding"] }
 hmac = "0.13.0"
-base64 = "0.22.1"
+base64 = "0.23.1"
 hex = "0.4.3"
-pkcs8 = { version = "0.10.2", features = ["encryption", "pem", "std"] }
+pkcs8 = { version = "0.11.0", features = ["encryption", "pem", "std"] }
 
 # Optimised libduckdb keeps debug test binaries small.
 [profile.dev.package.libduckdb-sys]
