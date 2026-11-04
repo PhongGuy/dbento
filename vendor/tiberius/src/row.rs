@@ -634,7 +634,7 @@ mod tests {
         assert_eq!(row.result_index(), 3);
     }
 
-    // Regression test for #211: an out-of-range usize index must not panic.
+    // Regression: an out-of-range usize index must not panic.
     #[test]
     fn try_get_out_of_range_index_returns_none() {
         let row = make_row();
@@ -646,8 +646,8 @@ mod tests {
         assert!(value.is_err());
     }
 
-    // Regression test for #382: a raw-identifier column name (`r#type`) must
-    // match the plain SQL column name (`type`).
+    // Regression: a raw-identifier column name (`r#type`) must match the plain
+    // SQL column name (`type`).
     #[test]
     fn raw_identifier_column_name_matches() {
         let row = make_row();

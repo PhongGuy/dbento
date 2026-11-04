@@ -462,7 +462,7 @@ mod tests {
     }
 
     // No-TLS build: an explicit encryption request must error (not silently
-    // downgrade to plaintext, #305); opting out and an omitted keyword stay
+    // downgrade to plaintext); opting out and an omitted keyword stay
     // `NotSupported`.
 
     #[test]
