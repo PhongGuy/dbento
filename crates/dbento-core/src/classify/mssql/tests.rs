@@ -405,3 +405,22 @@ fn a_hidden_commit_is_a_write_unless_the_batch_fails_to_parse() {
         assert_eq!(writes(sql), Writes::Unknown, "{sql}");
     }
 }
+
+// The MCP best-effort description states these forms get through; if one starts being refused,
+// or stops parsing as it does, that text is no longer true.
+#[test]
+fn the_forms_the_best_effort_description_quotes_are_not_refused() {
+    for sql in [
+        "SELECT 1 AS one EXEC('COMMIT COMMIT DROP DATABASE victim')",
+        "SELECT 1 AS one EXEC('COMMIT COMMIT KILL 999')",
+        "EXEC('COMMIT COMMIT') SHUTDOWN WITH NOWAIT",
+    ] {
+        let c = mssql_classification(sql);
+        assert_eq!(c.writes, Writes::Unknown, "{sql}");
+        assert!(!c.transaction_control, "{sql}");
+    }
+    assert_eq!(
+        mssql_classification("EXEC('COMMIT COMMIT')").writes,
+        Writes::Yes
+    );
+}

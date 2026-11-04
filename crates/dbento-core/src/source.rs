@@ -10,20 +10,24 @@ use sqlite3_parser::{
     },
 };
 use sqlparser::{
-    ast::{SetExpr, Statement, TableFactor},
-    dialect::MySqlDialect,
+    ast::{Ident, SetExpr, Statement, TableFactor},
+    dialect::{Dialect, MsSqlDialect, MySqlDialect},
     keywords::Keyword,
     parser::Parser as SqlParser,
     tokenizer::{Token, Tokenizer as SqlTokenizer},
 };
 
-use crate::{Engine, RelationRef};
+use crate::{
+    Engine, RelationRef,
+    tsql::{TsqlKind, tsql_tokens},
+};
 
 /// The table `sql` reads when it is exactly one SELECT over one plain table: no join,
 /// subquery, CTE, set operation, table function or second statement. An unqualified name
 /// gets the engine's default schema (`public`, `main`); on MySQL it takes `default_schema`,
-/// the connection's configured database (a `USE` in the session is not tracked), which
-/// Postgres and SQLite ignore. None when undecided or unparsable.
+/// the connection's configured database (a `USE` in the session is not tracked), and on SQL
+/// Server the connection's default schema; Postgres and SQLite ignore it. None when undecided
+/// or unparsable.
 pub fn single_source(
     engine: Engine,
     sql: &str,
@@ -33,7 +37,7 @@ pub fn single_source(
         Engine::Postgres => pg_source(sql),
         Engine::Sqlite => sqlite_source(sql),
         Engine::Mysql => my_source(sql, default_schema),
-        Engine::Mssql => None,
+        Engine::Mssql => ms_source(sql, default_schema),
         Engine::Duckdb => None,
         Engine::Mongodb => None,
         Engine::Surrealdb => None,
@@ -128,14 +132,48 @@ fn my_source(sql: &str, default_schema: Option<&str>) -> Option<RelationRef> {
     if selects != 1 {
         return None;
     }
-    let statements = SqlParser::parse_sql(&MySqlDialect {}, sql).ok()?;
+    let parts = plain_table(&MySqlDialect {}, sql)?;
+    match parts.as_slice() {
+        [db, table] => Some(RelationRef::new(&db.value, &table.value)),
+        // A bare DUAL is MySQL's pseudo-table, not a relation; a backticked one can be real.
+        [table] if table.quote_style.is_none() && table.value.eq_ignore_ascii_case("dual") => None,
+        [table] => Some(RelationRef::new(default_schema?, &table.value)),
+        _ => None,
+    }
+}
+
+/// SQL Server: one plain SELECT over one table. T-SQL needs no `;` between statements, so the
+/// SELECT words are counted with the lexer that reads text as the server does. A bare `#` or
+/// `@` name is a session's own table, never a catalog relation; a three-part name is elsewhere.
+fn ms_source(sql: &str, default_schema: Option<&str>) -> Option<RelationRef> {
+    let selects = tsql_tokens(sql)
+        .iter()
+        .filter(|t| t.kind == TsqlKind::Word && sql[t.range.clone()].eq_ignore_ascii_case("select"))
+        .count();
+    if selects != 1 {
+        return None;
+    }
+    let parts = plain_table(&MsSqlDialect {}, sql)?;
+    let local = |name: &Ident| name.quote_style.is_none() && name.value.starts_with(['#', '@']);
+    match parts.as_slice() {
+        [.., table] if local(table) => None,
+        [schema, table] => Some(RelationRef::new(&schema.value, &table.value)),
+        [table] => Some(RelationRef::new(default_schema?, &table.value)),
+        _ => None,
+    }
+}
+
+/// The name parts of the one table `sql` selects from, when it parses in `dialect` as a single
+/// SELECT with no CTE, INTO, FOR clause, join or table function.
+fn plain_table(dialect: &dyn Dialect, sql: &str) -> Option<Vec<Ident>> {
+    let statements = SqlParser::parse_sql(dialect, sql).ok()?;
     let [Statement::Query(query)] = statements.as_slice() else {
         return None;
     };
     let SetExpr::Select(select) = query.body.as_ref() else {
         return None;
     };
-    if query.with.is_some() || select.into.is_some() {
+    if query.with.is_some() || query.for_clause.is_some() || select.into.is_some() {
         return None;
     }
     let [from] = select.from.as_slice() else {
@@ -150,18 +188,7 @@ fn my_source(sql: &str, default_schema: Option<&str>) -> Option<RelationRef> {
     if !from.joins.is_empty() {
         return None;
     }
-    let parts = name
-        .0
-        .iter()
-        .map(|p| p.as_ident())
-        .collect::<Option<Vec<_>>>()?;
-    match parts.as_slice() {
-        [db, table] => Some(RelationRef::new(&db.value, &table.value)),
-        // A bare DUAL is MySQL's pseudo-table, not a relation; a backticked one can be real.
-        [table] if table.quote_style.is_none() && table.value.eq_ignore_ascii_case("dual") => None,
-        [table] => Some(RelationRef::new(default_schema?, &table.value)),
-        _ => None,
-    }
+    name.0.iter().map(|p| p.as_ident().cloned()).collect()
 }
 
 /// How many SELECT keyword tokens `sql` holds; None when the lexer rejects the text.

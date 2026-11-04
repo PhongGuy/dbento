@@ -4,7 +4,7 @@ use std::time::{Instant, SystemTime};
 
 use dbento_core::{
     CellRef, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome, HistorySource, Limits,
-    OnTruncate, Outcome, ReadOnlyEnforcement, TruncatedBy, statement_ranges,
+    OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy, statement_ranges,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -48,6 +48,9 @@ pub(crate) struct QueryResult {
     truncated: bool,
     /// The bound that cut the result, or null when it is whole.
     truncated_by: Option<Bound>,
+    /// Results after the first that ran to their end and are not returned; 0 after a cut, which
+    /// stops the batch.
+    extra_results: u32,
     duration_ms: u64,
 }
 
@@ -103,15 +106,15 @@ pub(crate) async fn run_read(
     };
     let started_at = SystemTime::now();
     let started = Instant::now();
+    let engine = opened.session.engine();
     let cancel = opened.session.cancel_handle();
     let work = collect(&mut opened.session, sql, limits);
-    let collected = until_cancelled(context, &cancel, work).await;
+    let collected = until_cancelled(context, &cancel, engine, work).await;
     let elapsed = started.elapsed();
-    let engine = opened.session.engine();
     let enforcement = opened.session.read_only_enforcement();
-    // A script ends at its first result here, so what the rest of the batch did is known only as
-    // the session closes. Where the database cannot refuse writes, any error then means the batch
-    // did not finish cleanly, so what it wrote is unknown and success would claim otherwise.
+    // A cut stops the batch, so what it did is known only as the session closes. Where the
+    // database cannot refuse writes, any error then means the batch did not finish cleanly, so
+    // what it wrote is unknown and success would claim otherwise.
     let collected = match (opened.session.close().await, collected) {
         (Err(e @ ExecuteError::ReadOnlyViolation { .. }), _) => Err(ToolError::from_execute(&e)),
         (Err(e), Ok(_)) if enforcement == Some(ReadOnlyEnforcement::BestEffort) => {
@@ -151,17 +154,20 @@ pub(crate) async fn run_read(
         row_count: outcome.rows,
         truncated: outcome.truncated,
         truncated_by,
+        extra_results: outcome.extra_results,
         duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
     })
 }
 
-/// Executes the script's only statement and walks every batch into JSON rows.
+/// Executes the script's only statement, walks every batch into JSON rows and, unless a cut
+/// stopped it, reads the rest of the script to its end.
 async fn collect(
     session: &mut dbento_core::Session,
     sql: &str,
     limits: Limits,
 ) -> Result<(Vec<ColumnInfo>, Vec<Vec<Value>>, Outcome), ToolError> {
     let engine = session.engine();
+    let enforcement = session.read_only_enforcement();
     let failed = |e: ExecuteError| ToolError::from_execute_on(&e, engine);
     let mut script = session.script(sql);
     let pending = match script.next().await {
@@ -179,11 +185,62 @@ async fn collect(
             );
         }
     }
-    let outcome = stream
+    let mut outcome = stream
         .outcome()
         .cloned()
         .ok_or_else(|| ToolError::new("internal", "the result ended without an outcome"))?;
-    Ok((stream.columns().to_vec(), rows, outcome))
+    let columns = stream.columns().to_vec();
+    drop(stream);
+    // A cut under Close ended the session, so nothing is left to read.
+    if !outcome.truncated {
+        let extra = discard(&mut script, enforcement).await.map_err(failed)?;
+        outcome.extra_results = outcome.extra_results.saturating_add(extra);
+    }
+    Ok((columns, rows, outcome))
+}
+
+/// Reads the script's later results to their end, keeping no rows, and counts those with
+/// columns. An error fails the call on a best-effort session or as a read-only violation, where
+/// what the batch wrote is unknown or refused; otherwise the database refused every write, so
+/// counting stops and the first result stands.
+async fn discard(
+    script: &mut Script<'_>,
+    enforcement: Option<ReadOnlyEnforcement>,
+) -> Result<u32, ExecuteError> {
+    let mut extra = 0_u32;
+    while let Some(next) = script.next().await {
+        let read = match next {
+            Ok(pending) => read_to_end(pending).await,
+            Err(e) => Err(e),
+        };
+        match read {
+            Ok(counted) => extra = extra.saturating_add(counted),
+            Err(e)
+                if enforcement == Some(ReadOnlyEnforcement::BestEffort)
+                    || matches!(e, ExecuteError::ReadOnlyViolation { .. }) =>
+            {
+                return Err(e);
+            }
+            Err(_) => break,
+        }
+    }
+    Ok(extra)
+}
+
+/// Runs one later statement to its end and answers how many results it counts for. No row is
+/// kept and Drain sends no Attention, so the statement finishes as written.
+async fn read_to_end(pending: Pending<'_>) -> Result<u32, ExecuteError> {
+    let limits = {
+        let mut l = Limits::default();
+        l.max_rows = Some(0);
+        l.on_truncate = OnTruncate::Drain;
+        l
+    };
+    let mut stream = pending.execute(limits).await?;
+    while stream.next_batch().await?.is_some() {}
+    let has_columns = !stream.columns().is_empty();
+    let inner = stream.outcome().map_or(0, |o| o.extra_results);
+    Ok(u32::from(has_columns).saturating_add(inner))
 }
 
 /// How a finished (or failed) statement reads in the history.

@@ -206,7 +206,7 @@ async fn the_tool_descriptions_name_mysql() {
     };
     let listed = description("list_connections");
     assert!(
-        listed.contains("sqlite, postgres, mysql or duckdb"),
+        listed.contains("sqlite, postgres, mysql, mssql or duckdb"),
         "{listed}"
     );
     let schemas = description("list_schemas");
@@ -216,4 +216,20 @@ async fn the_tool_descriptions_name_mysql() {
     );
     let explain = description("explain");
     assert!(explain.contains("not available on MySQL"), "{explain}");
+}
+
+#[tokio::test]
+async fn a_call_reports_its_later_result_sets_in_extra_results() {
+    for (label, db) in my_matrix().await {
+        db.scalar(
+            "CREATE PROCEDURE three() BEGIN SELECT 1 AS a; SELECT 2 AS b; SELECT 3 AS c; END",
+        )
+        .await;
+        let server = TestServer::mysql(&db, "").await;
+        let r = server.ok("query", q("CALL three()")).await;
+        assert_eq!(r["rows"], json!([["1"]]), "{label}");
+        assert_eq!(r["extra_results"], 2, "{label}: {r}");
+        let r = server.ok("query", q("SELECT 1 AS a")).await;
+        assert_eq!(r["extra_results"], 0, "{label}: {r}");
+    }
 }

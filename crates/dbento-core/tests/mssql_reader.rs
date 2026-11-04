@@ -261,3 +261,14 @@ async fn a_read_only_database_refuses_as_a_violation_in_any_session() {
         other => panic!("{:?}", other.err()),
     }
 }
+
+#[tokio::test]
+async fn a_reader_connection_states_the_level_its_session_reports() {
+    dbento_testkit::skip_without_mssql!();
+    let fx = ms_reader(T, &format!("read_only = true\n{READER}")).await;
+    let s = fx.session(SessionOptions::default()).await;
+    assert_eq!(
+        Some(fx.conn().read_only_enforcement()),
+        s.read_only_enforcement()
+    );
+}

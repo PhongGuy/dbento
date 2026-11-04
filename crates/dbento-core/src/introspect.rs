@@ -170,7 +170,9 @@ impl ColumnMeta {
         self.primary_key
     }
 
-    /// The default expression's text, if the column has one.
+    /// The default expression's text, if the column has one. On SQL Server, a text that starts
+    /// `/* withheld` stands for an expression the login may not read, and one that starts
+    /// `/* cut */` is the expression past the definition cap, so neither is always runnable SQL.
     pub fn default(&self) -> Option<&str> {
         self.default.as_deref()
     }
@@ -210,6 +212,7 @@ pub fn default_schema(engine: Engine, conn: &ConnectionConfig) -> Option<String>
         Engine::Postgres => Some("public".to_owned()),
         Engine::Sqlite => Some("main".to_owned()),
         Engine::Mysql => conn.database().map(str::to_owned),
+        // Assumed, not the login's own default schema: resolve that before row edits turn on.
         Engine::Mssql => Some("dbo".to_owned()),
         Engine::Duckdb => Some("main".to_owned()),
         Engine::Mongodb => conn.database().map(str::to_owned),

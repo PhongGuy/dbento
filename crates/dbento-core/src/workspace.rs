@@ -4,7 +4,7 @@
 
 use crate::edit::ConnectionSpec;
 use crate::folder::{FolderPath, parse_written};
-use crate::session::{Capabilities, QueryLanguage};
+use crate::session::{Capabilities, QueryLanguage, ReadOnlyEnforcement};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -1603,6 +1603,15 @@ impl ConnectionConfig {
     /// The SQL Server reader user that read-only work impersonates; `None` on other engines.
     pub fn read_only_user(&self) -> Option<&str> {
         self.read_only_user.as_deref()
+    }
+
+    /// How a read-only session on this connection is enforced, known without connecting.
+    pub fn read_only_enforcement(&self) -> ReadOnlyEnforcement {
+        if self.engine == Engine::Mssql && self.read_only_user.is_none() {
+            ReadOnlyEnforcement::BestEffort
+        } else {
+            ReadOnlyEnforcement::Database
+        }
     }
 
     /// Postgres startup settings; empty for SQLite.
