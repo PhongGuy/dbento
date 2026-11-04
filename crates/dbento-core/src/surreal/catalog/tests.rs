@@ -170,6 +170,10 @@ fn declared_columns_put_id_first_and_read_kind_default_and_nullability() {
     assert!(cols[5].nullable() && cols[6].nullable());
     assert_eq!((cols[7].type_name(), cols[7].nullable()), ("any", true));
     assert!(cols.iter().all(|c| !c.inferred()));
+    assert!(
+        !nullable("array<int | none>"),
+        "a nested none is the element's, not the field's"
+    );
 }
 
 #[test]
@@ -212,6 +216,8 @@ fn sampled_keys_not_declared_are_appended_as_inferred() {
         ("int", "string")
     );
     assert_eq!(with_inferred(declared.clone(), &[]), declared);
+    let mixed = [obj(&[("a", Wire::Int(1))]), Wire::Int(2)];
+    assert_eq!(with_inferred(declared.clone(), &mixed), declared);
 }
 
 #[test]
