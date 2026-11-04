@@ -269,3 +269,31 @@ async fn an_abandoned_read_or_a_cancelled_transaction_owes_nothing() {
     assert!(s.settle().await.is_ok());
     assert_eq!(db.count("undone").await, 0);
 }
+
+// The lexer reads `RETURN ->? / 2; SLEEP 30s; RETURN 7 / 2` as one statement and the server as
+// three. A stop of the `SLEEP` the caller never saw as a statement is heard once, not again at
+// the settle.
+#[tokio::test]
+async fn a_stop_in_a_statement_the_lexer_did_not_see_is_not_owed_again() {
+    let db = surreal_db().await;
+    let sql = "RETURN ->? / 2; SLEEP 30s; RETURN 7 / 2";
+    let mut s = sr_root(&db, "", SessionOptions::default()).await;
+    cancel_after(&s, Duration::from_millis(500));
+    let ran = run(&mut s, sql, Limits::default()).await;
+    assert!(
+        matches!(ran[..], [Err(ExecuteError::Cancelled)]),
+        "{:?}",
+        ran[0].as_ref().err()
+    );
+    let settled = s.settle().await;
+    assert!(settled.is_ok(), "after a cancel: {settled:?}");
+    let mut s = sr_root(&db, "", timed(Duration::from_millis(500))).await;
+    let ran = run(&mut s, sql, Limits::default()).await;
+    assert!(
+        matches!(ran[..], [Err(ExecuteError::Timeout)]),
+        "{:?}",
+        ran[0].as_ref().err()
+    );
+    let settled = s.settle().await;
+    assert!(settled.is_ok(), "after a deadline: {settled:?}");
+}

@@ -150,6 +150,22 @@ fn a_frame_too_deep_to_decode_still_reaches_its_stream() {
     assert!(routes.contains_key(&3), "the stream goes on");
 }
 
+// The socket is still fine, so a call's undecodable reply fails that call, not the session.
+#[test]
+fn a_call_reply_too_deep_to_decode_fails_only_that_call() {
+    let (mut routes, gauge) = pair();
+    let (reply, mut wait) = oneshot::channel();
+    routes.insert(4, Route::Call(reply));
+    let mut deep = vec![0x81; 300];
+    deep.push(0x01);
+    let frame = map(&[("id", &int(4)), ("result", &deep)]);
+    route(&frame, &mut routes, &gauge).unwrap();
+    match wait.try_recv().unwrap() {
+        Err(RpcError::Unreadable(message)) => assert!(message.contains("nesting"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn stream_frames_parse_by_kind_and_end_removes_the_route() {
     let (mut routes, gauge) = pair();

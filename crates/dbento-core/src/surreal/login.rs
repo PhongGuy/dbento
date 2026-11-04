@@ -139,7 +139,7 @@ pub(crate) fn read_only_level(
 fn wire_message(e: RpcError) -> String {
     match e {
         RpcError::Server(e) => e.message,
-        RpcError::Closed(why) => why,
+        RpcError::Unreadable(why) | RpcError::Closed(why) => why,
     }
 }
 
@@ -192,6 +192,9 @@ impl From<RpcError> for Missing {
     fn from(e: RpcError) -> Self {
         match e {
             RpcError::Server(e) => Missing::Server(e),
+            RpcError::Unreadable(why) => {
+                Missing::Target(format!("Dbento cannot read the server's reply: {why}"))
+            }
             RpcError::Closed(why) => Missing::Closed(why),
         }
     }

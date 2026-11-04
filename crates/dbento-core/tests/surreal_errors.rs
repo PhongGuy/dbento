@@ -251,3 +251,31 @@ async fn an_error_in_a_statement_the_lexer_did_not_see_is_owed_to_the_settle() {
     );
     assert!(s.settle().await.is_ok(), "owed once");
 }
+
+// An earlier unit owes a statement's error and a later one meets the drain bound: the settles
+// hear both, the statement's first.
+#[tokio::test]
+async fn a_drain_bound_does_not_overwrite_an_error_an_earlier_unit_owes() {
+    let db = surreal_db().await;
+    let mut opts = SessionOptions::default();
+    opts.bounds.drain = Some(Duration::from_secs(1));
+    let mut s = sr_root(&db, "", opts).await;
+    let mut script = s.script(
+        "RETURN ->? / 2; THROW 'first'; RETURN 7 / 2; LET $a = 1; CREATE early:1; SLEEP 30s;",
+    );
+    for _ in 0..3 {
+        let pending = script.next().await.unwrap().unwrap();
+        collect(pending, Limits::default()).await.unwrap();
+    }
+    drop(script);
+    let first = s.settle().await;
+    assert!(
+        matches!(&first, Err(ExecuteError::Database { message, .. }) if message.contains("first")),
+        "{first:?}"
+    );
+    let second = s.settle().await;
+    assert!(
+        matches!(second, Err(ExecuteError::StoppedAtDrainCap)),
+        "{second:?}"
+    );
+}

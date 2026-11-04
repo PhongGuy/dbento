@@ -130,6 +130,8 @@ fn write_param(param: &Param<'_>, w: &mut Vec<u8>) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RpcError {
     Server(WireError),
+    /// The reply came, but Dbento cannot decode it; the socket is fine.
+    Unreadable(String),
     Closed(String),
 }
 
@@ -563,7 +565,7 @@ fn unreadable(
         Some(Route::Stream(frames)) => deliver(frames, Frame::Unreadable { message }, bytes, gauge),
         Some(Route::Call(_)) => {
             if let Some(Route::Call(answer)) = routes.remove(&id) {
-                let _ = answer.send(Err(RpcError::Closed(message)));
+                let _ = answer.send(Err(RpcError::Unreadable(message)));
             }
         }
         None => {}

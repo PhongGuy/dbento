@@ -95,8 +95,8 @@ struct Served {
     cancel: Arc<SurrealCancel>,
     /// Where RPC `use` has put the session, for the next `USE` unit's pre-check.
     place: Place,
-    /// An error no caller has heard, for the next settle or close.
-    owed: Option<ExecuteError>,
+    /// Errors no caller has heard, for the next settles or close.
+    owed: Owed,
     /// Dbento closed the socket itself, so later calls read as a plain closed session.
     quiet: bool,
     /// The caller has heard why the session ended.
@@ -117,7 +117,7 @@ pub(crate) async fn serve(
         rules,
         cancel,
         place,
-        owed: None,
+        owed: Owed::default(),
         quiet: false,
         told: AtomicBool::new(false),
     };
@@ -136,6 +136,29 @@ pub(crate) async fn serve(
         }
     }
     s.rpc.close("the session was dropped");
+}
+
+/// What no caller has heard yet: a statement's error, then the one that closed the session.
+/// Each settle or close takes one, and each slot keeps its first.
+#[derive(Default)]
+struct Owed {
+    statement: Option<ExecuteError>,
+    closing: Option<ExecuteError>,
+}
+
+impl Owed {
+    fn keep(&mut self, e: ExecuteError) {
+        let slot = if e.closes_session() {
+            &mut self.closing
+        } else {
+            &mut self.statement
+        };
+        slot.get_or_insert(e);
+    }
+
+    fn take(&mut self) -> Option<ExecuteError> {
+        self.statement.take().or_else(|| self.closing.take())
+    }
 }
 
 /// One unit on the wire.
@@ -488,6 +511,7 @@ impl Served {
             .await
             .map_err(|e| match e {
                 RpcError::Server(e) => self.heard(statement_error(&e, self.rules.reading())),
+                RpcError::Unreadable(why) => unreadable(&why),
                 RpcError::Closed(why) => self.closed(why),
             })?;
         if let Some(Wire::Text(namespace)) = field(&reply, "namespace") {
@@ -507,6 +531,7 @@ impl Served {
                 format!("the server answered begin with {other:?}"),
             )),
             Err(RpcError::Server(e)) => Err(self.heard(statement_error(&e, self.rules.reading()))),
+            Err(RpcError::Unreadable(why)) => Err(unreadable(&why)),
             Err(RpcError::Closed(why)) => Err(self.closed(why)),
         }
     }
@@ -527,11 +552,13 @@ impl Served {
             self.read_past(&mut run, None).await;
         }
         self.close_fence(run.fence.take()).await;
-        if self.owed.is_none() && self.cancel.stopped(run.id) != Some(Stop::Quiet) {
+        if self.cancel.stopped(run.id) != Some(Stop::Quiet) {
             if let Some(e) = run.end_error.take().filter(|e| !e.undone()) {
-                self.owed = Some(self.end_error(&run, &e));
+                let e = self.end_error(&run, &e);
+                self.owed.keep(e);
             } else if let Some(e) = run.extra_error.take() {
-                self.owed = Some(self.unseen(&run, &e));
+                let e = self.unseen(&run, &e);
+                self.owed.keep(e);
             }
         }
         self.cancel.end();
@@ -563,7 +590,11 @@ impl Served {
                         index,
                         error: Some(e),
                         ..
-                    } if index >= run.expected && run.extra_error.is_none() && !e.undone() => {
+                    } if index >= run.expected
+                        && run.extra_error.is_none()
+                        && !e.undone()
+                        && !e.stopped() =>
+                    {
                         run.extra_error = Some(e);
                     }
                     Frame::Rows { index, .. } | Frame::Value { index, .. }
@@ -590,7 +621,7 @@ impl Served {
             Ok(extras) => run.extra += u32::try_from(extras).unwrap_or(u32::MAX),
             Err(_) => {
                 self.close_quietly("the statement was stopped at the drain bound");
-                self.owed = Some(ExecuteError::StoppedAtDrainCap);
+                self.owed.keep(ExecuteError::StoppedAtDrainCap);
                 run.ended = true;
             }
         }
