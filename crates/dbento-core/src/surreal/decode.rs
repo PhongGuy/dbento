@@ -93,6 +93,17 @@ pub(crate) fn decode_bounded(frame: &[u8], max_values: usize) -> Result<Wire, De
     }
 }
 
+/// The id at the head of a frame that failed to decode. The envelope's keys are sorted and
+/// shallow, so a value too deep to read still says whose reply it was.
+pub(crate) fn envelope(frame: &[u8]) -> Option<i64> {
+    let mut r = SliceReader::new(frame);
+    types::Map::<()>::len(&mut r).ok()?;
+    if <&str>::decode(&mut r).ok()? != "id" {
+        return None;
+    }
+    i64::decode(&mut r).ok()
+}
+
 fn failure(message: impl Into<String>) -> DecodeFailure {
     DecodeFailure {
         message: message.into(),
