@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dbento_core::{
-    ColumnMeta, ConnectionConfig, RelationKind, RelationRef, SecretStore, SessionOptions,
+    ColumnMeta, ConnectionConfig, Engine, RelationKind, RelationRef, SecretStore, SessionOptions,
     Workspace, connect, resolve_key_passphrase, resolve_secret,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -66,10 +66,14 @@ struct ConnectionList {
 #[derive(Serialize, JsonSchema)]
 struct ConnectionInfo {
     name: String,
-    /// `"sqlite"`, `"postgres"`, `"mysql"` (MySQL and MariaDB), `"mssql"` or `"duckdb"`.
+    /// `"sqlite"`, `"postgres"`, `"mysql"` (MySQL and MariaDB), `"mssql"`, `"duckdb"`,
+    /// `"mongodb"` or `"surrealdb"`.
     engine: &'static str,
+    /// The query language: `"SQL"`, `"MongoDB shell"` or `"SurrealQL"`.
+    language: &'static str,
     read_only: bool,
-    /// Who enforces a read-only session: `"database"`, `"best_effort"` or `"unknown"`.
+    /// Who enforces a read-only session: `"database"`, `"best_effort"` or `"unknown"`, the last
+    /// for SurrealDB, whose level is known only after connecting.
     read_only_enforcement: &'static str,
     /// What a read-only session here does and does not stop, in plain words.
     session: &'static str,
@@ -84,8 +88,14 @@ impl ConnectionInfo {
         ConnectionInfo {
             name: c.name().to_owned(),
             engine: c.engine().name(),
+            language: c.engine().capabilities().language.name(),
             read_only: c.read_only(),
-            read_only_enforcement: enforcement_name(c.read_only_enforcement()),
+            // SurrealDB's level follows the login, which only a connection reveals.
+            read_only_enforcement: if c.engine() == Engine::Surrealdb {
+                "unknown"
+            } else {
+                enforcement_name(c.read_only_enforcement())
+            },
             session: session_description(c.engine(), c.read_only_enforcement()),
             production: c.is_production(),
             folder: c.folder().map(ToString::to_string),
@@ -307,9 +317,10 @@ impl DbentoServer {
 impl DbentoServer {
     #[tool(
         description = "List the workspace's connections: name, engine (sqlite, postgres, \
-                       mysql, mssql or duckdb; mysql also covers MariaDB), whether it is \
-                       read-only, how far its read-only session goes (`read_only_enforcement`, \
-                       `session`), whether it is tagged production, and its folder.",
+                       mysql, mssql, duckdb, mongodb or surrealdb; mysql also covers MariaDB), \
+                       its query `language`, whether it is read-only, how far its read-only \
+                       session goes (`read_only_enforcement`, `session`), whether it is tagged \
+                       production, and its folder.",
         output_schema = schema_for_output::<ConnectionList>(),
         annotations(read_only_hint = true, open_world_hint = false)
     )]
