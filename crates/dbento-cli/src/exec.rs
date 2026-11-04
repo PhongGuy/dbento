@@ -4,9 +4,9 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use dbento_core::{
-    CancelHandle, ColumnInfo, ConnectionConfig, ExecuteError, Limits, Outcome, ReadOnlyEnforcement,
-    ResultBatch, Session, SessionOptions, Unguarded, Workspace, connect, resolve_key_passphrase,
-    resolve_secret, statement_ranges,
+    CancelHandle, ColumnInfo, ConnectionConfig, Engine, ExecuteError, Limits, Outcome,
+    ReadOnlyEnforcement, ResultBatch, Session, SessionOptions, Unguarded, Workspace, connect,
+    resolve_key_passphrase, resolve_secret, statement_ranges,
 };
 
 use crate::Exit;
@@ -105,11 +105,7 @@ pub(crate) async fn execute(
         }
     };
     if session.read_only_enforcement() == Some(ReadOnlyEnforcement::BestEffort) {
-        eprintln!(
-            "note: '{}' is read-only by best effort: SQL Server refuses writes in the database \
-             only with read_only_user; set read_only_user or use a reader login for production",
-            conn.name()
-        );
+        eprintln!("{}", best_effort_note(session.engine(), conn.name()));
     }
     let cancel = session.cancel_handle();
     interrupt.arm(cancel.clone());
@@ -314,4 +310,41 @@ async fn run_script(
         exit = exit.max(Exit::Failed);
     }
     Ok((exit, settled))
+}
+
+/// The warning for a best-effort read-only session, naming the engine's own remedy.
+fn best_effort_note(engine: Engine, connection: &str) -> String {
+    let remedy = match engine {
+        Engine::Mongodb => {
+            "MongoDB refuses writes in the database only for a user whose privileges only read; \
+             use such a user for production"
+        }
+        _ => {
+            "SQL Server refuses writes in the database only with read_only_user; set \
+             read_only_user or use a reader login for production"
+        }
+    };
+    format!("note: '{connection}' is read-only by best effort: {remedy}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_best_effort_note_names_the_engine_s_own_remedy() {
+        let mongo = best_effort_note(Engine::Mongodb, "docs");
+        assert!(
+            mongo.contains("'docs'") && mongo.contains("best effort"),
+            "{mongo}"
+        );
+        assert!(mongo.contains("MongoDB"), "{mongo}");
+        assert!(!mongo.contains("read_only_user"), "{mongo}");
+
+        let mssql = best_effort_note(Engine::Mssql, "prod");
+        assert!(
+            mssql.contains("best effort") && mssql.contains("read_only_user"),
+            "{mssql}"
+        );
+    }
 }

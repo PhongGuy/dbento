@@ -6,7 +6,7 @@
 #![deny(missing_docs)]
 
 mod value;
-pub use value::{CellRef, ColumnInfo, ColumnSource, ResultBatch};
+pub use value::{CellRef, ColumnInfo, ColumnSource, DocumentRef, ResultBatch};
 
 mod folder;
 pub use folder::{FolderPath, FolderPathError, WorkspaceItem};

@@ -4,7 +4,7 @@
 //! per engine; each engine implements [`Driver`].
 
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +14,8 @@ use crate::duckdb::{DuckCancel, DuckDriver};
 use crate::explain::{ExplainOutput, ExplainRequest};
 use crate::fkeys::{ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
+#[cfg(feature = "mongodb")]
+use crate::mongo::driver::{MongoCancel, MongoDriver};
 use crate::mssql::{MssqlCancel, MssqlDriver};
 use crate::mysql::{MysqlCancel, MysqlDriver};
 use crate::objects::{
@@ -387,7 +389,8 @@ pub enum ExecuteError {
 impl ExecuteError {
     /// The error's text for a session on `engine`: MySQL's drain-cap stop warns that a
     /// non-transactional write may be kept, SQL Server's that the batch's finished statements
-    /// keep their writes; everything else is the `Display` text.
+    /// keep their writes, and MongoDB's timeout and cancel that a write has no transaction to
+    /// undo it; everything else is the `Display` text.
     pub fn message_for(&self, engine: Engine) -> String {
         match (self, engine) {
             (ExecuteError::StoppedAtDrainCap, Engine::Mysql) => {
@@ -400,6 +403,14 @@ impl ExecuteError {
                 "the statement was still running when its result was cut short or abandoned, so \
                  it was stopped and the session closed; statements of the batch that already \
                  finished keep what they wrote, and only an open transaction was rolled back"
+                    .to_owned()
+            }
+            (ExecuteError::Timeout, Engine::Mongodb) => {
+                "the statement timed out; a write may have kept part of its changes".to_owned()
+            }
+            (ExecuteError::Cancelled, Engine::Mongodb) => {
+                "the statement was cancelled here; a write may keep running on the server until \
+                 it ends or hits the time limit"
                     .to_owned()
             }
             // Attention ends the batch; what it already ran stays unless a transaction undoes it.
@@ -457,6 +468,9 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) timeout: Option<Duration>,
     /// See [`SessionOptions::trusted_sql`].
     pub(crate) trusted_sql: bool,
+    /// The workspace folder, which relative certificate paths in a MongoDB `uri` resolve from.
+    #[cfg_attr(not(feature = "mongodb"), allow(dead_code))] // only MongoDB reads it
+    pub(crate) ws_dir: &'a Path,
 }
 
 /// The engine-specific half of a session. Each future it returns is `Send` because the
@@ -495,6 +509,8 @@ enum SessionInner {
     Mssql(MssqlDriver),
     #[cfg(feature = "duckdb")]
     Duckdb(DuckDriver),
+    #[cfg(feature = "mongodb")]
+    Mongodb(MongoDriver),
 }
 
 enum ScriptInner {
@@ -504,6 +520,8 @@ enum ScriptInner {
     Mssql(<MssqlDriver as Driver>::Script),
     #[cfg(feature = "duckdb")]
     Duckdb(<DuckDriver as Driver>::Script),
+    #[cfg(feature = "mongodb")]
+    Mongodb(<MongoDriver as Driver>::Script),
 }
 
 enum StreamInner {
@@ -513,11 +531,14 @@ enum StreamInner {
     Mssql(<MssqlDriver as Driver>::Stream),
     #[cfg(feature = "duckdb")]
     Duckdb(<DuckDriver as Driver>::Stream),
+    // Boxed so the driver's large cursor does not set the size of every engine's stream.
+    #[cfg(feature = "mongodb")]
+    Mongodb(Box<<MongoDriver as Driver>::Stream>),
 }
 
 /// Opens a session on `conn`. `secret` is the resolved password, if the engine needs one.
 pub async fn connect(
-    _ws: &Workspace,
+    ws: &Workspace,
     conn: &ConnectionConfig,
     secret: Option<Secret>,
     opts: SessionOptions,
@@ -535,6 +556,7 @@ pub async fn connect(
         read_only,
         timeout,
         trusted_sql: opts.trusted_sql,
+        ws_dir: ws.dir(),
     };
     match conn.engine() {
         Engine::Postgres => {
@@ -583,9 +605,14 @@ pub async fn connect(
             reason: "DuckDB is not available in this build".to_owned(),
         }),
         #[cfg(feature = "mongodb")]
-        Engine::Mongodb => Err(ConnectError::Unsupported {
-            reason: "MongoDB sessions are not available yet".to_owned(),
-        }),
+        Engine::Mongodb => {
+            let d = MongoDriver::connect(params).await?;
+            let level = d.read_only_level(read_only);
+            Ok(Session {
+                inner: SessionInner::Mongodb(d),
+                read_only: level,
+            })
+        }
         #[cfg(not(feature = "mongodb"))]
         Engine::Mongodb => Err(ConnectError::Unsupported {
             reason: "MongoDB is not available in this build".to_owned(),
@@ -606,9 +633,11 @@ pub async fn connect(
 #[non_exhaustive]
 pub enum ReadOnlyEnforcement {
     /// The database refuses every write: Postgres, MySQL, SQLite, DuckDB, SQL Server with
-    /// read_only_user, and SurrealDB's fence for a VIEWER login.
+    /// read_only_user, MongoDB with a user whose privileges only read, and SurrealDB's fence for
+    /// a VIEWER login.
     Database,
-    /// SQL Server without read_only_user: Dbento's fence and refusals, with known holes; and
+    /// SQL Server without read_only_user: Dbento's fence and refusals, with known holes; MongoDB
+    /// with any other user, where Dbento refuses every statement it cannot prove reads; and
     /// SurrealDB's fence for root OWNER, EDITOR or anonymous, where stored code can reach what
     /// the fence cannot undo.
     BestEffort,
@@ -630,11 +659,13 @@ impl Session {
             SessionInner::Mssql(_) => Engine::Mssql,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Engine::Duckdb,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Engine::Mongodb,
         }
     }
 
-    /// The server this session talks to (MySQL, MariaDB and SQL Server); `None` on SQLite and
-    /// DuckDB and, for now, on Postgres.
+    /// The server this session talks to (MySQL, MariaDB, SQL Server and MongoDB); `None` on
+    /// SQLite and DuckDB and, for now, on Postgres.
     pub fn server(&self) -> Option<ServerInfo> {
         match &self.inner {
             SessionInner::Mysql(d) => Some(d.server()),
@@ -642,6 +673,8 @@ impl Session {
             SessionInner::Sqlite(_) | SessionInner::Postgres(_) => None,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => None,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => Some(d.server()),
         }
     }
 
@@ -656,8 +689,8 @@ impl Session {
     }
 
     /// Whether this session ran a statement that changes session settings (SET or RESET on
-    /// Postgres, SET on MySQL, SET, RESET or USE on DuckDB); text it returns may then differ
-    /// from what a fresh session reads back. Always false on SQLite.
+    /// Postgres, SET on MySQL, SET, RESET or USE on DuckDB, `use` on MongoDB); text it returns
+    /// may then differ from what a fresh session reads back. Always false on SQLite.
     pub fn settings_changed(&self) -> bool {
         match &self.inner {
             SessionInner::Sqlite(_) => false,
@@ -666,6 +699,8 @@ impl Session {
             SessionInner::Mssql(_) => false,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.settings_changed(),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.settings_changed(),
         }
     }
 
@@ -683,6 +718,8 @@ impl Session {
             SessionInner::Mssql(d) => ScriptInner::Mssql(d.start_script(sql)),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => ScriptInner::Duckdb(d.start_script(sql)),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => ScriptInner::Mongodb(d.start_script(sql)),
         };
         Script {
             inner,
@@ -699,6 +736,8 @@ impl Session {
             SessionInner::Mssql(d) => d.cancel_handle(),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.cancel_handle(),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.cancel_handle(),
         }
     }
 
@@ -715,12 +754,15 @@ impl Session {
             SessionInner::Mssql(d) => d.settle().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.settle().await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.settle().await,
         }
     }
 
     /// Resolves once the session's connection has ended (the server closed it or the network
     /// dropped); never resolves on SQLite or DuckDB, whose sessions cannot end on their own,
-    /// nor on MySQL or SQL Server, whose dropped connection surfaces at the next call. Cancel-safe.
+    /// nor on MySQL, SQL Server or MongoDB, whose dropped connection surfaces at the next call.
+    /// Cancel-safe.
     pub async fn closed(&self) {
         match &self.inner {
             SessionInner::Sqlite(_) | SessionInner::Mysql(_) | SessionInner::Mssql(_) => {
@@ -729,6 +771,8 @@ impl Session {
             SessionInner::Postgres(d) => d.closed().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => std::future::pending().await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => std::future::pending().await,
         }
     }
 
@@ -741,6 +785,8 @@ impl Session {
             SessionInner::Mssql(d) => d.schemas().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.schemas().await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.schemas().await,
         }
     }
 
@@ -753,6 +799,8 @@ impl Session {
             SessionInner::Mssql(d) => d.relations(schema).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.relations(schema).await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.relations(schema).await,
         }
     }
 
@@ -765,6 +813,8 @@ impl Session {
             SessionInner::Mssql(d) => d.columns(rel).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.columns(rel).await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.columns(rel).await,
         }
     }
 
@@ -779,6 +829,10 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(IntrospectError::Unsupported {
+                what: "edit targets",
+            }),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
         }
@@ -805,6 +859,8 @@ impl Session {
                     what: "foreign keys",
                 });
             }
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Vec::new(),
         };
         sort_keys(&mut keys);
         Ok(keys)
@@ -825,11 +881,13 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(RelationObjects::new(Vec::new(), Vec::new(), Vec::new())),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => crate::mongo::catalog::relation_objects(d, rel).await,
         }
     }
 
-    /// Types and routines of `schema`, at most RELATION_CAP of each; empty on SQLite and DuckDB
-    /// and for an unknown schema.
+    /// Types and routines of `schema`, at most RELATION_CAP of each; empty on SQLite, DuckDB and
+    /// MongoDB and for an unknown schema.
     pub async fn schema_objects(&mut self, schema: &str) -> Result<SchemaObjects, IntrospectError> {
         match &mut self.inner {
             SessionInner::Sqlite(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
@@ -840,6 +898,8 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
         }
     }
 
@@ -854,6 +914,10 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => crate::duckdb::catalog::definition(d, object).await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Err(DefinitionError::Unsupported {
+                what: object.label(),
+            }),
         }
     }
 
@@ -877,6 +941,8 @@ impl Session {
             SessionInner::Mssql(_) => Ok(vec![None; columns.len()]),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(vec![None; columns.len()]),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Ok(vec![None; columns.len()]),
         }
     }
 
@@ -927,6 +993,8 @@ impl Session {
             SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Err(bound_unsupported()),
         }
     }
 
@@ -952,6 +1020,8 @@ impl Session {
             SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Err(bound_unsupported()),
         }
     }
 
@@ -969,6 +1039,8 @@ impl Session {
             SessionInner::Mssql(d) => d.close().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.close().await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.close().await,
         }
     }
 }
@@ -990,6 +1062,8 @@ impl Script<'_> {
             ScriptInner::Mssql(s) => MssqlDriver::prepare_next(s).await?,
             #[cfg(feature = "duckdb")]
             ScriptInner::Duckdb(s) => DuckDriver::prepare_next(s).await?,
+            #[cfg(feature = "mongodb")]
+            ScriptInner::Mongodb(s) => MongoDriver::prepare_next(s).await?,
         };
         Some(prepared.map(|prepared| Pending {
             script: &mut self.inner,
@@ -1025,6 +1099,8 @@ impl<'a> Pending<'a> {
             ScriptInner::Mssql(s) => MssqlDriver::is_last(s).await,
             #[cfg(feature = "duckdb")]
             ScriptInner::Duckdb(s) => DuckDriver::is_last(s).await,
+            #[cfg(feature = "mongodb")]
+            ScriptInner::Mongodb(s) => MongoDriver::is_last(s).await,
         }
     }
 
@@ -1052,6 +1128,11 @@ impl<'a> Pending<'a> {
             ScriptInner::Duckdb(s) => {
                 let (columns, stream) = DuckDriver::execute(s, limits).await?;
                 (columns, StreamInner::Duckdb(stream))
+            }
+            #[cfg(feature = "mongodb")]
+            ScriptInner::Mongodb(s) => {
+                let (columns, stream) = MongoDriver::execute(s, limits).await?;
+                (columns, StreamInner::Mongodb(Box::new(stream)))
             }
         };
         Ok(ResultStream {
@@ -1095,6 +1176,8 @@ impl ResultStream<'_> {
             StreamInner::Mssql(s) => MssqlDriver::next_event(s).await,
             #[cfg(feature = "duckdb")]
             StreamInner::Duckdb(s) => DuckDriver::next_event(s).await,
+            #[cfg(feature = "mongodb")]
+            StreamInner::Mongodb(s) => MongoDriver::next_event(s).await,
         };
         let item = match item {
             Ok(i) => i,
@@ -1136,6 +1219,8 @@ impl ResultStream<'_> {
             StreamInner::Mssql(s) => MssqlDriver::extend(s, more)?,
             #[cfg(feature = "duckdb")]
             StreamInner::Duckdb(s) => DuckDriver::extend(s, more)?,
+            #[cfg(feature = "mongodb")]
+            StreamInner::Mongodb(s) => MongoDriver::extend(s, more)?,
         }
         self.outcome = None;
         Ok(())
@@ -1159,6 +1244,8 @@ enum CancelInner {
     Mssql(Arc<MssqlCancel>),
     #[cfg(feature = "duckdb")]
     Duckdb(Arc<DuckCancel>),
+    #[cfg(feature = "mongodb")]
+    Mongodb(Arc<MongoCancel>),
 }
 
 impl CancelHandle {
@@ -1193,6 +1280,13 @@ impl CancelHandle {
         }
     }
 
+    #[cfg(feature = "mongodb")]
+    pub(crate) fn mongo(cancel: Arc<MongoCancel>) -> Self {
+        CancelHandle {
+            inner: CancelInner::Mongodb(cancel),
+        }
+    }
+
     /// Best effort; never blocks. A Postgres cancel runs on the runtime that opened the
     /// session, so once that runtime has shut down this does nothing.
     pub fn cancel(&self) {
@@ -1203,11 +1297,14 @@ impl CancelHandle {
             CancelInner::Mssql(c) => c.cancel(),
             #[cfg(feature = "duckdb")]
             CancelInner::Duckdb(c) => c.cancel(),
+            #[cfg(feature = "mongodb")]
+            CancelInner::Mongodb(c) => c.cancel(),
         }
     }
 }
 
-/// Bound statements back row edits, which MySQL, SQL Server and DuckDB sessions do not support yet.
+/// Bound statements back row edits, which MySQL, SQL Server, DuckDB and MongoDB sessions do not
+/// support yet.
 fn bound_unsupported() -> ExecuteError {
     ExecuteError::Unsupported {
         reason: "bound statements are not built for this engine yet".to_owned(),
@@ -1229,6 +1326,19 @@ mod tests {
         assert_eq!(
             ExecuteError::Timeout.message_for(Engine::Mysql),
             "the statement timed out"
+        );
+    }
+
+    #[test]
+    fn mongodb_says_a_stopped_statement_may_have_written() {
+        assert_eq!(
+            ExecuteError::Timeout.message_for(Engine::Mongodb),
+            "the statement timed out; a write may have kept part of its changes"
+        );
+        assert_eq!(
+            ExecuteError::Cancelled.message_for(Engine::Mongodb),
+            "the statement was cancelled here; a write may keep running on the server until it \
+             ends or hits the time limit"
         );
     }
 

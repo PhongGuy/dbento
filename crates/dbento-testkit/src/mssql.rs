@@ -110,7 +110,7 @@ macro_rules! skip_without_mssql {
 /// Host, port, user and password of `mssql://user:password@host:port[/...]`, taken literally
 /// (no percent-decoding).
 pub fn ms_url(url: &str) -> Result<(String, u16, String, String), String> {
-    let bad = || format!("bad SQL Server test URL {url:?}: expected {URL_FORM}");
+    let bad = || format!("bad SQL Server test URL: expected {URL_FORM}");
     let rest = url.strip_prefix("mssql://").ok_or_else(bad)?;
     let (login, server) = rest.rsplit_once('@').ok_or_else(bad)?;
     let (user, password) = login.split_once(':').ok_or_else(bad)?;

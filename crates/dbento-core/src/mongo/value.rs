@@ -362,15 +362,74 @@ fn timestamp(t: &Bson, i: &Bson) -> Option<Bson> {
     Some(Bson::Timestamp(Timestamp { time, increment }))
 }
 
-// Mongosh's leniency over RFC 3339: a bare date means midnight UTC, and a time without a
-// zone is UTC.
+// Mongosh's shapes, normalised to RFC 3339 so bson judges the calendar: a bare date is midnight
+// UTC, a time without a zone is UTC, and later clock parts are optional.
 fn iso_date(s: &str) -> Option<DateTime> {
-    let full = match s.split_once(['T', 't']) {
-        None => format!("{s}T00:00:00Z"),
-        Some((_, time)) if !time.contains(['Z', 'z', '+', '-']) => format!("{s}Z"),
-        Some(_) => s.to_owned(),
-    };
+    let mut rest = s;
+    let year = digits(&mut rest, 4)?;
+    let dashed = eat(&mut rest, "-");
+    let month = digits(&mut rest, 2)?;
+    if dashed && !eat(&mut rest, "-") {
+        return None;
+    }
+    let day = digits(&mut rest, 2)?;
+    let (mut hour, mut minute, mut second, mut fraction) = ("00", "00", "00", "");
+    let mut zone = "Z".to_owned();
+    if eat(&mut rest, "T") || eat(&mut rest, " ") {
+        hour = digits(&mut rest, 2)?;
+        if let Some(m) = clock_part(&mut rest) {
+            minute = m;
+            if let Some(sec) = clock_part(&mut rest) {
+                second = sec;
+                fraction = take_fraction(&mut rest);
+            }
+        }
+        if !eat(&mut rest, "Z")
+            && let Some(sign) = rest.get(..1).filter(|s| "+-".contains(s))
+        {
+            rest = &rest[1..];
+            let hours = digits(&mut rest, 2)?;
+            eat(&mut rest, ":");
+            zone = format!("{sign}{hours}:{}", digits(&mut rest, 2)?);
+        }
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    let full = format!("{year}-{month}-{day}T{hour}:{minute}:{second}{fraction}{zone}");
     DateTime::parse_rfc3339_str(full).ok()
+}
+
+fn eat(rest: &mut &str, prefix: &str) -> bool {
+    rest.strip_prefix(prefix).map(|r| *rest = r).is_some()
+}
+
+// Exactly `n` leading ASCII digits, consumed only on a match.
+fn digits<'a>(rest: &mut &'a str, n: usize) -> Option<&'a str> {
+    let head = rest
+        .get(..n)
+        .filter(|h| h.bytes().all(|b| b.is_ascii_digit()))?;
+    *rest = &rest[n..];
+    Some(head)
+}
+
+// Two digits with an optional colon before them; a lone colon stays behind to be refused.
+fn clock_part<'a>(rest: &mut &'a str) -> Option<&'a str> {
+    let mut after = rest.strip_prefix(':').unwrap_or(rest);
+    let part = digits(&mut after, 2)?;
+    *rest = after;
+    Some(part)
+}
+
+// A `.` and its digits, or nothing when no digit follows the dot.
+fn take_fraction<'a>(rest: &mut &'a str) -> &'a str {
+    let count = rest
+        .strip_prefix('.')
+        .map_or(0, |r| r.bytes().take_while(u8::is_ascii_digit).count());
+    let len = if count == 0 { 0 } else { count + 1 };
+    let (fraction, after) = rest.split_at(len);
+    *rest = after;
+    fraction
 }
 
 // BSON regex options are a sorted subset of `ilmsux`.

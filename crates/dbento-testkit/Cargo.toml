@@ -17,6 +17,10 @@ tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net"] }
 futures-util.workspace = true
 rcgen.workspace = true
 duckdb = { workspace = true, optional = true }
+mongodb = { workspace = true, optional = true }
+bson = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true, features = ["preserve_order"] }
 
 [features]
 duckdb = ["dep:duckdb"]
+mongodb = ["dep:mongodb", "dep:bson", "dep:serde_json"]
