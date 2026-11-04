@@ -108,9 +108,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Full history and tags, so the notes can list the commits since the previous tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
@@ -129,9 +131,13 @@ jobs:
           name: release-${{ needs.guard.outputs.version }}
           path: dist/*
           if-no-files-found: error
+      # A notes file only; gh would put generated notes after it, and they list nothing for commits straight to master.
+      - name: Write the release notes
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"
       - name: Draft the release
         if: github.ref_type == 'tag' && !inputs.dry_run
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.guard.outputs.version }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --generate-notes dist/*
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/*

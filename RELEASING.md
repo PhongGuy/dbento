@@ -2,7 +2,7 @@
 
 ## Overview
 
-A release is a `v<version>` tag. Pushing it runs `.github/workflows/release.yml`, which checks that the tag matches the workspace version, builds the five targets (Linux x86_64 and arm64, Windows x64, macOS Apple silicon and Intel), adds a copy of every package and archive under a name without the version or the `-unsigned` marker (such as `Dbento_aarch64.dmg`, which the README links through `/releases/latest/download/`), writes one `SHA256SUMS` over every file and drafts a GitHub release. A human reviews the draft and publishes it. Nothing is published automatically.
+A release is a `v<version>` tag. Pushing it runs `.github/workflows/release.yml`, which checks that the tag matches the workspace version, builds the five targets (Linux x86_64 and arm64, Windows x64, macOS Apple silicon and Intel), adds a copy of every package and archive under a name without the version or the `-unsigned` marker (such as `Dbento_aarch64.dmg`, which the README links through `/releases/latest/download/`), writes one `SHA256SUMS` over every file and drafts a GitHub release. The draft's notes come from `packaging/release-notes.md`, with the version filled in and a What's Changed list of the `feat` and `fix` commits since the previous tag; `scripts/release-notes.sh v<version>` prints the same notes locally. A human reviews the draft and publishes it. Nothing is published automatically.
 
 The macOS and Windows legs of the workflow have not yet run on real runners. Their artifact names, signing steps and runner tools are taken from the scripts and are unconfirmed until the first rehearsal below has passed.
 
@@ -75,7 +75,14 @@ The guard fails on a tag that does not match the workspace version, before any b
 3. Check the Windows installer's signature, or its `-unsigned` name.
 4. Install the `.deb` on stock Ubuntu 24.04; it installs `/usr/bin/dbento` and `/usr/bin/dbento-app`.
 5. Check that each package and CLI archive holds `THIRD-PARTY-NOTICES.html`, and that the release carries no loose copy.
-6. Publish the release in the GitHub UI.
+6. Edit the notes: replace the intro placeholder with one to three sentences on this release's headline changes, and reword What's Changed where it helps.
+7. Check the placeholder is gone; this must print `0`:
+
+   ```sh
+   gh release view v<version> --json body -q .body | grep -c '<!-- intro:'
+   ```
+
+8. Publish the release in the GitHub UI.
 
 ## First launch
 
