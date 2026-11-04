@@ -263,6 +263,11 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     )
 }
 
+// Format SQL applies only to SQL engines; the formatter knows no other language.
+fn formats(engine: Engine) -> bool {
+    engine.capabilities().language == QueryLanguage::Sql
+}
+
 /// The highlighter language for `engine`'s query editor: "sql" for an SQL engine, "text"
 /// (plain, no highlighting) for SurrealQL or the MongoDB shell.
 pub fn editor_language(engine: Engine) -> &'static str {
@@ -275,22 +280,32 @@ pub fn editor_language(engine: Engine) -> &'static str {
 /// The editor's right-click menu in order: Run, Format and Save with their effective key
 /// chips, then the clipboard items, whose keys the kit binds and the menu does not repeat.
 /// Cut and Copy are enabled only when `selected` (the editor holds a non-empty selection);
-/// both explain entries appear only when `explain` (the engine's `capabilities().explain`).
-pub fn editor_menu_entries(selected: bool, explain: bool, cx: &App) -> Vec<MenuEntry> {
+/// both explain entries appear only when `explain` (the engine's `capabilities().explain`),
+/// and Format only when `format` (the engine's query language is SQL).
+pub fn editor_menu_entries(
+    selected: bool,
+    explain: bool,
+    format: bool,
+    cx: &App,
+) -> Vec<MenuEntry> {
     let entry = |id, label, keys| MenuEntry {
         id,
         label,
         enabled: selected || !matches!(id, "editor-menu-cut" | "editor-menu-copy"),
         keys,
     };
-    let mut entries = vec![
-        entry(
-            "editor-menu-run",
-            "Run statement",
-            keys_for(&RunStatement, cx),
-        ),
-        entry("editor-menu-format", "Format SQL", keys_for(&FormatSql, cx)),
-    ];
+    let mut entries = vec![entry(
+        "editor-menu-run",
+        "Run statement",
+        keys_for(&RunStatement, cx),
+    )];
+    if format {
+        entries.push(entry(
+            "editor-menu-format",
+            "Format SQL",
+            keys_for(&FormatSql, cx),
+        ));
+    }
     if explain {
         entries.push(entry(
             "editor-menu-explain",
@@ -895,6 +910,9 @@ impl QueryTab {
     /// on its own: only the keys, the toolbar button and the editor menu call it.
     pub fn format_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_completion(cx);
+        if !formats(self.session_conn.engine()) {
+            return;
+        }
         let e = self.editor.read(cx);
         let edit = format_edit(self.session_conn.engine(), &e.value(), e.selected_range());
         let Some((range, new)) = edit else {
@@ -1344,6 +1362,7 @@ impl Render for QueryTab {
         let closed = m.closed();
         // Explain shows only where the session's engine has it; its keys still explain why not.
         let explain = self.session_conn.engine().capabilities().explain;
+        let format = formats(self.session_conn.engine());
         let staged = m.edits().len();
         // The summary appears once a statement has ended; its timing lives in the result footer.
         let summary = run_elapsed(m.results()).map(|_| {
@@ -1465,26 +1484,28 @@ impl Render for QueryTab {
                             .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
                     ),
             )
-            .child(
+            .when(format, |d| {
                 // The kit button takes only a text tooltip, so the keyed one sits on a wrapper.
-                div()
-                    .id("format-tip")
-                    .test_support()
-                    .tooltip(|window, cx| {
-                        theme::tooltip_keys(
-                            format_tooltip(cx),
-                            keys_for(&FormatSql, cx),
-                            window,
-                            cx,
-                        )
-                    })
-                    .child(
-                        tool_button("format", ui::Icons::WandSparkles, "Format SQL", muted)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.format_sql(window, cx)),
-                            ),
-                    ),
-            )
+                d.child(
+                    div()
+                        .id("format-tip")
+                        .test_support()
+                        .tooltip(|window, cx| {
+                            theme::tooltip_keys(
+                                format_tooltip(cx),
+                                keys_for(&FormatSql, cx),
+                                window,
+                                cx,
+                            )
+                        })
+                        .child(
+                            tool_button("format", ui::Icons::WandSparkles, "Format SQL", muted)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.format_sql(window, cx)),
+                                ),
+                        ),
+                )
+            })
             .when(explain, |d| {
                 d.child(
                     div()
@@ -1655,12 +1676,15 @@ fn editor_menu(
     let explain = tab
         .as_ref()
         .is_some_and(|t| t.read(cx).session_conn.engine().capabilities().explain);
+    let format = tab
+        .as_ref()
+        .is_some_and(|t| formats(t.read(cx).session_conn.engine()));
     for MenuEntry {
         id,
         label,
         keys,
         enabled,
-    } in editor_menu_entries(selected, explain, cx)
+    } in editor_menu_entries(selected, explain, format, cx)
     {
         if id == "editor-menu-cut" {
             menu = menu.separator();

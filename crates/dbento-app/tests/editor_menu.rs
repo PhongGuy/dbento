@@ -12,7 +12,7 @@ use support::{label_of, opened, present, wait_real};
 #[gpui_kit::test]
 fn the_menu_holds_run_format_save_and_the_clipboard(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        let e = editor_menu_entries(true, true, cx);
+        let e = editor_menu_entries(true, true, true, cx);
         let ids: Vec<_> = e.iter().map(|e| e.id).collect();
         assert_eq!(
             ids,
@@ -50,7 +50,7 @@ fn the_menu_holds_run_format_save_and_the_clipboard(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn cut_and_copy_wait_for_a_selection(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        let off: Vec<_> = editor_menu_entries(false, true, cx)
+        let off: Vec<_> = editor_menu_entries(false, true, true, cx)
             .into_iter()
             .filter(|e| !e.enabled)
             .map(|e| e.id)
@@ -148,7 +148,7 @@ fn cut_from_the_menu_cuts_a_selection_and_waits_without_one(cx: &mut TestAppCont
 #[gpui_kit::test]
 fn without_explain_the_menu_leaves_both_explain_items_out(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        let ids: Vec<_> = editor_menu_entries(true, false, cx)
+        let ids: Vec<_> = editor_menu_entries(true, false, true, cx)
             .iter()
             .map(|e| e.id)
             .collect();

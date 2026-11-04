@@ -95,7 +95,7 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::KeyPassphrase => Some("only for an encrypted key"),
         Field::ReadOnlyUser => Some("e.g. dbento_reader"),
         Field::Namespace => Some("e.g. app"),
-        Field::AuthLevel => Some("root"),
+        Field::AuthLevel => Some("root, namespace or database"),
         Field::Timeout => Some("e.g. 30s"),
         Field::Folder => Some("e.g. Production"),
     }

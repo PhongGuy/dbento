@@ -702,7 +702,7 @@ fn a_loaded_surrealdb_connection_shows_its_fields_and_returns_unchanged(cx: &mut
     );
     assert_eq!(
         value_and_hint(cx, &f, Field::AuthLevel),
-        ("database".into(), "root".into())
+        ("database".into(), "root, namespace or database".into())
     );
     assert_eq!(value_and_hint(cx, &f, Field::Port).1, "8000");
     assert_eq!(value_and_hint(cx, &f, Field::User).1, "optional");
