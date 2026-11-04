@@ -122,6 +122,8 @@ pub(crate) fn reply_failure(reply: &Document) -> Option<ExecuteError> {
     Some(ExecuteError::Database {
         code: code_text(entry.get_str("codeName").unwrap_or_default(), code),
         sqlstate: None,
+        class: None,
+        state: None,
         message: entry.get_str("errmsg").unwrap_or_default().to_owned(),
         detail,
         hint: None,
