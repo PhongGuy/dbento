@@ -4,7 +4,7 @@ use dbento_app::query_tab::{
     READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP, READ_ONLY_MSSQL_READER_TOOLTIP, READ_ONLY_MYSQL_TOOLTIP,
     READ_ONLY_PG_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP, READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
     READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP, READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_title,
-    read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
+    editor_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
 };
 use dbento_app::result_body::{ErrorView, code_label};
 use dbento_core::{Engine, Unguarded};
@@ -391,4 +391,18 @@ fn the_surrealdb_chip_names_namespace_and_database_and_its_errors_their_code() {
         code_label(Some(Engine::Surrealdb), &view("-32000")).as_deref(),
         Some("error -32000")
     );
+}
+
+#[test]
+fn surrealql_is_not_highlighted_as_sql() {
+    assert_eq!(editor_language(Engine::Surrealdb), "text");
+    assert_eq!(editor_language(Engine::Mongodb), "text");
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+    ] {
+        assert_eq!(editor_language(e), "sql", "{e:?}");
+    }
 }

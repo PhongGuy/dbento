@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dbento_core::{
-    ConnectionConfig, Engine, ExplainMode, ReadOnlyEnforcement, RelationRef, Unguarded, Workspace,
-    explain_request, read_only_residual,
+    ConnectionConfig, Engine, ExplainMode, QueryLanguage, ReadOnlyEnforcement, RelationRef,
+    Unguarded, Workspace, explain_request, read_only_residual,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
@@ -263,6 +263,15 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     )
 }
 
+/// The highlighter language for `engine`'s query editor: "sql" for an SQL engine, "text"
+/// (plain, no highlighting) for SurrealQL or the MongoDB shell.
+pub fn editor_language(engine: Engine) -> &'static str {
+    match engine.capabilities().language {
+        QueryLanguage::Sql => "sql",
+        _ => "text",
+    }
+}
+
 /// The editor's right-click menu in order: Run, Format and Save with their effective key
 /// chips, then the clipboard items, whose keys the kit binds and the menu does not repeat.
 /// Cut and Copy are enabled only when `selected` (the editor holds a non-empty selection);
@@ -401,7 +410,8 @@ impl QueryTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor = cx.new(|cx| EditorState::new(window, cx).language("sql"));
+        let editor =
+            cx.new(|cx| EditorState::new(window, cx).language(editor_language(conn.engine())));
         let completion = cx.new(|cx| CompletionPopup::new(&editor, cx));
         if let Some(sidebar) = sidebar.clone() {
             Self::complete_from(&editor, &completion, sidebar, &conn, cx);
@@ -497,7 +507,8 @@ impl QueryTab {
         }
     }
 
-    // Points the editor's completion at `conn`'s catalog in the explorer.
+    // Points the editor's completion at `conn`'s catalog in the explorer, and its highlighter at
+    // `conn`'s language, so a tab moved to another engine stops or starts reading SQL.
     fn complete_from(
         editor: &Entity<EditorState>,
         popup: &Entity<CompletionPopup>,
@@ -509,8 +520,12 @@ impl QueryTab {
         let default = dbento_core::default_schema(engine, conn);
         let provider =
             SqlCompletionProvider::new(sidebar, popup.downgrade(), name, engine, default);
-        editor.update(cx, |e, _| {
+        let lang = editor_language(engine);
+        editor.update(cx, |e, cx| {
             e.lsp_mut().completion_provider = Some(std::rc::Rc::new(provider));
+            if e.language_name() != lang {
+                e.set_highlighter(lang, cx);
+            }
         });
     }
 
