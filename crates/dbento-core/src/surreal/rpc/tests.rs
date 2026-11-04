@@ -279,3 +279,19 @@ fn the_gauge_goes_over_at_the_bound_and_back_under_as_frames_are_taken() {
     gauge.take(1);
     assert!(!gauge.over());
 }
+
+// The wait must see a take that lands before it is first polled, or the task stops reading for good.
+#[test]
+fn room_resolves_for_a_take_before_or_after_the_wait_starts() {
+    use futures_util::FutureExt as _;
+    let gauge = Gauge::default();
+    gauge.add(MAX_BUFFERED);
+    let early = gauge.room();
+    gauge.take(1);
+    assert_eq!(early.now_or_never(), Some(()));
+    gauge.add(1);
+    let mut late = std::pin::pin!(gauge.room());
+    assert_eq!(late.as_mut().now_or_never(), None);
+    gauge.take(1);
+    assert_eq!(late.as_mut().now_or_never(), Some(()));
+}

@@ -93,15 +93,68 @@ pub(crate) fn decode_bounded(frame: &[u8], max_values: usize) -> Result<Wire, De
     }
 }
 
-/// The id at the head of a frame that failed to decode. The envelope's keys are sorted and
-/// shallow, so a value too deep to read still says whose reply it was.
+/// The top-level `id` of a frame that failed to decode, under any key order. The values of other
+/// keys are stepped over by their heads alone, so one too deep or malformed to read is passed by.
 pub(crate) fn envelope(frame: &[u8]) -> Option<i64> {
-    let mut r = SliceReader::new(frame);
-    types::Map::<()>::len(&mut r).ok()?;
-    if <&str>::decode(&mut r).ok()? != "id" {
+    let mut at = 0;
+    let (major::MAP, entries) = cbor_head(frame, &mut at)? else {
         return None;
+    };
+    for _ in 0..entries {
+        let (major::STRING, len) = cbor_head(frame, &mut at)? else {
+            return None;
+        };
+        let end = at.checked_add(usize::try_from(len).ok()?)?;
+        let key = frame.get(at..end)?;
+        at = end;
+        if key == b"id" {
+            return i64::decode(&mut SliceReader::new(&frame[at..])).ok();
+        }
+        skip(frame, &mut at)?;
     }
-    i64::decode(&mut r).ok()
+    None
+}
+
+// One definite-length head: its major type and argument. Indefinite and reserved forms fail.
+fn cbor_head(frame: &[u8], at: &mut usize) -> Option<(u8, u64)> {
+    let first = *frame.get(*at)?;
+    *at += 1;
+    let size = match first & 0x1f {
+        n @ 0..=23 => return Some((first >> 5, u64::from(n))),
+        24 => 1,
+        25 => 2,
+        26 => 4,
+        27 => 8,
+        _ => return None,
+    };
+    let bytes = frame.get(*at..*at + size)?;
+    *at += size;
+    Some((
+        first >> 5,
+        bytes.iter().fold(0, |n, &b| n << 8 | u64::from(b)),
+    ))
+}
+
+// Steps over one value without recursion: a count of items still owed replaces the call stack.
+fn skip(frame: &[u8], at: &mut usize) -> Option<()> {
+    let mut owed: u64 = 1;
+    while owed > 0 {
+        owed -= 1;
+        let (kind, n) = cbor_head(frame, at)?;
+        match kind {
+            major::BYTES | major::STRING => {
+                *at = at.checked_add(usize::try_from(n).ok()?)?;
+                if *at > frame.len() {
+                    return None;
+                }
+            }
+            major::ARRAY => owed = owed.checked_add(n)?,
+            major::MAP => owed = owed.checked_add(n.checked_mul(2)?)?,
+            major::TAG => owed += 1,
+            _ => {}
+        }
+    }
+    Some(())
 }
 
 fn failure(message: impl Into<String>) -> DecodeFailure {

@@ -180,6 +180,19 @@ impl Gauge {
         self.bytes.fetch_sub(bytes, Ordering::AcqRel);
         self.taken.notify_waiters();
     }
+
+    // Resolves once the buffer is under the bound. The wait is registered before the check, so a
+    // take landing between the two still wakes it.
+    async fn room(&self) {
+        loop {
+            let mut taken = std::pin::pin!(self.taken.notified());
+            taken.as_mut().enable();
+            if !self.over() {
+                return;
+            }
+            taken.await;
+        }
+    }
 }
 
 /// The frames of one stream.
@@ -356,6 +369,8 @@ async fn run(
     let (mut sink, mut stream) = socket.split();
     let mut routes: HashMap<i64, Route> = HashMap::new();
     let why = loop {
+        // One reading of the gauge enables exactly one of the socket and the wait for room.
+        let over = gauge.over();
         tokio::select! {
             command = commands.recv() => {
                 let bytes = match command {
@@ -375,7 +390,7 @@ async fn run(
                     break LOST.to_owned();
                 }
             }
-            message = stream.next(), if !gauge.over() => match message {
+            message = stream.next(), if !over => match message {
                 Some(Ok(Message::Binary(frame))) => {
                     if let Err(why) = route(&frame, &mut routes, &gauge) {
                         break why;
@@ -394,7 +409,7 @@ async fn run(
                 }
                 Some(Err(_)) => break LOST.to_owned(),
             },
-            () = gauge.taken.notified(), if gauge.over() => {}
+            () = gauge.room(), if over => {}
         }
     };
     *closed.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
