@@ -205,3 +205,67 @@ async fn a_stalled_stream_on_a_v4_beta_loses_the_session() {
     let failed = stalled(&mut s).await.unwrap();
     assert!(failed.closes_session(), "{failed:?}");
 }
+
+// Executes the first result of `sql` and drops the script, leaving the rest of its unit to drain.
+async fn first_only(s: &mut Session, sql: &str, limits: Limits) {
+    let mut script = s.script(sql);
+    let pending = script.next().await.unwrap().unwrap();
+    let mut stream = pending.execute(limits).await.unwrap();
+    while stream.next_batch().await.unwrap().is_some() {}
+}
+
+#[tokio::test]
+async fn a_deadline_that_stops_an_abandoned_unit_is_owed_to_the_settle() {
+    let db = surreal_db().await;
+    let mut s = sr_root(&db, "", timed(Duration::from_millis(1500))).await;
+    first_only(
+        &mut s,
+        "LET $a = 1; CREATE owed:1; SLEEP 30s; CREATE owed:2",
+        Limits::default(),
+    )
+    .await;
+    let settled = s.settle().await;
+    assert!(matches!(settled, Err(ExecuteError::Timeout)), "{settled:?}");
+    assert_eq!(db.count("owed").await, 1);
+    assert!(run(&mut s, "RETURN 1", Limits::default()).await[0].is_ok());
+}
+
+// The lexer sees one statement, the server three: the cut result's `Done` goes out first, and
+// the deadline that stops the statements it never saw is heard at the settle.
+#[tokio::test]
+async fn a_deadline_met_while_a_cut_result_drains_is_owed_to_the_settle() {
+    let db = surreal_db().await;
+    let mut s = sr_root(&db, "", timed(Duration::from_millis(1500))).await;
+    let mut limits = Limits::default();
+    limits.max_rows = Some(0);
+    let ran = run(&mut s, "RETURN ->? / 2; SLEEP 30s; RETURN 7 / 2", limits).await;
+    assert_eq!(ran.len(), 1);
+    assert!(ran[0].as_ref().unwrap().outcome.truncated);
+    let settled = s.settle().await;
+    assert!(matches!(settled, Err(ExecuteError::Timeout)), "{settled:?}");
+    assert!(run(&mut s, "RETURN 1", Limits::default()).await[0].is_ok());
+}
+
+#[tokio::test]
+async fn an_abandoned_read_or_a_cancelled_transaction_owes_nothing() {
+    let db = surreal_db().await;
+    db.admin("CREATE |q:1..=2000| SET a = 1").await;
+    let mut s = sr_root(&db, "", SessionOptions::default()).await;
+    // A read nobody reads on is stopped quietly.
+    first_only(
+        &mut s,
+        "LET $a = 1; SELECT * FROM q; SLEEP 30s",
+        Limits::default(),
+    )
+    .await;
+    assert!(s.settle().await.is_ok());
+    // Every statement of a cancelled transaction is undone, which is not an error.
+    first_only(
+        &mut s,
+        "BEGIN; CREATE undone:1; CREATE undone:2; CANCEL",
+        Limits::default(),
+    )
+    .await;
+    assert!(s.settle().await.is_ok());
+    assert_eq!(db.count("undone").await, 0);
+}

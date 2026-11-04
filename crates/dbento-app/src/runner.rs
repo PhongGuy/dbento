@@ -870,20 +870,10 @@ async fn run_script(
                 let mut t = o.clone();
                 t.rows = tally.rows;
                 match after_park(&e) {
-                    AfterPark::Expired => {
+                    kind @ (AfterPark::Expired | AfterPark::Idle) => {
                         let expired = Event::ParkExpired {
                             run_id,
-                            statement_timeout: true,
-                        };
-                        if !cx.send(expired).await {
-                            return (After::Hangup, Tail::Cut);
-                        }
-                        (StatementEnd::Truncated(t), Some(Tail::Cut))
-                    }
-                    AfterPark::Idle => {
-                        let expired = Event::ParkExpired {
-                            run_id,
-                            statement_timeout: false,
+                            statement_timeout: kind == AfterPark::Expired,
                         };
                         if !cx.send(expired).await {
                             return (After::Hangup, Tail::Cut);
