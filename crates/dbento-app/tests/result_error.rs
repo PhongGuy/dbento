@@ -245,3 +245,21 @@ fn an_empty_database_code_shows_no_code() {
     assert_eq!(code_label(Some(Engine::Duckdb), &v), None);
     assert_eq!(error_copy_text(&v), "x\n\nSELECT 1");
 }
+
+#[test]
+fn a_surrealdb_result_maps_to_the_unit_that_holds_it() {
+    // Results 1 to 3 come from the one transaction unit; result 4 is the last SELECT.
+    let text = "SELECT 1; BEGIN; CREATE a:1; COMMIT; SELECT 2";
+    let e = Engine::Surrealdb;
+    assert_eq!(statement_source(e, text, 0, 0), Some(0..9));
+    for stmt in 1..=3 {
+        assert_eq!(statement_source(e, text, 0, stmt), Some(10..36), "{stmt}");
+    }
+    assert_eq!(statement_source(e, text, 5, 4), Some(42..50));
+    assert_eq!(statement_source(e, text, 0, 5), None);
+    // SQL engines keep one result per statement.
+    assert_eq!(
+        statement_source(Engine::Postgres, "SELECT 1; SELECT 2", 0, 1),
+        Some(10..18)
+    );
+}

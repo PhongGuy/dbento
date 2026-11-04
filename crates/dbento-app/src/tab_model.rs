@@ -9,8 +9,9 @@ use async_channel::Receiver;
 use dbento_core::{
     Applied, ApplyError, Browse, CancelHandle, CellRef, Change, ChangeOutcome, ColumnInfo,
     EditBatch, EditTarget, EditValue, Engine, ExecuteError, ExplainMode, ExplainOutput,
-    ExplainRequest, ForeignKey, HistoryEntry, HistoryOutcome, Keyset, Outcome, RelationRef, RowKey,
-    Sort, Unguarded, Workspace, browse_sql, render_sql, statement_ranges,
+    ExplainRequest, ForeignKey, HistoryEntry, HistoryOutcome, Keyset, Outcome, ReadOnlyEnforcement,
+    RelationRef, RowKey, Sort, Unguarded, Workspace, browse_sql, render_sql, result_ranges,
+    statement_count,
 };
 use gpui_kit::{Context, Entity, EventEmitter, Pixels, Task};
 
@@ -125,16 +126,16 @@ impl PlanResult {
     }
 }
 
-/// The editor range of statement `stmt` of run text `text` that began at editor offset
-/// `start`: its `statement_ranges` range trimmed at both ends (so it spans exactly `sql`);
-/// None past the last statement.
+/// The editor range of result `stmt` of run text `text` that began at editor offset
+/// `start`: its `result_ranges` range trimmed at both ends (so it spans exactly `sql`);
+/// None past the last result.
 pub fn statement_source(
     engine: Engine,
     text: &str,
     start: usize,
     stmt: usize,
 ) -> Option<Range<usize>> {
-    let range = statement_ranges(engine, text).get(stmt)?.clone();
+    let range = result_ranges(engine, text).get(stmt)?.clone();
     let piece = &text[range.clone()];
     let lead = piece.len() - piece.trim_start().len();
     let len = piece.trim().len();
@@ -285,6 +286,8 @@ pub struct TabModel {
     epoch: u64,
     running: bool,
     read_only: Option<bool>,
+    /// The session's read-only level, set and cleared with `read_only`.
+    read_only_level: Option<ReadOnlyEnforcement>,
     /// A session is open: set by `Connected`, cleared once it ends. `read_only` outlives it,
     /// since the edit rules keep the last known mode.
     connected: bool,
@@ -460,6 +463,7 @@ impl TabModel {
             epoch: 0,
             running: false,
             read_only: None,
+            read_only_level: None,
             connected: false,
             settings_changed: false,
             results: Vec::new(),
@@ -769,6 +773,7 @@ impl TabModel {
         self.abort_save(cx);
         let closing = self.retire_runner(cx);
         self.read_only = None;
+        self.read_only_level = None;
         self.error = None;
         closing
     }
@@ -786,6 +791,7 @@ impl TabModel {
         self.epoch += 1;
         // Unknown until the new session reports whether it opened read-only.
         self.read_only = None;
+        self.read_only_level = None;
         self.start_runner(cx);
         if let Some(r) = &self.runner {
             r.send(Command::Connect);
@@ -820,6 +826,7 @@ impl TabModel {
         self.epoch += 1;
         // The old connection's link and error say nothing about the new one.
         self.read_only = None;
+        self.read_only_level = None;
         self.error = None;
         self.start_runner(cx);
         if let Some(r) = &self.runner {
@@ -867,9 +874,13 @@ impl TabModel {
         self.settling = matches!(event, Event::Settling { .. });
         match event {
             Event::Connected {
-                read_only, cancel, ..
+                read_only,
+                level,
+                cancel,
+                ..
             } => {
                 self.read_only = Some(read_only);
+                self.read_only_level = level;
                 self.connected = true;
                 self.settings_changed = false;
                 self.cancel = Some(cancel);
@@ -2661,7 +2672,8 @@ impl TabModel {
     }
 
     /// Not a browse tab, the last result ended `Truncated` by a park expiry, the run text is
-    /// one statement (`statement_ranges`), and the row limit has a next step.
+    /// one statement (`statement_count`, so a SurrealDB unit of several never re-runs), and the
+    /// row limit has a next step.
     pub fn can_run_again(&self) -> bool {
         // Only read-only statements park, so an expired result needs no write check here.
         let Some(last) = self.results.last() else {
@@ -2670,7 +2682,7 @@ impl TabModel {
         let one = self
             .run_text
             .as_ref()
-            .is_some_and(|(engine, text)| statement_ranges(*engine, text).len() == 1);
+            .is_some_and(|(engine, text)| statement_count(*engine, text) == 1);
         self.browse.is_none()
             && !self.closed
             && !self.running
@@ -2812,6 +2824,11 @@ impl TabModel {
     /// Whether the session is read-only, once connected.
     pub fn read_only(&self) -> Option<bool> {
         self.read_only
+    }
+
+    /// How the session refuses writes, once connected; None while not connected or not read-only.
+    pub fn read_only_level(&self) -> Option<ReadOnlyEnforcement> {
+        self.read_only_level
     }
 
     /// The current run's statements, in script order.
@@ -3044,7 +3061,7 @@ impl TabModel {
                     .run_text
                     .as_ref()
                     .and_then(|(engine, text)| {
-                        let range = statement_ranges(*engine, text).get(stmt)?.clone();
+                        let range = result_ranges(*engine, text).get(stmt)?.clone();
                         let source = statement_source(*engine, text, self.run_start, stmt);
                         // An explain's text is one statement, named as the user gave it.
                         let sql = if plan.is_some() {
