@@ -78,7 +78,7 @@ impl Driver for SurrealDriver {
         let cancel = Arc::new(SurrealCancel::new(rpc.clone(), drain_bound));
         let rules = Rules { drain_bound };
         let (requests, rx) = mpsc::unbounded_channel();
-        tokio::spawn(serve(rpc, rules, Arc::clone(&cancel), rx));
+        tokio::spawn(serve(rpc, rules, Arc::clone(&cancel), logged.place, rx));
         Ok(SurrealDriver {
             requests,
             server: ServerInfo {

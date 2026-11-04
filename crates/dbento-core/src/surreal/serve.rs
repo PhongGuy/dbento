@@ -12,10 +12,11 @@ use tokio::sync::{mpsc, oneshot};
 use super::cancel::SurrealCancel;
 use super::classify::surreal_classification;
 use super::decode::Wire;
-use super::rpc::{Frame, Frames, Rpc};
+use super::login::{Missing, Place, pre_check};
+use super::rpc::{Frame, Frames, Param, Rpc, RpcError};
 use super::shape::Shape;
-use super::units::{Unit, units};
-use super::wire::{WireError, statement_error};
+use super::units::{Unit, UnitKind, UseTarget, units};
+use super::wire::{WireError, field, statement_error};
 use crate::session::{Classification, ExecuteError, Limits, Outcome, Prepared, Writes};
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ResultBatch};
 
@@ -71,6 +72,8 @@ struct Served {
     rpc: Rpc,
     rules: Rules,
     cancel: Arc<SurrealCancel>,
+    /// Where RPC `use` has put the session, for the next `USE` unit's pre-check.
+    place: Place,
     /// An error no caller has heard, for the next settle or close.
     owed: Option<ExecuteError>,
     /// Dbento closed the socket itself, so later calls read as a plain closed session.
@@ -85,12 +88,14 @@ pub(crate) async fn serve(
     rpc: Rpc,
     rules: Rules,
     cancel: Arc<SurrealCancel>,
+    place: Place,
     mut requests: mpsc::UnboundedReceiver<Request>,
 ) {
     let mut s = Served {
         rpc,
         rules,
         cancel,
+        place,
         owed: None,
         quiet: false,
         told: AtomicBool::new(false),
@@ -301,6 +306,15 @@ impl Served {
         self.cancel.end();
     }
 
+    // A `USE` the unit splitter could not turn into an RPC must not run as text.
+    fn refusal(unit: &Unit) -> Option<ExecuteError> {
+        unit.refused_use.then(|| ExecuteError::Unsupported {
+            reason: "USE must be a statement of its own with literal names, before any LET and \
+                     outside a transaction"
+                .to_owned(),
+        })
+    }
+
     // Sends the unit and waits for `begin`, which carries the server's statement count.
     async fn first(
         &mut self,
@@ -311,6 +325,31 @@ impl Served {
         run: &mut Option<Run>,
         out: &mut Out,
     ) -> After {
+        if let Some(refused) = Self::refusal(unit) {
+            out.fail(refused).await;
+            return After::Stop;
+        }
+        if let UnitKind::Use(target) = &unit.kind {
+            return match self.apply_use(target).await {
+                Ok(()) => {
+                    out.columns(Vec::new());
+                    let done = Outcome {
+                        rows: 0,
+                        truncated: false,
+                        rows_affected: None,
+                        truncated_by: None,
+                        extra_results: 0,
+                        rolled_back: false,
+                    };
+                    out.send(Event::Done(done)).await;
+                    After::Next
+                }
+                Err(e) => {
+                    out.fail(e).await;
+                    After::Stop
+                }
+            };
+        }
         let sql = &text[unit.range.clone()];
         let mut frames = self.rpc.stream(id, sql, None);
         let opened = loop {
@@ -348,6 +387,35 @@ impl Served {
             extra: 0,
         });
         self.result(current, out).await
+    }
+
+    // A `USE` unit is a pre-check and then RPC `use`, which keeps an absent part as it is; the
+    // reply says where the session now is.
+    async fn apply_use(&mut self, target: &UseTarget) -> Result<(), ExecuteError> {
+        pre_check(&self.rpc, &self.place, target)
+            .await
+            .map_err(|e| match e {
+                Missing::Target(message) => ExecuteError::database("use", message),
+                Missing::Server(e) => statement_error(&e),
+                Missing::Closed(why) => self.closed(why),
+            })?;
+        let params = [&target.namespace, &target.database]
+            .map(|part| part.as_deref().map_or(Param::None, Param::Text));
+        let reply = self
+            .rpc
+            .call("use", &params, None)
+            .await
+            .map_err(|e| match e {
+                RpcError::Server(e) => statement_error(&e),
+                RpcError::Closed(why) => self.closed(why),
+            })?;
+        if let Some(Wire::Text(namespace)) = field(&reply, "namespace") {
+            self.place.namespace.clone_from(namespace);
+        }
+        if let Some(Wire::Text(database)) = field(&reply, "database") {
+            self.place.database.clone_from(database);
+        }
+        Ok(())
     }
 
     // Reads the rest of the unit and counts the statements the lexer did not see.
