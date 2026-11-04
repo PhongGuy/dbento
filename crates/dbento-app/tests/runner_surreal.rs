@@ -1,8 +1,9 @@
-//! SurrealDB through the app's runner: the session's read-only level reaches the tab, and a
-//! fenced result says its changes were rolled back.
+//! SurrealDB through the app's runner: the session's read-only level reaches the tab, a fenced
+//! result says its changes were rolled back, and the catalog lists no schema objects.
 mod support;
 use std::sync::Arc;
 
+use dbento_app::catalog::{CatalogData, CatalogQuery, spawn_catalog};
 use dbento_app::results_pane::outcome_note;
 use dbento_app::runner::{Event, RunnerSpec, StatementEnd, spawn_on};
 use dbento_core::{Outcome, ReadOnlyEnforcement, Workspace};
@@ -102,4 +103,28 @@ async fn a_fenced_result_notes_that_its_changes_were_rolled_back() {
     assert!(!o.rolled_back);
     assert_eq!(outcome_note(&o), None);
     assert_eq!(db.count("w").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_engine_without_schema_objects_lists_none_instead_of_failing() {
+    let db = surreal_db().await;
+    let (_a, spec) = sr_spec(&db, ("ro", "root"), "");
+    let r = spawn_catalog(&here(), spec);
+    let rx = r.replies();
+    r.load(
+        1,
+        CatalogQuery::SchemaObjects {
+            schema: db.database().into(),
+        },
+    );
+    let got = tokio::time::timeout(std::time::Duration::from_secs(20), rx.recv())
+        .await
+        .expect("a reply within 20 s")
+        .expect("the runner is alive");
+    match got.result {
+        Ok(CatalogData::SchemaObjects(s)) => {
+            assert!(s.types().is_empty() && s.routines().is_empty() && !s.truncated())
+        }
+        other => panic!("{other:?}"),
+    }
 }
