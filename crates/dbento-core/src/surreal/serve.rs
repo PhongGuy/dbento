@@ -67,6 +67,8 @@ pub(crate) enum Event {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Rules {
     pub(crate) drain_bound: Duration,
+    /// The statement deadline, armed on every unit sent.
+    pub(crate) timeout: Option<Duration>,
 }
 
 /// The session as the task holds it.
@@ -340,6 +342,11 @@ impl Served {
         run: &mut Option<Run>,
         out: &mut Out,
     ) -> After {
+        // A stop aimed at this unit between `Next` and `Execute` means it never starts.
+        if let Some(stop) = self.cancel.stopped(id) {
+            out.fail(stop.error()).await;
+            return After::Stop;
+        }
         if let Some(refused) = Self::refusal(unit) {
             out.fail(refused).await;
             return After::Stop;
@@ -366,6 +373,9 @@ impl Served {
             };
         }
         let sql = &text[unit.range.clone()];
+        if let Some(after) = self.rules.timeout {
+            self.cancel.arm(id, after);
+        }
         let mut frames = self.rpc.stream(id, sql, None);
         let opened = loop {
             let frame = tokio::time::timeout(self.rpc.call_bound(), frames.next()).await;
@@ -379,6 +389,10 @@ impl Served {
                 Err(_) => break Err(self.closed(self.rpc.unanswered("query_stream"))),
             }
         };
+        // A stop sent before the server registered the stream was refused; send it again.
+        if opened.is_ok() && self.cancel.stopped(id).is_some() {
+            self.rpc.query_cancel(id);
+        }
         let statements = match opened {
             Ok(statements) => statements,
             Err(e) => {
@@ -433,12 +447,34 @@ impl Served {
         Ok(())
     }
 
-    // Reads the rest of the unit and counts the statements the lexer did not see.
+    // Reads the rest of the unit and counts the statements the lexer did not see. An error its
+    // `end` carried that no caller heard, as after a cut result, is owed to the next settle.
     async fn finish(&mut self, mut run: Run) {
         if !run.ended {
             self.read_past(&mut run, None).await;
         }
+        if let Some(e) = run.end_error.take()
+            && !e.undone()
+            && self.cancel.stopped(run.id) != Some(Stop::Quiet)
+            && self.owed.is_none()
+        {
+            self.owed = Some(self.end_error(&run, &e));
+        }
         self.cancel.end();
+    }
+
+    // The next frame, unless a stop went unanswered past the drain bound: then the socket
+    // closes, since only that ends a statement the server will not stop.
+    async fn frame(&self, run: &mut Run) -> Frame {
+        tokio::select! {
+            biased;
+            frame = run.frames.next() => frame,
+            () = self.cancel.past_bound(run.id) => {
+                let why = "the server did not stop the statement";
+                self.rpc.close(why);
+                Frame::Closed(why.to_owned())
+            }
+        }
     }
 
     // Reads frames until statement `upto` finishes, or the unit ends when `None`, within the
@@ -447,7 +483,7 @@ impl Served {
         let drained = tokio::time::timeout(self.rules.drain_bound, async {
             let mut extras = Vec::new();
             loop {
-                match run.frames.next().await {
+                match self.frame(run).await {
                     Frame::Finished { index, .. } if upto == Some(index) => break,
                     Frame::Rows { index, .. } | Frame::Value { index, .. }
                         if index >= run.expected && !extras.contains(&index) =>
@@ -506,6 +542,18 @@ impl Served {
         run.ended = true;
     }
 
+    // A statement's or the unit's error. "Stopped" after a stop of ours is that stop; with none it
+    // is the server's send timeout, which ends a result left unread too long.
+    fn end_error(&self, run: &Run, e: &WireError) -> ExecuteError {
+        if e.stopped() {
+            return match self.cancel.stopped(run.id) {
+                Some(stop) => stop.error(),
+                None => ExecuteError::ResultExpired,
+            };
+        }
+        Self::later_note(run, statement_error(e))
+    }
+
     // Later statements of a unit run whatever an earlier one did, unless a transaction ends them.
     fn later_note(run: &Run, error: ExecuteError) -> ExecuteError {
         let later = run.index + 1 < run.statements && !run.transaction;
@@ -534,6 +582,8 @@ impl Served {
         if !run.ended {
             self.read_past(run, None).await;
         }
+        // The caller hears this error for the unit, not the one its `end` repeats.
+        run.end_error = None;
         out.fail(e).await;
         After::Stop
     }
@@ -554,7 +604,7 @@ impl Served {
             && rows.len() < cap
             && out.limits.max_bytes.is_none_or(|max| sampled < max)
         {
-            match run.frames.next().await {
+            match self.frame(run).await {
                 Frame::Rows {
                     index,
                     values,
@@ -603,7 +653,7 @@ impl Served {
             && let Some(Some(e)) = &finished
             && !e.undone()
         {
-            let e = Self::later_note(run, statement_error(e));
+            let e = self.end_error(run, e);
             return self.failed(run, out, e).await;
         }
         out.columns(columns);
@@ -637,7 +687,7 @@ impl Served {
             if let Some(end) = finished.take() {
                 return self.ended(run, out, builder, delivered, end).await;
             }
-            match run.frames.next().await {
+            match self.frame(run).await {
                 Frame::Rows { index, values, .. } if index == run.index => rows.extend(values),
                 Frame::Value { index, value } if index == run.index => rows.push_back(value),
                 Frame::Finished { index, error, .. } if index == run.index => {
@@ -701,24 +751,24 @@ impl Served {
         match end {
             Some(e) if e.undone() => rolled_back = true,
             Some(e) => {
-                let e = Self::later_note(run, statement_error(&e));
+                let e = self.end_error(run, &e);
                 return self.failed(run, out, e).await;
             }
             None => {}
         }
-        run.index += 1;
         // The last result waits for `end`, so its outcome can count what followed it.
-        if run.index >= run.expected {
+        if run.index + 1 >= run.expected {
             if !run.ended {
                 self.read_past(run, None).await;
             }
             if let Some(e) = run.end_error.take() {
-                let e = Self::later_note(run, statement_error(&e));
+                let e = self.end_error(run, &e);
                 out.fail(e).await;
                 return After::Stop;
             }
             self.cancel.end();
         }
+        run.index += 1;
         let done = Outcome {
             rows: delivered,
             truncated: false,
@@ -781,18 +831,35 @@ impl Served {
         }
     }
 
-    // Holds a parked read until `extend` raises or lifts the row limit, or the stream goes.
+    // Holds a parked read until `extend` raises or lifts the row limit, the stream goes, or a
+    // stop ends it. Biased, so a stop made before a resume wins even if the server has finished.
     async fn park(&mut self, run: &mut Run, out: &mut Out) -> Cut {
         let Some(resume) = out.resume.as_mut() else {
             return Cut::Over(self.dropped(run).await);
         };
-        match resume.recv().await {
-            Some(more) => {
+        let woke = tokio::select! {
+            biased;
+            () = self.cancel.until_stopped(run.id) => None,
+            more = resume.recv() => Some(more),
+        };
+        match woke {
+            Some(Some(more)) => {
                 out.limits.max_rows =
                     more.and_then(|more| out.limits.max_rows.map(|max| max.saturating_add(more)));
                 Cut::Resume
             }
-            None => Cut::Over(self.dropped(run).await),
+            Some(None) => Cut::Over(self.dropped(run).await),
+            // The stop's error waits in the channel for the caller's `extend` and `next_batch`.
+            None => {
+                self.read_past(run, None).await;
+                run.end_error = None;
+                let e = self
+                    .cancel
+                    .stopped(run.id)
+                    .map_or(ExecuteError::Cancelled, Stop::error);
+                out.fail(e).await;
+                Cut::Over(After::Stop)
+            }
         }
     }
 }

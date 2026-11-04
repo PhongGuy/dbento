@@ -76,7 +76,10 @@ impl Driver for SurrealDriver {
         let (rpc, logged) = opened?;
         let drain_bound = params.bounds.drain.unwrap_or(DRAIN_CAP);
         let cancel = Arc::new(SurrealCancel::new(rpc.clone(), drain_bound));
-        let rules = Rules { drain_bound };
+        let rules = Rules {
+            drain_bound,
+            timeout: params.timeout,
+        };
         let (requests, rx) = mpsc::unbounded_channel();
         tokio::spawn(serve(rpc, rules, Arc::clone(&cancel), logged.place, rx));
         Ok(SurrealDriver {

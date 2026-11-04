@@ -3,6 +3,11 @@
 use super::decode::Wire;
 use crate::session::ExecuteError;
 
+/// The wire code of a query the server stopped at its own timeout.
+const TIMED_OUT: i64 = -32004;
+/// The words of `end` after a `query_cancel` or the server's own send timeout.
+const STOPPED: &str = "stopped before it completed";
+
 /// One `error` object: its code, kind, nested detail kinds outermost first, and message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WireError {
@@ -50,6 +55,15 @@ impl WireError {
     pub(crate) fn expired(&self) -> bool {
         self.has("SessionExpired")
     }
+
+    /// `query_cancel`, or the server's send timeout, ended the stream.
+    pub(crate) fn stopped(&self) -> bool {
+        self.message.contains(STOPPED)
+    }
+
+    fn timed_out(&self) -> bool {
+        self.code == TIMED_OUT || self.has("TimedOut")
+    }
 }
 
 /// A field of an object value.
@@ -72,6 +86,9 @@ fn text(value: &Wire, name: &str) -> String {
 
 /// A statement's `finished` or `end` error, or a call-level one, as `ExecuteError`.
 pub(crate) fn statement_error(e: &WireError) -> ExecuteError {
+    if e.timed_out() {
+        return ExecuteError::Timeout;
+    }
     ExecuteError::Database {
         code: e.code.to_string(),
         sqlstate: None,
