@@ -321,10 +321,14 @@ pub enum ExecuteError {
     #[non_exhaustive]
     Database {
         /// SQLSTATE on Postgres, the extended result code in decimal on SQLite, the error
-        /// number in decimal on MySQL.
+        /// number in decimal on MySQL and SQL Server.
         code: String,
-        /// The server's SQLSTATE on MySQL; `None` on Postgres and SQLite.
+        /// The server's SQLSTATE on MySQL; `None` on Postgres, SQLite and SQL Server.
         sqlstate: Option<String>,
+        /// The error's class (severity) on SQL Server; `None` elsewhere.
+        class: Option<u8>,
+        /// The error's state on SQL Server; `None` elsewhere.
+        state: Option<u8>,
         /// The database's message.
         message: String,
         /// The server's detail line (Postgres).
@@ -419,11 +423,13 @@ impl ExecuteError {
         )
     }
 
-    /// A database error with only a code and a message; detail, hint and position are empty.
+    /// A database error with only a code and a message; every other field is empty.
     pub fn database(code: impl Into<String>, message: impl Into<String>) -> Self {
         ExecuteError::Database {
             code: code.into(),
             sqlstate: None,
+            class: None,
+            state: None,
             message: message.into(),
             detail: None,
             hint: None,
@@ -707,6 +713,8 @@ impl Session {
     /// is closed and this returns [`ExecuteError::StoppedAtDrainCap`] for a statement that
     /// may write, or [`ExecuteError::SessionClosed`] as on a session whose connection ended;
     /// MySQL kills any statement with `KILL QUERY` and always returns `StoppedAtDrainCap`.
+    /// A caller that runs a second script on a session settles between them, since a stop
+    /// kept for a dropped SQL Server script is otherwise answered for the next one.
     pub async fn settle(&mut self) -> Result<(), ExecuteError> {
         match &mut self.inner {
             SessionInner::Sqlite(d) => d.settle().await,
@@ -794,11 +802,7 @@ impl Session {
             SessionInner::Sqlite(d) => sqlite_foreign_keys(d, rel).await?,
             SessionInner::Postgres(d) => pg_foreign_keys(d, rel).await?,
             SessionInner::Mysql(d) => crate::mysql::catalog::foreign_keys(d, rel).await?,
-            SessionInner::Mssql(_) => {
-                return Err(IntrospectError::Unsupported {
-                    what: "foreign keys",
-                });
-            }
+            SessionInner::Mssql(d) => crate::mssql::catalog::foreign_keys(d, rel).await?,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => {
                 return Err(IntrospectError::Unsupported {
@@ -820,9 +824,7 @@ impl Session {
             SessionInner::Sqlite(d) => sqlite_relation_objects(d, rel).await,
             SessionInner::Postgres(d) => pg_relation_objects(d, rel).await,
             SessionInner::Mysql(d) => crate::mysql::catalog::relation_objects(d, rel).await,
-            SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
-                what: "relation objects",
-            }),
+            SessionInner::Mssql(d) => crate::mssql::catalog::relation_objects(d, rel).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(RelationObjects::new(Vec::new(), Vec::new(), Vec::new())),
         }
@@ -835,23 +837,21 @@ impl Session {
             SessionInner::Sqlite(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
             SessionInner::Postgres(d) => pg_schema_objects(d, schema).await,
             SessionInner::Mysql(d) => crate::mysql::catalog::schema_objects(d, schema).await,
-            SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
-                what: "schema objects",
-            }),
+            SessionInner::Mssql(d) => crate::mssql::catalog::schema_objects(d, schema).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
         }
     }
 
-    /// The current definition of `object`, at most DEFINITION_CAP bytes.
+    /// The current definition of `object`, at most DEFINITION_CAP bytes. SQL Server answers for
+    /// views, triggers, routines, checks and synonyms; it stores no text for the rest, which are
+    /// Unsupported.
     pub async fn definition(&mut self, object: &ObjectRef) -> Result<Definition, DefinitionError> {
         match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_definition(d, object).await,
             SessionInner::Postgres(d) => pg_definition(d, object).await,
             SessionInner::Mysql(d) => crate::mysql::catalog::definition(d, object).await,
-            SessionInner::Mssql(_) => Err(DefinitionError::Unsupported {
-                what: object.label(),
-            }),
+            SessionInner::Mssql(d) => crate::mssql::catalog::definition(d, object).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => crate::duckdb::catalog::definition(d, object).await,
         }

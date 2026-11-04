@@ -170,7 +170,9 @@ impl ColumnMeta {
         self.primary_key
     }
 
-    /// The default expression's text, if the column has one.
+    /// The default expression's text, if the column has one. On SQL Server, a text that starts
+    /// `/* withheld` stands for an expression the login may not read, and one that starts
+    /// `/* cut */` is the expression past the definition cap, so neither is always runnable SQL.
     pub fn default(&self) -> Option<&str> {
         self.default.as_deref()
     }

@@ -3,7 +3,7 @@
 //! one request channel per session, one control channel per script and one depth-1 event
 //! channel per statement, as the SQLite driver does.
 
-mod catalog;
+pub(crate) mod catalog;
 mod conn;
 mod types;
 
@@ -474,7 +474,12 @@ fn database_error(e: &TokenError, reader: bool) -> ExecuteError {
             message: e.message().to_owned(),
         };
     }
-    ExecuteError::database(e.code().to_string(), e.message())
+    let mut error = ExecuteError::database(e.code().to_string(), e.message());
+    if let ExecuteError::Database { class, state, .. } = &mut error {
+        *class = Some(e.class());
+        *state = Some(e.state());
+    }
+    error
 }
 
 /// A tiberius error read mid-response, and whether it closes the session: a server error is

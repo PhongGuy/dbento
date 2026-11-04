@@ -15,6 +15,8 @@ pub(crate) struct ToolError {
     message: String,
     sqlstate: Option<String>,
     error_number: Option<String>,
+    class: Option<u8>,
+    state: Option<u8>,
     request_id: Option<String>,
     reason: Option<String>,
 }
@@ -27,6 +29,8 @@ impl ToolError {
             message: message.into(),
             sqlstate: None,
             error_number: None,
+            class: None,
+            state: None,
             request_id: None,
             reason: None,
         }
@@ -63,20 +67,27 @@ impl ToolError {
     }
 
     /// A statement or catalog query failed; only a database error carries a SQLSTATE. An
-    /// engine with its own SQLSTATE (MySQL) also reports its native code as `error_number`.
+    /// engine with its own SQLSTATE (MySQL) also reports its native code as `error_number`,
+    /// and SQL Server, which has none, reports its number there with `class` and `state`.
     pub(crate) fn from_execute(e: &ExecuteError) -> Self {
         let code = match e {
             ExecuteError::Database {
                 code,
                 message,
                 sqlstate,
+                class,
+                state,
                 ..
             } => {
                 return ToolError {
                     code: "database",
                     message: message.clone(),
-                    sqlstate: Some(sqlstate.clone().unwrap_or_else(|| code.clone())),
-                    error_number: sqlstate.is_some().then(|| code.clone()),
+                    sqlstate: sqlstate
+                        .clone()
+                        .or_else(|| class.is_none().then(|| code.clone())),
+                    error_number: (sqlstate.is_some() || class.is_some()).then(|| code.clone()),
+                    class: *class,
+                    state: *state,
                     request_id: None,
                     reason: None,
                 };
@@ -145,8 +156,8 @@ impl ToolError {
         &self.message
     }
 
-    /// The `{"error": {...}}` object, with `sqlstate`, `error_number`, `request_id` and `reason`
-    /// only when set.
+    /// The `{"error": {...}}` object, with `sqlstate`, `error_number`, `class`, `state`,
+    /// `request_id` and `reason` only when set.
     fn to_value(&self) -> Value {
         let mut error = Map::new();
         error.insert("code".into(), json!(self.code));
@@ -156,6 +167,12 @@ impl ToolError {
         }
         if let Some(number) = &self.error_number {
             error.insert("error_number".into(), json!(number));
+        }
+        if let Some(class) = self.class {
+            error.insert("class".into(), json!(class));
+        }
+        if let Some(state) = self.state {
+            error.insert("state".into(), json!(state));
         }
         if let Some(id) = &self.request_id {
             error.insert("request_id".into(), json!(id));
@@ -300,5 +317,21 @@ mod tests {
         assert!(v["error"].get("error_number").is_none(), "{v}");
         let v = ToolError::from_execute(&ExecuteError::Timeout).to_value();
         assert!(v["error"].get("error_number").is_none(), "{v}");
+    }
+
+    #[test]
+    fn a_stop_is_worded_for_its_engine_and_a_server_free_cap_pins_mysql() {
+        let on = |e: &ExecuteError, engine| ToolError::from_execute_on(e, engine);
+        let cap = ExecuteError::StoppedAtDrainCap;
+        assert!(
+            on(&cap, Engine::Mysql)
+                .message()
+                .contains("may have kept part of its changes")
+        );
+        assert_eq!(on(&cap, Engine::Postgres).message(), cap.to_string());
+        assert_eq!(on(&cap, Engine::Mysql).code(), "session_closed");
+        let cancelled = on(&ExecuteError::Cancelled, Engine::Mssql);
+        assert_eq!(cancelled.code(), "cancelled");
+        assert!(cancelled.message().contains("may have kept"));
     }
 }

@@ -239,6 +239,8 @@ fn a_cache_lookup_failure_reads_as_missing_and_other_errors_pass_through() {
         IntrospectError::Execute(ExecuteError::Database {
             code: code.to_owned(),
             sqlstate: None,
+            class: None,
+            state: None,
             message: message.to_owned(),
             detail: None,
             hint: None,

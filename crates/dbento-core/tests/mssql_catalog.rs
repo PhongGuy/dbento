@@ -8,7 +8,7 @@ use dbento_core::{
     ColumnMeta, ExecuteError, IntrospectError, Limits, Relation, RelationKind, RelationRef,
     SessionOptions,
 };
-use support::{MsFixture, ms_off, run, text};
+use support::{MsFixture, ms_fixture, ms_off, run, text};
 
 /// Runs each batch on a client of the fixture's database.
 async fn setup(fx: &MsFixture, batches: &[&str]) {
@@ -66,6 +66,7 @@ async fn relations_are_a_schemas_tables_and_views_named_as_the_database_compares
     let want = [
         Relation::new("Orders", RelationKind::Table),
         Relation::new("orders2", RelationKind::Table),
+        Relation::new("syn", RelationKind::Other),
         Relation::new("v", RelationKind::View),
     ];
     for schema in ["sales", "SALES"] {
@@ -115,7 +116,7 @@ async fn the_catalog_stays_on_the_connections_database_after_a_use() {
         .remove(0)
         .unwrap();
     let list = s.relations("sales").await.unwrap();
-    assert_eq!(list.items().len(), 3, "{:?}", list.items());
+    assert_eq!(list.items().len(), 4, "{:?}", list.items());
     let ran = run(&mut s, "SELECT DB_NAME() AS db", Limits::default())
         .await
         .remove(0)
@@ -342,4 +343,31 @@ async fn a_cancel_stops_a_catalog_call_waiting_on_a_lock() {
         .remove(0)
         .unwrap();
     assert_eq!(one.rows, vec![vec![text("1")]]);
+}
+
+/// `sys.types` hides a user type from a login without rights on it, though the column stays.
+#[tokio::test]
+async fn a_column_of_a_type_the_login_cannot_see_is_listed_by_its_base_type() {
+    dbento_testkit::skip_without_mssql!();
+    let fx = ms_fixture(
+        dbento_testkit::mssql_db().await,
+        "tls = \"off\"\nread_only = true\nread_only_user = \"r\"",
+    );
+    setup(
+        &fx,
+        &[
+            "CREATE TYPE dbo.phone FROM varchar(20) NOT NULL",
+            "CREATE TABLE dbo.t (id int NOT NULL, ph dbo.phone, h hierarchyid)",
+            "CREATE USER r WITHOUT LOGIN",
+            "GRANT SELECT ON dbo.t TO r",
+        ],
+    )
+    .await;
+    let mut s = fx.session(SessionOptions::default()).await;
+    let columns = s.columns(&RelationRef::new("dbo", "t")).await.unwrap();
+    let listed: Vec<_> = columns.iter().map(|c| (c.name(), c.type_name())).collect();
+    assert_eq!(
+        listed,
+        [("id", "INT"), ("ph", "VARCHAR(20)"), ("h", "HIERARCHYID")]
+    );
 }

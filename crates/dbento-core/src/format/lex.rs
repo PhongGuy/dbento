@@ -2,6 +2,7 @@
 
 use crate::Engine;
 use crate::ranges::mysql_dashes_comment;
+use crate::tsql::{TsqlKind, tsql_tokens};
 
 /// What a token is, as far as layout and keyword case need to know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,11 +34,13 @@ pub(crate) fn lex(engine: Engine, sql: &str) -> Option<Vec<Tok>> {
 }
 
 /// The tokens of `sql` that start before byte `upto`, so text past them need not lex;
-/// None when one of those tokens is unterminated, on SQL Server, which has no lexer here yet,
-/// or on MongoDB and SurrealDB, which are not SQL, so the formatter leaves their text alone.
+/// None when one of those tokens is unterminated, or on MongoDB and SurrealDB, which are not
+/// SQL, so the formatter leaves their text alone.
 pub(crate) fn lex_to(engine: Engine, sql: &str, upto: usize) -> Option<Vec<Tok>> {
-    if matches!(engine, Engine::Mssql | Engine::Mongodb | Engine::Surrealdb) {
-        return None;
+    match engine {
+        Engine::Mongodb | Engine::Surrealdb => return None,
+        Engine::Mssql => return mssql_toks(sql, upto),
+        _ => {}
     }
     let mut toks = Vec::new();
     let mut i = 0;
@@ -53,6 +56,47 @@ pub(crate) fn lex_to(engine: Engine, sql: &str, upto: usize) -> Option<Vec<Tok>>
         i = end;
     }
     Some(toks)
+}
+
+// `tsql_tokens` reads T-SQL as the server does and runs an unterminated token to the end, so
+// each quote and comment is checked here, against the same rules, to tell that case apart.
+fn mssql_toks(sql: &str, upto: usize) -> Option<Vec<Tok>> {
+    let b = sql.as_bytes();
+    tsql_tokens(sql)
+        .into_iter()
+        .take_while(|t| t.range.start < upto)
+        .map(|t| {
+            let start = t.range.start;
+            let text = &sql[t.range.clone()];
+            let kind = match t.kind {
+                TsqlKind::Space => Kind::Space,
+                TsqlKind::LineComment => Kind::LineComment,
+                TsqlKind::BlockComment => {
+                    block_comment(b, start, true)?;
+                    Kind::BlockComment
+                }
+                TsqlKind::Str => {
+                    // A leading `N` is part of the token, and the quote opens after it.
+                    quoted(b, start + usize::from(b[start] != b'\''), b'\'', false)?;
+                    Kind::String
+                }
+                TsqlKind::Ident => {
+                    let close = if b[start] == b'[' { b']' } else { b[start] };
+                    quoted(b, start, close, false)?;
+                    Kind::QuotedIdent
+                }
+                TsqlKind::Word if b[start].is_ascii_digit() => Kind::Number,
+                TsqlKind::Word if b[start] == b'@' => Kind::Param,
+                TsqlKind::Word => Kind::Word,
+                TsqlKind::Punct if matches!(text, "(" | ")" | "," | ";" | ".") => Kind::Punct,
+                TsqlKind::Punct => Kind::Op,
+            };
+            Some(Tok {
+                kind,
+                range: t.range,
+            })
+        })
+        .collect()
 }
 
 // The mysql client reads a line opening with `DELIMITER` as a client command that moves

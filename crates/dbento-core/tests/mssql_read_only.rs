@@ -438,3 +438,13 @@ async fn the_close_out_runs_after_errors_cuts_and_session_switches() {
     assert!(ran.outcome.truncated);
     assert_eq!(trancount(&mut s).await, vec![vec![text("2")]]);
 }
+
+#[tokio::test]
+async fn a_connection_states_the_level_its_read_only_session_reports() {
+    dbento_testkit::skip_without_mssql!();
+    let (fx, s) = read_only().await;
+    assert_eq!(
+        Some(fx.conn().read_only_enforcement()),
+        s.read_only_enforcement()
+    );
+}
