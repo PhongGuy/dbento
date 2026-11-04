@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use dbento_core::{
-    Color, ConnectionSpec, Engine, FieldKind, FolderPath, FormField, Secret, SecretSource, TlsMode,
-    secret_env_var,
+    AuthLevel, Color, ConnectionSpec, Engine, FieldKind, FolderPath, FormField, Secret,
+    SecretSource, TlsMode, secret_env_var,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
@@ -50,6 +50,8 @@ pub enum Field {
     Host,
     /// The Postgres port.
     Port,
+    /// The SurrealDB namespace.
+    Namespace,
     /// The Postgres database.
     Database,
     /// The Postgres user.
@@ -68,6 +70,8 @@ pub enum Field {
     KeyPassphrase,
     /// The SQL Server reader principal (`read_only_user`).
     ReadOnlyUser,
+    /// The SurrealDB login's level (`auth_level`).
+    AuthLevel,
     /// The statement timeout.
     Timeout,
     /// The sidebar folder.
@@ -90,6 +94,8 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::TlsKey => Some("e.g. certs/client.key"),
         Field::KeyPassphrase => Some("only for an encrypted key"),
         Field::ReadOnlyUser => Some("e.g. dbento_reader"),
+        Field::Namespace => Some("e.g. app"),
+        Field::AuthLevel => Some("root"),
         Field::Timeout => Some("e.g. 30s"),
         Field::Folder => Some("e.g. Production"),
     }
@@ -156,6 +162,7 @@ pub struct ConnectionForm {
     path: Entity<InputState>,
     host: Entity<InputState>,
     port: Entity<InputState>,
+    namespace: Entity<InputState>,
     database: Entity<InputState>,
     user: Entity<InputState>,
     password: Entity<InputState>,
@@ -165,6 +172,7 @@ pub struct ConnectionForm {
     tls_key: Entity<InputState>,
     key_passphrase: Entity<InputState>,
     read_only_user: Entity<InputState>,
+    auth_level: Entity<InputState>,
     timeout: Entity<InputState>,
     folder: Entity<InputState>,
     secret: SecretChoice,
@@ -222,6 +230,7 @@ impl ConnectionForm {
         let path = text(Field::Path, &shown.path);
         let host = text(Field::Host, &shown.host);
         let port = text(Field::Port, &shown.port);
+        let namespace = text(Field::Namespace, &shown.namespace);
         let database = text(Field::Database, &shown.database);
         let user = text(Field::User, &shown.user);
         let env_var = text(Field::EnvVar, &shown.env_var);
@@ -229,6 +238,7 @@ impl ConnectionForm {
         let tls_cert = text(Field::TlsCert, &shown.tls_cert);
         let tls_key = text(Field::TlsKey, &shown.tls_key);
         let read_only_user = text(Field::ReadOnlyUser, &shown.read_only_user);
+        let auth_level = text(Field::AuthLevel, &shown.auth_level);
         let timeout = text(Field::Timeout, &shown.timeout);
         let folder = text(Field::Folder, &shown.folder);
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
@@ -248,6 +258,7 @@ impl ConnectionForm {
             &path,
             &host,
             &port,
+            &namespace,
             &database,
             &user,
             &password,
@@ -257,6 +268,7 @@ impl ConnectionForm {
             &tls_key,
             &key_passphrase,
             &read_only_user,
+            &auth_level,
             &timeout,
         ];
         let field_changes = inputs
@@ -276,6 +288,7 @@ impl ConnectionForm {
             path,
             host,
             port,
+            namespace,
             database,
             user,
             password,
@@ -285,6 +298,7 @@ impl ConnectionForm {
             tls_key,
             key_passphrase,
             read_only_user,
+            auth_level,
             timeout,
             folder,
             secret: shown.secret,
@@ -373,6 +387,7 @@ impl ConnectionForm {
             (Field::Path, was.path, now.path),
             (Field::Host, was.host, now.host),
             (Field::Port, was.port, now.port),
+            (Field::Namespace, was.namespace, now.namespace),
             (Field::Database, was.database, now.database),
             (Field::User, was.user, now.user),
             (Field::EnvVar, was.env_var, now.env_var),
@@ -380,6 +395,7 @@ impl ConnectionForm {
             (Field::TlsCert, was.tls_cert, now.tls_cert),
             (Field::TlsKey, was.tls_key, now.tls_key),
             (Field::ReadOnlyUser, was.read_only_user, now.read_only_user),
+            (Field::AuthLevel, was.auth_level, now.auth_level),
             (Field::Timeout, was.timeout, now.timeout),
             (Field::Folder, was.folder, now.folder),
         ] {
@@ -479,6 +495,7 @@ impl ConnectionForm {
             Field::Path => &self.path,
             Field::Host => &self.host,
             Field::Port => &self.port,
+            Field::Namespace => &self.namespace,
             Field::Database => &self.database,
             Field::User => &self.user,
             Field::Password => &self.password,
@@ -488,6 +505,7 @@ impl ConnectionForm {
             Field::TlsKey => &self.tls_key,
             Field::KeyPassphrase => &self.key_passphrase,
             Field::ReadOnlyUser => &self.read_only_user,
+            Field::AuthLevel => &self.auth_level,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
         }
@@ -604,9 +622,16 @@ impl ConnectionForm {
                     let Some((field, _)) = field_of(f.key) else {
                         continue;
                     };
+                    if field == Field::AuthLevel {
+                        if let Some(v) = changed(field, &shown.auth_level) {
+                            spec.auth_level = v.map(|t| parse_auth_level(&t)).transpose()?;
+                        }
+                        continue;
+                    }
                     let (was, key) = match field {
                         Field::Path => (&shown.path, &mut spec.path),
                         Field::Host => (&shown.host, &mut spec.host),
+                        Field::Namespace => (&shown.namespace, &mut spec.namespace),
                         Field::Database => (&shown.database, &mut spec.database),
                         Field::User => (&shown.user, &mut spec.user),
                         Field::ReadOnlyUser => (&shown.read_only_user, &mut spec.read_only_user),
@@ -1320,6 +1345,7 @@ struct Shown {
     path: String,
     host: String,
     port: String,
+    namespace: String,
     database: String,
     user: String,
     env_var: String,
@@ -1327,6 +1353,7 @@ struct Shown {
     tls_cert: String,
     tls_key: String,
     read_only_user: String,
+    auth_level: String,
     timeout: String,
     folder: String,
     secret: SecretChoice,
@@ -1341,6 +1368,7 @@ impl Shown {
             Field::Path => &self.path,
             Field::Host => &self.host,
             Field::Port => &self.port,
+            Field::Namespace => &self.namespace,
             Field::Database => &self.database,
             Field::User => &self.user,
             Field::EnvVar => &self.env_var,
@@ -1348,6 +1376,7 @@ impl Shown {
             Field::TlsCert => &self.tls_cert,
             Field::TlsKey => &self.tls_key,
             Field::ReadOnlyUser => &self.read_only_user,
+            Field::AuthLevel => &self.auth_level,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
             Field::Name | Field::Password | Field::KeyPassphrase => "",
@@ -1366,6 +1395,7 @@ impl Shown {
             path: text(&spec.path),
             host: text(&spec.host),
             port: spec.port.map(|p| p.to_string()).unwrap_or_default(),
+            namespace: text(&spec.namespace),
             database: text(&spec.database),
             user: text(&spec.user),
             env_var,
@@ -1373,6 +1403,10 @@ impl Shown {
             tls_cert: text(&spec.tls_cert),
             tls_key: text(&spec.tls_key),
             read_only_user: text(&spec.read_only_user),
+            auth_level: spec
+                .auth_level
+                .map(|l| l.name().to_owned())
+                .unwrap_or_default(),
             timeout: text(&spec.statement_timeout),
             folder: spec
                 .folder
@@ -1413,9 +1447,11 @@ fn field_of(key: &str) -> Option<(Field, &'static str)> {
         "path" => (Field::Path, "conn-path"),
         "host" => (Field::Host, "conn-host"),
         "port" => (Field::Port, "conn-port"),
+        "namespace" => (Field::Namespace, "conn-namespace"),
         "database" => (Field::Database, "conn-database"),
         "user" => (Field::User, "conn-user"),
         "read_only_user" => (Field::ReadOnlyUser, "conn-read-only-user"),
+        "auth_level" => (Field::AuthLevel, "conn-auth-level"),
         _ => return None,
     })
 }
@@ -1444,6 +1480,7 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     for (key, slot) in [
         ("path", &mut spec.path),
         ("host", &mut spec.host),
+        ("namespace", &mut spec.namespace),
         ("database", &mut spec.database),
         ("user", &mut spec.user),
         ("read_only_user", &mut spec.read_only_user),
@@ -1454,6 +1491,9 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     }
     if !has("port") {
         spec.port = None;
+    }
+    if !has("auth_level") {
+        spec.auth_level = None;
     }
     if !has("secret") {
         spec.secret = None;
@@ -1467,9 +1507,18 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     }
 }
 
-// Whether the engine takes a client certificate and key: SQL Server refuses both keys.
+// Whether the engine takes a client certificate and key: SQL Server and SurrealDB refuse both.
 fn client_cert(engine: Engine) -> bool {
-    engine != Engine::Mssql
+    !matches!(engine, Engine::Mssql | Engine::Surrealdb)
+}
+
+// One of the three level names, in any case; trimmed already by the caller.
+fn parse_auth_level(text: &str) -> Result<AuthLevel, String> {
+    let lower = text.to_lowercase();
+    [AuthLevel::Root, AuthLevel::Namespace, AuthLevel::Database]
+        .into_iter()
+        .find(|l| l.name() == lower)
+        .ok_or_else(|| "Auth level must be root, namespace or database".to_owned())
 }
 
 // Digits only: `u16::from_str` also takes a leading `+`.

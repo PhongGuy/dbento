@@ -1,7 +1,9 @@
 mod support;
 
 use dbento_app::connection_dialog::{ConnectionForm, Field};
-use dbento_core::{Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form};
+use dbento_core::{
+    AuthLevel, Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form,
+};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
 use support::{label_of, present};
@@ -643,4 +645,113 @@ fn a_client_certificate_stays_with_postgres_when_switching_to_sql_server(cx: &mu
         typed.map(|s| s.expose().to_owned()).as_deref(),
         Some("typed")
     );
+}
+
+fn sr() -> ConnectionSpec {
+    let mut s = ConnectionSpec::new(Engine::Surrealdb);
+    (s.host, s.namespace, s.database, s.user, s.auth_level) = (
+        Some("db.example".into()),
+        Some("app".into()),
+        Some("main".into()),
+        Some("reader".into()),
+        Some(AuthLevel::Database),
+    );
+    (s.tls, s.tls_ca) = (Some(TlsMode::Verify), Some("certs/ca.pem".into()));
+    s
+}
+
+#[gpui_kit::test]
+fn a_loaded_surrealdb_connection_shows_its_fields_and_returns_unchanged(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    for id in [
+        "conn-host",
+        "conn-port",
+        "conn-namespace",
+        "conn-database",
+        "conn-user",
+        "conn-user-help",
+        "conn-auth-level",
+        "conn-auth-level-help",
+        "conn-password",
+        "conn-secret",
+        "conn-tls",
+        "conn-tls-ca",
+        "conn-read-only",
+        "conn-read-only-help",
+    ] {
+        assert!(present(cx, win, id), "{id}");
+    }
+    for id in [
+        "conn-path",
+        "conn-read-only-user",
+        "conn-tls-cert",
+        "conn-tls-key",
+        "conn-tls-key-passphrase",
+    ] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    let form = connection_form(Engine::Surrealdb);
+    assert_eq!(
+        label_of(cx, win, "conn-auth-level-help").as_deref(),
+        form.sections[0].fields[5].help
+    );
+    assert_eq!(
+        label_of(cx, win, "conn-user-help").as_deref(),
+        form.sections[0].fields[4].help
+    );
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Namespace),
+        ("app".into(), "e.g. app".into())
+    );
+    assert_eq!(
+        value_and_hint(cx, &f, Field::AuthLevel),
+        ("database".into(), "root".into())
+    );
+    assert_eq!(value_and_hint(cx, &f, Field::Port).1, "8000");
+    assert_eq!(value_and_hint(cx, &f, Field::User).1, "optional");
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), sr())));
+}
+
+#[gpui_kit::test]
+fn namespace_and_auth_level_edit_and_clear(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    set(cx, win, &f, Field::Namespace, "other");
+    set(cx, win, &f, Field::AuthLevel, " Root ");
+    let mut want = sr();
+    (want.namespace, want.auth_level) = (Some("other".into()), Some(AuthLevel::Root));
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want.clone())));
+    set(cx, win, &f, Field::AuthLevel, "");
+    want.auth_level = None;
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
+    set(cx, win, &f, Field::AuthLevel, "admin");
+    assert_eq!(
+        edit(cx, &f),
+        Err("Auth level must be root, namespace or database".into())
+    );
+}
+
+#[gpui_kit::test]
+fn a_reload_moves_an_untouched_namespace_and_auth_level(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    let mut now = sr();
+    (now.namespace, now.auth_level) = (Some("moved".into()), Some(AuthLevel::Namespace));
+    cx.update_window(win, |_, w, cx| {
+        f.update(cx, |f, cx| f.rebase(Some(now.clone()), Vec::new(), w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(value_and_hint(cx, &f, Field::Namespace).0, "moved");
+    assert_eq!(value_and_hint(cx, &f, Field::AuthLevel).0, "namespace");
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), now)));
+}
+
+#[gpui_kit::test]
+fn leaving_surrealdb_drops_its_namespace_and_auth_level(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    radio(cx, win, "conn-engine", 0);
+    assert!(!present(cx, win, "conn-namespace"));
+    assert!(!present(cx, win, "conn-auth-level"));
+    let mut want = sr();
+    (want.engine, want.namespace, want.auth_level) = (Engine::Postgres, None, None);
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
 }
