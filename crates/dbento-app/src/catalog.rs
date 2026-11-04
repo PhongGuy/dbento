@@ -252,10 +252,10 @@ async fn load(
         answer,
         Err(_)
             | Ok(Asked::Listing(Err(IntrospectError::Execute(
-                ExecuteError::SessionClosed
+                ExecuteError::SessionClosed | ExecuteError::SessionEnded { .. }
             ))))
             | Ok(Asked::Definition(Err(DefinitionError::Execute(
-                ExecuteError::SessionClosed
+                ExecuteError::SessionClosed | ExecuteError::SessionEnded { .. }
             ))))
     );
     if lost && let Some((s, _)) = session.take() {

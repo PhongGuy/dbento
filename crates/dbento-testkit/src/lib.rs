@@ -25,12 +25,14 @@ mod duck;
 mod mongo;
 mod mssql;
 mod mysql;
+mod surreal;
 #[cfg(feature = "duckdb")]
 pub use duck::duckdb_file;
 #[cfg(feature = "mongodb")]
 pub use mongo::*;
 pub use mssql::*;
 pub use mysql::*;
+pub use surreal::*;
 
 /// The environment variable the generated connection reads its password from.
 pub const SECRET_VAR: &str = "DBENTO_TEST_PG_SECRET";

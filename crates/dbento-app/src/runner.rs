@@ -532,8 +532,10 @@ async fn finish(session: &mut Option<Session>, tail: Tail, run_id: u64, events: 
             match s.settle().await {
                 Ok(()) => return,
                 Err(ExecuteError::SessionClosed) => LOST.to_owned(),
-                // A write stopped at the drain cap: its own words say what was lost.
-                Err(e @ ExecuteError::StoppedAtDrainCap) => e.to_string(),
+                // A write stopped at the drain cap, or a session that ended: its own words say why.
+                Err(e @ (ExecuteError::StoppedAtDrainCap | ExecuteError::SessionEnded { .. })) => {
+                    e.to_string()
+                }
                 Err(e) => {
                     let message = e.to_string();
                     let _ = events.send(Event::SettleFailed { message }).await;
@@ -868,10 +870,10 @@ async fn run_script(
                 let mut t = o.clone();
                 t.rows = tally.rows;
                 match after_park(&e) {
-                    AfterPark::Expired => {
+                    kind @ (AfterPark::Expired | AfterPark::Idle) => {
                         let expired = Event::ParkExpired {
                             run_id,
-                            statement_timeout: true,
+                            statement_timeout: kind == AfterPark::Expired,
                         };
                         if !cx.send(expired).await {
                             return (After::Hangup, Tail::Cut);
@@ -1225,6 +1227,8 @@ fn failed(e: ExecuteError, cx: &Ctx<'_>) -> Flow {
 #[derive(Debug, PartialEq, Eq)]
 enum AfterPark {
     Expired,
+    /// The server dropped the parked result after it sat unread too long.
+    Idle,
     Truncated,
     Lost,
     Failed,
@@ -1233,8 +1237,11 @@ enum AfterPark {
 fn after_park(e: &ExecuteError) -> AfterPark {
     match e {
         ExecuteError::Timeout => AfterPark::Expired,
+        ExecuteError::ResultExpired => AfterPark::Idle,
         ExecuteError::Cancelled => AfterPark::Truncated,
-        ExecuteError::SessionClosed | ExecuteError::StoppedAtDrainCap => AfterPark::Lost,
+        ExecuteError::SessionClosed
+        | ExecuteError::SessionEnded { .. }
+        | ExecuteError::StoppedAtDrainCap => AfterPark::Lost,
         ExecuteError::Database { code, sqlstate, .. }
             if lost_connection(code, sqlstate.as_deref()) =>
         {
@@ -1338,6 +1345,13 @@ mod tests {
         assert_eq!(after_park(&ExecuteError::SessionClosed), AfterPark::Lost);
         assert_eq!(
             after_park(&ExecuteError::StoppedAtDrainCap),
+            AfterPark::Lost
+        );
+        assert_eq!(after_park(&ExecuteError::ResultExpired), AfterPark::Idle);
+        assert_eq!(
+            after_park(&ExecuteError::SessionEnded {
+                reason: "lost".to_owned()
+            }),
             AfterPark::Lost
         );
         assert_eq!(

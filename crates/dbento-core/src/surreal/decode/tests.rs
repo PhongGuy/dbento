@@ -1,6 +1,6 @@
 use std::ops::Bound;
 
-use super::{DecodeFailure, Wire, decode, decode_bounded};
+use super::{DecodeFailure, Wire, decode, decode_bounded, envelope};
 
 fn wire(hex_text: &str) -> Wire {
     decode(&hex::decode(hex_text).unwrap()).unwrap_or_else(|e| panic!("{hex_text}: {e}"))
@@ -362,4 +362,33 @@ fn the_value_budget_stops_a_frame_of_tiny_items() {
     decode_bounded(&frame, 4).unwrap();
     let m = decode_bounded(&frame, 3).unwrap_err().message;
     assert!(m.contains("too many values"), "{m}");
+}
+
+// A call error sorts `error` before `id`, and the part that fails to decode may be the error.
+#[test]
+fn the_envelope_finds_the_id_under_any_key_order_and_past_an_unreadable_value() {
+    let id_first = hex::decode("a26269640762726581ff").unwrap();
+    assert_eq!(envelope(&id_first), Some(7));
+    // {"error": {"message": <text with a byte that is not UTF-8>}, "id": 5}
+    let bad_text = hex::decode("a2656572726f72a1676d65737361676561ff62696405").unwrap();
+    assert!(decode(&bad_text).is_err());
+    assert_eq!(envelope(&bad_text), Some(5));
+    // {"error": [[[...300 deep...0]]], "id": -2}
+    let mut deep = hex::decode("a2656572726f72").unwrap();
+    deep.extend([0x81; 300]);
+    deep.push(0);
+    deep.extend(hex::decode("626964 21".replace(' ', "")).unwrap());
+    assert!(decode(&deep).unwrap_err().message.contains("nesting"));
+    assert_eq!(envelope(&deep), Some(-2));
+    assert_eq!(
+        envelope(&hex::decode("a1617801").unwrap()),
+        None,
+        "no id key"
+    );
+    assert_eq!(envelope(&[0xff, 0xff]), None);
+    assert_eq!(
+        envelope(&hex::decode("a2656572726f7281").unwrap()),
+        None,
+        "cut short"
+    );
 }
