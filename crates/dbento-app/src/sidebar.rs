@@ -1805,6 +1805,7 @@ pub fn engine_icon(engine: Engine) -> IconName {
         Engine::Mysql => Icons::Database,
         Engine::Duckdb => Icons::FileBox,
         Engine::Mssql => Icons::Server,
+        Engine::Surrealdb => Icons::Layers,
         _ => Icons::Database,
     }
 }

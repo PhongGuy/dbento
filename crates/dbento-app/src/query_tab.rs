@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use dbento_core::{
     ConnectionConfig, Engine, ExplainMode, ReadOnlyEnforcement, RelationRef, Unguarded, Workspace,
-    explain_request,
+    explain_request, read_only_residual,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
@@ -80,6 +80,12 @@ pub const READ_ONLY_DUCKDB_TOOLTIP: &str = "Read-only: DuckDB opens the file rea
 pub const READ_ONLY_MSSQL_READER_TOOLTIP: &str = "Read-only: runs as the read_only_user principal, so SQL Server refuses writes. Procedures granted to public can still write.";
 /// The read-only badge's tooltip on a SQL Server connection without a read_only_user.
 pub const READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: each batch is fenced in a rolled-back transaction and parseable writes are refused, but a hidden commit can get past it. Set read_only_user for enforcement.";
+/// The SurrealDB badge's head when the session runs as a VIEWER.
+pub const READ_ONLY_SURREAL_VIEWER_TOOLTIP: &str = "Read-only: this VIEWER login cannot write, and Dbento runs each statement in a transaction it cancels.";
+/// The SurrealDB badge's head when the login could write and only the fence holds.
+pub const READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: Dbento runs each statement in a transaction it cancels and refuses the writes it can see. Use a VIEWER login for enforcement.";
+/// The SurrealDB badge's head before the session has reported its level.
+pub const READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP: &str = "Read-only: Dbento runs each statement in a transaction it cancels; the level shows once connected.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -138,6 +144,24 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
         (Engine::Mssql, ReadOnlyEnforcement::Database) => READ_ONLY_MSSQL_READER_TOOLTIP,
         (Engine::Mssql, ReadOnlyEnforcement::BestEffort) => READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
         _ => read_only_tooltip(c.engine()),
+    }
+}
+
+/// The badge text for `c` with the session's `level`: on SurrealDB the level's head, a space and
+/// the residual; on every other engine `read_only_tooltip_of(c)`.
+pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
+    if c.engine() != Engine::Surrealdb {
+        return read_only_tooltip_of(c).to_owned();
+    }
+    // SurrealDB's level comes from the login's role, which only the session knows.
+    let head = match level {
+        Some(ReadOnlyEnforcement::Database) => READ_ONLY_SURREAL_VIEWER_TOOLTIP,
+        Some(ReadOnlyEnforcement::BestEffort) => READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+        _ => READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
+    };
+    match read_only_residual(Engine::Surrealdb) {
+        Some(residual) => format!("{head} {residual}"),
+        None => head.to_owned(),
     }
 }
 
@@ -217,13 +241,19 @@ pub fn analyze_ask(kinds: &[Unguarded], connection: &str, sql: &str) -> Ask {
 }
 
 /// The connection chip's text, "name · engine · target": the Postgres database, the MySQL or
-/// SQL Server database when set, or else the target as written in dbento.toml.
+/// SQL Server database when set, SurrealDB's "namespace/database", or else the target as
+/// written in dbento.toml.
 pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     let target = match c.engine() {
         Engine::Postgres => c.database().unwrap_or_default().to_owned(),
         Engine::Mysql | Engine::Mssql => c
             .database()
             .map_or_else(|| c.display_target(), str::to_owned),
+        Engine::Surrealdb => format!(
+            "{}/{}",
+            c.namespace().unwrap_or_default(),
+            c.database().unwrap_or_default()
+        ),
         _ => c.display_target(),
     };
     format!(
@@ -1306,6 +1336,10 @@ impl Render for QueryTab {
             let s = if n == 1 { "" } else { "s" };
             format!("{n} statement{s}")
         });
+        // A VIEWER login is read-only whatever the config says, so the session can raise the badge.
+        let read_only = self.session_conn.read_only() || m.read_only() == Some(true);
+        let badge_text: SharedString =
+            read_only_badge_text(&self.session_conn, m.read_only_level()).into();
         let production = self.conn.is_production();
         // Production is a loud chip in the toolbar; its id keeps the old band's name.
         let prod_chip = production.then(|| {
@@ -1316,8 +1350,9 @@ impl Render for QueryTab {
         });
         let chip = self.chip(cx);
         let connection = self.connection_chip(cx);
-        let badge = self.session_conn.read_only().then(|| {
-            let tip = read_only_tooltip_of(&self.session_conn);
+        let badge = read_only.then(|| {
+            let tip = badge_text.clone();
+            let tooltip = badge_text;
             ui::chip_base(cx)
                 .id("read-only-badge")
                 .aria_label(tip)
@@ -1325,7 +1360,7 @@ impl Render for QueryTab {
                 .text_color(dim)
                 .child(ui::icon(ui::Icons::Lock, px(12.), dim))
                 .child("read-only")
-                .tooltip(move |window, cx| theme::tooltip(tip, window, cx))
+                .tooltip(move |window, cx| theme::tooltip(tooltip.clone(), window, cx))
         });
         let run_summary = summary.map(|text| {
             div()

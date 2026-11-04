@@ -63,6 +63,7 @@ fn engines_get_generic_glyphs_never_logos() {
     assert_eq!(engine_icon(Engine::Mysql), Icons::Database);
     assert_eq!(engine_icon(Engine::Duckdb), Icons::FileBox);
     assert_eq!(engine_icon(Engine::Mssql), Icons::Server);
+    assert_eq!(engine_icon(Engine::Surrealdb), Icons::Layers);
 }
 #[gpui_kit::test]
 fn the_header_is_36_px_with_24_px_buttons(cx: &mut TestAppContext) {
