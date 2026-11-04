@@ -303,10 +303,16 @@ pub fn insert_table(m: &TabModel, stmt: usize) -> Option<(Engine, RelationRef)> 
 }
 
 /// The engine and `single_source` of result `stmt`'s SQL; MySQL's default schema is the tab
-/// connection's `default_schema` while `result.epoch == m.epoch()`, else None.
+/// connection's `default_schema` while `result.epoch == m.epoch()`, else None. None on SQL
+/// Server.
 pub(crate) fn sql_source(m: &TabModel, stmt: usize) -> Option<(Engine, RelationRef)> {
     let result = m.results().get(stmt)?;
     let engine = result.engine?;
+    // SQL Server rows cannot be edited and its columns carry no source, and a bare name's
+    // schema is assumed rather than read from the login, so no free result names a table.
+    if engine == Engine::Mssql {
+        return None;
+    }
     // An older epoch ran before a connection edit, so today's database may not be the one it read.
     let schema = (result.epoch == m.epoch())
         .then(|| m.spec().workspace.connection(&m.spec().connection))

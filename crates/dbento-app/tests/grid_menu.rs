@@ -327,3 +327,24 @@ fn a_mysql_select_offers_its_table_in_the_connections_database(cx: &mut TestAppC
         assert_eq!(insert_table(m, 2), None, "a join names no table");
     });
 }
+
+#[gpui_kit::test]
+fn a_sql_server_select_offers_no_table(cx: &mut TestAppContext) {
+    dbento_testkit::skip_without_mssql!();
+    support::init(cx);
+    support::init_tokio(cx);
+    let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
+    let _enter = rt.enter();
+    let db = rt.block_on(dbento_testkit::mssql_db());
+    let (_dir, spec) = support::ms_spec(&db, "tls = \"off\"");
+    let m = cx.new(|_| dbento_app::tab_model::TabModel::new(spec));
+    let sql = "CREATE TABLE t (id INT PRIMARY KEY)\nGO\nSELECT * FROM t";
+    m.update(cx, |m, cx| m.run(sql.into(), cx));
+    wait_real(cx, "the run", |cx| m.read_with(cx, |m, _| !m.running()));
+    m.read_with(cx, |m, _| {
+        let result = m.results().last().unwrap();
+        assert_eq!(result.engine, Some(Engine::Mssql));
+        assert_eq!(result.sql, "SELECT * FROM t");
+        assert_eq!(insert_table(m, m.results().len() - 1), None);
+    });
+}

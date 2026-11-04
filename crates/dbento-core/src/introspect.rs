@@ -212,6 +212,7 @@ pub fn default_schema(engine: Engine, conn: &ConnectionConfig) -> Option<String>
         Engine::Postgres => Some("public".to_owned()),
         Engine::Sqlite => Some("main".to_owned()),
         Engine::Mysql => conn.database().map(str::to_owned),
+        // Assumed, not the login's own default schema: resolve that before row edits turn on.
         Engine::Mssql => Some("dbo".to_owned()),
         Engine::Duckdb => Some("main".to_owned()),
         Engine::Mongodb => conn.database().map(str::to_owned),
