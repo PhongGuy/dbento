@@ -149,8 +149,8 @@ test_bulk_type!(varchar_limited(
     vec!["aaaaaaaaaaaaaaaaaaaaaaa"; 1000].into_iter()
 ));
 
-// Column types added by 97bbbfd (bulk support for #352/#358) that previously
-// had no bulk coverage. `text`/`ntext` exercise the COLMETADATA TableName path
+// Column types added with bulk support for more types that previously had no
+// bulk coverage. `text`/`ntext` exercise the COLMETADATA TableName path
 // (MS-TDS §2.2.7.4): without emitting TableName for these types the server
 // rejects the bulk COLMETADATA, so these tests only pass with that fix in place.
 test_bulk_type!(text(

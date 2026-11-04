@@ -45,9 +45,9 @@ static DOT_CONN_STR: Lazy<String> = Lazy::new(|| CONN_STR.replace("localhost", "
 static APP_NAME_CONN_STR: Lazy<String> =
     Lazy::new(|| format!("{};Application Name=meow", *CONN_STR));
 
-// `encrypt=true` requires a TLS backend; without one it is a hard error
-// (see #305), so this connection string and the test using it are only built
-// when a TLS backend is compiled in.
+// `encrypt=true` requires a TLS backend; without one it is a hard error, so
+// this connection string and the test using it are only built when a TLS
+// backend is compiled in.
 #[cfg(any(
     feature = "rustls",
     feature = "native-tls",

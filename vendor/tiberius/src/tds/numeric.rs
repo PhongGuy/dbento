@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(format!("{}", n), "577.05");
 
         // Negative values format with a single leading sign and an unsigned
-        // fractional part (see #390).
+        // fractional part.
         let n = Numeric::new_with_scale(-57705, 3);
         assert_eq!(format!("{}", n), "-57.705");
 

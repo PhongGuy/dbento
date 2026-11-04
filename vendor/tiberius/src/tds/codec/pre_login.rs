@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(prelogin, decoded);
     }
 
-    // #425: a server declining the requested encryption level must yield a
+    // A server declining the requested encryption level must yield a
     // catchable protocol error instead of panicking.
     #[cfg(any(
         feature = "rustls",

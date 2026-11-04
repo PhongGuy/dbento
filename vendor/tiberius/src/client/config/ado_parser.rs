@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn splits_each_pair_on_the_first_equals() {
-        // A value may contain further `=` (base64 padding etc.); see #313.
+        // A value may contain further `=` (base64 padding etc.).
         assert_eq!(
             value("Password=ab=cd", "password").as_deref(),
             Some("ab=cd")
