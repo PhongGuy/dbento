@@ -1,6 +1,6 @@
 //! The session's serving task: it runs one script at a time over the socket task, splitting a
-//! unit's frames into one result per statement. Drain, cut and park live here, so they happen
-//! whether or not the caller is polling, and the driver only talks to it by channel.
+//! unit's frames into one result per statement. Drain, cut, park and the fence live here, so
+//! they happen whether or not the caller is polling, and the driver only talks to it by channel.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -16,14 +16,17 @@ use super::login::{Missing, Place, pre_check};
 use super::rpc::{Frame, Frames, Param, Rpc, RpcError};
 use super::shape::Shape;
 use super::units::{Unit, UnitKind, UseTarget, units};
-use super::wire::{WireError, field, statement_error};
+use super::wire::{Reading, WireError, field, statement_error};
 use crate::session::{
-    Classification, ExecuteError, Limits, OnTruncate, Outcome, Prepared, TruncatedBy, Writes,
+    Classification, ExecuteError, Limits, OnTruncate, Outcome, Prepared, ReadOnlyEnforcement,
+    TruncatedBy, Writes,
 };
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ResultBatch};
 
 /// Rows that fix a result's columns, unless a limit is reached first.
 const SAMPLE_ROWS: usize = 100;
+/// How long a parked fenced result may hold its transaction.
+pub(crate) const PARK_BOUND: Duration = Duration::from_secs(300);
 
 pub(crate) enum Request {
     Script {
@@ -69,6 +72,20 @@ pub(crate) struct Rules {
     pub(crate) drain_bound: Duration,
     /// The statement deadline, armed on every unit sent.
     pub(crate) timeout: Option<Duration>,
+    /// Set when every unit runs fenced, in an RPC transaction that is always cancelled.
+    pub(crate) read_only: Option<ReadOnlyEnforcement>,
+    /// A VIEWER login made the session read-only.
+    pub(crate) viewer: bool,
+    pub(crate) park_bound: Duration,
+}
+
+impl Rules {
+    fn reading(&self) -> Reading {
+        Reading {
+            read_only: self.read_only.is_some(),
+            viewer: self.viewer,
+        }
+    }
 }
 
 /// The session as the task holds it.
@@ -323,13 +340,32 @@ impl Served {
         self.cancel.end();
     }
 
-    // A `USE` the unit splitter could not turn into an RPC must not run as text.
-    fn refusal(unit: &Unit) -> Option<ExecuteError> {
-        unit.refused_use.then(|| ExecuteError::Unsupported {
-            reason: "USE must be a statement of its own with literal names, before any LET and \
-                     outside a transaction"
-                .to_owned(),
-        })
+    // A `USE` the unit splitter could not turn into an RPC must not run as text. A read-only
+    // session also refuses a sure write, and transaction control, which the fence owns.
+    fn refusal(&self, unit: &Unit, class: &Classification) -> Option<ExecuteError> {
+        if unit.refused_use {
+            return Some(ExecuteError::Unsupported {
+                reason: "USE must be a statement of its own with literal names, before any LET \
+                         and outside a transaction"
+                    .to_owned(),
+            });
+        }
+        self.rules.read_only?;
+        let because = if self.rules.viewer {
+            "this login is a VIEWER, so the session is read-only"
+        } else {
+            "the session is read-only"
+        };
+        if class.writes == Writes::Yes {
+            return Some(ExecuteError::ReadOnlyViolation {
+                message: format!("{because}; this statement would write"),
+            });
+        }
+        class
+            .transaction_control
+            .then(|| ExecuteError::TransactionControl {
+                reason: format!("{because}; each unit runs in Dbento's own transaction"),
+            })
     }
 
     // Sends the unit and waits for `begin`, which carries the server's statement count.
@@ -347,7 +383,7 @@ impl Served {
             out.fail(stop.error()).await;
             return After::Stop;
         }
-        if let Some(refused) = Self::refusal(unit) {
+        if let Some(refused) = self.refusal(unit, class) {
             out.fail(refused).await;
             return After::Stop;
         }
@@ -372,16 +408,27 @@ impl Served {
                 }
             };
         }
+        // Each unit gets its own fence, so a parked result holds one for at most its bound.
+        let fence = match self.rules.read_only {
+            None => None,
+            Some(_) => match self.open_fence().await {
+                Ok(fence) => Some(fence),
+                Err(e) => {
+                    out.fail(e).await;
+                    return After::Stop;
+                }
+            },
+        };
         let sql = &text[unit.range.clone()];
         if let Some(after) = self.rules.timeout {
             self.cancel.arm(id, after);
         }
-        let mut frames = self.rpc.stream(id, sql, None);
+        let mut frames = self.rpc.stream(id, sql, fence);
         let opened = loop {
             let frame = tokio::time::timeout(self.rpc.call_bound(), frames.next()).await;
             match frame {
                 Ok(Frame::Begin { statements }) => break Ok(statements),
-                Ok(Frame::Refused(e)) => break Err(statement_error(&e)),
+                Ok(Frame::Refused(e)) => break Err(statement_error(&e, self.rules.reading())),
                 Ok(Frame::Closed(why) | Frame::Unreadable { message: why }) => {
                     break Err(self.closed(why));
                 }
@@ -397,6 +444,7 @@ impl Served {
             Ok(statements) => statements,
             Err(e) => {
                 self.cancel.end();
+                self.close_fence(fence).await;
                 out.fail(e).await;
                 return After::Stop;
             }
@@ -409,7 +457,7 @@ impl Served {
             expected: statements.min(unit.statements as u64),
             statements,
             writes: class.writes,
-            fence: None,
+            fence,
             transaction: unit.transaction,
             ended: false,
             end_error: None,
@@ -425,7 +473,7 @@ impl Served {
             .await
             .map_err(|e| match e {
                 Missing::Target(message) => ExecuteError::database("use", message),
-                Missing::Server(e) => statement_error(&e),
+                Missing::Server(e) => statement_error(&e, self.rules.reading()),
                 Missing::Closed(why) => self.closed(why),
             })?;
         let params = [&target.namespace, &target.database]
@@ -435,7 +483,7 @@ impl Served {
             .call("use", &params, None)
             .await
             .map_err(|e| match e {
-                RpcError::Server(e) => statement_error(&e),
+                RpcError::Server(e) => statement_error(&e, self.rules.reading()),
                 RpcError::Closed(why) => self.closed(why),
             })?;
         if let Some(Wire::Text(namespace)) = field(&reply, "namespace") {
@@ -447,12 +495,33 @@ impl Served {
         Ok(())
     }
 
-    // Reads the rest of the unit and counts the statements the lexer did not see. An error its
-    // `end` carried that no caller heard, as after a cut result, is owed to the next settle.
+    async fn open_fence(&mut self) -> Result<[u8; 16], ExecuteError> {
+        match self.rpc.call("begin", &[], None).await {
+            Ok(Wire::Uuid(fence)) => Ok(fence),
+            Ok(other) => Err(ExecuteError::database(
+                "begin",
+                format!("the server answered begin with {other:?}"),
+            )),
+            Err(RpcError::Server(e)) => Err(statement_error(&e, self.rules.reading())),
+            Err(RpcError::Closed(why)) => Err(self.closed(why)),
+        }
+    }
+
+    // The reply is not needed: a closed socket has already rolled the fence back, and a call
+    // past its bound closes the socket.
+    async fn close_fence(&mut self, fence: Option<[u8; 16]>) {
+        if let Some(fence) = fence {
+            let _ = self.rpc.call("cancel", &[Param::Uuid(fence)], None).await;
+        }
+    }
+
+    // Reads the rest of the unit, counts the statements the lexer did not see, and closes the
+    // fence. An error its `end` carried that no caller heard is owed to the next settle.
     async fn finish(&mut self, mut run: Run) {
         if !run.ended {
             self.read_past(&mut run, None).await;
         }
+        self.close_fence(run.fence.take()).await;
         if let Some(e) = run.end_error.take()
             && !e.undone()
             && self.cancel.stopped(run.id) != Some(Stop::Quiet)
@@ -535,7 +604,8 @@ impl Served {
         }
     }
 
-    // Stops the stream and throws away its frames, so nothing unread can stall a later reply.
+    // Stops the stream and throws away its frames, so nothing unread, such as the reply to the
+    // fence's `cancel`, can stall behind them.
     fn give_up(&self, run: &mut Run) {
         self.cancel.stop(run.id, Stop::Quiet);
         run.frames.discard();
@@ -551,7 +621,7 @@ impl Served {
                 None => ExecuteError::ResultExpired,
             };
         }
-        Self::later_note(run, statement_error(e))
+        Self::later_note(run, statement_error(e, self.rules.reading()))
     }
 
     // Later statements of a unit run whatever an earlier one did, unless a transaction ends them.
@@ -568,7 +638,11 @@ impl Served {
             } if later => ExecuteError::Database {
                 code,
                 sqlstate,
-                message: format!("{message}; the later statements of this unit ran"),
+                message: if run.fence.is_some() {
+                    format!("{message}; the later statements of this unit ran, then rolled back")
+                } else {
+                    format!("{message}; the later statements of this unit ran")
+                },
                 detail,
                 hint,
                 position,
@@ -766,6 +840,8 @@ impl Served {
                 out.fail(e).await;
                 return After::Stop;
             }
+            // Closed before `Done`, so a caller that has its result sees nothing of the unit.
+            self.close_fence(run.fence.take()).await;
             self.cancel.end();
         }
         run.index += 1;
@@ -832,8 +908,10 @@ impl Served {
     }
 
     // Holds a parked read until `extend` raises or lifts the row limit, the stream goes, or a
-    // stop ends it. Biased, so a stop made before a resume wins even if the server has finished.
+    // stop ends it; a fenced one also expires at its bound, as it holds a transaction open.
+    // Biased, so a stop made before a resume wins even if the server has finished.
     async fn park(&mut self, run: &mut Run, out: &mut Out) -> Cut {
+        let bound = run.fence.map(|_| self.rules.park_bound);
         let Some(resume) = out.resume.as_mut() else {
             return Cut::Over(self.dropped(run).await);
         };
@@ -841,6 +919,11 @@ impl Served {
             biased;
             () = self.cancel.until_stopped(run.id) => None,
             more = resume.recv() => Some(more),
+            () = sleep_or_never(bound) => {
+                self.give_up(run);
+                out.fail(ExecuteError::ResultExpired).await;
+                return Cut::Over(After::Stop);
+            }
         };
         match woke {
             Some(Some(more)) => {
@@ -869,4 +952,11 @@ enum Cut {
     /// The limit moved, so the same row is tested again.
     Resume,
     Over(After),
+}
+
+async fn sleep_or_never(bound: Option<Duration>) {
+    match bound {
+        Some(bound) => tokio::time::sleep(bound).await,
+        None => std::future::pending().await,
+    }
 }

@@ -64,6 +64,11 @@ impl WireError {
     fn timed_out(&self) -> bool {
         self.code == TIMED_OUT || self.has("TimedOut")
     }
+
+    /// An IAM refusal of what the login tried; a refused change of database shares the kind.
+    fn refused(&self) -> bool {
+        self.kind == "NotAllowed" && self.message.starts_with("IAM error")
+    }
 }
 
 /// A field of an object value.
@@ -84,10 +89,30 @@ fn text(value: &Wire, name: &str) -> String {
     }
 }
 
+/// How a session reads a statement's error.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Reading {
+    /// The session is read-only, so an IAM refusal is a refused write.
+    pub(crate) read_only: bool,
+    /// A VIEWER login made it so, which the message names.
+    pub(crate) viewer: bool,
+}
+
 /// A statement's `finished` or `end` error, or a call-level one, as `ExecuteError`.
-pub(crate) fn statement_error(e: &WireError) -> ExecuteError {
+pub(crate) fn statement_error(e: &WireError, reading: Reading) -> ExecuteError {
     if e.timed_out() {
         return ExecuteError::Timeout;
+    }
+    if reading.read_only && e.refused() {
+        let message = if reading.viewer {
+            format!(
+                "{} (this login is a VIEWER, so the session is read-only)",
+                e.message
+            )
+        } else {
+            e.message.clone()
+        };
+        return ExecuteError::ReadOnlyViolation { message };
     }
     ExecuteError::Database {
         code: e.code.to_string(),
