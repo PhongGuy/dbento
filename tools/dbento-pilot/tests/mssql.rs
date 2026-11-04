@@ -160,6 +160,11 @@ async fn a_sql_server_connection_made_in_the_dialog_tests_saves_opens_and_browse
     assert!(text.contains("engine = \"mssql\""), "{text}");
     assert!(text.contains("tls = \"off\""), "{text}");
     assert!(text.contains(dbento_testkit::MS_SECRET_VAR), "{text}");
+    // The failure message must not echo the file or the password.
+    assert!(
+        !text.contains(db.password()),
+        "the saved dbento.toml holds the server password"
+    );
 
     // Opened: a query runs; the tree lists dbo's table and Open data reads both rows.
     run(&pilot, "ms", "SELECT name FROM dbo.t WHERE id = 1").await;
