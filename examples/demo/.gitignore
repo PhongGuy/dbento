@@ -1,0 +1,3 @@
+# Built from seed.sql by `make demo`; never committed.
+*.sqlite
+*.sqlite.partial

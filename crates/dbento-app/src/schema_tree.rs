@@ -1,0 +1,1499 @@
+//! The schema tree model: which catalog levels are expanded, loaded, failed or stale, and the
+//! flat rows the sidebar draws. Pure data with no GPUI types, so it is tested directly.
+
+use std::collections::{HashMap, HashSet};
+
+use dbento_core::{
+    ColumnMeta, ConstraintInfo, ConstraintKind, Engine, FormatOptions, IndexInfo, ObjectRef,
+    RELATION_CAP, RelationKind, RelationList, RelationObjects, RelationRef, RoutineKind,
+    SchemaInfo, SchemaObjects, TriggerState, TypeKind, format_sql, quote_ident,
+};
+use gpui_kit::App;
+
+use crate::catalog::{CatalogData, CatalogQuery, CatalogReply};
+use crate::keymap::{OpenSelected, keys_for};
+use crate::labels::{MenuEntry, group_digits};
+use crate::link::LinkState;
+
+/// A group of schema objects under a relation (the first four) or a schema (the last two).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectGroup {
+    /// Primary, unique, foreign, exclusion and other keys.
+    Keys,
+    /// Indexes, constraint-backed ones included.
+    Indexes,
+    /// Check constraints.
+    Checks,
+    /// Triggers.
+    Triggers,
+    /// Enum, domain, composite and range types.
+    Types,
+    /// Functions, procedures and aggregates.
+    Routines,
+}
+
+/// A node of the tree that can expand.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NodeKey {
+    /// A connection row.
+    Connection(String),
+    /// A schema of a connection.
+    Schema {
+        /// The connection name.
+        conn: String,
+        /// The schema name.
+        schema: String,
+    },
+    /// A group of one relation kind inside a schema.
+    Kind {
+        /// The connection name.
+        conn: String,
+        /// The schema name.
+        schema: String,
+        /// The kind the group lists.
+        kind: RelationKind,
+    },
+    /// A table, view or other relation.
+    Relation {
+        /// The connection name.
+        conn: String,
+        /// The relation.
+        rel: RelationRef,
+    },
+    /// An object group under a relation; starts collapsed.
+    RelationGroup {
+        /// The connection name.
+        conn: String,
+        /// The relation.
+        rel: RelationRef,
+        /// The group.
+        group: ObjectGroup,
+    },
+    /// An object group under a schema; starts collapsed.
+    SchemaGroup {
+        /// The connection name.
+        conn: String,
+        /// The schema name.
+        schema: String,
+        /// The group.
+        group: ObjectGroup,
+    },
+    /// The objects level of a `Relation` or `Schema` key: its error and truncated rows.
+    Objects(Box<NodeKey>),
+}
+
+/// What a row shows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowKind {
+    /// A schema.
+    Schema,
+    /// A kind group such as "tables".
+    Kind(RelationKind),
+    /// A relation of the given kind.
+    Relation(RelationKind),
+    /// A column.
+    Column {
+        /// The declared type, as the engine reports it.
+        type_name: String,
+        /// Whether the column is part of the primary key.
+        primary_key: bool,
+    },
+    /// An object group such as "indexes".
+    Group(ObjectGroup),
+    /// One schema object.
+    Object {
+        /// The group it is listed in.
+        group: ObjectGroup,
+        /// What a definition load asks for.
+        object: ObjectRef,
+        /// The dim trailing text: index method, constraint kind, type kind, routine result.
+        detail: String,
+    },
+    /// A level that is still loading.
+    Loading,
+    /// A level whose load failed.
+    Failed {
+        /// The error to show.
+        message: String,
+    },
+    /// The relation list hit its cap.
+    Truncated,
+    /// A level that loaded with nothing in it.
+    Empty,
+}
+
+/// One visible row of the tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogRow {
+    /// What the row shows.
+    pub kind: RowKind,
+    /// The node the row toggles; a column's or status row's is the node it sits under.
+    pub key: NodeKey,
+    /// Indent level, counted from the `depth` given to [`CatalogTree::rows`].
+    pub depth: usize,
+    /// Whether the row's node is expanded.
+    pub expanded: bool,
+    /// The text to draw.
+    pub label: String,
+    /// The dotted path; the row's aria label.
+    pub aria: String,
+}
+
+/// A catalog load the caller must start.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadRequest {
+    /// The connection to load from.
+    pub conn: String,
+    /// The generation to echo in the reply.
+    pub generation: u64,
+    /// The level to load.
+    pub query: CatalogQuery,
+}
+
+/// How far [`CatalogTree::reveal`] got toward showing a relation's row.
+#[derive(Debug, PartialEq)]
+#[non_exhaustive]
+pub enum RevealStep {
+    /// A level on the path is still loading; the caller sends these loads and asks again.
+    Waiting(Vec<LoadRequest>),
+    /// Every ancestor is open, so the relation has a row unless the filter hides it.
+    Shown,
+    /// The relation, its schema, or a load on the way is gone or failed.
+    Missing,
+}
+
+/// One cached level.
+enum Load<T> {
+    Loading,
+    Ready(T),
+    Failed(String),
+}
+
+/// The name of the connection `key` belongs to.
+pub(crate) fn node_connection(key: &NodeKey) -> &str {
+    match key {
+        NodeKey::Connection(conn)
+        | NodeKey::Schema { conn, .. }
+        | NodeKey::Kind { conn, .. }
+        | NodeKey::Relation { conn, .. }
+        | NodeKey::RelationGroup { conn, .. }
+        | NodeKey::SchemaGroup { conn, .. } => conn,
+        NodeKey::Objects(inner) => node_connection(inner),
+    }
+}
+
+/// Expansion state, cached levels and the generation that guards against stale replies.
+#[derive(Default)]
+pub struct CatalogTree {
+    expanded: HashSet<NodeKey>,
+    collapsed_kinds: HashSet<NodeKey>,
+    schemas: HashMap<String, Load<Vec<SchemaInfo>>>,
+    relations: HashMap<(String, String), Load<RelationList>>,
+    columns: HashMap<(String, RelationRef), Load<Vec<ColumnMeta>>>,
+    relation_objects: HashMap<(String, RelationRef), Load<RelationObjects>>,
+    schema_objects: HashMap<(String, String), Load<SchemaObjects>>,
+    generation: u64,
+    // The oldest generation still current, for all connections and per refreshed one.
+    floor: u64,
+    floors: HashMap<String, u64>,
+}
+
+const KINDS: [RelationKind; 5] = [
+    RelationKind::Table,
+    RelationKind::View,
+    RelationKind::MaterializedView,
+    RelationKind::ForeignTable,
+    RelationKind::Other,
+];
+
+/// One listed object: its label, its dim detail and what a definition load asks for.
+type Entry = (String, String, ObjectRef);
+
+/// How a row fits the walk in [`CatalogTree::rows`].
+struct Walk<'a> {
+    conn: &'a str,
+    /// The trimmed, lowercased filter; empty means no filtering.
+    filter: &'a str,
+}
+
+impl Walk<'_> {
+    fn matches(&self, name: &str) -> bool {
+        self.filter.is_empty() || name.to_lowercase().contains(self.filter)
+    }
+}
+
+impl CatalogTree {
+    /// An empty tree at generation 0.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The generation new requests carry; it moves on every refresh.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Whether a reply for `conn` at `generation` is from after that connection's last
+    /// refresh; older replies are ignored.
+    pub fn is_current(&self, conn: &str, generation: u64) -> bool {
+        generation >= self.floor.max(self.floors.get(conn).copied().unwrap_or(0))
+    }
+
+    /// Whether `key` is expanded. Kind groups start expanded.
+    pub fn is_expanded(&self, key: &NodeKey) -> bool {
+        match key {
+            NodeKey::Kind { .. } => !self.collapsed_kinds.contains(key),
+            _ => self.expanded.contains(key),
+        }
+    }
+
+    /// Flips `key`; expanding a level that is absent or failed marks it loading and returns its load.
+    pub fn toggle(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        if matches!(key, NodeKey::Kind { .. }) {
+            if !self.collapsed_kinds.remove(key) {
+                self.collapsed_kinds.insert(key.clone());
+            }
+            return None;
+        }
+        // A group opens locally, its objects already loaded with its parent; an objects key
+        // only carries status rows, so it never opens.
+        match key {
+            NodeKey::RelationGroup { .. } | NodeKey::SchemaGroup { .. } => {
+                if !self.expanded.remove(key) {
+                    self.expanded.insert(key.clone());
+                }
+                return None;
+            }
+            NodeKey::Objects(_) => return None,
+            _ => {}
+        }
+        if self.expanded.remove(key) {
+            return None;
+        }
+        self.expanded.insert(key.clone());
+        self.drop_failed_objects(key);
+        let absent_or_failed = match key {
+            NodeKey::Connection(c) => {
+                !matches!(self.schemas.get(c), Some(Load::Loading | Load::Ready(_)))
+            }
+            NodeKey::Schema { conn, schema } => !matches!(
+                self.relations.get(&(conn.clone(), schema.clone())),
+                Some(Load::Loading | Load::Ready(_))
+            ),
+            NodeKey::Relation { conn, rel } => !matches!(
+                self.columns.get(&(conn.clone(), rel.clone())),
+                Some(Load::Loading | Load::Ready(_))
+            ),
+            _ => false,
+        };
+        if absent_or_failed {
+            self.start(key)
+        } else {
+            None
+        }
+    }
+
+    /// Opens `key` if it is collapsed, like [`Self::toggle`]; never collapses an open node.
+    pub fn expand(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        if self.is_expanded(key) {
+            None
+        } else {
+            self.toggle(key)
+        }
+    }
+
+    /// Opens the path down to `rel` as far as its loaded levels allow: the connection, the
+    /// schema once the schemas are in, the relation's kind group once the relations are in.
+    pub fn reveal(&mut self, conn: &str, rel: &RelationRef) -> RevealStep {
+        let loads: Vec<_> = self
+            .expand(&NodeKey::Connection(conn.to_owned()))
+            .into_iter()
+            .collect();
+        let schemas = match self.schemas.get(conn) {
+            Some(Load::Ready(s)) => s,
+            Some(Load::Failed(_)) => return RevealStep::Missing,
+            None | Some(Load::Loading) => return RevealStep::Waiting(loads),
+        };
+        if !schemas.iter().any(|s| s.name() == rel.schema()) {
+            return RevealStep::Missing;
+        }
+        let skey = NodeKey::Schema {
+            conn: conn.to_owned(),
+            schema: rel.schema().to_owned(),
+        };
+        let loads: Vec<_> = self.expand(&skey).into_iter().collect();
+        let list = match self
+            .relations
+            .get(&(conn.to_owned(), rel.schema().to_owned()))
+        {
+            Some(Load::Ready(l)) => l,
+            Some(Load::Failed(_)) => return RevealStep::Missing,
+            None | Some(Load::Loading) => return RevealStep::Waiting(loads),
+        };
+        let Some(found) = list.items().iter().find(|r| r.name() == rel.name()) else {
+            return RevealStep::Missing;
+        };
+        let kind = NodeKey::Kind {
+            conn: conn.to_owned(),
+            schema: rel.schema().to_owned(),
+            kind: found.kind(),
+        };
+        self.expand(&kind);
+        RevealStep::Shown
+    }
+
+    /// Reloads a failed level under `key`; None unless it failed.
+    pub fn retry(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        let failed = match key {
+            NodeKey::Connection(c) => matches!(self.schemas.get(c), Some(Load::Failed(_))),
+            NodeKey::Schema { conn, schema } => matches!(
+                self.relations.get(&(conn.clone(), schema.clone())),
+                Some(Load::Failed(_))
+            ),
+            NodeKey::Relation { conn, rel } => matches!(
+                self.columns.get(&(conn.clone(), rel.clone())),
+                Some(Load::Failed(_))
+            ),
+            NodeKey::Objects(inner) => {
+                return match inner.as_ref() {
+                    NodeKey::Relation { conn, rel }
+                        if matches!(
+                            self.relation_objects.get(&(conn.clone(), rel.clone())),
+                            Some(Load::Failed(_))
+                        ) =>
+                    {
+                        Some(self.begin(&conn.clone(), relation_objects_query(rel)))
+                    }
+                    NodeKey::Schema { conn, schema }
+                        if matches!(
+                            self.schema_objects.get(&(conn.clone(), schema.clone())),
+                            Some(Load::Failed(_))
+                        ) =>
+                    {
+                        Some(self.begin(&conn.clone(), schema_objects_query(schema)))
+                    }
+                    _ => None,
+                };
+            }
+            _ => false,
+        };
+        if failed { self.start(key) } else { None }
+    }
+
+    /// Forgets a failed objects level of the relation or schema `key`, so the next
+    /// [`Self::objects_to_load`] restarts it; a loading or loaded level is kept.
+    fn drop_failed_objects(&mut self, key: &NodeKey) {
+        match key {
+            NodeKey::Relation { conn, rel } => {
+                let k = (conn.clone(), rel.clone());
+                if matches!(self.relation_objects.get(&k), Some(Load::Failed(_))) {
+                    self.relation_objects.remove(&k);
+                }
+            }
+            NodeKey::Schema { conn, schema } => {
+                let k = (conn.clone(), schema.clone());
+                if matches!(self.schema_objects.get(&k), Some(Load::Failed(_))) {
+                    self.schema_objects.remove(&k);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Marks loading and returns the objects load of every expanded relation and schema
+    /// whose objects are absent.
+    pub fn objects_to_load(&mut self) -> Vec<LoadRequest> {
+        let queries: Vec<(String, CatalogQuery)> = self
+            .expanded
+            .iter()
+            .filter_map(|k| match k {
+                NodeKey::Relation { conn, rel } => {
+                    Some((conn.clone(), relation_objects_query(rel)))
+                }
+                NodeKey::Schema { conn, schema } => {
+                    Some((conn.clone(), schema_objects_query(schema)))
+                }
+                _ => None,
+            })
+            .collect();
+        queries
+            .into_iter()
+            .filter_map(|(conn, q)| self.ensure(&conn, &q))
+            .collect()
+    }
+
+    /// The number of objects a group row lists; 0 for any other key.
+    pub fn group_count(&self, key: &NodeKey) -> usize {
+        match key {
+            NodeKey::RelationGroup { conn, rel, group } => {
+                let Some(o) = self.relation_objects(conn, rel) else {
+                    return 0;
+                };
+                let checks = o
+                    .constraints()
+                    .iter()
+                    .filter(|c| matches!(c.kind(), ConstraintKind::Check))
+                    .count();
+                match group {
+                    ObjectGroup::Keys => o.constraints().len() - checks,
+                    ObjectGroup::Indexes => o.indexes().len(),
+                    ObjectGroup::Checks => checks,
+                    ObjectGroup::Triggers => o.triggers().len(),
+                    ObjectGroup::Types | ObjectGroup::Routines => 0,
+                }
+            }
+            NodeKey::SchemaGroup {
+                conn,
+                schema,
+                group,
+            } => {
+                let Some(o) = self.schema_objects(conn, schema) else {
+                    return 0;
+                };
+                match group {
+                    ObjectGroup::Types => o.types().len(),
+                    ObjectGroup::Routines => o.routines().len(),
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    /// Marks the level under `key` loading and builds its request at the current generation.
+    fn start(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        let (conn, query) = match key {
+            NodeKey::Connection(c) => (c, CatalogQuery::Schemas),
+            NodeKey::Schema { conn, schema } => (
+                conn,
+                CatalogQuery::Relations {
+                    schema: schema.clone(),
+                },
+            ),
+            NodeKey::Relation { conn, rel } => (conn, CatalogQuery::Columns { rel: rel.clone() }),
+            _ => return None,
+        };
+        Some(self.begin(&conn.clone(), query))
+    }
+
+    /// Marks `query`'s level of `conn` loading and builds its request at the current generation.
+    fn begin(&mut self, conn: &str, query: CatalogQuery) -> LoadRequest {
+        let c = conn.to_owned();
+        match &query {
+            CatalogQuery::Schemas => {
+                self.schemas.insert(c, Load::Loading);
+            }
+            CatalogQuery::Relations { schema } => {
+                self.relations.insert((c, schema.clone()), Load::Loading);
+            }
+            CatalogQuery::Columns { rel } => {
+                self.columns.insert((c, rel.clone()), Load::Loading);
+            }
+            CatalogQuery::RelationObjects { rel } => {
+                self.relation_objects
+                    .insert((c, rel.clone()), Load::Loading);
+            }
+            CatalogQuery::SchemaObjects { schema } => {
+                self.schema_objects
+                    .insert((c, schema.clone()), Load::Loading);
+            }
+            // Counts and definitions are no tree level.
+            CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => {}
+        }
+        LoadRequest {
+            conn: conn.to_owned(),
+            generation: self.generation,
+            query,
+        }
+    }
+
+    /// Marks `query`'s level loading and returns its request when it is absent; None when it
+    /// is loading, loaded or failed. Never expands a node.
+    pub fn ensure(&mut self, conn: &str, query: &CatalogQuery) -> Option<LoadRequest> {
+        let c = conn.to_owned();
+        let present = match query {
+            CatalogQuery::Schemas => self.schemas.contains_key(&c),
+            CatalogQuery::Relations { schema } => self.relations.contains_key(&(c, schema.clone())),
+            CatalogQuery::Columns { rel } => self.columns.contains_key(&(c, rel.clone())),
+            CatalogQuery::RelationObjects { rel } => {
+                self.relation_objects.contains_key(&(c, rel.clone()))
+            }
+            CatalogQuery::SchemaObjects { schema } => {
+                self.schema_objects.contains_key(&(c, schema.clone()))
+            }
+            // A count or definition is no level of the tree, so there is nothing to ensure.
+            CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => true,
+        };
+        (!present).then(|| self.begin(conn, query.clone()))
+    }
+
+    /// Stores a reply for `conn`; one from an older generation is ignored.
+    pub fn apply(&mut self, conn: &str, reply: CatalogReply) {
+        if !self.is_current(conn, reply.generation) {
+            return;
+        }
+        let conn = conn.to_owned();
+        let result = reply.result;
+        // Data that does not fit its query fails that level rather than being dropped.
+        match reply.query {
+            CatalogQuery::Schemas => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::Schemas(s) => Some(s),
+                    _ => None,
+                });
+                self.schemas.insert(conn, load);
+            }
+            CatalogQuery::Relations { schema } => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::Relations(r) => Some(r),
+                    _ => None,
+                });
+                self.relations.insert((conn, schema), load);
+            }
+            CatalogQuery::Columns { rel } => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::Columns(c) => Some(c),
+                    _ => None,
+                });
+                self.columns.insert((conn, rel), load);
+            }
+            CatalogQuery::RelationObjects { rel } => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::RelationObjects(o) => Some(o),
+                    _ => None,
+                });
+                self.relation_objects.insert((conn, rel), load);
+            }
+            CatalogQuery::SchemaObjects { schema } => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::SchemaObjects(o) => Some(o),
+                    _ => None,
+                });
+                self.schema_objects.insert((conn, schema), load);
+            }
+            // Counts and definitions are no tree level.
+            CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => {}
+        }
+    }
+
+    /// Drops every cache, bumps the generation and returns a load for each expanded level.
+    pub fn refresh(&mut self) -> Vec<LoadRequest> {
+        self.generation += 1;
+        self.floor = self.generation;
+        self.floors.clear();
+        self.schemas.clear();
+        self.relations.clear();
+        self.columns.clear();
+        let rels = std::mem::take(&mut self.relation_objects)
+            .into_keys()
+            .collect();
+        let schemas = std::mem::take(&mut self.schema_objects)
+            .into_keys()
+            .collect();
+        let keys: Vec<NodeKey> = self.expanded.iter().cloned().collect();
+        let mut loads: Vec<_> = keys.iter().filter_map(|k| self.start(k)).collect();
+        loads.extend(self.restart_objects(rels, schemas));
+        loads
+    }
+
+    /// Drops `conn`'s cached levels and returns a load for each of its expanded levels. Only
+    /// `conn`'s loads in flight go stale; other connections' still land.
+    pub fn refresh_connection(&mut self, conn: &str) -> Vec<LoadRequest> {
+        self.generation += 1;
+        self.floors.insert(conn.to_owned(), self.generation);
+        self.schemas.remove(conn);
+        self.relations.retain(|(c, _), _| c != conn);
+        self.columns.retain(|(c, _), _| c != conn);
+        let rels = self
+            .relation_objects
+            .extract_if(|(c, _), _| c == conn)
+            .map(|(k, _)| k)
+            .collect();
+        let schemas = self
+            .schema_objects
+            .extract_if(|(c, _), _| c == conn)
+            .map(|(k, _)| k)
+            .collect();
+        let keys: Vec<NodeKey> = self
+            .expanded
+            .iter()
+            .filter(|k| node_connection(k) == conn)
+            .cloned()
+            .collect();
+        let mut loads: Vec<_> = keys.iter().filter_map(|k| self.start(k)).collect();
+        loads.extend(self.restart_objects(rels, schemas));
+        loads
+    }
+
+    /// Reloads the dropped objects levels whose relation or schema is still expanded; ones
+    /// never asked stay absent for [`Self::objects_to_load`].
+    fn restart_objects(
+        &mut self,
+        rels: Vec<(String, RelationRef)>,
+        schemas: Vec<(String, String)>,
+    ) -> Vec<LoadRequest> {
+        let mut loads = Vec::new();
+        for (conn, rel) in rels {
+            let rkey = NodeKey::Relation {
+                conn: conn.clone(),
+                rel: rel.clone(),
+            };
+            if self.expanded.contains(&rkey) {
+                loads.push(self.begin(&conn, relation_objects_query(&rel)));
+            }
+        }
+        for (conn, schema) in schemas {
+            let skey = NodeKey::Schema {
+                conn: conn.clone(),
+                schema: schema.clone(),
+            };
+            if self.expanded.contains(&skey) {
+                loads.push(self.begin(&conn, schema_objects_query(&schema)));
+            }
+        }
+        loads
+    }
+
+    /// Drops `conn`'s expansion and cached levels.
+    pub fn forget(&mut self, conn: &str) {
+        self.expanded.retain(|k| node_connection(k) != conn);
+        self.collapsed_kinds.retain(|k| node_connection(k) != conn);
+        self.schemas.remove(conn);
+        self.relations.retain(|(c, _), _| c != conn);
+        self.columns.retain(|(c, _), _| c != conn);
+        self.relation_objects.retain(|(c, _), _| c != conn);
+        self.schema_objects.retain(|(c, _), _| c != conn);
+    }
+
+    /// The schema level of `conn` as a link: absent Idle, loading Connecting, loaded
+    /// Connected, failed Failed with its error.
+    pub fn link(&self, conn: &str) -> LinkState {
+        match self.schemas.get(conn) {
+            None => LinkState::Idle,
+            Some(Load::Loading) => LinkState::Connecting,
+            Some(Load::Ready(_)) => LinkState::Connected,
+            Some(Load::Failed(m)) => LinkState::Failed(m.clone()),
+        }
+    }
+
+    /// Loaded schemas of `conn`, for completion.
+    pub fn schemas(&self, conn: &str) -> Option<&[SchemaInfo]> {
+        match self.schemas.get(conn) {
+            Some(Load::Ready(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Loaded relations of `schema`, for completion.
+    pub fn relations(&self, conn: &str, schema: &str) -> Option<&RelationList> {
+        match self.relations.get(&(conn.to_owned(), schema.to_owned())) {
+            Some(Load::Ready(r)) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// Loaded columns of `rel`, for completion.
+    pub fn columns(&self, conn: &str, rel: &RelationRef) -> Option<&[ColumnMeta]> {
+        match self.columns.get(&(conn.to_owned(), rel.clone())) {
+            Some(Load::Ready(c)) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Loaded objects of `rel`.
+    pub fn relation_objects(&self, conn: &str, rel: &RelationRef) -> Option<&RelationObjects> {
+        match self.relation_objects.get(&(conn.to_owned(), rel.clone())) {
+            Some(Load::Ready(o)) => Some(o),
+            _ => None,
+        }
+    }
+
+    /// Loaded objects of `schema`.
+    pub fn schema_objects(&self, conn: &str, schema: &str) -> Option<&SchemaObjects> {
+        match self
+            .schema_objects
+            .get(&(conn.to_owned(), schema.to_owned()))
+        {
+            Some(Load::Ready(o)) => Some(o),
+            _ => None,
+        }
+    }
+
+    /// The rows under connection `conn` when it is expanded, schemas at `depth`.
+    ///
+    /// A non-empty `filter` (trimmed, case-insensitive) keeps rows whose name matches, the
+    /// ancestors of visible matches and error rows, and everything below a match. Rows under a
+    /// collapsed node are not searched.
+    pub fn rows(&self, conn: &str, depth: usize, filter: &str) -> Vec<CatalogRow> {
+        let ckey = NodeKey::Connection(conn.to_owned());
+        if !self.expanded.contains(&ckey) {
+            return Vec::new();
+        }
+        let filter = filter.trim().to_lowercase();
+        let w = Walk {
+            conn,
+            filter: &filter,
+        };
+        let status = |load: Option<&Load<_>>| match load {
+            None | Some(Load::Loading) => {
+                Some((RowKind::Loading, "loading…".to_owned(), "loading"))
+            }
+            Some(Load::Failed(m)) => {
+                Some((RowKind::Failed { message: m.clone() }, m.clone(), "error"))
+            }
+            Some(Load::Ready(_)) => None,
+        };
+        let mut out = Vec::new();
+        if let Some((kind, label, tag)) = status(self.schemas.get(conn)) {
+            out.push(row(
+                kind,
+                ckey,
+                depth,
+                false,
+                label,
+                format!("{conn}:{tag}"),
+            ));
+            return out;
+        }
+        let Some(Load::Ready(schemas)) = self.schemas.get(conn) else {
+            return out;
+        };
+        if schemas.is_empty() {
+            out.push(row(
+                RowKind::Empty,
+                ckey,
+                depth,
+                false,
+                "no schemas".into(),
+                format!("{conn}:empty"),
+            ));
+            return out;
+        }
+        for s in schemas {
+            let skey = NodeKey::Schema {
+                conn: conn.to_owned(),
+                schema: s.name().to_owned(),
+            };
+            let matched = w.matches(s.name());
+            let expanded = self.expanded.contains(&skey);
+            let children = if expanded {
+                self.schema_children(&w, s.name(), depth + 1, matched)
+            } else {
+                Vec::new()
+            };
+            if matched || !children.is_empty() {
+                let aria = format!("{conn}.{}", s.name());
+                out.push(row(
+                    RowKind::Schema,
+                    skey,
+                    depth,
+                    expanded,
+                    s.name().to_owned(),
+                    aria,
+                ));
+                out.extend(children);
+            }
+        }
+        out
+    }
+
+    /// Kind groups, relations and status rows under one expanded schema.
+    fn schema_children(&self, w: &Walk, schema: &str, depth: usize, all: bool) -> Vec<CatalogRow> {
+        let conn = w.conn;
+        let skey = NodeKey::Schema {
+            conn: conn.to_owned(),
+            schema: schema.to_owned(),
+        };
+        let path = format!("{conn}.{schema}");
+        // Loading, empty and truncated rows only show under a matching ancestor; an error row
+        // always shows, since its Retry is actionable.
+        let show_status = all || w.filter.is_empty();
+        let list = match self.relations.get(&(conn.to_owned(), schema.to_owned())) {
+            None | Some(Load::Loading) => {
+                return if show_status {
+                    vec![row(
+                        RowKind::Loading,
+                        skey,
+                        depth,
+                        false,
+                        "loading…".into(),
+                        format!("{path}:loading"),
+                    )]
+                } else {
+                    Vec::new()
+                };
+            }
+            Some(Load::Failed(m)) => {
+                return vec![row(
+                    RowKind::Failed { message: m.clone() },
+                    skey,
+                    depth,
+                    false,
+                    m.clone(),
+                    format!("{path}:error"),
+                )];
+            }
+            Some(Load::Ready(l)) => l,
+        };
+        let mut out = Vec::new();
+        if list.items().is_empty() && show_status {
+            out.push(row(
+                RowKind::Empty,
+                skey.clone(),
+                depth,
+                false,
+                "no tables or views".into(),
+                format!("{path}:empty"),
+            ));
+        }
+        for k in KINDS {
+            let items: Vec<_> = list.items().iter().filter(|r| r.kind() == k).collect();
+            if items.is_empty() {
+                continue;
+            }
+            let label = kind_label(k);
+            let kkey = NodeKey::Kind {
+                conn: conn.to_owned(),
+                schema: schema.to_owned(),
+                kind: k,
+            };
+            let expanded = self.is_expanded(&kkey);
+            let mut kids = Vec::new();
+            // The filter searches only what is visible, so a collapsed group surfaces nothing.
+            for r in items.into_iter().filter(|_| expanded) {
+                let rel = RelationRef::new(schema, r.name());
+                let rkey = NodeKey::Relation {
+                    conn: conn.to_owned(),
+                    rel: rel.clone(),
+                };
+                let matched = all || w.matches(r.name());
+                let rexp = self.expanded.contains(&rkey);
+                let cols = if rexp {
+                    self.column_rows(w, &rel, depth + 2, matched)
+                } else {
+                    Vec::new()
+                };
+                if matched || !cols.is_empty() {
+                    let aria = format!("{path}.{}", r.name());
+                    kids.push(row(
+                        RowKind::Relation(k),
+                        rkey,
+                        depth + 1,
+                        rexp,
+                        r.name().to_owned(),
+                        aria,
+                    ));
+                    kids.extend(cols);
+                }
+            }
+            if all || !kids.is_empty() {
+                out.push(row(
+                    RowKind::Kind(k),
+                    kkey,
+                    depth,
+                    expanded,
+                    label.to_owned(),
+                    format!("{path}/{label}"),
+                ));
+                out.extend(kids);
+            }
+        }
+        if list.truncated() && show_status {
+            out.push(row(
+                RowKind::Truncated,
+                skey,
+                depth,
+                false,
+                "first 10,000 shown; filter to narrow".into(),
+                format!("{path}:truncated"),
+            ));
+        }
+        out.extend(self.schema_object_rows(w, schema, depth, all));
+        out
+    }
+
+    /// A schema's types and routines groups and objects truncated row, or its error row.
+    fn schema_object_rows(
+        &self,
+        w: &Walk,
+        schema: &str,
+        depth: usize,
+        all: bool,
+    ) -> Vec<CatalogRow> {
+        let conn = w.conn;
+        let path = format!("{conn}.{schema}");
+        let okey = NodeKey::Objects(Box::new(NodeKey::Schema {
+            conn: conn.to_owned(),
+            schema: schema.to_owned(),
+        }));
+        let objects = match self
+            .schema_objects
+            .get(&(conn.to_owned(), schema.to_owned()))
+        {
+            None | Some(Load::Loading) => return Vec::new(),
+            Some(Load::Failed(m)) => return vec![objects_error(okey, depth, m, &path)],
+            Some(Load::Ready(o)) => o,
+        };
+        let mut out = Vec::new();
+        for group in [ObjectGroup::Types, ObjectGroup::Routines] {
+            let gkey = NodeKey::SchemaGroup {
+                conn: conn.to_owned(),
+                schema: schema.to_owned(),
+                group,
+            };
+            out.extend(self.group_rows(w, gkey, &path, depth, all, || {
+                schema_entries(objects, group)
+            }));
+        }
+        if objects.truncated() && (all || w.filter.is_empty()) {
+            let label = format!(
+                "first {} of each shown; filter to narrow",
+                group_digits(RELATION_CAP as u64)
+            );
+            out.push(row(
+                RowKind::Truncated,
+                okey,
+                depth,
+                false,
+                label,
+                format!("{path}/objects:truncated"),
+            ));
+        }
+        out
+    }
+
+    /// Whether `rel`'s objects answered that the engine cannot read them.
+    fn unreadable(&self, conn: &str, rel: &RelationRef) -> bool {
+        matches!(
+            self.relation_objects.get(&(conn.to_owned(), rel.clone())),
+            Some(Load::Ready(o)) if o.unreadable_reason().is_some()
+        )
+    }
+
+    /// The keys, indexes, checks and triggers groups of one relation, or its objects error row.
+    fn relation_object_rows(
+        &self,
+        w: &Walk,
+        rel: &RelationRef,
+        depth: usize,
+        all: bool,
+    ) -> Vec<CatalogRow> {
+        let conn = w.conn;
+        let path = format!("{conn}.{}.{}", rel.schema(), rel.name());
+        let okey = NodeKey::Objects(Box::new(NodeKey::Relation {
+            conn: conn.to_owned(),
+            rel: rel.clone(),
+        }));
+        let objects = match self.relation_objects.get(&(conn.to_owned(), rel.clone())) {
+            None | Some(Load::Loading) => return Vec::new(),
+            Some(Load::Failed(m)) => return vec![objects_error(okey, depth, m, &path)],
+            Some(Load::Ready(o)) => o,
+        };
+        // An unreadable relation is no failure to retry: one status row says why.
+        if let Some(why) = objects.unreadable_reason() {
+            if !(all || w.filter.is_empty()) {
+                return Vec::new();
+            }
+            let label = format!("objects can't be read: {why}");
+            let aria = format!("{path}/objects:unreadable");
+            return vec![row(RowKind::Empty, okey, depth, false, label, aria)];
+        }
+        let groups = [
+            ObjectGroup::Keys,
+            ObjectGroup::Indexes,
+            ObjectGroup::Checks,
+            ObjectGroup::Triggers,
+        ];
+        groups
+            .into_iter()
+            .flat_map(|group| {
+                let gkey = NodeKey::RelationGroup {
+                    conn: conn.to_owned(),
+                    rel: rel.clone(),
+                    group,
+                };
+                self.group_rows(w, gkey, &path, depth, all, || {
+                    relation_entries(objects, group)
+                })
+            })
+            .collect()
+    }
+
+    /// A non-empty group's row and, when it is open, its objects one level deeper. Like a
+    /// kind group, a collapsed group surfaces nothing under a filter; `entries` is built only
+    /// for an open group, so a closed one with thousands of routines costs nothing.
+    fn group_rows(
+        &self,
+        w: &Walk,
+        gkey: NodeKey,
+        path: &str,
+        depth: usize,
+        all: bool,
+        entries: impl FnOnce() -> Vec<Entry>,
+    ) -> Vec<CatalogRow> {
+        let (NodeKey::RelationGroup { group, .. } | NodeKey::SchemaGroup { group, .. }) = gkey
+        else {
+            return Vec::new();
+        };
+        if self.group_count(&gkey) == 0 {
+            return Vec::new();
+        }
+        let expanded = self.expanded.contains(&gkey);
+        let label = object_group_label(group);
+        let aria = format!("{path}/{label}");
+        let kids: Vec<_> = if expanded { entries() } else { Vec::new() }
+            .into_iter()
+            .filter(|(name, ..)| all || w.matches(name))
+            .map(|(name, detail, object)| {
+                let kind = RowKind::Object {
+                    group,
+                    object,
+                    detail,
+                };
+                let aria = format!("{aria}.{name}");
+                row(kind, gkey.clone(), depth + 1, false, name, aria)
+            })
+            .collect();
+        if !all && kids.is_empty() {
+            return Vec::new();
+        }
+        let mut out = vec![row(
+            RowKind::Group(group),
+            gkey,
+            depth,
+            expanded,
+            label.to_owned(),
+            aria,
+        )];
+        out.extend(kids);
+        out
+    }
+
+    /// Column and status rows under one expanded relation.
+    fn column_rows(&self, w: &Walk, rel: &RelationRef, depth: usize, all: bool) -> Vec<CatalogRow> {
+        let conn = w.conn;
+        let rkey = NodeKey::Relation {
+            conn: conn.to_owned(),
+            rel: rel.clone(),
+        };
+        let path = format!("{conn}.{}.{}", rel.schema(), rel.name());
+        let show_status = all || w.filter.is_empty();
+        let status = |kind, label: String, tag: &str| {
+            if show_status || matches!(kind, RowKind::Failed { .. }) {
+                vec![row(
+                    kind,
+                    rkey.clone(),
+                    depth,
+                    false,
+                    label,
+                    format!("{path}:{tag}"),
+                )]
+            } else {
+                Vec::new()
+            }
+        };
+        let columns = self.columns.get(&(conn.to_owned(), rel.clone()));
+        let mut out = match columns {
+            None | Some(Load::Loading) => status(RowKind::Loading, "loading…".into(), "loading"),
+            // Such a relation fails its columns the same way; its objects row says why.
+            Some(Load::Failed(_)) if self.unreadable(conn, rel) => {
+                return self.relation_object_rows(w, rel, depth, all);
+            }
+            Some(Load::Failed(m)) => {
+                status(RowKind::Failed { message: m.clone() }, m.clone(), "error")
+            }
+            Some(Load::Ready(c)) if c.is_empty() => {
+                status(RowKind::Empty, "no columns".into(), "empty")
+            }
+            Some(Load::Ready(cols)) => cols
+                .iter()
+                .filter(|c| all || w.matches(c.name()))
+                .map(|c| {
+                    let kind = RowKind::Column {
+                        type_name: c.type_name().to_owned(),
+                        primary_key: c.primary_key().is_some(),
+                    };
+                    row(
+                        kind,
+                        rkey.clone(),
+                        depth,
+                        false,
+                        c.name().to_owned(),
+                        format!("{path}.{}", c.name()),
+                    )
+                })
+                .collect(),
+        };
+        if matches!(columns, Some(Load::Ready(_))) {
+            out.extend(self.relation_object_rows(w, rel, depth, all));
+        }
+        out
+    }
+}
+
+/// The error row of a failed objects level; it shows under any filter, since Retry acts.
+fn objects_error(okey: NodeKey, depth: usize, message: &str, path: &str) -> CatalogRow {
+    row(
+        RowKind::Failed {
+            message: message.to_owned(),
+        },
+        okey,
+        depth,
+        false,
+        message.to_owned(),
+        format!("{path}/objects:error"),
+    )
+}
+
+/// The objects a relation group lists, in the order core gives them.
+fn relation_entries(o: &RelationObjects, group: ObjectGroup) -> Vec<Entry> {
+    let is_check = |c: &&ConstraintInfo| matches!(c.kind(), ConstraintKind::Check);
+    match group {
+        ObjectGroup::Keys => o
+            .constraints()
+            .iter()
+            .filter(|c| !is_check(c))
+            .map(constraint_entry)
+            .collect(),
+        ObjectGroup::Checks => o
+            .constraints()
+            .iter()
+            .filter(is_check)
+            .map(constraint_entry)
+            .collect(),
+        ObjectGroup::Indexes => o.indexes().iter().map(index_entry).collect(),
+        ObjectGroup::Triggers => o
+            .triggers()
+            .iter()
+            .map(|t| {
+                let detail = match t.state() {
+                    TriggerState::Disabled => "disabled",
+                    TriggerState::ReplicaOnly => "replica only",
+                    _ => "",
+                };
+                (t.name().to_owned(), detail.to_owned(), t.object_ref())
+            })
+            .collect(),
+        ObjectGroup::Types | ObjectGroup::Routines => Vec::new(),
+    }
+}
+
+/// The objects a schema group lists, in the order core gives them.
+fn schema_entries(o: &SchemaObjects, group: ObjectGroup) -> Vec<Entry> {
+    match group {
+        ObjectGroup::Types => o
+            .types()
+            .iter()
+            .map(|t| {
+                let detail = match t.kind() {
+                    TypeKind::Enum => "enum",
+                    TypeKind::Domain => "domain",
+                    TypeKind::Composite => "composite",
+                    TypeKind::Range => "range",
+                    _ => "type",
+                };
+                (t.name().to_owned(), detail.to_owned(), t.object_ref())
+            })
+            .collect(),
+        ObjectGroup::Routines => o
+            .routines()
+            .iter()
+            .map(|r| {
+                let detail = match r.kind() {
+                    RoutineKind::Procedure => "procedure",
+                    RoutineKind::Aggregate => "aggregate",
+                    _ => r.returns().unwrap_or_default(),
+                };
+                let label = format!("{}({})", r.name(), r.arguments());
+                (label, detail.to_owned(), r.object_ref())
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// An index by name, its detail the words among primary or unique, partial and the method.
+fn index_entry(i: &IndexInfo) -> Entry {
+    let key = if i.primary() {
+        Some("primary")
+    } else {
+        i.unique().then_some("unique")
+    };
+    let words: Vec<&str> = key
+        .into_iter()
+        .chain(i.partial().then_some("partial"))
+        .chain(i.method())
+        .collect();
+    (i.name().to_owned(), words.join(" "), i.object_ref())
+}
+
+/// A constraint by name or, nameless, by its words and columns; its detail is its kind.
+fn constraint_entry(c: &ConstraintInfo) -> Entry {
+    let words = constraint_words(c.kind());
+    let label = match c.name() {
+        Some(name) => name.to_owned(),
+        None if c.columns().is_empty() => words.to_owned(),
+        None => format!("{words} ({})", c.columns().join(", ")),
+    };
+    let detail = match c.kind() {
+        ConstraintKind::Exclusion => "exclusion".to_owned(),
+        ConstraintKind::PrimaryKey
+        | ConstraintKind::Unique
+        | ConstraintKind::ForeignKey
+        | ConstraintKind::Check => words.to_lowercase(),
+        _ => "constraint".to_owned(),
+    };
+    (label, detail, c.object_ref())
+}
+
+/// "PRIMARY KEY", "UNIQUE", "FOREIGN KEY", "CHECK", "EXCLUDE", else "CONSTRAINT".
+pub fn constraint_words(kind: ConstraintKind) -> &'static str {
+    match kind {
+        ConstraintKind::PrimaryKey => "PRIMARY KEY",
+        ConstraintKind::Unique => "UNIQUE",
+        ConstraintKind::ForeignKey => "FOREIGN KEY",
+        ConstraintKind::Check => "CHECK",
+        ConstraintKind::Exclusion => "EXCLUDE",
+        _ => "CONSTRAINT",
+    }
+}
+
+fn row(
+    kind: RowKind,
+    key: NodeKey,
+    depth: usize,
+    expanded: bool,
+    label: String,
+    aria: String,
+) -> CatalogRow {
+    CatalogRow {
+        kind,
+        key,
+        depth,
+        expanded,
+        label,
+        aria,
+    }
+}
+
+/// The one schema's name when `schemas` holds exactly one, else None.
+pub fn lone_schema(schemas: &[SchemaInfo]) -> Option<&str> {
+    match schemas {
+        [only] => Some(only.name()),
+        _ => None,
+    }
+}
+
+/// "tables", "views", "materialized views", "foreign tables", "other".
+pub fn kind_label(kind: RelationKind) -> &'static str {
+    match kind {
+        RelationKind::Table => "tables",
+        RelationKind::View => "views",
+        RelationKind::MaterializedView => "materialized views",
+        RelationKind::ForeignTable => "foreign tables",
+        _ => "other",
+    }
+}
+
+/// "keys", "indexes", "checks", "triggers", "types", "routines".
+pub fn object_group_label(group: ObjectGroup) -> &'static str {
+    match group {
+        ObjectGroup::Keys => "keys",
+        ObjectGroup::Indexes => "indexes",
+        ObjectGroup::Checks => "checks",
+        ObjectGroup::Triggers => "triggers",
+        ObjectGroup::Types => "types",
+        ObjectGroup::Routines => "routines",
+    }
+}
+
+/// "Keys", "Indexes", "Checks", "Triggers", "Types", "Routines".
+pub fn object_group_title(group: ObjectGroup) -> &'static str {
+    match group {
+        ObjectGroup::Keys => "Keys",
+        ObjectGroup::Indexes => "Indexes",
+        ObjectGroup::Checks => "Checks",
+        ObjectGroup::Triggers => "Triggers",
+        ObjectGroup::Types => "Types",
+        ObjectGroup::Routines => "Routines",
+    }
+}
+
+/// The explorer's group heading for a kind: "Tables", "Views", "Materialized views",
+/// "Foreign tables", "Other".
+pub fn group_title(kind: RelationKind) -> &'static str {
+    match kind {
+        RelationKind::Table => "Tables",
+        RelationKind::View => "Views",
+        RelationKind::MaterializedView => "Materialized views",
+        RelationKind::ForeignTable => "Foreign tables",
+        _ => "Other",
+    }
+}
+
+/// A Postgres `format_type` spelling in the grid header's short name ("character varying(40)[]"
+/// becomes "varchar(40)[]"), keeping the modifier and array brackets. Other text is unchanged.
+pub fn short_type(type_name: &str) -> String {
+    // Peel the array brackets, then lift the first modifier out of the words it sits among
+    // ("timestamp(3) with time zone"), so the remaining words match exactly.
+    let mut base = type_name;
+    while let Some(rest) = base.strip_suffix("[]") {
+        base = rest;
+    }
+    let brackets = &type_name[base.len()..];
+    let (words, modifier) = match (base.find('('), base.find(')')) {
+        (Some(open), Some(close)) if open < close => (
+            format!("{}{}", &base[..open], &base[close + 1..]),
+            &base[open..=close],
+        ),
+        _ => (base.to_owned(), ""),
+    };
+    let short = match words.as_str() {
+        "integer" => "int4",
+        "smallint" => "int2",
+        "bigint" => "int8",
+        "real" => "float4",
+        "double precision" => "float8",
+        "boolean" => "bool",
+        "character varying" => "varchar",
+        "character" => "bpchar",
+        "bit varying" => "varbit",
+        "timestamp without time zone" => "timestamp",
+        "timestamp with time zone" => "timestamptz",
+        "time without time zone" => "time",
+        "time with time zone" => "timetz",
+        _ => return type_name.to_owned(),
+    };
+    format!("{short}{modifier}{brackets}")
+}
+
+/// `<schema>.<name>`, each part through `quote_ident` (`"main.Album"` on SQLite).
+pub fn qualified_name(engine: Engine, rel: &RelationRef) -> String {
+    format!(
+        "{}.{}",
+        quote_ident(engine, rel.schema()),
+        quote_ident(engine, rel.name())
+    )
+}
+
+/// The context menu items for a catalog row of `kind` on `engine`, in menu order, ids
+/// `tree-menu-*`. Loading, empty and truncated rows have none, so their menu never opens.
+pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntry> {
+    let entry = |name, label| MenuEntry {
+        id: name,
+        label,
+        enabled: true,
+        keys: None,
+    };
+    let new_query = |label| entry("tree-menu-new-query", label);
+    let copy_name = entry("tree-menu-copy-name", "Copy name");
+    let copy_qualified = entry("tree-menu-copy-qualified", "Copy qualified name");
+    let refresh = entry("tree-menu-refresh", "Refresh");
+    let view_definition = entry("tree-menu-view-definition", "View definition");
+    match kind {
+        RowKind::Relation(kind) => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..entry("tree-menu-open", "Open data")
+            },
+            new_query(if *kind == RelationKind::Table {
+                "New query on table"
+            } else {
+                "New query on view"
+            }),
+            copy_name,
+            copy_qualified,
+            entry("tree-menu-count", "Count rows"),
+            entry("tree-menu-generate-select", "Generate SELECT"),
+        ]
+        .into_iter()
+        .chain(
+            (*kind == RelationKind::Table)
+                .then(|| entry("tree-menu-generate-insert", "Generate INSERT")),
+        )
+        // A table offers its definition only where the engine keeps one (SQLite, MySQL, DuckDB).
+        .chain(
+            match kind {
+                RelationKind::View | RelationKind::MaterializedView => true,
+                RelationKind::Table => engine.capabilities().table_definition,
+                _ => false,
+            }
+            .then_some(view_definition),
+        )
+        .chain([refresh])
+        .collect(),
+        RowKind::Schema => vec![new_query("New query"), copy_name, refresh],
+        RowKind::Kind(_) => vec![new_query("New query"), refresh],
+        RowKind::Column { .. } => vec![copy_name, copy_qualified],
+        RowKind::Failed { .. } => vec![
+            entry("tree-menu-retry", "Retry"),
+            entry("tree-menu-copy-error", "Copy error"),
+        ],
+        RowKind::Group(_) => vec![refresh],
+        RowKind::Object { .. } => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..view_definition
+            },
+            copy_name,
+        ],
+        RowKind::Loading | RowKind::Empty | RowKind::Truncated => Vec::new(),
+    }
+}
+
+/// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`
+/// with default options (`"SELECT *\nFROM main.Album"` on SQLite).
+pub fn select_sql(engine: Engine, rel: &RelationRef) -> String {
+    let raw = format!(
+        "SELECT * FROM {}.{}",
+        quote_ident(engine, rel.schema()),
+        quote_ident(engine, rel.name())
+    );
+    format_sql(engine, &raw, &FormatOptions::default())
+}
+
+/// `INSERT INTO <q> (<cols>)\nVALUES (NULL, ...)` with one NULL per column, every name
+/// through `quote_ident`.
+pub fn insert_sql(engine: Engine, rel: &RelationRef, columns: &[&str]) -> String {
+    let names: Vec<_> = columns.iter().map(|c| quote_ident(engine, c)).collect();
+    format!(
+        "INSERT INTO {} ({})\nVALUES ({})",
+        qualified_name(engine, rel),
+        names.join(", "),
+        vec!["NULL"; columns.len()].join(", ")
+    )
+}
+
+/// A count's notice text, `"main.Album: 12,345 rows"` (`"1 row"` for one).
+pub fn count_text(rel: &RelationRef, n: u64) -> String {
+    let noun = if n == 1 { "row" } else { "rows" };
+    format!(
+        "{}.{}: {} {noun}",
+        rel.schema(),
+        rel.name(),
+        group_digits(n)
+    )
+}
+
+fn relation_objects_query(rel: &RelationRef) -> CatalogQuery {
+    CatalogQuery::RelationObjects { rel: rel.clone() }
+}
+
+fn schema_objects_query(schema: &str) -> CatalogQuery {
+    CatalogQuery::SchemaObjects {
+        schema: schema.to_owned(),
+    }
+}
+
+fn load_of<T>(
+    result: Result<CatalogData, String>,
+    pick: impl FnOnce(CatalogData) -> Option<T>,
+) -> Load<T> {
+    match result {
+        Ok(d) => pick(d).map_or_else(
+            || Load::Failed("unexpected catalog reply".into()),
+            Load::Ready,
+        ),
+        Err(e) => Load::Failed(e),
+    }
+}

@@ -1,0 +1,466 @@
+mod support;
+
+use dbento_app::connection_dialog::{ConnectionForm, Field};
+use dbento_core::{Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form};
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
+use support::{label_of, present};
+
+fn open(
+    cx: &mut TestAppContext,
+    existing: Option<(&str, ConnectionSpec)>,
+) -> (AnyWindowHandle, Entity<ConnectionForm>) {
+    support::init(cx);
+    let existing = existing.map(|(n, s)| (n.to_owned(), s));
+    cx.update(|cx| {
+        gpui_kit::open_window(Default::default(), cx, |window, cx| {
+            cx.new(|cx| ConnectionForm::new(existing, Vec::new(), false, window, cx))
+        })
+    })
+    .unwrap()
+}
+fn set(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+    f: &Entity<ConnectionForm>,
+    field: Field,
+    text: &str,
+) {
+    let state = f.read_with(cx, |f, _| f.input(field).clone());
+    cx.update_window(win, |_, w, cx| {
+        state.update(cx, |s, cx| s.set_value(text.to_owned(), w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+fn click(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) {
+    let id = id.into();
+    cx.update_window(win, |_, w, cx| w.click(id, cx)).unwrap();
+    cx.run_until_parked();
+}
+fn radio(cx: &mut TestAppContext, win: AnyWindowHandle, group: &'static str, ix: usize) {
+    cx.update_window(win, |_, w, cx| w.within(group).click(ix, cx))
+        .unwrap();
+    cx.run_until_parked();
+}
+fn edit(
+    cx: &mut TestAppContext,
+    f: &Entity<ConnectionForm>,
+) -> Result<(String, ConnectionSpec), String> {
+    f.read_with(cx, |f, cx| f.edit(cx))
+}
+fn nopg() -> ConnectionSpec {
+    let mut s = ConnectionSpec::new(Engine::Postgres);
+    (s.host, s.port, s.database, s.user) = (
+        Some("127.0.0.1".into()),
+        Some(9),
+        Some("x".into()),
+        Some("x".into()),
+    );
+    s
+}
+
+fn engine_option(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+    ix: usize,
+) -> (Option<String>, Option<bool>) {
+    cx.update_window(win, |_, w, cx| {
+        w.render_frame(cx);
+        let o = w.within("conn-engine").find(ix);
+        (o.label().map(str::to_owned), o.selected())
+    })
+    .unwrap()
+}
+fn value_and_hint(
+    cx: &mut TestAppContext,
+    f: &Entity<ConnectionForm>,
+    field: Field,
+) -> (String, String) {
+    let state = f.read_with(cx, |f, _| f.input(field).clone());
+    state.read_with(cx, |s, _| {
+        (
+            s.value().to_string(),
+            s.presentation().placeholder().to_string(),
+        )
+    })
+}
+
+#[gpui_kit::test]
+fn a_new_form_starts_as_postgres_with_every_key_absent(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert!(present(cx, win, "conn-host") && !present(cx, win, "conn-path"));
+    set(cx, win, &f, Field::Name, "pg");
+    set(cx, win, &f, Field::Host, "127.0.0.1");
+    set(cx, win, &f, Field::Port, "9");
+    set(cx, win, &f, Field::Database, "x");
+    set(cx, win, &f, Field::User, "x");
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), nopg())));
+}
+
+#[gpui_kit::test]
+fn the_engine_choice_switches_the_fields_and_clears_the_others(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    set(cx, win, &f, Field::Name, "lite");
+    set(cx, win, &f, Field::Host, "h");
+    click(cx, win, "conn-read-only");
+    radio(cx, win, "conn-engine", 1);
+    assert!(present(cx, win, "conn-path") && !present(cx, win, "conn-host"));
+    set(cx, win, &f, Field::Path, "a.db");
+    let mut want = ConnectionSpec::new(Engine::Sqlite);
+    (want.path, want.read_only) = (Some("a.db".into()), Some(true));
+    assert_eq!(edit(cx, &f), Ok(("lite".into(), want)));
+}
+
+#[gpui_kit::test]
+fn an_edit_form_shows_the_keys_and_returns_them_unchanged(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("nopg", nopg())));
+    assert_eq!(
+        f.read_with(cx, |f, _| f.previous().map(str::to_owned)),
+        Some("nopg".into())
+    );
+    let port = f.read_with(cx, |f, _| f.input(Field::Port).clone());
+    assert_eq!(port.read_with(cx, |s, _| s.value().to_string()), "9");
+    let pw = f.read_with(cx, |f, _| f.input(Field::Password).clone());
+    assert_eq!(
+        pw.read_with(cx, |s, _| s.value().to_string()),
+        "",
+        "a password is never shown back"
+    );
+    assert!(present(cx, win, "conn-tls"));
+    assert_eq!(
+        edit(cx, &f),
+        Ok(("nopg".into(), nopg())),
+        "defaults stay absent"
+    );
+}
+
+#[gpui_kit::test]
+fn only_changed_controls_change_keys(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("nopg", nopg())));
+    click(cx, win, "conn-read-only");
+    click(cx, win, ("conn-color", 0usize));
+    radio(cx, win, "conn-tls", 2);
+    let mut want = nopg();
+    (want.read_only, want.color, want.tls) = (Some(true), Some(Color::Red), Some(TlsMode::Off));
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), want.clone())));
+    click(cx, win, "conn-color-none");
+    radio(cx, win, "conn-tls", 0);
+    (want.color, want.tls) = (None, None);
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), want)));
+}
+
+#[gpui_kit::test]
+fn form_errors_and_the_error_line(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("nopg", nopg())));
+    set(cx, win, &f, Field::Port, "70000");
+    assert_eq!(
+        edit(cx, &f),
+        Err("Port must be a number from 1 to 65535".into())
+    );
+    set(cx, win, &f, Field::Port, "");
+    set(cx, win, &f, Field::Name, "");
+    assert_eq!(edit(cx, &f), Err("Enter a name".into()));
+    f.update(cx, |f, cx| f.set_error(Some("boom".into()), false, cx));
+    cx.run_until_parked();
+    assert_eq!(label_of(cx, win, "conn-error").as_deref(), Some("boom"));
+    assert!(!present(cx, win, "conn-reload"));
+    f.update(cx, |f, cx| f.set_error(Some("changed".into()), true, cx));
+    cx.run_until_parked();
+    assert!(present(cx, win, "conn-reload"));
+}
+
+#[gpui_kit::test]
+fn an_untouched_value_with_surrounding_spaces_is_unchanged(cx: &mut TestAppContext) {
+    let mut spaced = nopg();
+    (spaced.host, spaced.secret) = (
+        Some(" 127.0.0.1 ".into()),
+        Some(SecretSource::Env(" PGPW ".into())),
+    );
+    let (_, f) = open(cx, Some(("nopg", spaced.clone())));
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), spaced)));
+}
+
+#[gpui_kit::test]
+fn a_bad_folder_names_the_folder_once(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("nopg", nopg())));
+    set(cx, win, &f, Field::Folder, "a//b");
+    assert_eq!(
+        edit(cx, &f),
+        Err("folder path `a//b` has an empty segment".into())
+    );
+}
+
+#[gpui_kit::test]
+fn switching_back_to_the_loaded_engine_restores_its_values(cx: &mut TestAppContext) {
+    let mut loaded = nopg();
+    (loaded.secret, loaded.tls) = (Some(SecretSource::Env("PGPW".into())), Some(TlsMode::Off));
+    let (win, f) = open(cx, Some(("nopg", loaded.clone())));
+    radio(cx, win, "conn-engine", 1);
+    radio(cx, win, "conn-engine", 0);
+    let host = f.read_with(cx, |f, _| f.input(Field::Host).clone());
+    assert_eq!(
+        host.read_with(cx, |s, _| s.value().to_string()),
+        "127.0.0.1"
+    );
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), loaded)));
+}
+
+#[gpui_kit::test]
+fn a_port_with_a_plus_sign_is_refused(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("nopg", nopg())));
+    set(cx, win, &f, Field::Port, "+5");
+    assert_eq!(
+        edit(cx, &f),
+        Err("Port must be a number from 1 to 65535".into())
+    );
+}
+
+#[gpui_kit::test]
+fn client_cert_fields_edit_their_keys_and_hide_when_tls_is_off(cx: &mut TestAppContext) {
+    let mut loaded = nopg();
+    loaded.tls = Some(TlsMode::Verify);
+    let (win, f) = open(cx, Some(("nopg", loaded.clone())));
+    for id in ["conn-tls-cert", "conn-tls-key", "conn-tls-key-passphrase"] {
+        assert!(present(cx, win, id), "{id}");
+    }
+    set(cx, win, &f, Field::TlsCert, "certs/me.crt");
+    set(cx, win, &f, Field::TlsKey, "certs/me.key");
+    let mut want = loaded.clone();
+    (want.tls_cert, want.tls_key) = (Some("certs/me.crt".into()), Some("certs/me.key".into()));
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), want.clone())));
+    assert!(f.read_with(cx, |f, cx| f.key_passphrase(cx)).is_none());
+    set(cx, win, &f, Field::KeyPassphrase, "typed");
+    let typed = f.read_with(cx, |f, cx| f.key_passphrase(cx));
+    assert_eq!(
+        typed.map(|s| s.expose().to_owned()).as_deref(),
+        Some("typed")
+    );
+}
+
+#[gpui_kit::test]
+fn loaded_client_cert_keys_show_back_and_clear(cx: &mut TestAppContext) {
+    let mut loaded = nopg();
+    loaded.tls = Some(TlsMode::Verify);
+    let mut want = loaded.clone();
+    (want.tls_cert, want.tls_key) = (Some("certs/me.crt".into()), Some("certs/me.key".into()));
+    let (win, f) = open(cx, Some(("nopg", want)));
+    let cert = f.read_with(cx, |f, _| f.input(Field::TlsCert).clone());
+    assert_eq!(
+        cert.read_with(cx, |s, _| s.value().to_string()),
+        "certs/me.crt"
+    );
+    set(cx, win, &f, Field::TlsCert, "");
+    set(cx, win, &f, Field::TlsKey, "");
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), loaded)));
+    radio(cx, win, "conn-tls", 2);
+    assert!(!present(cx, win, "conn-tls-cert") && !present(cx, win, "conn-tls-key"));
+}
+
+#[gpui_kit::test]
+fn the_ca_field_edits_tls_ca_and_hides_when_tls_is_off(cx: &mut TestAppContext) {
+    let mut loaded = nopg();
+    loaded.tls = Some(TlsMode::Verify);
+    loaded.tls_ca = Some("certs/ca.pem".into());
+    let (win, f) = open(cx, Some(("nopg", loaded.clone())));
+    assert!(present(cx, win, "conn-tls-ca"));
+    let ca = f.read_with(cx, |f, _| f.input(Field::TlsCa).clone());
+    assert_eq!(
+        ca.read_with(cx, |s, _| s.value().to_string()),
+        "certs/ca.pem"
+    );
+    set(cx, win, &f, Field::TlsCa, "other/ca.pem");
+    let mut want = loaded.clone();
+    want.tls_ca = Some("other/ca.pem".into());
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), want.clone())));
+    set(cx, win, &f, Field::TlsCa, "");
+    want.tls_ca = None;
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), want)));
+    radio(cx, win, "conn-tls", 2);
+    assert!(!present(cx, win, "conn-tls-ca"));
+}
+
+#[gpui_kit::test]
+fn the_third_engine_is_mysql_and_writes_only_its_keys(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(
+        engine_option(cx, win, 2).0.as_deref(),
+        Some("MySQL / MariaDB")
+    );
+    radio(cx, win, "conn-engine", 2);
+    for id in [
+        "conn-host",
+        "conn-port",
+        "conn-database",
+        "conn-database-help",
+        "conn-user",
+        "conn-password",
+        "conn-secret",
+        "conn-tls",
+        "conn-tls-ca",
+        "conn-read-only",
+        "conn-read-only-help",
+        "conn-timeout",
+        "conn-folder",
+    ] {
+        assert!(present(cx, win, id), "{id}");
+    }
+    assert!(!present(cx, win, "conn-path"));
+    assert_eq!(value_and_hint(cx, &f, Field::Port).1, "3306");
+    assert_eq!(value_and_hint(cx, &f, Field::User).1, "e.g. root");
+    set(cx, win, &f, Field::Name, "my");
+    set(cx, win, &f, Field::Host, "127.0.0.1");
+    set(cx, win, &f, Field::User, "root");
+    let mut want = ConnectionSpec::new(Engine::Mysql);
+    (want.host, want.user) = (Some("127.0.0.1".into()), Some("root".into()));
+    assert_eq!(edit(cx, &f), Ok(("my".into(), want)));
+}
+
+#[gpui_kit::test]
+fn postgres_to_mysql_keeps_the_shared_keys(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("nopg", nopg())));
+    radio(cx, win, "conn-engine", 2);
+    let mut want = nopg();
+    want.engine = Engine::Mysql;
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), want)));
+    assert_eq!(value_and_hint(cx, &f, Field::User).1, "e.g. root");
+    radio(cx, win, "conn-engine", 0);
+    // Back on the loaded engine: its values and its placeholders return.
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Port),
+        ("9".into(), "5432".into())
+    );
+    assert_eq!(value_and_hint(cx, &f, Field::User).1, "e.g. postgres");
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), nopg())));
+}
+
+#[gpui_kit::test]
+fn a_typed_default_port_follows_the_engine_and_another_port_stays(cx: &mut TestAppContext) {
+    // Loaded as SQLite, so neither server engine takes set_engine's restore-the-loaded path.
+    let mut lite = ConnectionSpec::new(Engine::Sqlite);
+    lite.path = Some("a.db".into());
+    let (win, f) = open(cx, Some(("lite", lite)));
+    radio(cx, win, "conn-engine", 0);
+    set(cx, win, &f, Field::Port, "5432");
+    radio(cx, win, "conn-engine", 2);
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Port),
+        ("".into(), "3306".into())
+    );
+    set(cx, win, &f, Field::Port, "3307");
+    radio(cx, win, "conn-engine", 0);
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Port),
+        ("3307".into(), "5432".into())
+    );
+}
+
+#[gpui_kit::test]
+fn a_loaded_mysql_connection_selects_mysql_and_returns_unchanged(cx: &mut TestAppContext) {
+    let mut my = ConnectionSpec::new(Engine::Mysql);
+    (my.host, my.user) = (Some("h".into()), Some("u".into()));
+    let (win, f) = open(cx, Some(("my", my.clone())));
+    assert_eq!(engine_option(cx, win, 2).1, Some(true));
+    assert_eq!(engine_option(cx, win, 0).1, Some(false));
+    assert!(present(cx, win, "conn-read-only-help"));
+    assert_eq!(edit(cx, &f), Ok(("my".into(), my)));
+}
+
+#[gpui_kit::test]
+fn only_mysql_shows_the_read_only_help(cx: &mut TestAppContext) {
+    let (win, _f) = open(cx, Some(("nopg", nopg())));
+    assert!(!present(cx, win, "conn-read-only-help"));
+    assert!(!present(cx, win, "conn-database-help"));
+    radio(cx, win, "conn-engine", 1);
+    assert!(!present(cx, win, "conn-read-only-help"));
+    assert!(present(cx, win, "conn-read-only"));
+}
+
+#[gpui_kit::test]
+fn a_round_trip_through_mysql_keeps_what_was_typed_in_shared_fields(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    set(cx, win, &f, Field::Host, "typed");
+    set(cx, win, &f, Field::Password, "pw");
+    radio(cx, win, "conn-engine", 2);
+    radio(cx, win, "conn-engine", 0);
+    assert_eq!(value_and_hint(cx, &f, Field::Host).0, "typed");
+    assert_eq!(value_and_hint(cx, &f, Field::Password).0, "pw");
+}
+
+#[gpui_kit::test]
+fn a_loaded_default_port_cleared_on_the_way_out_comes_back(cx: &mut TestAppContext) {
+    let mut pg = nopg();
+    pg.port = Some(5432);
+    let (win, f) = open(cx, Some(("pg", pg.clone())));
+    radio(cx, win, "conn-engine", 2);
+    assert_eq!(value_and_hint(cx, &f, Field::Port).0, "");
+    radio(cx, win, "conn-engine", 0);
+    assert_eq!(value_and_hint(cx, &f, Field::Port).0, "5432");
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), pg)));
+}
+
+#[gpui_kit::test]
+fn the_fourth_engine_is_duckdb_and_writes_only_its_path(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(engine_option(cx, win, 3).0.as_deref(), Some("DuckDB"));
+    radio(cx, win, "conn-engine", 3);
+    for id in [
+        "conn-path",
+        "conn-read-only",
+        "conn-read-only-help",
+        "conn-timeout",
+        "conn-folder",
+    ] {
+        assert!(present(cx, win, id), "{id}");
+    }
+    for id in [
+        "conn-host",
+        "conn-port",
+        "conn-user",
+        "conn-password",
+        "conn-tls",
+    ] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    assert_eq!(
+        label_of(cx, win, "conn-read-only-help").as_deref(),
+        connection_form(Engine::Duckdb).read_only_help
+    );
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Path).1,
+        "path/to/database.duckdb"
+    );
+    set(cx, win, &f, Field::Name, "duck");
+    set(cx, win, &f, Field::Path, "data/app.duckdb");
+    let mut want = ConnectionSpec::new(Engine::Duckdb);
+    want.path = Some("data/app.duckdb".into());
+    assert_eq!(edit(cx, &f), Ok(("duck".into(), want)));
+}
+
+#[gpui_kit::test]
+fn sqlite_to_duckdb_and_back_keeps_the_path(cx: &mut TestAppContext) {
+    let mut lite = ConnectionSpec::new(Engine::Sqlite);
+    (lite.path, lite.read_only) = (Some("a.db".into()), Some(true));
+    let (win, f) = open(cx, Some(("lite", lite.clone())));
+    radio(cx, win, "conn-engine", 3);
+    let mut want = lite.clone();
+    want.engine = Engine::Duckdb;
+    assert_eq!(edit(cx, &f), Ok(("lite".into(), want)));
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Path),
+        ("a.db".into(), "path/to/database.duckdb".into())
+    );
+    radio(cx, win, "conn-engine", 1);
+    assert_eq!(edit(cx, &f), Ok(("lite".into(), lite)));
+}
+
+#[gpui_kit::test]
+fn a_loaded_duckdb_connection_selects_duckdb_and_returns_unchanged(cx: &mut TestAppContext) {
+    let mut duck = ConnectionSpec::new(Engine::Duckdb);
+    duck.path = Some("data/app.duckdb".into());
+    let (win, f) = open(cx, Some(("duck", duck.clone())));
+    assert_eq!(engine_option(cx, win, 3).1, Some(true));
+    assert_eq!(engine_option(cx, win, 1).1, Some(false));
+    assert!(present(cx, win, "conn-read-only-help"));
+    assert_eq!(edit(cx, &f), Ok(("duck".into(), duck)));
+}

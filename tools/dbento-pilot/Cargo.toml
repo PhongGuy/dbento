@@ -1,0 +1,34 @@
+[package]
+name = "dbento-pilot"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Its own workspace root, so cargo never walks up into an enclosing checkout.
+[workspace]
+
+[dependencies]
+dbento-app = { path = "../../crates/dbento-app" }
+dbento-core = { path = "../../crates/dbento-core" }
+gpui-kit = "=0.7.1"
+gpui-pilot-host = { git = "https://github.com/PhongGuy/gpui-pilot", tag = "v0.1.0" }
+anyhow = "1"
+
+[dev-dependencies]
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-child-process"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "sync", "time"] }
+serde_json = "1"
+toml = "1"
+tempfile = "3"
+png = "0.18"
+dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb"] }
+
+# Headless frame numbers need an optimised host and app.
+[profile.dev.package."*"]
+opt-level = 3
+
+# The root workspace's patch does not reach this separate workspace, so it repeats it.
+[patch.crates-io]
+tiberius = { path = "../../vendor/tiberius" }

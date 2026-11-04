@@ -1,0 +1,41 @@
+[package]
+name = "dbento-cli"
+version.workspace = true
+description = "The dbento command line"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dbento"
+path = "src/main.rs"
+
+[features]
+default = ["duckdb", "mongodb", "surrealdb"]
+# Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
+duckdb = ["dbento-core/duckdb", "dbento-mcp/duckdb", "dbento-testkit/duckdb"]
+# Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
+mongodb = ["dbento-core/mongodb", "dbento-mcp/mongodb"]
+# Forwarded so a default edge to core cannot switch SurrealDB on through feature unification.
+surrealdb = ["dbento-core/surrealdb", "dbento-mcp/surrealdb"]
+
+[dependencies]
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
+dbento-mcp = { path = "../dbento-mcp", default-features = false }
+anyhow.workspace = true
+clap.workspace = true
+humantime.workspace = true
+rpassword.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "signal", "sync"] }
+unicode-width.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+insta.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+rusqlite.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "process"] }
+dbento-testkit = { path = "../dbento-testkit" }

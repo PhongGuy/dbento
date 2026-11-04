@@ -1,0 +1,84 @@
+Source: crates.io tiberius 0.13.0 (tiberius-0.13.0.crate),
+sha256 e07324791de2bdaed058af4aa433a0b5ec5c0beac407a9797419c19805df2415.
+The tarball is unchanged except for the patches below.
+
+P1
+  Change: tokio-rustls without default features; the provider fallback is
+          ring, not aws-lc-rs.
+  Files: Cargo.toml, src/client/tls_stream/rustls_tls_stream.rs
+  Upstream: tiberius-rs/tiberius#456,
+            https://github.com/tiberius-rs/tiberius/pull/456 (issue #457)
+
+P2
+  Change: AttentionHandle (Client::attention_handle, re-exported at the crate
+          root) lets another thread ask the connection to send Attention for
+          the request in flight; the connection sends it at its next packet
+          poll, a read already pending included, and a request is forgotten
+          by the next send. Once an Attention is sent, every token stream and
+          flush_stream read past end-of-message until the message whose final
+          DONE carries DONE_ATTN; simple_query_items yields that Done with
+          attention: true as its last item. cancel_query reads its
+          acknowledgement across messages: the diff of PR #460 at head
+          f177f879dfb83d8a8d8276f02ae61859691b7d11, applied unchanged.
+          Client::drain_attention stops the request in flight and discards
+          the rest of its response packet by packet through flush_stream's
+          loop, so rows buffered in the socket are not decoded.
+          Client::forget_transaction clears the transaction descriptor, for a
+          caller whose drain lost the ENVCHANGE that ended the transaction;
+          Client::transaction_descriptor reads it. drain_attention returns
+          whether the response was still being stopped, not whole.
+  Files: src/tds/stream/token.rs, src/client/connection.rs, src/client.rs,
+         src/lib.rs, tests/query.rs
+  Upstream: tiberius-rs/tiberius#459,
+            https://github.com/tiberius-rs/tiberius/pull/460 (the cancel fix);
+            the handle: none found
+
+P3
+  Change: Client::simple_query_items sends one SQL Batch and returns a
+          QueryStream in items mode, which yields QueryItem::Done (a DoneItem
+          with kind, row count, MORE, ERROR and ATTN bits and CurCmd) for every
+          DONE, DONEINPROC and DONEPROC token and QueryItem::Error for every
+          ERROR token, in wire order, and ends without repeating the held-back
+          server error. Every other query path behaves as before.
+  Files: src/tds/stream/query.rs, src/client.rs, src/result.rs,
+         src/tds/codec/token/token_done.rs, tests/query.rs
+  Upstream: none found (searched tiberius-rs/tiberius issues and PRs, 2026-10-29)
+
+P4
+  Change: Column::type_info returns the column's TypeInfo as COLMETADATA sent
+          it (size, precision, scale, collation or UDT names) and
+          Column::user_type its UserType (80 marks a rowversion); a
+          Column::new column has None and 0. MetaDataColumn keeps the decoded
+          UserType, and UdtInfo is re-exported at the crate root. Every other
+          query path behaves as before.
+  Files: src/row.rs, src/lib.rs, src/client.rs,
+         src/tds/codec/token/token_col_metadata.rs, src/tds/stream/query.rs,
+         src/tds/stream/command.rs, and the MetaDataColumn literals in
+         src/tds/codec/bulk_load.rs, src/tds/codec/type_info_tvp.rs and
+         src/tds/codec/token/token_row.rs tests
+  Upstream: none found (searched tiberius-rs/tiberius issues and PRs, 2026-10-30);
+            the nearest is #442 (merged to main after 0.13.0, superseding #398),
+            whose Client::column_metadata reads a table, not a result's columns
+
+P5
+  Change: the exact-money feature decodes money and smallmoney as a scale-4
+          Numeric, exact over the whole range, and their nulls as
+          Numeric(None); a nullable smallmoney column reports Money4. Applied
+          as the diff of PR #461 at head 185b65eb9064e602a61e60a345e2611a9792ef40,
+          with two hunks merged by hand (the [features] entry of the normalized
+          Cargo.toml, and pub(crate) mod money in column_data.rs).
+  Files: Cargo.toml, CHANGELOG.md, src/from_sql.rs, src/row.rs,
+         src/tds/codec/column_data.rs, src/tds/codec/column_data/money.rs,
+         src/tds/codec/column_data/var_len.rs,
+         src/tds/codec/token/token_col_metadata.rs, tests/bulk.rs,
+         tests/query.rs
+  Upstream: tiberius-rs/tiberius#461,
+            https://github.com/tiberius-rs/tiberius/pull/461
+
+P6
+  Change: Collation::is_utf8 reads the fUTF8 bit (bit 26 of the info word),
+          and Collation::encoding answers UTF-8 when it is set, before the
+          LCID and sort-ID lookups, so a UTF-8 collated varchar (sql_variant
+          included) decodes as UTF-8 instead of its locale's code page.
+  Files: src/tds/collation.rs
+  Upstream: none found (searched tiberius-rs/tiberius issues and PRs, 2026-10-30)

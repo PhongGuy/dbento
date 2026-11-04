@@ -1,0 +1,34 @@
+[package]
+name = "dbento-mcp"
+version.workspace = true
+description = "MCP server exposing a Dbento workspace's databases to AI clients, read-only"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["duckdb", "mongodb", "surrealdb"]
+# Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
+duckdb = ["dbento-core/duckdb", "dbento-testkit/duckdb"]
+# Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
+mongodb = ["dbento-core/mongodb"]
+# Forwarded so a default edge to core cannot switch SurrealDB on through feature unification.
+surrealdb = ["dbento-core/surrealdb"]
+
+[dependencies]
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
+futures-util.workspace = true
+getrandom.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+
+[dev-dependencies]
+rmcp = { workspace = true, features = ["client"] }
+dbento-testkit = { path = "../dbento-testkit" }
+rusqlite.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "io-util"] }

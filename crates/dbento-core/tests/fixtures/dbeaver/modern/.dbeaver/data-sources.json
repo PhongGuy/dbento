@@ -1,0 +1,29 @@
+{
+  "folders": {"Prod": {}, "Prod/EU": {}},
+  "connections": {
+    "postgres-jdbc-a1": {"provider": "postgresql", "driver": "postgres-jdbc", "name": "Orders DB", "save-password": true, "folder": "Prod/EU",
+      "configuration": {"host": "db.orders.example", "port": "5433", "database": "orders", "url": "jdbc:postgresql://stale.example:1/stale",
+        "configurationType": "MANUAL", "type": "prod", "auth-model": "native",
+        "properties": {"ApplicationName": "dbento-fixture", "loggerLevel": "OFF"},
+        "handlers": {"postgre_ssl": {"type": "CONFIG", "enabled": true, "save-password": false,
+          "properties": {"sslMode": "verify-ca", "ssl.method": "CERTIFICATES", "ssl.ca.cert": "/nonexistent/dbento-fixture-ca.pem"}}}}},
+    "postgres-jdbc-b2": {"provider": "postgresql", "driver": "postgres-jdbc", "name": "Reporting (RO)", "save-password": true, "read-only": true,
+      "configuration": {"url": "jdbc:postgresql://localhost:5432/reports?currentSchema=reporting&password=fake-pw-url",
+        "configurationType": "URL", "type": "dev",
+        "handlers": {"postgre_ssl": {"type": "CONFIG", "enabled": true, "properties": {"sslMode": "prefer", "rootCert": "relative/ca.pem"}}}}},
+    "postgres-jdbc-f6": {"provider": "postgresql", "driver": "postgres-jdbc", "name": "Tunnelled", "save-password": true,
+      "configuration": {"host": "10.0.0.5", "database": "app", "type": "dev",
+        "handlers": {"ssh_tunnel": {"type": "TUNNEL", "enabled": true, "save-password": true,
+          "properties": {"host": "jump.example", "port": 22, "authType": "PASSWORD"}}}}},
+    "postgres-jdbc-g7": {"provider": "postgresql", "driver": "postgres-jdbc", "name": "Proxied",
+      "configuration": {"host": "db.proxied.example", "database": "app", "type": "dev",
+        "handlers": {"socks_proxy": {"type": "PROXY", "enabled": true, "properties": {"socks-host": "proxy.example", "socks-port": 1080}}}}},
+    "postgres-timescale-jdbc-e5": {"provider": "postgresql", "driver": "postgres-timescale-jdbc", "name": "Timeseries",
+      "configuration": {"host": "ts.example", "database": "metrics", "type": "dev"}},
+    "sqlite-jdbc-c3": {"provider": "sqlite", "driver": "sqlite_jdbc", "name": "app.db",
+      "configuration": {"database": "data/app.db", "configurationType": "MANUAL", "type": "dev"}},
+    "sqlite_xerial-d4": {"provider": "generic", "driver": "sqlite_xerial", "name": "Legacy Lite",
+      "configuration": {"url": "jdbc:sqlite:data/legacy.db?journal_mode=WAL", "configurationType": "URL", "type": "dev"}}
+  },
+  "connection-types": {"prod": {"name": "Production", "color": "250,207,207"}, "dev": {"name": "Development", "color": "255,255,255"}}
+}

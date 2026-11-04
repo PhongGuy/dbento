@@ -1,0 +1,133 @@
+//! The resolved dependency graph: no aws-lc, OpenSSL or native-tls, one rustls, the pinned client
+//! crates, no SurrealDB crate, and tiberius from the patched copy in vendor/tiberius.
+use std::collections::BTreeSet;
+use std::process::Command;
+
+/// Every `name vX.Y.Z [(path)]` line `cargo tree` resolves for the workspace, on every target,
+/// over normal, build and dev edges. Not `--offline`: a cold CI cache lacks the
+/// platform-only crates `--target all` resolves, so cargo may fetch them here.
+fn packages() -> BTreeSet<String> {
+    let out = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--workspace",
+            "--locked",
+            "--target",
+            "all",
+            "-e",
+            "normal,build,dev",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+        ])
+        .current_dir(xtask::workspace_root())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| l.trim_end_matches(" (*)").to_owned())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+fn named<'a>(packages: &'a BTreeSet<String>, name: &str) -> Vec<&'a str> {
+    packages
+        .iter()
+        .map(String::as_str)
+        .filter(|p| p.split(' ').next() == Some(name))
+        .collect()
+}
+
+#[test]
+fn no_forbidden_tls_stack_and_one_rustls() {
+    let packages = packages();
+    for name in [
+        "aws-lc-rs",
+        "aws-lc-sys",
+        "openssl",
+        "openssl-sys",
+        "native-tls",
+    ] {
+        assert!(
+            named(&packages, name).is_empty(),
+            "{name}: {:?}",
+            named(&packages, name)
+        );
+    }
+    let rustls: BTreeSet<&str> = named(&packages, "rustls")
+        .into_iter()
+        .map(|p| p.split(' ').nth(1).unwrap())
+        .collect();
+    assert_eq!(rustls.len(), 1, "{rustls:?}");
+}
+
+#[test]
+fn tiberius_resolves_to_the_vendored_copy() {
+    let packages = packages();
+    let tiberius = named(&packages, "tiberius");
+    assert_eq!(tiberius.len(), 1, "{tiberius:?}");
+    assert!(
+        tiberius[0].starts_with("tiberius v0.13.0 (") && tiberius[0].ends_with("vendor/tiberius)"),
+        "{}",
+        tiberius[0]
+    );
+}
+
+#[test]
+fn the_vendored_copy_keeps_its_licences_and_lists_its_patches() {
+    let dir = xtask::workspace_root().join("vendor/tiberius");
+    for file in ["LICENSE-MIT.txt", "LICENSE-APACHE.txt"] {
+        assert!(dir.join(file).is_file(), "{file}");
+    }
+    let patches = std::fs::read_to_string(dir.join("DBENTO-PATCHES")).unwrap();
+    assert!(
+        patches.contains("P1") && patches.contains("#456"),
+        "{patches}"
+    );
+    assert!(
+        patches.contains("P3") && patches.contains("simple_query_items"),
+        "{patches}"
+    );
+    assert!(
+        patches.contains("P5") && patches.contains("#461") && patches.contains("exact-money"),
+        "{patches}"
+    );
+    assert!(
+        patches.contains("P6") && patches.contains("UTF-8"),
+        "{patches}"
+    );
+    assert!(
+        patches.contains("P4") && patches.contains("type_info"),
+        "{patches}"
+    );
+}
+
+#[test]
+fn mongodb_and_bson_resolve_once_at_their_pins() {
+    let packages = packages();
+    assert_eq!(named(&packages, "mongodb"), ["mongodb v3.9.1"]);
+    assert_eq!(named(&packages, "bson"), ["bson v3.1.0"]);
+}
+
+#[test]
+fn the_surrealdb_client_crates_resolve_at_their_pins_and_no_bsl_crate_does() {
+    let packages = packages();
+    assert_eq!(
+        named(&packages, "tokio-tungstenite"),
+        ["tokio-tungstenite v0.30.0"]
+    );
+    assert_eq!(named(&packages, "cbor4ii"), ["cbor4ii v1.2.4"]);
+    assert_eq!(named(&packages, "half"), ["half v2.7.1"]);
+    let bsl: Vec<&String> = packages
+        .iter()
+        .filter(|p| p.starts_with("surreal"))
+        .collect();
+    assert!(bsl.is_empty(), "{bsl:?}");
+}

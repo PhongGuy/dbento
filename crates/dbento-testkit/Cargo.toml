@@ -1,0 +1,22 @@
+[package]
+name = "dbento-testkit"
+version.workspace = true
+description = "Test-only Postgres, MySQL and SQL Server containers and fresh databases for Dbento"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+testcontainers-modules.workspace = true
+tokio-postgres.workspace = true
+mysql_async.workspace = true
+tiberius.workspace = true
+tokio-util.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net"] }
+futures-util.workspace = true
+rcgen.workspace = true
+duckdb = { workspace = true, optional = true }
+
+[features]
+duckdb = ["dep:duckdb"]

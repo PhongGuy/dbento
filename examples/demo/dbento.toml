@@ -1,0 +1,21 @@
+# The Dbento demo workspace. `make demo` copies it to a cache folder and builds shop.sqlite
+# from seed.sql there, so nothing you do in the app reaches the repo.
+dbento = 1
+
+[folders."Local"]
+color = "teal"
+
+[folders."Production"]
+color = "red"
+
+[connections.shop]
+engine = "sqlite"
+path = "shop.sqlite"
+folder = "Local"
+
+# The same file again, read-only: it shows the production tint and refuses writes.
+[connections.shop-prod]
+engine = "sqlite"
+path = "shop.sqlite"
+read_only = true
+folder = "Production"

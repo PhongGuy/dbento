@@ -1,0 +1,7 @@
+# arch  name in cargo-packager's tools dir  sha256  url (fixed release tags, never continuous)
+x86_64 AppRun-x86_64 f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
+x86_64 linuxdeploy-x86_64.AppImage c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+x86_64 linuxdeploy-plugin-appimage.AppImage 992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3 https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-x86_64.AppImage
+aarch64 AppRun-aarch64 072f17c0895a85c490282fe5395c5007e5fc75da727e553b3b8fb680feb11578 https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-aarch64
+aarch64 linuxdeploy-aarch64.AppImage 620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-aarch64.AppImage
+aarch64 linuxdeploy-plugin-appimage.AppImage 83c292149274965a865dcd44c135cfca8ba28c6b7de3eb628d4b8b5f248af17c https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-aarch64.AppImage

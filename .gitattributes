@@ -1,0 +1,3 @@
+datasets/chinook/* -text
+assets/icon/generated/** binary
+vendor/** -text

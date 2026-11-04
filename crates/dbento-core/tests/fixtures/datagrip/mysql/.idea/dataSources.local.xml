@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="dataSourceStorageLocal">
+    <data-source name="Shop MySQL" uuid="aaaaaaaa-1111-4111-8111-111111111111">
+      <user-name>shop_app</user-name>
+      <ssl-config>
+        <ca-cert>/nonexistent/dbento-fixture/mysql-ca.pem</ca-cert>
+        <enabled>true</enabled>
+        <mode>REQUIRE</mode>
+      </ssl-config>
+    </data-source>
+    <data-source name="Maria (RO)" uuid="aaaaaaaa-2222-4222-8222-222222222222">
+      <user-name>maria</user-name>
+    </data-source>
+    <data-source name="Cluster" uuid="aaaaaaaa-5555-4555-8555-555555555555">
+      <user-name>app</user-name>
+    </data-source>
+    <data-source name="Tunnelled" uuid="aaaaaaaa-6666-4666-8666-666666666666">
+      <user-name>ops</user-name>
+      <ssh-properties>
+        <enabled>true</enabled>
+      </ssh-properties>
+    </data-source>
+  </component>
+</project>

@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Cargo monthly, as one grouped PR. The gpui crates move together with a
+  # matching gpui-pilot release, so they are bumped by hand.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/"
+      - "/tools/dbento-pilot"
+    schedule:
+      interval: "monthly"
+    groups:
+      cargo:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "gpui*"

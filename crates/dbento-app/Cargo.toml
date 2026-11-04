@@ -1,0 +1,77 @@
+[package]
+name = "dbento-app"
+version.workspace = true
+description = "The Dbento desktop app: a GPUI shell over dbento-core"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dbento-app"
+path = "src/main.rs"
+
+[features]
+default = ["duckdb", "mongodb", "surrealdb"]
+# Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
+duckdb = ["dbento-core/duckdb", "dbento-testkit/duckdb"]
+# Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
+mongodb = ["dbento-core/mongodb"]
+# Forwarded so a default edge to core cannot switch SurrealDB on through feature unification.
+surrealdb = ["dbento-core/surrealdb"]
+# A self-driving bench window run by `cargo xtask app-bench`; off in a normal build.
+bench = ["dep:dbento-bench"]
+
+[dependencies]
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
+# Only the bench mode uses it, for its targets workspace and memory reading.
+dbento-bench = { path = "../dbento-bench", optional = true }
+gpui-kit.workspace = true
+lsp-types.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+async-channel.workspace = true
+log.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+# Same version gpui links, so `RgbaImage` is the type `WindowOptions.icon` takes.
+image = { version = "=0.25.10", default-features = false, features = ["png", "gif", "jpeg", "webp", "bmp"] }
+tempfile.workspace = true
+# Unused directly: turns on `debug-embed` for the kit's icon set, so debug builds carry
+# their SVGs instead of reading them from the cargo registry at runtime.
+rust-embed.workspace = true
+
+# Plain build dependency: build.rs checks the target OS, which a cfg table cannot.
+[build-dependencies]
+winresource = "=0.1.31"
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+rusqlite.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "io-util"] }
+dbento-testkit = { path = "../dbento-testkit" }
+
+[package.metadata.packager]
+productName = "Dbento"
+identifier = "dev.dbento.app"
+description = "A native database client for Postgres and SQLite"
+longDescription = "Dbento keeps connections and saved queries as plain files in a workspace folder, ready for git, with secrets in the OS keychain."
+authors = ["The Dbento authors"]
+category = "DeveloperTool"
+binaries = [{ path = "dbento-app", main = true }, { path = "dbento", main = false }]
+icons = [
+    "../../assets/icon/generated/png/*.png",
+    "../../assets/icon/generated/dbento.icns",
+    "../../assets/icon/generated/dbento.ico",
+]
+# Licence texts for the bundled fonts and icons, installed flat beside the binary; the
+# generated notices are added by `cargo xtask packager-config`.
+resources = ["../../licenses/*.txt"]
+
+[package.metadata.packager.deb]
+depends = ["libxcb1", "libxkbcommon0", "libxkbcommon-x11-0", "libvulkan1", "libwayland-client0", "libwayland-egl1", "libegl1"]
+section = "devel"
+# cargo-packager's default template plus StartupWMClass, so the shell matches the window to it.
+desktopTemplate = "packaging/dbento-app.desktop"

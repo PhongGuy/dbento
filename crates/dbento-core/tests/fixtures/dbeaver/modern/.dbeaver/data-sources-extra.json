@@ -1,0 +1,7 @@
+{
+  "connections": {
+    "postgres-jdbc-a1": {"provider": "postgresql", "driver": "postgres-jdbc", "name": "Shadow", "configuration": {"host": "shadow.example", "database": "x"}},
+    "postgres-jdbc-i9": {"provider": "postgresql", "driver": "postgres-jdbc", "name": "Orders DB", "save-password": true,
+      "configuration": {"host": "db2.orders.example", "database": "orders", "type": "dev"}}
+  }
+}

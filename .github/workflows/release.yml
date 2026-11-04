@@ -1,0 +1,137 @@
+# Builds release artifacts on a v* tag and drafts a GitHub release that a human publishes.
+# A manual run builds a chosen set of platforms; with dry_run it drafts nothing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build without drafting a release
+        type: boolean
+        default: true
+      platforms:
+        description: Comma-separated subset of linux,windows,macos-arm64,macos-intel (macOS bills 10x)
+        type: string
+        default: linux,windows,macos-arm64
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # GPUI's system libraries for the app, and libclang for pg_query's bindgen.
+  LINUX_BUILD_DEPS: pkg-config libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libegl1 libclang-dev
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.guard.outputs.version }}
+      matrix: ${{ steps.guard.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: guard
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          PLATFORMS: ${{ inputs.platforms }}
+        run: scripts/release.sh guard "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$DRY_RUN" "$PLATFORMS" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: guard
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.guard.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_BUILD_DEPS
+      - name: Install cargo-packager
+        run: cargo install --locked cargo-packager --version 0.11.8
+      - name: Install cargo-about
+        run: cargo install --locked cargo-about --version 0.9.2 --features cli
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: make package
+      # Build scripts run here, so the build is its own step and holds no signing secret.
+      - name: Build (macOS, Windows)
+        if: runner.os != 'Linux'
+        run: bash scripts/release.sh build
+      # Only this step on Windows sees the signing secrets; the decoded key lands under runner.temp.
+      - name: Package (macOS, Windows)
+        if: runner.os != 'Linux'
+        env:
+          WINDOWS_CERTIFICATE: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/release.sh package
+      # The notices ship inside every package; the checksums job writes the one SHA256SUMS.
+      - name: Drop per-runner loose files
+        run: rm -f target/dist/*/SHA256SUMS target/dist/*/THIRD-PARTY-NOTICES.html
+      # Rooted at the platform directory, so the merged download in checksums is flat.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: target/dist/${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}/
+          if-no-files-found: error
+
+  checksums:
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      # Unversioned copies, so the README links /releases/latest/download/<name> directly.
+      - name: Add stable-named copies
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: scripts/release.sh stable dist "$VERSION"
+      # write_sums is GNU-only, which is why the sums run here and not on the build runners.
+      - name: Write SHA256SUMS
+        run: scripts/release.sh sums dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ needs.guard.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+      - name: Draft the release
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --generate-notes dist/*

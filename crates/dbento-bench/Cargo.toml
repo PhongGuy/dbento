@@ -1,0 +1,20 @@
+[package]
+name = "dbento-bench"
+version.workspace = true
+description = "Release-build measurement of the spec's performance targets"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
+anyhow.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tempfile.workspace = true
+
+[dev-dependencies]
+xtask = { path = "../xtask" }
+dbento-testkit = { path = "../dbento-testkit" }
+tokio = { workspace = true, features = ["macros", "rt"] }

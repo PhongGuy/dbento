@@ -1,0 +1,3 @@
+# ExecuteError::Database carries six engine fields (136 bytes, 144 inside ApplyError) and is
+# matched by field across every crate, so it stays unboxed; the default 128 flags it everywhere.
+large-error-threshold = 152

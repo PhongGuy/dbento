@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gpui-pilot": {
+      "command": "gpui-pilot",
+      "args": ["mcp"]
+    }
+  }
+}

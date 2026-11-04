@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="Warehouse" uuid="66666666-6666-4666-8666-666666666666">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://wh.example/warehouse</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="local.db" uuid="77777777-7777-4777-8777-777777777777">
+      <driver-ref>sqlite.xerial</driver-ref>
+      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/local.db</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+  </component>
+</project>

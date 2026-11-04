@@ -1,0 +1,17 @@
+{
+  "folders": {"Shop": {}},
+  "connections": {
+    "my-a1": {"provider": "mysql", "driver": "mysql8", "name": "Shop MySQL", "save-password": true, "folder": "Shop",
+      "configuration": {"host": "db.shop.example", "port": "3307", "database": "shop", "configurationType": "MANUAL", "type": "prod", "auth-model": "native",
+        "properties": {"connectTimeout": "5"},
+        "handlers": {"mysql_ssl": {"type": "CONFIG", "enabled": true, "properties": {"ssl.require": "true", "ssl.verify.server": "false"}}}}},
+    "my-b2": {"provider": "mysql", "driver": "mariaDB", "name": "Maria (RO)", "save-password": true, "read-only": true,
+      "configuration": {"url": "jdbc:mariadb://localhost:3306/inventory", "configurationType": "URL", "type": "dev"}},
+    "my-c3": {"provider": "mysql", "driver": "starRocks", "name": "Stars",
+      "configuration": {"host": "stars.example", "type": "dev"}},
+    "my-d4": {"provider": "mysql", "driver": "mysql8", "name": "Tunnelled", "save-password": true,
+      "configuration": {"host": "10.0.0.5", "database": "app", "type": "dev",
+        "handlers": {"ssh_tunnel": {"type": "TUNNEL", "enabled": true, "properties": {"host": "jump.example", "port": 22}}}}}
+  },
+  "connection-types": {"prod": {"name": "Production", "color": "250,207,207"}, "dev": {"name": "Development", "color": "255,255,255"}}
+}

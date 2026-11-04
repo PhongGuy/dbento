@@ -1,0 +1,98 @@
+[workspace]
+members = ["crates/dbento-core", "crates/dbento-cli", "crates/dbento-mcp", "crates/dbento-app", "crates/dbento-testkit", "crates/dbento-bench", "crates/xtask"]
+resolver = "3"
+# A path dependency under the root would otherwise become a workspace member.
+exclude = ["vendor/tiberius"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+log = "0.4.34"
+roxmltree = "0.21.1"
+percent-encoding = "2.3.2"
+rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype", "limits", "hooks", "column_metadata"] }
+sqlite3-parser = "0.17.0"
+tokio = { version = "1.53.2", features = ["sync"] }
+tokio-util = { version = "0.7.20", features = ["compat"] }
+tokio-postgres = "0.7.18"
+pg_query = "6.2.1"
+tiberius = { version = "=0.13.0", default-features = false, features = ["rustls", "tds80", "exact-money"] }
+duckdb = { version = "=1.20000.1", default-features = false, features = ["bundled"] }
+mongodb = { version = "=3.9.1", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0", "dns-resolver"] }
+bson = { version = "=3.1.0", features = ["serde", "serde_json-1"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["__rustls-tls"] }
+cbor4ii = { version = "=1.2.4", features = ["use_alloc", "half-f16"] }
+half = "=2.7.1"
+sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }
+tokio-postgres-rustls = "0.14.0"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7.1"
+futures-util = "0.3.34"
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "mysql", "mariadb", "mssql_server", "watchdog"] }
+mysql_async = { version = "=0.37.1", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
+rcgen = "0.14.10"
+thiserror = "2.0.21"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+toml = "1.1.8"
+toml_edit = "=0.25.17"
+humantime = "2.4.0"
+tempfile = "3.27.0"
+libc = "0.2.190"
+unicode-width = "0.2.2"
+keyring-core = "1.0.0"
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+windows-native-keyring-store = "1.1.0"
+clap = { version = "4.6.7", features = ["derive"] }
+anyhow = "1.0.104"
+lsp-types = { version = "=0.97.0", features = ["proposed"] }
+rpassword = "7.5.4"
+assert_cmd = "2.2.2"
+insta = { version = "1.49.0", features = ["json"] }
+sha2 = "0.11.0"
+gpui-kit = { version = "=0.7.1", features = ["tree-sitter", "tree-sitter-sql"] }
+async-channel = "2.5.0"
+rust-embed = { version = "=8.13.0", features = ["debug-embed"] }
+dirs = "6.0.0"
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+schemars = "1.2.2"
+getrandom = "0.3.4"
+zeroize = "1.9.1"
+aes = "0.8.4"
+cbc = { version = "0.1.2", features = ["block-padding"] }
+hmac = "0.13.0"
+base64 = "0.22.1"
+hex = "0.4.3"
+pkcs8 = { version = "0.10.2", features = ["encryption", "pem", "std"] }
+
+# Optimised libduckdb keeps debug test binaries small.
+[profile.dev.package.libduckdb-sys]
+opt-level = 3
+
+# The session app under gpui-pilot: dev, but optimised so frame timings mean something.
+[profile.timing]
+inherits = "dev"
+opt-level = 3
+debug = 0
+
+# Only for `make xwin-build`, never for shipping.
+[profile.xwin-release]
+inherits = "release"
+
+# gpui-pre-windows 0.3.8 precompiles shaders only on a Windows host (needs fxc.exe), so take its
+# runtime-compile path. Drop it once its build.rs checks CARGO_CFG_TARGET_OS or ships the bytecode.
+[profile.xwin-release.package.gpui-pre-windows]
+debug-assertions = true
+
+[profile.release]
+strip = true
+lto = "thin"
+
+# The vendored tiberius with its DBENTO-PATCHES applied.
+[patch.crates-io]
+tiberius = { path = "vendor/tiberius" }

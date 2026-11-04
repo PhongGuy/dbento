@@ -1,0 +1,8 @@
+# How gpui-pilot builds and launches Dbento for an agent; see tools/dbento-pilot.
+[headless]
+build = ["cargo", "build", "--manifest-path", "tools/dbento-pilot/Cargo.toml"]
+binary = "tools/dbento-pilot/target/debug/dbento-pilot"
+
+[session]
+build = ["cargo", "build", "-p", "dbento-app", "--bin", "dbento-app", "--profile", "timing"]
+binary = "target/timing/dbento-app"

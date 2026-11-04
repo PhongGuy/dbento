@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="Shop MySQL" group="backend" uuid="aaaaaaaa-1111-4111-8111-111111111111">
+      <driver-ref>mysql.8</driver-ref>
+      <jdbc-driver>com.mysql.cj.jdbc.Driver</jdbc-driver>
+      <jdbc-url>jdbc:mysql://db.shop.example:3307/shop?sslMode=VERIFY_IDENTITY&amp;connectTimeout=5</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
+    <data-source source="LOCAL" name="Maria (RO)" read-only="true" uuid="aaaaaaaa-2222-4222-8222-222222222222">
+      <driver-ref>mariadb</driver-ref>
+      <jdbc-driver>org.mariadb.jdbc.Driver</jdbc-driver>
+      <jdbc-url>jdbc:mariadb://localhost:3306/inventory</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="Aurora" uuid="aaaaaaaa-3333-4333-8333-333333333333">
+      <driver-ref>mysql_aurora_aws</driver-ref>
+      <jdbc-url>jdbc:mysql:aws://aurora.example:3306/app</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="TiDB" uuid="aaaaaaaa-4444-4444-8444-444444444444">
+      <driver-ref>tidb</driver-ref>
+      <jdbc-driver>com.mysql.cj.jdbc.Driver</jdbc-driver>
+      <jdbc-url>jdbc:mysql://tidb.example:4000/test</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="Cluster" uuid="aaaaaaaa-5555-4555-8555-555555555555">
+      <driver-ref>mysql.8</driver-ref>
+      <jdbc-url>jdbc:mysql:loadbalance://a.example,b.example/app</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="Tunnelled" uuid="aaaaaaaa-6666-4666-8666-666666666666">
+      <driver-ref>mariadb</driver-ref>
+      <jdbc-url>jdbc:mariadb://10.0.0.5/internal</jdbc-url>
+    </data-source>
+  </component>
+</project>
