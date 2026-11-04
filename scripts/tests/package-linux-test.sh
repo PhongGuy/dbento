@@ -183,7 +183,7 @@ test_deb_arch_maps_machines_to_debian_names() {
   if deb_arch riscv64 2>/dev/null; then fail "riscv64 accepted"; fi
 }
 
-DEPENDS="libxcb1, libxkbcommon0, libxkbcommon-x11-0, libvulkan1, libwayland-client0, libwayland-egl1, libegl1"
+DEPENDS="libxcb1, libxkbcommon0, libxkbcommon-x11-0, libvulkan1, libwayland-client0, libwayland-egl1, libegl1, libstdc++6"
 
 test_a_failed_cli_archive_leaves_no_stage_or_partial_tarball() {
   printf '#!/usr/bin/env bash\necho partial\nexit 2\n' >"$WORK/broken-tar"
@@ -198,7 +198,7 @@ test_a_failed_cli_archive_leaves_no_stage_or_partial_tarball() {
 }
 
 test_missing_depends_reports_only_undeclared_libraries() {
-  local all="libc.so.6 libm.so.6 libgcc_s.so.1 ld-linux-x86-64.so.2 libxcb.so.1 libxkbcommon.so.0 libxkbcommon-x11.so.0 libvulkan.so.1 libwayland-client.so.0 libwayland-egl.so.1 libEGL.so.1"
+  local all="libc.so.6 libm.so.6 libgcc_s.so.1 libstdc++.so.6 ld-linux-x86-64.so.2 libxcb.so.1 libxkbcommon.so.0 libxkbcommon-x11.so.0 libvulkan.so.1 libwayland-client.so.0 libwayland-egl.so.1 libEGL.so.1"
   [[ -z $(missing_depends "$all" "$DEPENDS") ]] || fail "declared set reported: $(missing_depends "$all" "$DEPENDS")"
   [[ -z $(missing_depends "ld-linux-aarch64.so.1" "$DEPENDS") ]] || fail "aarch64 loader reported: $(missing_depends "ld-linux-aarch64.so.1" "$DEPENDS")"
   [[ $(missing_depends "libEGL.so.1" "libxcb1, libvulkan1") == "libEGL.so.1 (libegl1)" ]] || fail "undeclared libegl1 not reported"
