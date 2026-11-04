@@ -520,8 +520,9 @@ enum ScriptInner {
     Mssql(<MssqlDriver as Driver>::Script),
     #[cfg(feature = "duckdb")]
     Duckdb(<DuckDriver as Driver>::Script),
+    // Boxed, like its stream, so every engine's `Script` does not carry the parsed statements.
     #[cfg(feature = "mongodb")]
-    Mongodb(<MongoDriver as Driver>::Script),
+    Mongodb(Box<<MongoDriver as Driver>::Script>),
 }
 
 enum StreamInner {
@@ -719,7 +720,7 @@ impl Session {
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => ScriptInner::Duckdb(d.start_script(sql)),
             #[cfg(feature = "mongodb")]
-            SessionInner::Mongodb(d) => ScriptInner::Mongodb(d.start_script(sql)),
+            SessionInner::Mongodb(d) => ScriptInner::Mongodb(Box::new(d.start_script(sql))),
         };
         Script {
             inner,
@@ -1130,8 +1131,10 @@ impl<'a> Pending<'a> {
                 (columns, StreamInner::Duckdb(stream))
             }
             #[cfg(feature = "mongodb")]
+            // Pinned on the heap: its future is several times the size of any SQL engine's, and
+            // inline it would set the size of every engine's `execute`.
             ScriptInner::Mongodb(s) => {
-                let (columns, stream) = MongoDriver::execute(s, limits).await?;
+                let (columns, stream) = Box::pin(MongoDriver::execute(s, limits)).await?;
                 (columns, StreamInner::Mongodb(Box::new(stream)))
             }
         };
