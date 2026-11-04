@@ -43,6 +43,15 @@ pub fn statement_count(engine: Engine, sql: &str) -> usize {
     }
 }
 
+/// The range each result of `Script` takes its text from, in result order: on SurrealDB a
+/// unit's range once per statement it holds; elsewhere `statement_ranges`.
+pub fn result_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
+    match engine {
+        Engine::Surrealdb => crate::surreal::units::result_ranges(sql),
+        _ => statement_ranges(engine, sql),
+    }
+}
+
 /// One SQL Server batch: its text and how many times its GO line asks for it to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MssqlBatch {
