@@ -10,18 +10,23 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::cancel::{Stop, SurrealCancel};
+use super::catalog::{self, Answer, Ask, Statement, TableInfo};
 use super::classify::surreal_classification;
 use super::decode::Wire;
+use super::lex::quote_ident;
 use super::login::{Missing, Place, pre_check};
 use super::rpc::{Frame, Frames, Param, Rpc, RpcError};
 use super::shape::Shape;
 use super::units::{Unit, UnitKind, UseTarget, units};
 use super::wire::{Reading, STRING_CAST, WireError, call_error, field, statement_error};
+use crate::introspect::{ColumnMeta, IntrospectError, RelationRef, SchemaInfo, capped};
+use crate::objects::RelationObjects;
 use crate::session::{
     Classification, ExecuteError, Limits, OnTruncate, Outcome, Prepared, ReadOnlyEnforcement,
     TruncatedBy, Writes,
 };
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ResultBatch};
+use crate::workspace::AuthLevel;
 
 /// Rows that fix a result's columns, unless a limit is reached first.
 const SAMPLE_ROWS: usize = 100;
@@ -35,6 +40,10 @@ pub(crate) enum Request {
     },
     Settle {
         done: oneshot::Sender<Result<(), ExecuteError>>,
+    },
+    Catalog {
+        ask: Ask,
+        reply: oneshot::Sender<Result<Answer, IntrospectError>>,
     },
     Close {
         done: oneshot::Sender<Result<(), ExecuteError>>,
@@ -127,6 +136,9 @@ pub(crate) async fn serve(
             Request::Settle { done } => {
                 s.cancel.end();
                 let _ = done.send(s.owed.take().map_or(Ok(()), Err));
+            }
+            Request::Catalog { ask, reply } => {
+                let _ = reply.send(s.catalog(ask).await);
             }
             Request::Close { done } => {
                 s.rpc.close("the session was closed");
@@ -989,6 +1001,146 @@ impl Served {
                 Cut::Over(After::Stop)
             }
         }
+    }
+}
+
+const INFO_NS: &str = "INFO FOR NS";
+const INFO_DB: &str = "INFO FOR DB STRUCTURE";
+const INFO_TABLE: &str = "INFO FOR DB STRUCTURE; INFO FOR TABLE $t STRUCTURE";
+const SAMPLE: &str = "SELECT * FROM type::table($t) LIMIT 100";
+
+/// Catalog calls. They read with `Reading::default()`, so a refused read is a `Database` error.
+impl Served {
+    async fn catalog(&mut self, ask: Ask) -> Result<Answer, IntrospectError> {
+        if let Some(e) = self.gone() {
+            return Err(e.into());
+        }
+        match ask {
+            Ask::Schemas => {
+                // A database login may not read `INFO FOR NS`, and sees only its own database.
+                if self.place.level == Some(AuthLevel::Database) {
+                    let own = SchemaInfo::new(self.place.database.clone());
+                    return Ok(Answer::Schemas(vec![own]));
+                }
+                let reply = self.catalog_query("", INFO_NS, 1, None, None).await?;
+                Ok(Answer::Schemas(catalog::schema_names(&reply[0])?))
+            }
+            Ask::Relations(schema) => {
+                let Some(prefix) = self.reach(&schema).await? else {
+                    return Ok(Answer::Relations(capped(Vec::new())));
+                };
+                let reply = self.catalog_query(&prefix, INFO_DB, 1, None, None).await?;
+                Ok(Answer::Relations(catalog::relation_list(&reply[0])?))
+            }
+            Ask::Columns(rel) => Ok(Answer::Columns(self.columns(&rel).await?)),
+            Ask::Objects(rel) => {
+                let empty = RelationObjects::new(Vec::new(), Vec::new(), Vec::new());
+                let Some((_, _, reply)) = self.table_structure(&rel).await? else {
+                    return Ok(Answer::Objects(empty));
+                };
+                Ok(Answer::Objects(catalog::relation_objects(&rel, &reply[1])?))
+            }
+        }
+    }
+
+    // Declared columns, plus sampled ones for a table that is not schemafull or is a view. The
+    // sample runs in a fence it always cancels, so browsing never writes, writable session or not.
+    async fn columns(&mut self, rel: &RelationRef) -> Result<Vec<ColumnMeta>, IntrospectError> {
+        let Some((prefix, info, reply)) = self.table_structure(rel).await? else {
+            return Ok(Vec::new());
+        };
+        let declared = catalog::declared_columns(&reply[1], rel.name())?;
+        if info.schemafull && !info.view {
+            return Ok(declared);
+        }
+        let fence = self.open_fence().await?;
+        let vars = Param::Object(vec![("t", Param::Text(rel.name()))]);
+        let sampled = self
+            .catalog_query(&prefix, SAMPLE, 1, Some(vars), Some(fence))
+            .await;
+        self.close_fence(Some(fence)).await;
+        match &sampled?[0] {
+            Wire::Array(rows) => Ok(catalog::with_inferred(declared, rows)),
+            _ => Err(IntrospectError::Unexpected {
+                message: "the sample of a table is not a list of rows".to_owned(),
+            }),
+        }
+    }
+
+    // The prefix that reached `rel`'s database, its `tables` entry, and the replies to
+    // `INFO FOR DB STRUCTURE` and `INFO FOR TABLE`; None when the database or table is not there.
+    async fn table_structure(
+        &self,
+        rel: &RelationRef,
+    ) -> Result<Option<(String, TableInfo, Vec<Wire>)>, IntrospectError> {
+        let Some(prefix) = self.reach(rel.schema()).await? else {
+            return Ok(None);
+        };
+        let vars = Param::Object(vec![("t", Param::Text(rel.name()))]);
+        let reply = self
+            .catalog_query(&prefix, INFO_TABLE, 2, Some(vars), None)
+            .await?;
+        let info = catalog::table_info(&reply[0], rel.name())?;
+        Ok(info.map(|info| (prefix, info, reply)))
+    }
+
+    // The text that puts a call in database `schema`: none for the session's own, a text `USE
+    // DB` for another the pre-check found, since that `USE` would create a missing one. None
+    // when it is out of reach: missing, or any other database under a database login.
+    async fn reach(&self, schema: &str) -> Result<Option<String>, IntrospectError> {
+        if schema == self.place.database {
+            return Ok(Some(String::new()));
+        }
+        if self.place.level == Some(AuthLevel::Database) {
+            return Ok(None);
+        }
+        let target = UseTarget {
+            namespace: None,
+            database: Some(schema.to_owned()),
+        };
+        match pre_check(&self.rpc, &self.place, &target).await {
+            Ok(()) => Ok(Some(format!("USE DB {};", quote_ident(schema)))),
+            Err(Missing::Target(_)) => Ok(None),
+            Err(Missing::Server(e)) => {
+                Err(self.heard(statement_error(&e, Reading::default())).into())
+            }
+            Err(Missing::Closed(why)) => Err(self.closed(why).into()),
+        }
+    }
+
+    // Sends `prefix` then `text` as one `query` call and returns the results of the `count`
+    // statements of `text`; the prefix's statement must succeed too.
+    async fn catalog_query(
+        &self,
+        prefix: &str,
+        text: &str,
+        count: usize,
+        vars: Option<Param<'_>>,
+        txn: Option<[u8; 16]>,
+    ) -> Result<Vec<Wire>, IntrospectError> {
+        let sql = format!("{prefix}{text}");
+        let mut params = vec![Param::Text(&sql)];
+        params.extend(vars);
+        let reply = match self.rpc.call("query", &params, txn).await {
+            Ok(reply) => reply,
+            Err(RpcError::Server(e)) => {
+                return Err(self.heard(call_error(&e, &sql, Reading::default())).into());
+            }
+            Err(RpcError::Unreadable(why)) => return Err(unreadable(&why).into()),
+            Err(RpcError::Closed(why)) => return Err(self.closed(why).into()),
+        };
+        let skip = usize::from(!prefix.is_empty());
+        let mut results = Vec::with_capacity(count);
+        for at in 0..skip + count {
+            match catalog::statement(&reply, at)? {
+                Statement::Ok(result) if at >= skip => results.push(result.clone()),
+                Statement::Ok(_) => {}
+                Statement::Err(e) => {
+                    return Err(self.heard(statement_error(&e, Reading::default())).into());
+                }
+            }
+        }
+        Ok(results)
     }
 }
 

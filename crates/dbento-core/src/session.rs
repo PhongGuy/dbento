@@ -971,9 +971,7 @@ impl Session {
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(RelationObjects::new(Vec::new(), Vec::new(), Vec::new())),
             #[cfg(feature = "surrealdb")]
-            SessionInner::Surreal(_) => Err(IntrospectError::Unsupported {
-                what: "relation objects",
-            }),
+            SessionInner::Surreal(d) => d.relation_objects(rel).await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => crate::mongo::catalog::relation_objects(d, rel).await,
         }

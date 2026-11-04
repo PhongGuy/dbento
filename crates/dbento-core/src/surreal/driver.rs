@@ -7,10 +7,12 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::cancel::SurrealCancel;
+use super::catalog::{Answer, Ask};
 use super::login::login;
 use super::rpc::{CALL_BOUND, Rpc};
 use super::serve::{Ctl, Event, PARK_BOUND, Request, Rules, serve};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
+use crate::objects::RelationObjects;
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError, ExtendError,
     Flavor, Limits, OnTruncate, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem,
@@ -46,6 +48,33 @@ impl SurrealDriver {
     /// What the shell should say about the server: set for a prerelease or a higher major.
     pub(crate) fn warning(&self) -> Option<&str> {
         self.warning.as_deref()
+    }
+
+    /// The indexes and events of `rel`; empty for an unknown database or table.
+    pub(crate) async fn relation_objects(
+        &mut self,
+        rel: &RelationRef,
+    ) -> Result<RelationObjects, IntrospectError> {
+        match self.ask(Ask::Objects(rel.clone())).await? {
+            Answer::Objects(objects) => Ok(objects),
+            _ => Err(wrong_answer("relation objects")),
+        }
+    }
+
+    // Catalog calls queue in the serving task behind any script, in the session's own place.
+    async fn ask(&self, ask: Ask) -> Result<Answer, IntrospectError> {
+        let closed = || IntrospectError::Execute(ExecuteError::SessionClosed);
+        let (reply, wait) = oneshot::channel();
+        if self.requests.send(Request::Catalog { ask, reply }).is_err() {
+            return Err(closed());
+        }
+        wait.await.unwrap_or_else(|_| Err(closed()))
+    }
+}
+
+fn wrong_answer(what: &str) -> IntrospectError {
+    IntrospectError::Unexpected {
+        message: format!("the session answered a request for {what} with something else"),
     }
 }
 
@@ -199,15 +228,24 @@ impl Driver for SurrealDriver {
     }
 
     async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, IntrospectError> {
-        Err(IntrospectError::Unsupported { what: "schemas" })
+        match self.ask(Ask::Schemas).await? {
+            Answer::Schemas(schemas) => Ok(schemas),
+            _ => Err(wrong_answer("schemas")),
+        }
     }
 
-    async fn relations(&mut self, _schema: &str) -> Result<RelationList, IntrospectError> {
-        Err(IntrospectError::Unsupported { what: "relations" })
+    async fn relations(&mut self, schema: &str) -> Result<RelationList, IntrospectError> {
+        match self.ask(Ask::Relations(schema.to_owned())).await? {
+            Answer::Relations(relations) => Ok(relations),
+            _ => Err(wrong_answer("relations")),
+        }
     }
 
-    async fn columns(&mut self, _rel: &RelationRef) -> Result<Vec<ColumnMeta>, IntrospectError> {
-        Err(IntrospectError::Unsupported { what: "columns" })
+    async fn columns(&mut self, rel: &RelationRef) -> Result<Vec<ColumnMeta>, IntrospectError> {
+        match self.ask(Ask::Columns(rel.clone())).await? {
+            Answer::Columns(columns) => Ok(columns),
+            _ => Err(wrong_answer("columns")),
+        }
     }
 
     // The level is the login's, fixed at connect, whatever this call asks.

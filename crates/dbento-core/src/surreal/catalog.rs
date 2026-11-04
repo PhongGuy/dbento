@@ -2,7 +2,7 @@
 
 use super::decode::Wire;
 use super::shape::Shape;
-use super::wire::field;
+use super::wire::{WireError, field};
 use crate::introspect::{
     ColumnMeta, IntrospectError, Relation, RelationKind, RelationList, RelationRef, SchemaInfo,
     capped,
@@ -12,6 +12,52 @@ use crate::objects::{IndexInfo, RelationObjects, TriggerInfo, TriggerState};
 const NS: &str = "INFO FOR NS";
 const DB: &str = "INFO FOR DB STRUCTURE";
 const TABLE: &str = "INFO FOR TABLE STRUCTURE";
+
+/// A catalog question for the serving task.
+pub(crate) enum Ask {
+    Schemas,
+    Relations(String),
+    Columns(RelationRef),
+    Objects(RelationRef),
+}
+
+/// The serving task's answer, one variant per [`Ask`].
+pub(crate) enum Answer {
+    Schemas(Vec<SchemaInfo>),
+    Relations(RelationList),
+    Columns(Vec<ColumnMeta>),
+    Objects(RelationObjects),
+}
+
+/// One statement of a `query` reply: its result, or its error with the server's message.
+pub(crate) enum Statement<'w> {
+    Ok(&'w Wire),
+    Err(WireError),
+}
+
+/// Statement `at` of a `query` reply, an array of `{status, result, kind?, details?}`.
+pub(crate) fn statement(reply: &Wire, at: usize) -> Result<Statement<'_>, IntrospectError> {
+    let Wire::Array(statements) = reply else {
+        return Err(IntrospectError::Unexpected {
+            message: "the query reply is not a list of statements".to_owned(),
+        });
+    };
+    let Some(one) = statements.get(at) else {
+        return Err(IntrospectError::Unexpected {
+            message: format!("the query reply has no statement {}", at + 1),
+        });
+    };
+    let result = field(one, "result").unwrap_or(&Wire::None);
+    if matches!(field(one, "status"), Some(Wire::Text(status)) if status == "OK") {
+        return Ok(Statement::Ok(result));
+    }
+    let mut error = WireError::of(one);
+    error.message = match result {
+        Wire::Text(message) => message.clone(),
+        other => super::cell::surql_text(other),
+    };
+    Ok(Statement::Err(error))
+}
 
 /// What a `tables` entry of `INFO FOR DB STRUCTURE` says about one table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

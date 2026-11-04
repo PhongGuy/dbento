@@ -294,3 +294,27 @@ fn indexes_and_events_are_the_relation_objects() {
     let m = unexpected(relation_objects(&rel, &obj(&[("events", list(vec![]))])).unwrap_err());
     assert!(m.contains("`indexes`"), "{m}");
 }
+
+#[test]
+fn a_failed_statement_carries_its_kind_and_the_servers_message() {
+    let reply = list(vec![
+        obj(&[("result", list(vec![])), ("status", text("OK"))]),
+        obj(&[
+            ("kind", text("NotAllowed")),
+            ("result", text("Not enough permissions")),
+            ("status", text("ERR")),
+        ]),
+    ]);
+    assert!(matches!(
+        statement(&reply, 0).unwrap(),
+        Statement::Ok(Wire::Array(_))
+    ));
+    let Statement::Err(e) = statement(&reply, 1).unwrap() else {
+        panic!("statement 2 failed")
+    };
+    assert_eq!(
+        (e.kind.as_str(), e.message.as_str()),
+        ("NotAllowed", "Not enough permissions")
+    );
+    assert!(unexpected(statement(&reply, 2).err().unwrap()).contains("statement 3"));
+}
