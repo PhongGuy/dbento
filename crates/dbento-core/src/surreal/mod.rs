@@ -3,6 +3,8 @@
 #[cfg(feature = "surrealdb")]
 pub(crate) mod cancel;
 #[cfg(feature = "surrealdb")]
+pub(crate) mod catalog;
+#[cfg(feature = "surrealdb")]
 pub(crate) mod cell;
 pub(crate) mod classify;
 #[cfg(feature = "surrealdb")]

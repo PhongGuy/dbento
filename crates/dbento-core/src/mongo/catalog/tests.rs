@@ -100,3 +100,13 @@ fn a_compound_text_index_keeps_its_plain_keys() {
         doc! { "key": { "a": 1, "_fts": "text", "_ftsx": 1 }, "name": "c", "weights": { "s": 1 } };
     assert_eq!(index_info(&rel, &entry).unwrap().columns(), ["a", "s"]);
 }
+
+#[test]
+fn sampled_columns_are_marked_inferred() {
+    let columns = inferred_columns(&[doc! { "_id": 1, "a": 2 }]);
+    assert!(
+        !columns.is_empty() && columns.iter().all(ColumnMeta::inferred),
+        "{columns:?}"
+    );
+    assert!(!ColumnMeta::new("x", "int", true, None, None).inferred());
+}

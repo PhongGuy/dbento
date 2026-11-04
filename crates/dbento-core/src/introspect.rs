@@ -130,6 +130,7 @@ pub struct ColumnMeta {
     nullable: bool,
     primary_key: Option<u16>,
     default: Option<String>,
+    inferred: bool,
 }
 
 impl ColumnMeta {
@@ -147,7 +148,19 @@ impl ColumnMeta {
             nullable,
             primary_key,
             default,
+            inferred: false,
         }
+    }
+
+    /// Marks the column as read from sampled rows rather than declared.
+    pub fn mark_inferred(mut self) -> Self {
+        self.inferred = true;
+        self
+    }
+
+    /// Whether the column was read from sampled rows rather than declared by the schema.
+    pub fn inferred(&self) -> bool {
+        self.inferred
     }
 
     /// The column's name, unquoted.
