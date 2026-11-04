@@ -503,3 +503,32 @@ fn a_catalog_menu_opened_across_a_refresh_still_names_its_row(cx: &mut TestAppCo
     click_id(cx, o.win, "tree-menu-copy-qualified");
     assert_eq!(clipboard(cx).as_deref(), Some("main.Album"));
 }
+
+#[gpui_kit::test]
+fn surrealdb_menus_offer_no_generated_sql(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let ids = |k: RowKind| {
+            catalog_entries(&k, Engine::Surrealdb, cx)
+                .iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(RowKind::Relation(RelationKind::Table)),
+            [
+                "tree-menu-open",
+                "tree-menu-new-query",
+                "tree-menu-copy-name",
+                "tree-menu-generate-select",
+                "tree-menu-refresh",
+            ]
+        );
+        assert_eq!(
+            ids(RowKind::Column {
+                type_name: "string".into(),
+                primary_key: false,
+            }),
+            ["tree-menu-copy-name"]
+        );
+    });
+}

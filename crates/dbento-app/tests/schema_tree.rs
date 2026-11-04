@@ -5,7 +5,7 @@ use RelationKind::{Table, View};
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::schema_tree::{
     CatalogTree, LoadRequest, NodeKey, ObjectGroup, RevealStep, RowKind, group_title, kind_label,
-    object_group_label, object_group_title, select_sql, short_type,
+    object_group_label, object_group_title, select_sql, select_text, short_type,
 };
 use dbento_core::{
     ColumnMeta, ConstraintInfo, ConstraintKind, Engine, IndexInfo, ObjectRef, Relation,
@@ -1323,5 +1323,38 @@ fn schema_objects_follow_the_empty_relations_row() {
             "  lite.main/types",
             "  lite.main/routines",
         ]
+    );
+}
+
+#[test]
+fn surrealdb_selects_name_the_table_alone_and_switch_database_only_when_needed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.sr]\nengine = \"surrealdb\"\nhost = \"h\"\n\
+         namespace = \"app\"\ndatabase = \"main\"\n\n[connections.lite]\nengine = \"sqlite\"\n\
+         path = \"l.db\"\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    let sr = ws.connection("sr").unwrap();
+    assert_eq!(
+        select_sql(Engine::Surrealdb, &RelationRef::new("main", "t")),
+        "SELECT * FROM `t`"
+    );
+    assert_eq!(
+        select_text(sr, &RelationRef::new("main", "order lines")),
+        "SELECT * FROM `order lines`"
+    );
+    assert_eq!(
+        select_text(sr, &RelationRef::new("other", "t`x")),
+        "USE DB `other`;\nSELECT * FROM `t\\`x`;"
+    );
+    assert_eq!(
+        select_text(
+            ws.connection("lite").unwrap(),
+            &RelationRef::new("main", "Album")
+        ),
+        "SELECT *\nFROM main.Album"
     );
 }

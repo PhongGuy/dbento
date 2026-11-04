@@ -68,7 +68,7 @@ use crate::recent_tabs::Recent;
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
 use crate::runner::RunnerSpec;
-use crate::schema_tree::{NodeKey, select_sql};
+use crate::schema_tree::{NodeKey, select_text};
 use crate::settings_dialog::{SettingsView, SettingsViewEvent};
 use crate::settings_store::{self, SettingsEvent, SettingsStore};
 use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
@@ -1243,7 +1243,7 @@ impl Shell {
 
     /// Opens `rel` on `connection`. A table opens as a browse tab: the tab whose browse
     /// state or pending target is `rel` is activated and re-run, else a new tab loads the
-    /// target and runs once it lands. Any other kind shows `select_sql` and runs it, in a tab
+    /// target and runs once it lands. Any other kind shows `select_text` and runs it, in a tab
     /// already holding exactly that SELECT or a new one, so no edited SQL is ever replaced.
     pub fn open_relation(
         &mut self,
@@ -1270,7 +1270,7 @@ impl Shell {
             kind,
         };
         palette::push_recent(&mut self.recent_tables, recent);
-        let sql = select_sql(conn.engine(), rel);
+        let sql = select_text(&conn, rel);
         let table = kind == RelationKind::Table;
         if let Some(ix) = self.relation_tab(conn.name(), rel, &sql, table, cx) {
             self.activate(ix, window, cx);
@@ -4569,7 +4569,7 @@ fn point_at(
     window: &mut Window,
     cx: &mut Context<QueryTab>,
 ) {
-    let sql = select_sql(tab.conn().engine(), rel);
+    let sql = select_text(tab.conn(), rel);
     tab.set_origin(rel.clone());
     tab.set_sql(&sql, window, cx);
     tab.mark_saved(cx);

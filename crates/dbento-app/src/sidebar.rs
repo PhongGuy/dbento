@@ -42,7 +42,7 @@ use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, LoadRequest, NodeKey, ObjectGroup, RevealStep, RowKind,
     catalog_entries, count_text, group_title, insert_sql, lone_schema, node_connection,
-    object_group_title, qualified_name, select_sql, short_type,
+    object_group_title, qualified_name, select_text, short_type,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
 use crate::{settings, theme, tokio_bridge};
@@ -53,7 +53,7 @@ pub enum SidebarEvent {
     /// Open a query tab on the connection at this index of `Workspace::connections`.
     Open(usize),
     /// Open a tab on connection `connection` (index into `Workspace::connections`) on `rel`:
-    /// a browse tab for a table, a `select_sql` tab for any other kind.
+    /// a browse tab for a table, a `select_text` tab for any other kind.
     OpenRelation {
         /// The connection's index.
         connection: usize,
@@ -1999,10 +1999,10 @@ fn explorer_menu(menu: PopupMenu, weak: &WeakEntity<Sidebar>, cx: &mut App) -> P
         }
     };
     if let Some(ExplorerTarget::Catalog(t)) = target {
-        let Some(engine) = ws.connection(&t.connection).map(|c| c.engine()) else {
+        let Some(conn) = ws.connection(&t.connection) else {
             return menu;
         };
-        return catalog_menu(menu, *t, engine, weak, cx);
+        return catalog_menu(menu, *t, conn, weak, cx);
     }
     // Every row leads with its glyph; only New connection and Reload carry a key chip.
     let label =
@@ -2116,15 +2116,16 @@ struct CatalogTarget {
 }
 
 // A catalog row's menu: only the items `catalog_entries` lists for its kind, each wired to the
-// sidebar or the clipboard. A column's relation is its node; its name is its label. `engine`
-// is the row's connection's, for quoting and SQL.
+// sidebar or the clipboard. A column's relation is its node; its name is its label. `config`
+// is the row's connection, for quoting and the select text.
 fn catalog_menu(
     menu: PopupMenu,
     t: CatalogTarget,
-    engine: Engine,
+    config: &ConnectionConfig,
     weak: &WeakEntity<Sidebar>,
     cx: &mut App,
 ) -> PopupMenu {
+    let engine = config.engine();
     let rel = match &t.node {
         NodeKey::Relation { rel, .. } => Some(rel.clone()),
         _ => None,
@@ -2165,7 +2166,7 @@ fn catalog_menu(
             "tree-menu-new-query" => {
                 let sql = rel
                     .as_ref()
-                    .map_or_else(String::new, |rel| select_sql(engine, rel));
+                    .map_or_else(String::new, |rel| select_text(config, rel));
                 item.on_click(on_sidebar(weak, move |_, cx| {
                     cx.emit(SidebarEvent::NewQuery {
                         connection: conn.clone(),
@@ -2192,7 +2193,7 @@ fn catalog_menu(
                 None => continue,
             },
             "tree-menu-generate-select" => match &rel {
-                Some(rel) => item.on_click(copy(select_sql(engine, rel))),
+                Some(rel) => item.on_click(copy(select_text(config, rel))),
                 None => continue,
             },
             "tree-menu-generate-insert" => match rel.clone() {
