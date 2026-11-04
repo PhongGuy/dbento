@@ -69,6 +69,13 @@ test_releasing_doc_says_outward_steps_are_the_maintainers() {
   need "$DOC" "Pushing a tag, publishing the draft, uploading anything and dispatching any workflow run are the maintainer's own actions, each taken only with their explicit approval."
 }
 
+test_releasing_doc_checks_the_intro_placeholder_is_gone() {
+  [[ -f $DOC ]] || return 0
+  need "$DOC" 'packaging/release-notes.md'
+  need "$DOC" "gh release view v<version> --json body -q .body | grep -c '<!-- intro:'"
+  grep -qF -- '<!-- intro:' "$ROOT/packaging/release-notes.md" 2>/dev/null || fail "the template has no intro marker"
+}
+
 # A dispatch on a tag ref with dry_run off drafts exactly as a tag push does (release.yml's draft if:).
 test_releasing_doc_warns_that_a_tag_dispatch_drafts() {
   [[ -f $DOC ]] || return 0

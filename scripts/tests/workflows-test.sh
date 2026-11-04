@@ -120,12 +120,22 @@ test_release_drafts_only_on_a_tag() {
   [[ -f $RELEASE ]] || return 0
   [[ $(grep -cE '^[[:space:]]+run: .*gh release' "$RELEASE") == 1 ]] || fail "want exactly one run: line calling gh release: $(grep -n 'gh release' "$RELEASE")"
   [[ $(grep -cE '^[[:space:]]+gh release' "$RELEASE") == 0 ]] || fail "a gh release call inside a run block: $(grep -n 'gh release' "$RELEASE")"
-  grep -qF 'gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --generate-notes dist/*' "$RELEASE" \
+  grep -qF 'gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/*' "$RELEASE" \
     || fail "draft command"
+  # gh puts a notes file before generated notes, so the two never mix.
+  if grep -qF -- '--generate-notes' "$RELEASE"; then fail "release.yml still asks gh to generate notes"; fi
+  grep -qF 'run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"' "$RELEASE" || fail "no step writes the notes"
   # The draft step's if: sits at most six lines above its gh release line (if, env and two values, run).
   awk '/if: github.ref_type == .tag. && !inputs.dry_run/ { armed = NR } /gh release create/ { if (armed && NR - armed <= 6) ok = 1 } END { exit !ok }' "$RELEASE" \
     || fail "the draft step is not guarded by a tag and not-dry-run if"
   [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] || fail "contents: write outside the checksums job"
+}
+
+# What's Changed walks back to the previous tag, which a shallow checkout does not have.
+test_release_notes_checkout_has_full_history() {
+  [[ -f $RELEASE ]] || return 0
+  awk '/^  checksums:$/ { on = 1 } on && /fetch-depth: 0/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
+    || fail "the checksums job checks out without fetch-depth: 0"
 }
 
 test_release_has_no_updater_pieces() {
