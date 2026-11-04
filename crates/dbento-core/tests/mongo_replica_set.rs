@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use bson::doc;
 use dbento_core::{
-    ExecuteError, IntrospectError, Limits, RelationRef, Session, SessionOptions, Workspace, connect,
+    ExecuteError, IntrospectError, Limits, RelationRef, Session, SessionOptions, Workspace, Writes,
+    connect,
 };
 use dbento_testkit::{MgReplicaSet, mongo_replica_set};
 use support::{failure, one, read};
@@ -104,7 +105,16 @@ async fn a_write_stays_on_the_primary_whatever_the_uri_says() {
     let (_dir, mut s) = session(&set, SECONDARY, SessionOptions::default()).await;
     let inserted = one(&mut s, "db.t.insertOne({a: 1})", Limits::default()).await;
     assert_eq!(inserted.outcome.rows_affected, Some(1));
-    // `Unknown` may write, so it gets the default as well.
     let raw = "db.runCommand({insert: 't', documents: [{a: 2}]})";
     assert_eq!(read(&mut s, raw).await.rows.len(), 1);
+    // `Unknown` may write, so it gets the default as well.
+    let unknown = "db.runCommand({findandmodify: 't', query: {a: 2}, update: {$set: {b: 1}}})";
+    {
+        let mut script = s.script(unknown);
+        let p = script.next().await.unwrap().unwrap();
+        assert_eq!(p.classification().writes, Writes::Unknown);
+    }
+    assert_eq!(read(&mut s, unknown).await.rows.len(), 1);
+    let changed = set.run(doc! { "count": "t", "query": { "b": 1 } }).await;
+    assert_eq!(changed.get_i32("n").unwrap(), 1);
 }

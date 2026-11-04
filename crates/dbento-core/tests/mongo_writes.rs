@@ -211,6 +211,32 @@ async fn an_unreadable_reply_to_a_write_says_it_may_have_landed() {
     assert_eq!(landed.get_i32("n").unwrap(), 1);
 }
 
+// A key holding NUL cannot be encoded, so the driver fails before anything reaches the server.
+async fn unsent(statement: &str) {
+    let fx = mg("").await;
+    let mut s = fx.session(Writer, SessionOptions::default()).await;
+    match run(&mut s, statement, Limits::default()).await.remove(0) {
+        Err(ExecuteError::Database { code, detail, .. }) => {
+            assert_eq!(code, "driver");
+            assert_eq!(
+                detail.as_deref(),
+                Some("the command could not be encoded, so nothing was sent")
+            );
+        }
+        other => panic!("{:?}", other.map(|r| r.outcome)),
+    }
+}
+
+#[tokio::test]
+async fn a_write_that_cannot_be_encoded_says_nothing_was_sent() {
+    unsent("db.w.insertOne({'a\\u0000b': 1})").await;
+}
+
+#[tokio::test]
+async fn an_out_aggregate_that_cannot_be_encoded_says_nothing_was_sent() {
+    unsent("db.many.aggregate([{$match: {'a\\u0000b': 1}}, {$out: 'c'}])").await;
+}
+
 #[tokio::test]
 async fn a_duplicate_key_fails_and_says_what_was_written_first() {
     let fx = mg("").await;

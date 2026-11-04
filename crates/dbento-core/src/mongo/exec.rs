@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bson::oid::ObjectId;
-use bson::{Bson, Document, doc};
+use bson::{Bson, Document, RawDocumentBuf, doc};
 use mongodb::Database;
 use mongodb::error::{Error, ErrorKind};
 use mongodb::options::SelectionCriteria;
@@ -40,6 +40,19 @@ pub(crate) fn outgoing(op: &MongoOp, timeout: Option<Duration>) -> Document {
         }
     }
     command
+}
+
+/// `outgoing`'s command, refused when it cannot be encoded. The driver would fail the same way
+/// before sending, but its error is the one a reply that failed to decode gives after a write.
+pub(crate) fn sendable(op: &MongoOp, timeout: Option<Duration>) -> Result<Document, ExecuteError> {
+    let command = outgoing(op, timeout);
+    match RawDocumentBuf::try_from(&command) {
+        Ok(_) => Ok(command),
+        Err(e) => Err(with_detail(
+            ExecuteError::database("driver", e.to_string()),
+            "the command could not be encoded, so nothing was sent",
+        )),
+    }
 }
 
 /// The URI's read preference, for a statement that cannot write. `run_command` must ignore a

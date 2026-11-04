@@ -18,7 +18,7 @@ use tokio::sync::watch;
 use super::catalog;
 use super::classify::mongo_classification;
 use super::exec::{
-    command_error, outgoing, read_preference, reply_failure, rows_affected, write_failure,
+    command_error, read_preference, reply_failure, rows_affected, sendable, write_failure,
 };
 use super::parse::{MongoMethod, MongoOp, MongoStatement, SyntaxError, parse_script};
 use super::stream::{MongoStream, counted, is_cursor, with_batch_size};
@@ -148,7 +148,8 @@ impl Shared {
 
     /// `f`, dropped at the statement timeout plus a grace. `maxTimeMS` does not reach the waits of
     /// a tailable cursor or a change stream, so only the client can end those. Dropping a cursor
-    /// kills it; a write never comes through here, since its own timeout stays on the server.
+    /// kills it. A `$out` or `$merge` aggregate does come through here, and `maxTimeMS` normally
+    /// stops it first; past the grace it may have written part, as `Timeout`'s message says.
     pub(super) async fn deadline<F: Future>(&self, f: F) -> Result<F::Output, ExecuteError> {
         let Some(limit) = self.timeout else {
             return Ok(f.await);
@@ -301,7 +302,7 @@ impl Driver for MongoDriver {
             return Err(refusal);
         }
         if is_cursor(&statement.op) {
-            let command = outgoing(&statement.op, script.shared.timeout);
+            let command = sendable(&statement.op, script.shared.timeout)?;
             let database = script
                 .client
                 .database(&script.shared.database_of(&statement));
@@ -401,7 +402,7 @@ async fn send(
     writes: Writes,
 ) -> Result<Document, ExecuteError> {
     let shared = &script.shared;
-    let command = outgoing(&statement.op, shared.timeout);
+    let command = sendable(&statement.op, shared.timeout)?;
     let database = script.client.database(&shared.database_of(statement));
     let call = database
         .run_command(command)
@@ -428,7 +429,7 @@ async fn reply_rows(
         ..
     } = statement.op
     {
-        let command = outgoing(&statement.op, shared.timeout);
+        let command = sendable(&statement.op, shared.timeout)?;
         let database = script.client.database(&shared.database_of(statement));
         let n = script
             .cancel

@@ -2,7 +2,7 @@
 #![cfg(feature = "mongodb")]
 mod support;
 
-use dbento_core::{ExecuteError, Limits, SessionOptions};
+use dbento_core::{ExecuteError, Limits, ReadOnlyEnforcement, SessionOptions};
 use dbento_testkit::MgUser::{Reader, Writer};
 use support::{failure, forced, mg, read, run};
 
@@ -73,14 +73,20 @@ async fn an_explain_wrapping_a_write_passes_the_gate_and_writes_nothing() {
 async fn a_command_the_gate_cannot_read_is_refused_by_the_server_for_a_reader() {
     let fx = mg("").await;
     let mut s = fx.session(Reader, forced()).await;
+    // Only under `Database` does the gate let an unknown command through to the server.
+    assert_eq!(
+        s.read_only_enforcement(),
+        Some(ReadOnlyEnforcement::Database)
+    );
     let bulk = format!(
         "db.getSiblingDB('admin').runCommand({{bulkWrite: 1, \
          ops: [{{insert: 0, document: {{a: 1}}}}], nsInfo: [{{ns: '{}.many'}}]}})",
         fx.db.database()
     );
     match failure(&mut s, &bulk).await {
+        // The server's 13 carries its own words, unlike either of the gate's refusals.
         ExecuteError::ReadOnlyViolation { message } => {
-            assert_ne!(message, "this statement writes");
+            assert!(message.contains("not authorized"), "{message}");
         }
         other => panic!("{other:?}"),
     }
