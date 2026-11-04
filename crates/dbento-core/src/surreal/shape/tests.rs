@@ -20,7 +20,7 @@ fn types(columns: &[ColumnInfo]) -> Vec<&str> {
 #[test]
 fn no_rows_means_no_columns() {
     let (shape, columns) = Shape::of(&[], false, true);
-    assert!(columns.is_empty() && !shape.has_columns());
+    assert!(columns.is_empty());
     assert_eq!(shape.width(), 0);
 }
 

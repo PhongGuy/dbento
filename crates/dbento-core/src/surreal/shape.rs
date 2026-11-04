@@ -77,11 +77,6 @@ impl Shape {
         (shape, columns)
     }
 
-    /// Whether the result has any column.
-    pub(crate) fn has_columns(&self) -> bool {
-        self.value || !self.names.is_empty()
-    }
-
     /// How many cells a row of this shape holds.
     pub(crate) fn width(&self) -> usize {
         usize::from(self.value) + self.names.len() + usize::from(self.more)

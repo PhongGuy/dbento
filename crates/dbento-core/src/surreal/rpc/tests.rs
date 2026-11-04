@@ -69,7 +69,6 @@ fn none_null_and_integer_widths_encode_as_cbor() {
         w
     };
     assert_eq!(param(Param::None), [0xc6, 0xf6]);
-    assert_eq!(param(Param::Null), [0xf6]);
     assert_eq!(param(Param::Int(23)), [0x17]);
     assert_eq!(param(Param::Int(24)), [0x18, 24]);
     assert_eq!(param(Param::Int(70_000)), [0x1a, 0, 1, 0x11, 0x70]);

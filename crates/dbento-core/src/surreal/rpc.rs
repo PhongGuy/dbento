@@ -38,7 +38,6 @@ const LOST: &str = "the connection to the server was lost";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Param<'a> {
     Text(&'a str),
-    Null,
     None,
     Uuid([u8; 16]),
     Int(i64),
@@ -106,7 +105,6 @@ fn write_param(param: &Param<'_>, w: &mut Vec<u8>) {
             head(w, TEXT, text.len() as u64);
             w.extend(text.as_bytes());
         }
-        Param::Null => w.push(NULL),
         Param::None => {
             head(w, TAG, 6);
             w.push(NULL);

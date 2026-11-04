@@ -5,6 +5,8 @@ use crate::session::ExecuteError;
 
 /// The wire code of a query the server stopped at its own timeout.
 const TIMED_OUT: i64 = -32004;
+/// The wire code of a reply the server could not encode, such as one holding a regex.
+const UNENCODABLE: i64 = -32700;
 /// The words of `end` after a `query_cancel` or the server's own send timeout.
 const STOPPED: &str = "stopped before it completed";
 
@@ -103,6 +105,11 @@ pub(crate) fn statement_error(e: &WireError, reading: Reading) -> ExecuteError {
     if e.timed_out() {
         return ExecuteError::Timeout;
     }
+    if e.expired() {
+        return ExecuteError::SessionEnded {
+            reason: "the login's session on the server expired".to_owned(),
+        };
+    }
     if reading.read_only && e.refused() {
         let message = if reading.viewer {
             format!(
@@ -114,6 +121,18 @@ pub(crate) fn statement_error(e: &WireError, reading: Reading) -> ExecuteError {
         };
         return ExecuteError::ReadOnlyViolation { message };
     }
+    if e.code == UNENCODABLE {
+        return ExecuteError::Database {
+            code: e.code.to_string(),
+            sqlstate: None,
+            message: "a value in this result has no CBOR form, usually a regex; the statement \
+                      may have run"
+                .to_owned(),
+            detail: Some(e.kind.clone()),
+            hint: Some(STRING_CAST.to_owned()),
+            position: None,
+        };
+    }
     ExecuteError::Database {
         code: e.code.to_string(),
         sqlstate: None,
@@ -122,6 +141,38 @@ pub(crate) fn statement_error(e: &WireError, reading: Reading) -> ExecuteError {
         hint: None,
         position: None,
     }
+}
+
+/// What to do about a value Dbento cannot read or the server cannot send.
+pub(crate) const STRING_CAST: &str = "cast the field to a string with <string>";
+
+/// A call-level error for `text`, the unit sent: a parse error points into it.
+pub(crate) fn call_error(e: &WireError, text: &str, reading: Reading) -> ExecuteError {
+    let mut error = statement_error(e, reading);
+    if let ExecuteError::Database { position, .. } = &mut error {
+        *position = parse_position(&e.message, text);
+    }
+    error
+}
+
+/// The byte offset in `text` of a parse error's `--> [line:col]`, both 1-based and the column
+/// in chars; a column past the end of its line clamps to that end.
+fn parse_position(message: &str, text: &str) -> Option<usize> {
+    let (_, rest) = message.split_once("--> [")?;
+    let (at, _) = rest.split_once(']')?;
+    let (line, column) = at.split_once(':')?;
+    let (line, column): (usize, usize) = (line.parse().ok()?, column.parse().ok()?);
+    let start = match line.checked_sub(2) {
+        None if line == 1 => 0,
+        None => return None,
+        Some(before) => text.match_indices('\n').nth(before)?.0 + 1,
+    };
+    let line = text[start..].split('\n').next().unwrap_or_default();
+    let offset = line
+        .char_indices()
+        .nth(column.checked_sub(1)?)
+        .map_or(line.len(), |(at, _)| at);
+    Some(start + offset)
 }
 
 #[cfg(test)]

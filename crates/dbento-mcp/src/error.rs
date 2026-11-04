@@ -91,7 +91,9 @@ impl ToolError {
             ExecuteError::Cancelled => "cancelled",
             ExecuteError::TransactionControl { .. } => "transaction_control",
             ExecuteError::Unsupported { .. } => "unsupported",
-            ExecuteError::SessionClosed | ExecuteError::StoppedAtDrainCap => "session_closed",
+            ExecuteError::SessionClosed
+            | ExecuteError::SessionEnded { .. }
+            | ExecuteError::StoppedAtDrainCap => "session_closed",
             _ => "internal",
         };
         ToolError::new(code, e.to_string())
@@ -259,6 +261,12 @@ mod tests {
             ),
             (
                 ToolError::from_execute(&ExecuteError::StoppedAtDrainCap),
+                "session_closed",
+            ),
+            (
+                ToolError::from_execute(&ExecuteError::SessionEnded {
+                    reason: "the connection to the server was lost".into(),
+                }),
                 "session_closed",
             ),
             (

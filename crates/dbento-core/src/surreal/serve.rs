@@ -16,7 +16,7 @@ use super::login::{Missing, Place, pre_check};
 use super::rpc::{Frame, Frames, Param, Rpc, RpcError};
 use super::shape::Shape;
 use super::units::{Unit, UnitKind, UseTarget, units};
-use super::wire::{Reading, WireError, field, statement_error};
+use super::wire::{Reading, STRING_CAST, WireError, call_error, field, statement_error};
 use crate::session::{
     Classification, ExecuteError, Limits, OnTruncate, Outcome, Prepared, ReadOnlyEnforcement,
     TruncatedBy, Writes,
@@ -154,6 +154,8 @@ struct Run {
     transaction: bool,
     ended: bool,
     end_error: Option<WireError>,
+    /// The first error of a statement only the server counted, which no result reports.
+    extra_error: Option<WireError>,
     extra: u32,
 }
 
@@ -428,10 +430,11 @@ impl Served {
             let frame = tokio::time::timeout(self.rpc.call_bound(), frames.next()).await;
             match frame {
                 Ok(Frame::Begin { statements }) => break Ok(statements),
-                Ok(Frame::Refused(e)) => break Err(statement_error(&e, self.rules.reading())),
-                Ok(Frame::Closed(why) | Frame::Unreadable { message: why }) => {
-                    break Err(self.closed(why));
+                Ok(Frame::Refused(e)) => {
+                    break Err(self.heard(call_error(&e, sql, self.rules.reading())));
                 }
+                Ok(Frame::Unreadable { message }) => break Err(unreadable(&message)),
+                Ok(Frame::Closed(why)) => break Err(self.closed(why)),
                 Ok(_) => {}
                 Err(_) => break Err(self.closed(self.rpc.unanswered("query_stream"))),
             }
@@ -461,6 +464,7 @@ impl Served {
             transaction: unit.transaction,
             ended: false,
             end_error: None,
+            extra_error: None,
             extra: 0,
         });
         self.result(current, out).await
@@ -473,7 +477,7 @@ impl Served {
             .await
             .map_err(|e| match e {
                 Missing::Target(message) => ExecuteError::database("use", message),
-                Missing::Server(e) => statement_error(&e, self.rules.reading()),
+                Missing::Server(e) => self.heard(statement_error(&e, self.rules.reading())),
                 Missing::Closed(why) => self.closed(why),
             })?;
         let params = [&target.namespace, &target.database]
@@ -483,7 +487,7 @@ impl Served {
             .call("use", &params, None)
             .await
             .map_err(|e| match e {
-                RpcError::Server(e) => statement_error(&e, self.rules.reading()),
+                RpcError::Server(e) => self.heard(statement_error(&e, self.rules.reading())),
                 RpcError::Closed(why) => self.closed(why),
             })?;
         if let Some(Wire::Text(namespace)) = field(&reply, "namespace") {
@@ -502,7 +506,7 @@ impl Served {
                 "begin",
                 format!("the server answered begin with {other:?}"),
             )),
-            Err(RpcError::Server(e)) => Err(statement_error(&e, self.rules.reading())),
+            Err(RpcError::Server(e)) => Err(self.heard(statement_error(&e, self.rules.reading()))),
             Err(RpcError::Closed(why)) => Err(self.closed(why)),
         }
     }
@@ -516,18 +520,19 @@ impl Served {
     }
 
     // Reads the rest of the unit, counts the statements the lexer did not see, and closes the
-    // fence. An error its `end` carried that no caller heard is owed to the next settle.
+    // fence. An error its `end` carried, or one of a statement only the server counted, that no
+    // caller heard is owed to the next settle.
     async fn finish(&mut self, mut run: Run) {
         if !run.ended {
             self.read_past(&mut run, None).await;
         }
         self.close_fence(run.fence.take()).await;
-        if let Some(e) = run.end_error.take()
-            && !e.undone()
-            && self.cancel.stopped(run.id) != Some(Stop::Quiet)
-            && self.owed.is_none()
-        {
-            self.owed = Some(self.end_error(&run, &e));
+        if self.owed.is_none() && self.cancel.stopped(run.id) != Some(Stop::Quiet) {
+            if let Some(e) = run.end_error.take().filter(|e| !e.undone()) {
+                self.owed = Some(self.end_error(&run, &e));
+            } else if let Some(e) = run.extra_error.take() {
+                self.owed = Some(self.unseen(&run, &e));
+            }
         }
         self.cancel.end();
     }
@@ -554,6 +559,13 @@ impl Served {
             loop {
                 match self.frame(run).await {
                     Frame::Finished { index, .. } if upto == Some(index) => break,
+                    Frame::Finished {
+                        index,
+                        error: Some(e),
+                        ..
+                    } if index >= run.expected && run.extra_error.is_none() && !e.undone() => {
+                        run.extra_error = Some(e);
+                    }
                     Frame::Rows { index, .. } | Frame::Value { index, .. }
                         if index >= run.expected && !extras.contains(&index) =>
                     {
@@ -621,7 +633,45 @@ impl Served {
                 None => ExecuteError::ResultExpired,
             };
         }
-        Self::later_note(run, statement_error(e, self.rules.reading()))
+        Self::later_note(run, self.heard(statement_error(e, self.rules.reading())))
+    }
+
+    // An error that ends the server's session for this login closes the socket, which the
+    // server leaves open, and is the one the caller hears.
+    fn heard(&self, error: ExecuteError) -> ExecuteError {
+        if error.closes_session() {
+            self.told.store(true, Ordering::Relaxed);
+            self.rpc.close("the login's session on the server expired");
+        }
+        error
+    }
+
+    // The error of a statement the lexer folded into the one before it, which has no result.
+    fn unseen(&self, run: &Run, e: &WireError) -> ExecuteError {
+        if e.stopped() {
+            return self.end_error(run, e);
+        }
+        match self.heard(statement_error(e, self.rules.reading())) {
+            ExecuteError::Database {
+                code,
+                sqlstate,
+                message,
+                detail,
+                hint,
+                position,
+            } => ExecuteError::Database {
+                code,
+                sqlstate,
+                message: format!(
+                    "{message}; this failed in a statement Dbento read as part of the one \
+                     before it"
+                ),
+                detail,
+                hint,
+                position,
+            },
+            other => other,
+        }
     }
 
     // Later statements of a unit run whatever an earlier one did, unless a transaction ends them.
@@ -710,7 +760,8 @@ impl Served {
                     finished = Some(Some(e));
                 }
                 Frame::Unreadable { message } => {
-                    return self.unreadable(run, out, &message).await;
+                    let e = Self::later_note(run, unreadable(&message));
+                    return self.failed(run, out, e).await;
                 }
                 Frame::Closed(why) => {
                     run.ended = true;
@@ -779,7 +830,8 @@ impl Served {
                     if !builder.is_empty() {
                         let _ = out.send(Event::Batch(builder.finish())).await;
                     }
-                    return self.unreadable(run, out, &message).await;
+                    let e = Self::later_note(run, unreadable(&message));
+                    return self.failed(run, out, e).await;
                 }
                 Frame::Closed(why) => {
                     run.ended = true;
@@ -793,15 +845,6 @@ impl Served {
                 _ => {}
             }
         }
-    }
-
-    // The statement ran, but a value in its reply cannot be read; the unit drains.
-    async fn unreadable(&mut self, run: &mut Run, out: &mut Out, message: &str) -> After {
-        let e = ExecuteError::database(
-            "reply",
-            format!("Dbento cannot read this reply: {message}; the statement ran"),
-        );
-        self.failed(run, out, e).await
     }
 
     // The caller dropped the stream mid-result.
@@ -952,6 +995,18 @@ enum Cut {
     /// The limit moved, so the same row is tested again.
     Resume,
     Over(After),
+}
+
+// The statement ran, but a value in its reply cannot be read.
+fn unreadable(message: &str) -> ExecuteError {
+    ExecuteError::Database {
+        code: "reply".to_owned(),
+        sqlstate: None,
+        message: format!("Dbento cannot read this reply: {message}; the statement ran"),
+        detail: None,
+        hint: Some(STRING_CAST.to_owned()),
+        position: None,
+    }
 }
 
 async fn sleep_or_never(bound: Option<Duration>) {
