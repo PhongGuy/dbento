@@ -145,7 +145,7 @@ pub fn code_label(engine: Option<Engine>, v: &ErrorView) -> Option<String> {
     Some(match (engine, &v.sqlstate) {
         (Some(Engine::Postgres), _) => format!("SQLSTATE {code}"),
         (Some(Engine::Mysql), Some(s)) => format!("error {code} \u{b7} SQLSTATE {s}"),
-        (Some(Engine::Mysql), None) => format!("error {code}"),
+        (Some(Engine::Mysql), None) | (Some(Engine::Mssql), _) => format!("error {code}"),
         (Some(Engine::Duckdb), _) => format!("{code} Error"),
         _ => format!("code {code}"),
     })

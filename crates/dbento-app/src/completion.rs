@@ -472,9 +472,14 @@ fn is_word_char(c: char) -> bool {
 /// brackets and backticks quote names on SQLite.
 /// MySQL is read under the default `sql_mode`: backslash escapes, `"` quotes a string, `#` and
 /// `-- ` start line comments, and only backticks quote names.
+/// SQL Server mirrors core's T-SQL lexer: `[..]` and `"..."` quote names with the close
+/// doubled, `N'..'` is a string, `--` runs to `\n` or `\r`, comments nest, and `@` and `#` are
+/// word characters.
 pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
     let pg = matches!(engine, Engine::Postgres | Engine::Duckdb);
     let my = matches!(engine, Engine::Mysql);
+    let ms = engine == Engine::Mssql;
+    let word_char = |c: char| is_word_char(c) || (ms && matches!(c, '@' | '#'));
     let b = s.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0;
@@ -490,18 +495,25 @@ pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
             i += c.len_utf8();
             continue;
         } else if line_comment {
-            let end = s[i..].find('\n').map_or(s.len(), |n| i + n);
+            let end = s[i..]
+                .find(|ch| ch == '\n' || (ms && ch == '\r'))
+                .map_or(s.len(), |n| i + n);
             (TokKind::Comment, end, true)
         } else if s[i..].starts_with("/*") {
-            let (end, open) = block_comment(s, i, pg);
+            let (end, open) = block_comment(s, i, pg || ms);
             (TokKind::Comment, end, open)
         } else if c == '\'' || (my && c == '"') {
             let (end, open) = quoted(b, i, c as u8, my);
             (TokKind::Str, end, open)
-        } else if c == '"' || (!pg && c == '`') {
-            let (end, open) = quoted(b, i, c as u8, false);
+        } else if ms && c.eq_ignore_ascii_case(&'n') && b.get(i + 1) == Some(&b'\'') {
+            // A lone `N` touching a quote is the Unicode string prefix, part of the string.
+            let (end, open) = quoted(b, i + 1, b'\'', false);
+            (TokKind::Str, end, open)
+        } else if c == '"' || (!pg && !ms && c == '`') || (ms && c == '[') {
+            let close = if c == '[' { ']' } else { c };
+            let (end, open) = quoted(b, i, close as u8, false);
             let inner = &s[i + 1..if open { end } else { end - 1 }];
-            let d = c.to_string();
+            let d = close.to_string();
             (TokKind::Quoted(inner.replace(&d.repeat(2), &d)), end, open)
         } else if !pg && !my && c == '[' {
             match s[i..].find(']') {
@@ -517,9 +529,9 @@ pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
                 Some(n) => (TokKind::Str, i + delim.len() + n + delim.len(), false),
                 None => (TokKind::Str, s.len(), true),
             }
-        } else if is_word_char(c) {
+        } else if word_char(c) {
             let end = s[i..]
-                .find(|ch: char| !is_word_char(ch))
+                .find(|ch: char| !word_char(ch))
                 .map_or(s.len(), |n| i + n);
             (TokKind::Word, end, false)
         } else {

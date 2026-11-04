@@ -839,3 +839,30 @@ fn a_duckdb_insert_writes_bytes_as_a_blob_and_quotes_infinity() {
         Some("INSERT INTO main.t (v, w, t) VALUES ('inf', '-inf', 'inf');")
     );
 }
+
+#[test]
+fn a_sql_server_insert_brackets_names_and_writes_bytes_as_hex() {
+    let s = store(SQL);
+    let ms = insert(Engine::Mssql, "dbo", &s);
+    assert_eq!(
+        copy_as(&s, TableSelection::Row(0), &ms, false).as_deref(),
+        Some("INSERT INTO [dbo].[t] ([a], [b], [c], [d]) VALUES (1, N'x\ty', NULL, 0x00ff);")
+    );
+    assert_eq!(
+        copy_as(&s, TableSelection::Row(1), &ms, false).as_deref(),
+        Some(
+            "INSERT INTO [dbo].[t] ([a], [b], [c], [d]) VALUES (2, N'say \"hi\"', N'l1\nl2', 0x);"
+        )
+    );
+    let q = store("SELECT 'it''s' AS v");
+    assert_eq!(
+        copy_as(
+            &q,
+            TableSelection::Row(0),
+            &insert(Engine::Mssql, "dbo", &q),
+            false
+        )
+        .as_deref(),
+        Some("INSERT INTO [dbo].[t] ([v]) VALUES (N'it''s');")
+    );
+}

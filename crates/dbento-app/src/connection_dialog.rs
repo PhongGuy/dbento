@@ -66,6 +66,8 @@ pub enum Field {
     TlsKey,
     /// The client key's passphrase, which goes only to the keychain.
     KeyPassphrase,
+    /// The SQL Server reader principal (`read_only_user`).
+    ReadOnlyUser,
     /// The statement timeout.
     Timeout,
     /// The sidebar folder.
@@ -87,6 +89,7 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::TlsCert => Some("e.g. certs/client.crt"),
         Field::TlsKey => Some("e.g. certs/client.key"),
         Field::KeyPassphrase => Some("only for an encrypted key"),
+        Field::ReadOnlyUser => Some("e.g. dbento_reader"),
         Field::Timeout => Some("e.g. 30s"),
         Field::Folder => Some("e.g. Production"),
     }
@@ -161,6 +164,7 @@ pub struct ConnectionForm {
     tls_cert: Entity<InputState>,
     tls_key: Entity<InputState>,
     key_passphrase: Entity<InputState>,
+    read_only_user: Entity<InputState>,
     timeout: Entity<InputState>,
     folder: Entity<InputState>,
     secret: SecretChoice,
@@ -224,6 +228,7 @@ impl ConnectionForm {
         let tls_ca = text(Field::TlsCa, &shown.tls_ca);
         let tls_cert = text(Field::TlsCert, &shown.tls_cert);
         let tls_key = text(Field::TlsKey, &shown.tls_key);
+        let read_only_user = text(Field::ReadOnlyUser, &shown.read_only_user);
         let timeout = text(Field::Timeout, &shown.timeout);
         let folder = text(Field::Folder, &shown.folder);
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
@@ -251,6 +256,7 @@ impl ConnectionForm {
             &tls_cert,
             &tls_key,
             &key_passphrase,
+            &read_only_user,
             &timeout,
         ];
         let field_changes = inputs
@@ -278,6 +284,7 @@ impl ConnectionForm {
             tls_cert,
             tls_key,
             key_passphrase,
+            read_only_user,
             timeout,
             folder,
             secret: shown.secret,
@@ -372,6 +379,7 @@ impl ConnectionForm {
             (Field::TlsCa, was.tls_ca, now.tls_ca),
             (Field::TlsCert, was.tls_cert, now.tls_cert),
             (Field::TlsKey, was.tls_key, now.tls_key),
+            (Field::ReadOnlyUser, was.read_only_user, now.read_only_user),
             (Field::Timeout, was.timeout, now.timeout),
             (Field::Folder, was.folder, now.folder),
         ] {
@@ -479,6 +487,7 @@ impl ConnectionForm {
             Field::TlsCert => &self.tls_cert,
             Field::TlsKey => &self.tls_key,
             Field::KeyPassphrase => &self.key_passphrase,
+            Field::ReadOnlyUser => &self.read_only_user,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
         }
@@ -490,8 +499,12 @@ impl ConnectionForm {
         (!typed.is_empty()).then(|| Secret::new(typed.to_string()))
     }
 
-    /// The typed client key passphrase, when non-empty. Never prefilled.
+    /// The typed client key passphrase, when non-empty and the engine takes a client key.
+    /// Never prefilled.
     pub fn key_passphrase(&self, cx: &App) -> Option<Secret> {
+        if !client_cert(self.engine) {
+            return None;
+        }
         let typed = self.key_passphrase.read(cx).value();
         (!typed.is_empty()).then(|| Secret::new(typed.to_string()))
     }
@@ -566,11 +579,15 @@ impl ConnectionForm {
                     }
                 }
                 FieldKind::Tls => {
+                    let pairs = if client_cert(self.engine) { 3 } else { 1 };
                     for (field, was, key) in [
                         (Field::TlsCa, &shown.tls_ca, &mut spec.tls_ca),
                         (Field::TlsCert, &shown.tls_cert, &mut spec.tls_cert),
                         (Field::TlsKey, &shown.tls_key, &mut spec.tls_key),
-                    ] {
+                    ]
+                    .into_iter()
+                    .take(pairs)
+                    {
                         if let Some(v) = changed(field, was) {
                             *key = v;
                         }
@@ -592,6 +609,7 @@ impl ConnectionForm {
                         Field::Host => (&shown.host, &mut spec.host),
                         Field::Database => (&shown.database, &mut spec.database),
                         Field::User => (&shown.user, &mut spec.user),
+                        Field::ReadOnlyUser => (&shown.read_only_user, &mut spec.read_only_user),
                         _ => continue,
                     };
                     if let Some(v) = changed(field, was) {
@@ -864,8 +882,10 @@ impl ConnectionForm {
             cx,
         );
         let mut rows = vec![Self::row(label, h_flex().child(tls), cx)];
-        // A client certificate only travels inside TLS, so its rows go with TLS off.
+        // A client certificate only travels inside TLS, so its rows go with TLS off, and an
+        // engine that takes no client certificate shows only the CA row.
         if self.tls != TlsChoice::Off {
+            let files = if client_cert(self.engine) { 3 } else { 1 };
             for (label, id, field, prompt) in [
                 (
                     "CA cert",
@@ -885,15 +905,20 @@ impl ConnectionForm {
                     Field::TlsKey,
                     "Choose client key",
                 ),
-            ] {
+            ]
+            .into_iter()
+            .take(files)
+            {
                 rows.push(self.file_row(label, id, field, prompt, cx));
             }
-            rows.push(self.text_row(
-                "Passphrase",
-                "conn-tls-key-passphrase",
-                Field::KeyPassphrase,
-                cx,
-            ));
+            if client_cert(self.engine) {
+                rows.push(self.text_row(
+                    "Passphrase",
+                    "conn-tls-key-passphrase",
+                    Field::KeyPassphrase,
+                    cx,
+                ));
+            }
         }
         rows
     }
@@ -933,7 +958,7 @@ impl ConnectionForm {
             }
             for f in shown {
                 if let Some(says) = f.help {
-                    let id = SharedString::from(format!("conn-{}-help", f.key));
+                    let id = SharedString::from(format!("conn-{}-help", f.key.replace('_', "-")));
                     rows.push(Self::help_line(id, says, cx));
                 }
             }
@@ -1109,7 +1134,13 @@ impl Render for ConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let engine = ui::segmented(
             "conn-engine",
-            &["Postgres", "SQLite", "MySQL / MariaDB", "DuckDB"],
+            &[
+                "Postgres",
+                "SQLite",
+                "MySQL / MariaDB",
+                "DuckDB",
+                "SQL Server",
+            ],
             ENGINES.iter().position(|e| *e == self.engine).unwrap_or(0),
             cx.listener(|this, ix: &usize, window, cx| {
                 this.set_engine(ENGINES[*ix], window, cx);
@@ -1295,6 +1326,7 @@ struct Shown {
     tls_ca: String,
     tls_cert: String,
     tls_key: String,
+    read_only_user: String,
     timeout: String,
     folder: String,
     secret: SecretChoice,
@@ -1315,6 +1347,7 @@ impl Shown {
             Field::TlsCa => &self.tls_ca,
             Field::TlsCert => &self.tls_cert,
             Field::TlsKey => &self.tls_key,
+            Field::ReadOnlyUser => &self.read_only_user,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
             Field::Name | Field::Password | Field::KeyPassphrase => "",
@@ -1339,6 +1372,7 @@ impl Shown {
             tls_ca: text(&spec.tls_ca),
             tls_cert: text(&spec.tls_cert),
             tls_key: text(&spec.tls_key),
+            read_only_user: text(&spec.read_only_user),
             timeout: text(&spec.statement_timeout),
             folder: spec
                 .folder
@@ -1357,11 +1391,12 @@ impl Shown {
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 4] = [
+const ENGINES: [Engine; 5] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
     Engine::Duckdb,
+    Engine::Mssql,
 ];
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {
@@ -1380,6 +1415,7 @@ fn field_of(key: &str) -> Option<(Field, &'static str)> {
         "port" => (Field::Port, "conn-port"),
         "database" => (Field::Database, "conn-database"),
         "user" => (Field::User, "conn-user"),
+        "read_only_user" => (Field::ReadOnlyUser, "conn-read-only-user"),
         _ => return None,
     })
 }
@@ -1410,6 +1446,7 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
         ("host", &mut spec.host),
         ("database", &mut spec.database),
         ("user", &mut spec.user),
+        ("read_only_user", &mut spec.read_only_user),
     ] {
         if !has(key) {
             *slot = None;
@@ -1425,6 +1462,14 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
         spec.tls = None;
         (spec.tls_ca, spec.tls_cert, spec.tls_key) = (None, None, None);
     }
+    if !client_cert(spec.engine) {
+        (spec.tls_cert, spec.tls_key) = (None, None);
+    }
+}
+
+// Whether the engine takes a client certificate and key: SQL Server refuses both keys.
+fn client_cert(engine: Engine) -> bool {
+    engine != Engine::Mssql
 }
 
 // Digits only: `u16::from_str` also takes a leading `+`.

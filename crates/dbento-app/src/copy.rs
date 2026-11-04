@@ -364,9 +364,9 @@ fn markdown_cell(cell: CellRef<'_>) -> String {
 
 /// `cell` as an SQL literal for `engine`: NULL, a bare number (as `bare_number` allows, and an
 /// infinite SQLite real as `9e999` or `-9e999`), bytes as `X'..'` on SQLite and MySQL,
-/// `E'\\x..'::bytea` on Postgres or `'\xHH..'::BLOB` on DuckDB, text as `quote_literal`
-/// writes it. None for a kind or engine core adds later, so an INSERT never carries a value it
-/// did not read.
+/// `E'\\x..'::bytea` on Postgres, `'\xHH..'::BLOB` on DuckDB or `0x..` on SQL Server, text as
+/// `quote_literal` writes it. None for a kind or engine core adds later, so an INSERT never
+/// carries a value it did not read.
 pub(crate) fn sql_literal(
     engine: Engine,
     cell: CellRef<'_>,
@@ -397,6 +397,7 @@ pub(crate) fn sql_literal(
             match engine {
                 Engine::Sqlite | Engine::Mysql => format!("X'{}'", &hex[2..]),
                 Engine::Postgres => format!("{}::bytea", quote_literal(engine, &hex)),
+                Engine::Mssql => format!("0x{}", &hex[2..]),
                 _ => return None,
             }
         }

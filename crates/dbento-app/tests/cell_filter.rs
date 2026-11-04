@@ -462,3 +462,31 @@ fn a_postgres_cell_filter_follows_the_column_type(cx: &mut TestAppContext) {
         assert_eq!(kept_ids(cx, &m, sql), ids, "{sql}");
     }
 }
+
+#[test]
+fn and_filter_reads_sql_server_quoting() {
+    let and = |e: &str| and_filter(Engine::Mssql, Some(e), "a = 1");
+    assert_eq!(
+        and("[x or y] = 1").as_deref(),
+        Some("[x or y] = 1 AND a = 1")
+    );
+    assert_eq!(
+        and("[x]] or y] = 1").as_deref(),
+        Some("[x]] or y] = 1 AND a = 1")
+    );
+    assert_eq!(
+        and("name = N'it''s or'").as_deref(),
+        Some("name = N'it''s or' AND a = 1")
+    );
+    assert_eq!(
+        and("/* a /* b */ or */ x = 1").as_deref(),
+        Some("/* a /* b */ or */ x = 1 AND a = 1")
+    );
+    assert_eq!(
+        and("x = 1 or y = 2 -- c").as_deref(),
+        Some("a = 1 AND (x = 1 or y = 2) -- c")
+    );
+    assert_eq!(and("x = 1 /* a /* b */"), None);
+    assert_eq!(and("[x = 1"), None);
+    assert_eq!(and("x = N'open"), None);
+}

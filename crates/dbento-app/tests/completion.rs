@@ -535,3 +535,107 @@ fn duckdb_reads_strings_and_comments_as_postgres_does() {
     assert!(offers(&after_bracket, "TRUE"), "{after_bracket:?}");
     assert!(offers(&duck("SELECT * FROM Al"), "Album"));
 }
+
+/// `ms`: schemas dbo and sales; dbo holds orders (id, status) and "Order Lines".
+fn ms_tree() -> CatalogTree {
+    let mut t = CatalogTree::new();
+    let schemas = vec![SchemaInfo::new("dbo"), SchemaInfo::new("sales")];
+    put(
+        &mut t,
+        "ms",
+        CatalogQuery::Schemas,
+        CatalogData::Schemas(schemas),
+    );
+    put(
+        &mut t,
+        "ms",
+        relations_of("dbo"),
+        rels(&[
+            ("orders", RelationKind::Table),
+            ("Order Lines", RelationKind::Table),
+        ]),
+    );
+    put(
+        &mut t,
+        "ms",
+        CatalogQuery::Columns {
+            rel: RelationRef::new("dbo", "orders"),
+        },
+        CatalogData::Columns(vec![col("id", "int"), col("status", "nvarchar(20)")]),
+    );
+    t
+}
+fn ms(sql: &str) -> Vec<String> {
+    let c = complete(Engine::Mssql, sql, sql.len(), &ms_tree(), "ms", Some("dbo"));
+    labels(&c).into_iter().map(str::to_owned).collect()
+}
+
+fn ms_at(sql: &str, caret: &str) -> Vec<String> {
+    let off = sql.find(caret).expect("caret marker") + caret.len();
+    let c = complete(Engine::Mssql, sql, off, &ms_tree(), "ms", Some("dbo"));
+    c.items.into_iter().map(|i| i.label).collect()
+}
+
+#[test]
+fn sql_server_strings_names_and_comments_lex_as_the_server_reads_them() {
+    for inside in [
+        "SELECT 'it''s or",
+        "SELECT N'Al",
+        "SELECT N'a''b",
+        "SELECT [Al",
+        "SELECT [x]] FROM ord",
+        "SELECT \"Al",
+        "SELECT 1 -- Al",
+        "/* a /* b */ Al",
+    ] {
+        let got = ms(inside);
+        assert!(got.is_empty(), "{inside}: {got:?}");
+    }
+    for after in [
+        "SELECT [a]]b] FROM ord",
+        "SELECT N'it''s' FROM ord",
+        "SELECT \"x\"\"y\" FROM ord",
+        "/* a /* b */ c */ SELECT * FROM ord",
+        "SELECT 1 -- c\rSELECT * FROM ord",
+        "SELECT `a FROM ord",
+        "SELECT * FROM [dbo].ord",
+    ] {
+        let got = ms(after);
+        assert!(offers(&got, "orders"), "{after}: {got:?}");
+    }
+}
+
+#[test]
+fn sql_server_variables_and_temp_tables_are_words_not_catalog_prefixes() {
+    for sql in ["SELECT @o", "SELECT * FROM #o", "SELECT * FROM ##o"] {
+        let got = ms(sql);
+        assert!(got.is_empty(), "{sql}: {got:?}");
+    }
+}
+
+#[test]
+fn a_bracketed_alias_with_an_escaped_bracket_resolves() {
+    assert_eq!(
+        ms_at("SELECT [o]]x].st FROM dbo.orders AS [o]]x]", "].st"),
+        ["status"]
+    );
+    assert_eq!(
+        ms_at("SELECT o.st FROM [dbo].[orders] o", "o.st"),
+        ["status"]
+    );
+}
+
+#[test]
+fn sql_server_inserts_names_in_brackets() {
+    let sql = "SELECT * FROM Ord";
+    let c = complete(Engine::Mssql, sql, sql.len(), &ms_tree(), "ms", Some("dbo"));
+    let got: Vec<(&str, &str)> = c
+        .items
+        .iter()
+        .map(|i| (i.label.as_str(), i.insert.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [("Order Lines", "[Order Lines]"), ("orders", "[orders]")]
+    );
+}
