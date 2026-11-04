@@ -1,8 +1,11 @@
 mod support;
+use dbento_app::query_tab::connection_chip_text;
 use dbento_app::query_tab::{
-    READ_ONLY_MYSQL_TOOLTIP, READ_ONLY_PG_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP, confirm_title,
-    read_only_tooltip,
+    READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP, READ_ONLY_MSSQL_READER_TOOLTIP, READ_ONLY_MYSQL_TOOLTIP,
+    READ_ONLY_PG_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP, confirm_title, read_only_tooltip,
+    read_only_tooltip_of,
 };
+use dbento_app::result_body::{ErrorView, code_label};
 use dbento_core::{Engine, Unguarded};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
@@ -248,4 +251,68 @@ fn stop_appearing_does_not_move_its_neighbours(cx: &mut TestAppContext) {
     cx.update_window(o.win, |_, w, cx| w.click("cancel", cx))
         .unwrap();
     o.idle(cx);
+}
+
+fn ms_workspace() -> (tempfile::TempDir, dbento_core::Workspace) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n\n[connections.ms]\nengine = \"mssql\"\nhost = \"db.example\"\n\
+         database = \"shop\"\nuser = \"sa\"\nread_only = true\n\n[connections.rr]\n\
+         engine = \"mssql\"\nhost = \"db.example\"\nuser = \"sa\"\nread_only = true\n\
+         read_only_user = \"dbento_reader\"\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    (dir, ws)
+}
+
+#[test]
+fn the_sql_server_badge_names_its_enforcement_level() {
+    let (_dir, ws) = ms_workspace();
+    assert_eq!(
+        read_only_tooltip_of(ws.connection("ms").unwrap()),
+        READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP
+    );
+    assert_eq!(
+        read_only_tooltip_of(ws.connection("rr").unwrap()),
+        READ_ONLY_MSSQL_READER_TOOLTIP
+    );
+    assert_eq!(
+        READ_ONLY_MSSQL_READER_TOOLTIP,
+        "Read-only: runs as the read_only_user principal, so SQL Server refuses writes. \
+         Procedures granted to public can still write."
+    );
+    assert_eq!(
+        READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
+        "Read-only is best effort: each batch is fenced in a rolled-back transaction and \
+         parseable writes are refused, but a hidden commit can get past it. Set \
+         read_only_user for enforcement."
+    );
+}
+
+#[test]
+fn the_sql_server_chip_names_its_database_and_its_errors_their_number() {
+    let (_dir, ws) = ms_workspace();
+    assert_eq!(
+        connection_chip_text(ws.connection("ms").unwrap()),
+        "ms \u{b7} mssql \u{b7} shop"
+    );
+    assert_eq!(
+        connection_chip_text(ws.connection("rr").unwrap()),
+        "rr \u{b7} mssql \u{b7} sa@db.example:1433"
+    );
+    let v = ErrorView {
+        message: "Invalid object name 'nope'.".into(),
+        code: Some("208".into()),
+        sqlstate: None,
+        detail: None,
+        hint: None,
+        position: None,
+        sql: "SELECT * FROM nope".into(),
+    };
+    assert_eq!(
+        code_label(Some(Engine::Mssql), &v).as_deref(),
+        Some("error 208")
+    );
 }

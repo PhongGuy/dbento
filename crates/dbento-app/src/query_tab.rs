@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dbento_core::{
-    ConnectionConfig, Engine, ExplainMode, RelationRef, Unguarded, Workspace, explain_request,
+    ConnectionConfig, Engine, ExplainMode, ReadOnlyEnforcement, RelationRef, Unguarded, Workspace,
+    explain_request,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
@@ -75,6 +76,10 @@ pub const READ_ONLY_SQLITE_TOOLTIP: &str =
 pub const READ_ONLY_MYSQL_TOOLTIP: &str = "Read-only: each statement runs in a read-only transaction, but GET_LOCK and writes to non-transactional tables are not blocked. Use an account with only SELECT.";
 /// The read-only badge's tooltip on a DuckDB connection.
 pub const READ_ONLY_DUCKDB_TOOLTIP: &str = "Read-only: DuckDB opens the file read-only with file access off, so writes, COPY TO, ATTACH and read_csv or parquet of local files are refused.";
+/// The read-only badge's tooltip on a SQL Server connection with a read_only_user.
+pub const READ_ONLY_MSSQL_READER_TOOLTIP: &str = "Read-only: runs as the read_only_user principal, so SQL Server refuses writes. Procedures granted to public can still write.";
+/// The read-only badge's tooltip on a SQL Server connection without a read_only_user.
+pub const READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: each batch is fenced in a rolled-back transaction and parseable writes are refused, but a hidden commit can get past it. Set read_only_user for enforcement.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -123,6 +128,16 @@ pub fn read_only_tooltip(engine: Engine) -> &'static str {
         Engine::Mysql => READ_ONLY_MYSQL_TOOLTIP,
         Engine::Duckdb => READ_ONLY_DUCKDB_TOOLTIP,
         _ => "Read-only connection.",
+    }
+}
+
+/// The badge text for `c`: SQL Server by `c.read_only_enforcement()`, every other engine as
+/// `read_only_tooltip`.
+pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
+    match (c.engine(), c.read_only_enforcement()) {
+        (Engine::Mssql, ReadOnlyEnforcement::Database) => READ_ONLY_MSSQL_READER_TOOLTIP,
+        (Engine::Mssql, ReadOnlyEnforcement::BestEffort) => READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
+        _ => read_only_tooltip(c.engine()),
     }
 }
 
@@ -201,12 +216,12 @@ pub fn analyze_ask(kinds: &[Unguarded], connection: &str, sql: &str) -> Ask {
     }
 }
 
-/// The connection chip's text, "name · engine · target": the Postgres database, or the
-/// SQLite path as written in dbento.toml.
+/// The connection chip's text, "name · engine · target": the Postgres database, the MySQL or
+/// SQL Server database when set, or else the target as written in dbento.toml.
 pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     let target = match c.engine() {
         Engine::Postgres => c.database().unwrap_or_default().to_owned(),
-        Engine::Mysql => c
+        Engine::Mysql | Engine::Mssql => c
             .database()
             .map_or_else(|| c.display_target(), str::to_owned),
         _ => c.display_target(),
@@ -1302,7 +1317,7 @@ impl Render for QueryTab {
         let chip = self.chip(cx);
         let connection = self.connection_chip(cx);
         let badge = self.session_conn.read_only().then(|| {
-            let tip = read_only_tooltip(self.session_conn.engine());
+            let tip = read_only_tooltip_of(&self.session_conn);
             ui::chip_base(cx)
                 .id("read-only-badge")
                 .aria_label(tip)
