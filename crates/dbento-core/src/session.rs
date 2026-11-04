@@ -720,8 +720,7 @@ impl Session {
     }
 
     /// The server this session talks to (MySQL, MariaDB, SQL Server, MongoDB and SurrealDB);
-    /// `None` on
-    /// SQLite and DuckDB and, for now, on Postgres.
+    /// `None` on SQLite and DuckDB and, for now, on Postgres.
     pub fn server(&self) -> Option<ServerInfo> {
         match &self.inner {
             SessionInner::Mysql(d) => Some(d.server()),
