@@ -529,7 +529,7 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
     form(cx, &o);
     cx.update_window(o.win, |_, w, cx| {
         w.render_frame(cx);
-        let last = w.within("conn-engine").find(3usize).bounds();
+        let last = w.within("conn-engine").find(4usize).bounds();
         let name = w.find("conn-name").bounds();
         assert!(last.right() <= name.right(), "{last:?} overflows {name:?}");
     })

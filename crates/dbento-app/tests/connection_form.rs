@@ -576,3 +576,71 @@ fn leaving_sql_server_drops_its_reader_user(cx: &mut TestAppContext) {
     (want.engine, want.read_only_user) = (Engine::Mysql, None);
     assert_eq!(edit(cx, &f), Ok(("ms".into(), want)));
 }
+
+#[gpui_kit::test]
+fn the_fifth_engine_is_sql_server_and_writes_only_its_keys(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(engine_option(cx, win, 4).0.as_deref(), Some("SQL Server"));
+    radio(cx, win, "conn-engine", 4);
+    assert!(present(cx, win, "conn-read-only-user"));
+    assert_eq!(value_and_hint(cx, &f, Field::Port).1, "1433");
+    assert_eq!(value_and_hint(cx, &f, Field::Database).1, "optional");
+    set(cx, win, &f, Field::Name, "ms");
+    set(cx, win, &f, Field::Host, "db.example");
+    set(cx, win, &f, Field::User, "sa");
+    set(cx, win, &f, Field::ReadOnlyUser, "dbento_reader");
+    let mut want = ConnectionSpec::new(Engine::Mssql);
+    (want.host, want.user, want.read_only_user) = (
+        Some("db.example".into()),
+        Some("sa".into()),
+        Some("dbento_reader".into()),
+    );
+    assert_eq!(edit(cx, &f), Ok(("ms".into(), want)));
+}
+
+#[gpui_kit::test]
+fn a_loaded_sql_server_connection_selects_sql_server(cx: &mut TestAppContext) {
+    let (win, _f) = open(cx, Some(("ms", ms())));
+    assert_eq!(engine_option(cx, win, 4).1, Some(true));
+    assert_eq!(engine_option(cx, win, 0).1, Some(false));
+}
+
+#[gpui_kit::test]
+fn sql_server_to_mysql_and_back_restores_the_reader_user(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("ms", ms())));
+    radio(cx, win, "conn-engine", 2);
+    radio(cx, win, "conn-engine", 4);
+    assert_eq!(
+        value_and_hint(cx, &f, Field::ReadOnlyUser).0,
+        "dbento_reader"
+    );
+    assert_eq!(edit(cx, &f), Ok(("ms".into(), ms())));
+}
+
+#[gpui_kit::test]
+fn a_client_certificate_stays_with_postgres_when_switching_to_sql_server(cx: &mut TestAppContext) {
+    let mut pg = nopg();
+    (pg.tls, pg.tls_cert, pg.tls_key) = (
+        Some(TlsMode::Verify),
+        Some("certs/me.crt".into()),
+        Some("certs/me.key".into()),
+    );
+    let (win, f) = open(cx, Some(("pg", pg.clone())));
+    set(cx, win, &f, Field::KeyPassphrase, "typed");
+    radio(cx, win, "conn-engine", 4);
+    for id in ["conn-tls-cert", "conn-tls-key", "conn-tls-key-passphrase"] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    assert!(present(cx, win, "conn-tls-ca"));
+    assert!(f.read_with(cx, |f, cx| f.key_passphrase(cx)).is_none());
+    let mut want = pg.clone();
+    (want.engine, want.tls_cert, want.tls_key) = (Engine::Mssql, None, None);
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), want)));
+    radio(cx, win, "conn-engine", 0);
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), pg)));
+    let typed = f.read_with(cx, |f, cx| f.key_passphrase(cx));
+    assert_eq!(
+        typed.map(|s| s.expose().to_owned()).as_deref(),
+        Some("typed")
+    );
+}

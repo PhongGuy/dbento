@@ -58,36 +58,44 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
         Some(true),
         "Tab skips the engine row"
     );
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 0);
+    assert_eq!(chosen(cx, o.win, "conn-engine", 5), 0);
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 1, "Right picks SQLite");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 5), 1, "Right picks SQLite");
     assert!(
         support::present(cx, o.win, "conn-path"),
         "the SQLite form shows"
     );
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 2, "Right picks MySQL");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 5), 2, "Right picks MySQL");
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 3, "Right picks DuckDB");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 5), 3, "Right picks DuckDB");
     assert!(
         support::present(cx, o.win, "conn-path"),
         "the DuckDB form shows"
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 4),
-        3,
+        chosen(cx, o.win, "conn-engine", 5),
+        4,
+        "Right picks SQL Server"
+    );
+    assert!(
+        support::present(cx, o.win, "conn-read-only-user"),
+        "the SQL Server form shows"
+    );
+    press(cx, o.win, "right");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 5),
+        4,
         "Right stops at the end"
     );
-    press(cx, o.win, "left");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 2, "Left steps back");
-    press(cx, o.win, "left");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 1);
-    press(cx, o.win, "left");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 4), 0);
+    for want in [3, 2, 1, 0] {
+        press(cx, o.win, "left");
+        assert_eq!(chosen(cx, o.win, "conn-engine", 5), want, "Left steps back");
+    }
     press(cx, o.win, "left");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 4),
+        chosen(cx, o.win, "conn-engine", 5),
         0,
         "Left stops at the start"
     );

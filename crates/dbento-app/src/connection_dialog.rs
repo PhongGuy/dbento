@@ -1134,7 +1134,13 @@ impl Render for ConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let engine = ui::segmented(
             "conn-engine",
-            &["Postgres", "SQLite", "MySQL / MariaDB", "DuckDB"],
+            &[
+                "Postgres",
+                "SQLite",
+                "MySQL / MariaDB",
+                "DuckDB",
+                "SQL Server",
+            ],
             ENGINES.iter().position(|e| *e == self.engine).unwrap_or(0),
             cx.listener(|this, ix: &usize, window, cx| {
                 this.set_engine(ENGINES[*ix], window, cx);
@@ -1385,11 +1391,12 @@ impl Shown {
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 4] = [
+const ENGINES: [Engine; 5] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
     Engine::Duckdb,
+    Engine::Mssql,
 ];
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {
