@@ -400,3 +400,11 @@ fn a_lex_error_after_a_closed_statement_stays_in_its_span() {
     assert_eq!(texts("BEGIN; COMMIT; 'open"), ["BEGIN; COMMIT;", "'open"]);
     assert!(only("BEGIN; 'open").lex_error);
 }
+
+#[test]
+fn a_unit_knows_whether_it_opens_a_transaction() {
+    let flags = |src: &str| -> Vec<bool> { units(src).iter().map(|u| u.transaction).collect() };
+    assert_eq!(flags("BEGIN; CREATE a:1; COMMIT; RETURN 1"), [true, false]);
+    assert_eq!(flags("begin transaction; RETURN 1;"), [true]);
+    assert_eq!(flags("LET $a = 1; BEGIN; COMMIT"), [false]);
+}

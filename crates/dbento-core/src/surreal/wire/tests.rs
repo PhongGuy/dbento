@@ -66,3 +66,12 @@ fn details_that_are_not_a_chain_of_kinds_stop_the_walk() {
     assert_eq!(WireError::of(&error).details, ["Record"]);
     assert_eq!(WireError::of(&Wire::Null).code, 0);
 }
+
+#[test]
+fn not_executed_and_cancelled_are_undone_and_nothing_else_is() {
+    let undone = |details: &[&str]| wire(-32003, "Query", details, "x").undone();
+    assert!(undone(&["NotExecuted"]));
+    assert!(undone(&["Cancelled"]));
+    assert!(!undone(&["TimedOut"]));
+    assert!(!wire(-32000, "Internal", &["NotExecuted"], "x").undone());
+}

@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::cancel::SurrealCancel;
 use super::login::login;
 use super::rpc::{CALL_BOUND, Rpc};
-use super::serve::{Ctl, Event, Request, serve};
+use super::serve::{Ctl, Event, Request, Rules, serve};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError, ExtendError,
@@ -76,8 +76,9 @@ impl Driver for SurrealDriver {
         let (rpc, logged) = opened?;
         let drain_bound = params.bounds.drain.unwrap_or(DRAIN_CAP);
         let cancel = Arc::new(SurrealCancel::new(rpc.clone(), drain_bound));
+        let rules = Rules { drain_bound };
         let (requests, rx) = mpsc::unbounded_channel();
-        tokio::spawn(serve(rpc, rx));
+        tokio::spawn(serve(rpc, rules, Arc::clone(&cancel), rx));
         Ok(SurrealDriver {
             requests,
             server: ServerInfo {

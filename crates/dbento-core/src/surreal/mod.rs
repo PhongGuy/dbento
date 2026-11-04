@@ -17,6 +17,8 @@ pub(crate) mod login;
 pub(crate) mod rpc;
 #[cfg(feature = "surrealdb")]
 pub(crate) mod serve;
+#[cfg(feature = "surrealdb")]
+pub(crate) mod shape;
 pub(crate) mod units;
 #[cfg(feature = "surrealdb")]
 pub(crate) mod wire;
