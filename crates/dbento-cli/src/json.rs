@@ -113,7 +113,9 @@ pub(crate) fn error_code(e: &ExecuteError, engine: Engine) -> (String, String) {
         ExecuteError::Unsupported { reason } => ("unsupported".to_owned(), reason.clone()),
         // The CLI's JSON contract predates the split; transaction control stays "unsupported".
         ExecuteError::TransactionControl { reason } => ("unsupported".to_owned(), reason.clone()),
-        ExecuteError::SessionClosed => ("session_closed".to_owned(), e.message_for(engine)),
+        ExecuteError::SessionClosed | ExecuteError::SessionEnded { .. } => {
+            ("session_closed".to_owned(), e.message_for(engine))
+        }
         // The session is gone either way, so the code stays; the message says why.
         ExecuteError::StoppedAtDrainCap => ("session_closed".to_owned(), described(e, engine)),
         _ => ("error".to_owned(), e.message_for(engine)),
@@ -241,6 +243,16 @@ impl<W: Write> Sink for JsonSink<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_that_ended_keeps_the_code_and_says_why() {
+        let e = ExecuteError::SessionEnded {
+            reason: "the server went away".into(),
+        };
+        let (code, message) = error_code(&e, Engine::Surrealdb);
+        assert_eq!(code, "session_closed");
+        assert!(message.contains("the server went away"), "{message}");
+    }
 
     #[test]
     fn transaction_control_keeps_reporting_as_unsupported() {

@@ -23,6 +23,8 @@ use crate::objects::{
 use crate::postgres::{PgCancel, PgDriver};
 use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
 use crate::sqlite::{SqliteCancel, SqliteDriver};
+#[cfg(feature = "surrealdb")]
+use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
 use crate::value::{ColumnInfo, ResultBatch};
 use crate::workspace::{ConnectionConfig, Engine, Workspace};
 
@@ -39,6 +41,22 @@ pub struct SessionOptions {
     /// The session runs only SQL that Dbento generated, so a database may enforce read-only
     /// by transaction alone. Other engines ignore it.
     pub trusted_sql: bool,
+    /// A test seam: shorter bounds for a SurrealDB session.
+    #[doc(hidden)]
+    pub bounds: TestBounds,
+}
+
+/// SurrealDB's bounds, shortened by tests that cannot wait them out; `None` keeps the real one.
+#[doc(hidden)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TestBounds {
+    /// On a parked fenced result.
+    pub park: Option<Duration>,
+    /// On a drain, in place of `DRAIN_CAP`.
+    pub drain: Option<Duration>,
+    /// On one RPC call.
+    pub call: Option<Duration>,
 }
 
 /// What to do with the rest of a result once a row or byte bound is reached.
@@ -382,6 +400,12 @@ pub enum ExecuteError {
     /// A parked result was given up by the server or by its bound; the session stays open.
     #[error("the result expired; run the query again")]
     ResultExpired,
+    /// The session's connection ended for a reason the shell can name.
+    #[error("the session is closed: {reason}")]
+    SessionEnded {
+        /// Why it ended.
+        reason: String,
+    },
 }
 
 impl ExecuteError {
@@ -415,7 +439,9 @@ impl ExecuteError {
     pub fn closes_session(&self) -> bool {
         matches!(
             self,
-            ExecuteError::SessionClosed | ExecuteError::StoppedAtDrainCap
+            ExecuteError::SessionClosed
+                | ExecuteError::SessionEnded { .. }
+                | ExecuteError::StoppedAtDrainCap
         )
     }
 
@@ -457,6 +483,8 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) timeout: Option<Duration>,
     /// See [`SessionOptions::trusted_sql`].
     pub(crate) trusted_sql: bool,
+    /// See [`SessionOptions::bounds`].
+    pub(crate) bounds: TestBounds,
 }
 
 /// The engine-specific half of a session. Each future it returns is `Send` because the
@@ -495,6 +523,8 @@ enum SessionInner {
     Mssql(MssqlDriver),
     #[cfg(feature = "duckdb")]
     Duckdb(DuckDriver),
+    #[cfg(feature = "surrealdb")]
+    Surreal(SurrealDriver),
 }
 
 enum ScriptInner {
@@ -504,6 +534,8 @@ enum ScriptInner {
     Mssql(<MssqlDriver as Driver>::Script),
     #[cfg(feature = "duckdb")]
     Duckdb(<DuckDriver as Driver>::Script),
+    #[cfg(feature = "surrealdb")]
+    Surreal(<SurrealDriver as Driver>::Script),
 }
 
 enum StreamInner {
@@ -513,6 +545,8 @@ enum StreamInner {
     Mssql(<MssqlDriver as Driver>::Stream),
     #[cfg(feature = "duckdb")]
     Duckdb(<DuckDriver as Driver>::Stream),
+    #[cfg(feature = "surrealdb")]
+    Surreal(<SurrealDriver as Driver>::Stream),
 }
 
 /// Opens a session on `conn`. `secret` is the resolved password, if the engine needs one.
@@ -535,6 +569,7 @@ pub async fn connect(
         read_only,
         timeout,
         trusted_sql: opts.trusted_sql,
+        bounds: opts.bounds,
     };
     match conn.engine() {
         Engine::Postgres => {
@@ -591,9 +626,14 @@ pub async fn connect(
             reason: "MongoDB is not available in this build".to_owned(),
         }),
         #[cfg(feature = "surrealdb")]
-        Engine::Surrealdb => Err(ConnectError::Unsupported {
-            reason: "SurrealDB sessions are not available yet".to_owned(),
-        }),
+        Engine::Surrealdb => {
+            let d = SurrealDriver::connect(params).await?;
+            let level = d.read_only_level(read_only);
+            Ok(Session {
+                inner: SessionInner::Surreal(d),
+                read_only: level,
+            })
+        }
         #[cfg(not(feature = "surrealdb"))]
         Engine::Surrealdb => Err(ConnectError::Unsupported {
             reason: "SurrealDB is not available in this build".to_owned(),
@@ -630,11 +670,13 @@ impl Session {
             SessionInner::Mssql(_) => Engine::Mssql,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Engine::Duckdb,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Engine::Surrealdb,
         }
     }
 
-    /// The server this session talks to (MySQL, MariaDB and SQL Server); `None` on SQLite and
-    /// DuckDB and, for now, on Postgres.
+    /// The server this session talks to (MySQL, MariaDB, SQL Server and SurrealDB); `None` on
+    /// SQLite and DuckDB and, for now, on Postgres.
     pub fn server(&self) -> Option<ServerInfo> {
         match &self.inner {
             SessionInner::Mysql(d) => Some(d.server()),
@@ -642,6 +684,18 @@ impl Session {
             SessionInner::Sqlite(_) | SessionInner::Postgres(_) => None,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => None,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => Some(d.server()),
+        }
+    }
+
+    /// What a shell should say about the server, when it should say anything: set on SurrealDB
+    /// for a server newer than the versions Dbento was tested against.
+    pub fn server_warning(&self) -> Option<&str> {
+        match &self.inner {
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.warning(),
+            _ => None,
         }
     }
 
@@ -666,6 +720,8 @@ impl Session {
             SessionInner::Mssql(_) => false,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.settings_changed(),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => false,
         }
     }
 
@@ -683,6 +739,8 @@ impl Session {
             SessionInner::Mssql(d) => ScriptInner::Mssql(d.start_script(sql)),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => ScriptInner::Duckdb(d.start_script(sql)),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => ScriptInner::Surreal(d.start_script(sql)),
         };
         Script {
             inner,
@@ -699,6 +757,8 @@ impl Session {
             SessionInner::Mssql(d) => d.cancel_handle(),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.cancel_handle(),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.cancel_handle(),
         }
     }
 
@@ -715,6 +775,8 @@ impl Session {
             SessionInner::Mssql(d) => d.settle().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.settle().await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.settle().await,
         }
     }
 
@@ -729,6 +791,8 @@ impl Session {
             SessionInner::Postgres(d) => d.closed().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => std::future::pending().await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => std::future::pending().await,
         }
     }
 
@@ -741,6 +805,8 @@ impl Session {
             SessionInner::Mssql(d) => d.schemas().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.schemas().await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.schemas().await,
         }
     }
 
@@ -753,6 +819,8 @@ impl Session {
             SessionInner::Mssql(d) => d.relations(schema).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.relations(schema).await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.relations(schema).await,
         }
     }
 
@@ -765,6 +833,8 @@ impl Session {
             SessionInner::Mssql(d) => d.columns(rel).await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.columns(rel).await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.columns(rel).await,
         }
     }
 
@@ -779,6 +849,10 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(IntrospectError::Unsupported {
+                what: "edit targets",
+            }),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
         }
@@ -805,6 +879,12 @@ impl Session {
                     what: "foreign keys",
                 });
             }
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => {
+                return Err(IntrospectError::Unsupported {
+                    what: "foreign keys",
+                });
+            }
         };
         sort_keys(&mut keys);
         Ok(keys)
@@ -825,6 +905,10 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(RelationObjects::new(Vec::new(), Vec::new(), Vec::new())),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(IntrospectError::Unsupported {
+                what: "relation objects",
+            }),
         }
     }
 
@@ -840,6 +924,10 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(IntrospectError::Unsupported {
+                what: "schema objects",
+            }),
         }
     }
 
@@ -854,6 +942,10 @@ impl Session {
             }),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => crate::duckdb::catalog::definition(d, object).await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(DefinitionError::Unsupported {
+                what: object.label(),
+            }),
         }
     }
 
@@ -877,6 +969,8 @@ impl Session {
             SessionInner::Mssql(_) => Ok(vec![None; columns.len()]),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Ok(vec![None; columns.len()]),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Ok(vec![None; columns.len()]),
         }
     }
 
@@ -927,6 +1021,8 @@ impl Session {
             SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(bound_unsupported()),
         }
     }
 
@@ -952,6 +1048,8 @@ impl Session {
             SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(bound_unsupported()),
         }
     }
 
@@ -969,6 +1067,8 @@ impl Session {
             SessionInner::Mssql(d) => d.close().await,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.close().await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.close().await,
         }
     }
 }
@@ -990,6 +1090,8 @@ impl Script<'_> {
             ScriptInner::Mssql(s) => MssqlDriver::prepare_next(s).await?,
             #[cfg(feature = "duckdb")]
             ScriptInner::Duckdb(s) => DuckDriver::prepare_next(s).await?,
+            #[cfg(feature = "surrealdb")]
+            ScriptInner::Surreal(s) => SurrealDriver::prepare_next(s).await?,
         };
         Some(prepared.map(|prepared| Pending {
             script: &mut self.inner,
@@ -1025,6 +1127,8 @@ impl<'a> Pending<'a> {
             ScriptInner::Mssql(s) => MssqlDriver::is_last(s).await,
             #[cfg(feature = "duckdb")]
             ScriptInner::Duckdb(s) => DuckDriver::is_last(s).await,
+            #[cfg(feature = "surrealdb")]
+            ScriptInner::Surreal(s) => SurrealDriver::is_last(s).await,
         }
     }
 
@@ -1052,6 +1156,11 @@ impl<'a> Pending<'a> {
             ScriptInner::Duckdb(s) => {
                 let (columns, stream) = DuckDriver::execute(s, limits).await?;
                 (columns, StreamInner::Duckdb(stream))
+            }
+            #[cfg(feature = "surrealdb")]
+            ScriptInner::Surreal(s) => {
+                let (columns, stream) = SurrealDriver::execute(s, limits).await?;
+                (columns, StreamInner::Surreal(stream))
             }
         };
         Ok(ResultStream {
@@ -1095,6 +1204,8 @@ impl ResultStream<'_> {
             StreamInner::Mssql(s) => MssqlDriver::next_event(s).await,
             #[cfg(feature = "duckdb")]
             StreamInner::Duckdb(s) => DuckDriver::next_event(s).await,
+            #[cfg(feature = "surrealdb")]
+            StreamInner::Surreal(s) => SurrealDriver::next_event(s).await,
         };
         let item = match item {
             Ok(i) => i,
@@ -1136,6 +1247,8 @@ impl ResultStream<'_> {
             StreamInner::Mssql(s) => MssqlDriver::extend(s, more)?,
             #[cfg(feature = "duckdb")]
             StreamInner::Duckdb(s) => DuckDriver::extend(s, more)?,
+            #[cfg(feature = "surrealdb")]
+            StreamInner::Surreal(s) => SurrealDriver::extend(s, more)?,
         }
         self.outcome = None;
         Ok(())
@@ -1159,6 +1272,8 @@ enum CancelInner {
     Mssql(Arc<MssqlCancel>),
     #[cfg(feature = "duckdb")]
     Duckdb(Arc<DuckCancel>),
+    #[cfg(feature = "surrealdb")]
+    Surreal(Arc<SurrealCancel>),
 }
 
 impl CancelHandle {
@@ -1186,6 +1301,13 @@ impl CancelHandle {
         }
     }
 
+    #[cfg(feature = "surrealdb")]
+    pub(crate) fn surreal(cancel: Arc<SurrealCancel>) -> Self {
+        CancelHandle {
+            inner: CancelInner::Surreal(cancel),
+        }
+    }
+
     #[cfg(feature = "duckdb")]
     pub(crate) fn duckdb(cancel: Arc<DuckCancel>) -> Self {
         CancelHandle {
@@ -1203,6 +1325,8 @@ impl CancelHandle {
             CancelInner::Mssql(c) => c.cancel(),
             #[cfg(feature = "duckdb")]
             CancelInner::Duckdb(c) => c.cancel(),
+            #[cfg(feature = "surrealdb")]
+            CancelInner::Surreal(c) => c.cancel(),
         }
     }
 }

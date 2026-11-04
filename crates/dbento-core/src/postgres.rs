@@ -248,6 +248,14 @@ fn rustls_connector(
     conn: &ConnectionConfig,
     passphrase: Option<&Secret>,
 ) -> Result<MakeRustlsConnect, ConnectError> {
+    rustls_config(conn, passphrase).map(MakeRustlsConnect::new)
+}
+
+/// The client configuration behind `rustls_connector`, also used by SurrealDB's WebSocket.
+pub(crate) fn rustls_config(
+    conn: &ConnectionConfig,
+    passphrase: Option<&Secret>,
+) -> Result<rustls::ClientConfig, ConnectError> {
     let client = client_auth(conn, passphrase)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let extra: Vec<CertificateDer<'static>> = match conn.tls_ca() {
@@ -272,13 +280,12 @@ fn rustls_connector(
         .map_err(|e| tls_error(conn, e.to_string()))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier));
-    let config = match client {
-        None => builder.with_no_client_auth(),
+    match client {
+        None => Ok(builder.with_no_client_auth()),
         Some((chain, key)) => builder
             .with_client_auth_cert(chain, key)
-            .map_err(|e| tls_error(conn, format!("client certificate: {e}")))?,
-    };
-    Ok(MakeRustlsConnect::new(config))
+            .map_err(|e| tls_error(conn, format!("client certificate: {e}"))),
+    }
 }
 
 /// The connector a session was opened with; its cancel request must use the same one.

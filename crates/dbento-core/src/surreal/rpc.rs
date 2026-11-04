@@ -10,11 +10,18 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::error::{CapacityError, Error as WsError};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::tungstenite::http::header;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream, client_async_tls_with_config};
 
 use super::decode::{Wire, decode, envelope};
 use super::wire::{WireError, field};
+use crate::postgres::{TLS_WAYS_OUT, rustls_config, tls_error};
+use crate::secrets::Secret;
+use crate::session::ConnectError;
+use crate::workspace::{ConnectionConfig, TlsMode};
 
 /// The largest reply the socket accepts; one frame holds up to 256 rows, so wide rows need room.
 pub(crate) const MAX_REPLY: usize = 256 << 20;
@@ -269,6 +276,43 @@ fn reason(closed: &Mutex<Option<String>>) -> String {
 }
 
 impl Rpc {
+    /// Connects, offering only `cbor`, and starts the socket task. No ALPN, so the server stays
+    /// on HTTP/1.1. A 101 without `cbor` fails here, as that socket would speak JSON.
+    pub(crate) async fn open(
+        conn: &ConnectionConfig,
+        passphrase: Option<&Secret>,
+        call_bound: Duration,
+    ) -> Result<Rpc, ConnectError> {
+        let host = conn.host().unwrap_or_default();
+        let port = conn.port().unwrap_or(8000);
+        let tls = !matches!(conn.tls(), Some(TlsMode::Off));
+        let scheme = if tls { "wss" } else { "ws" };
+        let mut upgrade = format!("{scheme}://{host}:{port}/rpc")
+            .into_client_request()
+            .map_err(|e| open_error(conn, format!("bad server address: {e}")))?;
+        upgrade.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            header::HeaderValue::from_static("cbor"),
+        );
+        let tcp = TcpStream::connect((host, port))
+            .await
+            .map_err(|e| open_error(conn, e.to_string()))?;
+        let _ = tcp.set_nodelay(true);
+        // Always a connector: `None` would build one with no roots at all.
+        let connector = if tls {
+            Connector::Rustls(Arc::new(rustls_config(conn, passphrase)?))
+        } else {
+            Connector::Plain
+        };
+        let config = WebSocketConfig::default()
+            .max_message_size(Some(MAX_REPLY))
+            .max_frame_size(Some(MAX_REPLY));
+        let (socket, _) = client_async_tls_with_config(upgrade, tcp, Some(config), Some(connector))
+            .await
+            .map_err(|e| handshake_error(conn, tls, e))?;
+        Ok(Rpc::start(socket, call_bound))
+    }
+
     fn start(socket: WebSocketStream<MaybeTlsStream<TcpStream>>, call_bound: Duration) -> Rpc {
         let (commands, rx) = mpsc::unbounded_channel();
         let gauge = Arc::new(Gauge::default());
@@ -355,6 +399,46 @@ impl Rpc {
     /// Ends the socket; every open stream and call then reports `reason`.
     pub(crate) fn close(&self, reason: impl Into<String>) {
         let _ = self.commands.send(Command::Close(reason.into()));
+    }
+}
+
+fn open_error(conn: &ConnectionConfig, message: String) -> ConnectError {
+    ConnectError::Open {
+        message: format!("{}: {message}", conn.display_target()),
+    }
+}
+
+// The wrong pairing of `ws` and `wss` fails in two ways, and neither says "wrong scheme", so
+// each error names the setting that would fix it.
+fn handshake_error(conn: &ConnectionConfig, tls: bool, e: WsError) -> ConnectError {
+    use tokio_tungstenite::tungstenite::error::{ProtocolError, SubProtocolError};
+    match e {
+        WsError::Protocol(ProtocolError::SecWebSocketSubProtocolError(
+            SubProtocolError::NoSubProtocol,
+        )) => open_error(
+            conn,
+            "the server did not accept the cbor subprotocol".to_owned(),
+        ),
+        WsError::Tls(e) => tls_error(conn, format!("{e}; {TLS_WAYS_OUT}")),
+        // rustls reports a refused certificate as `InvalidData` through its stream.
+        WsError::Io(e) if tls && e.kind() == std::io::ErrorKind::InvalidData => {
+            tls_error(conn, format!("{e}; {TLS_WAYS_OUT}"))
+        }
+        WsError::Io(e) if tls => tls_error(
+            conn,
+            format!(
+                "{e}; the server may not serve TLS on this port: set tls = \"off\" for ws, or \
+                 check the port"
+            ),
+        ),
+        other if !tls => open_error(
+            conn,
+            format!(
+                "{other}; the server may require TLS: set tls = \"verify\" for wss, or check \
+                 the port"
+            ),
+        ),
+        other => open_error(conn, other.to_string()),
     }
 }
 

@@ -8,9 +8,15 @@ pub(crate) mod cell;
 pub(crate) mod classify;
 #[cfg(feature = "surrealdb")]
 pub(crate) mod decode;
+#[cfg(feature = "surrealdb")]
+pub(crate) mod driver;
 pub(crate) mod lex;
 #[cfg(feature = "surrealdb")]
+pub(crate) mod login;
+#[cfg(feature = "surrealdb")]
 pub(crate) mod rpc;
+#[cfg(feature = "surrealdb")]
+pub(crate) mod serve;
 pub(crate) mod units;
 #[cfg(feature = "surrealdb")]
 pub(crate) mod wire;
