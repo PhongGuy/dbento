@@ -147,6 +147,18 @@ pub fn copy_rows(
         CopyFormat::Tsv => delimited("\t", tsv_quote, &mut lines),
         CopyFormat::Csv => delimited(",", csv_quote, &mut lines),
         CopyFormat::Json => {
+            // Rows that carry a stored document copy it whole, since the cells are only a flat
+            // view of it; any row without one falls back to the cell objects for every row.
+            let documents: Option<Vec<String>> = loaded
+                .clone()
+                .map(|row| {
+                    let doc = store.document(row)?.to_extended_json(false);
+                    Some(format!("  {doc}"))
+                })
+                .collect();
+            if let Some(documents) = documents.filter(|d| !d.is_empty()) {
+                return format!("[\n{}\n]", documents.join(",\n"));
+            }
             let objects: Vec<String> = loaded_cells()
                 .map(|row| {
                     let pairs: Vec<String> = names

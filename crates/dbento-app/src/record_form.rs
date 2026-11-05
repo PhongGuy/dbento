@@ -80,6 +80,8 @@ pub struct RecordForm {
     prefix: &'static str,
     /// Each field as a name line over a filled value box, for a narrow dock.
     stacked: bool,
+    /// Whether a row with a stored document shows it whole instead of its fields.
+    document_mode: bool,
     _observe: Subscription,
     _leave: Subscription,
     _typed: Subscription,
@@ -141,6 +143,7 @@ impl RecordForm {
             error: None,
             prefix,
             stacked,
+            document_mode: false,
             _observe: observe,
             _leave: leave,
             _typed: typed,
@@ -154,6 +157,20 @@ impl RecordForm {
             self.end_edit(true, false, window, cx);
             self.stmt = stmt;
             self.row = row;
+            cx.notify();
+        }
+    }
+
+    /// Whether a row with a stored document shows it instead of its fields.
+    pub fn document_mode(&self) -> bool {
+        self.document_mode
+    }
+
+    /// Shows (true) or leaves (false) the document of each row that has one; rows without a
+    /// document keep showing their fields.
+    pub fn set_document_mode(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.document_mode != on {
+            self.document_mode = on;
             cx.notify();
         }
     }
@@ -559,10 +576,23 @@ impl Focusable for RecordForm {
 }
 
 impl Render for RecordForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = self.model.read(cx);
         let fields = record_fields(m, self.stmt, self.row);
         let at = record_at(m, self.stmt, self.row);
+        // Only a loaded row of an engine with documents offers the mode; the shell text is
+        // built only while it is shown.
+        let document = match at {
+            GridRow::Loaded(r) => m
+                .results()
+                .get(self.stmt)
+                .and_then(|res| res.store.document(r)),
+            GridRow::Inserted(_) => None,
+        };
+        let has_document = document.is_some();
+        let document_text = document
+            .filter(|_| self.document_mode)
+            .map(|d| d.to_shell(true));
         let deleted = self.stmt == 0
             && m.browse_result()
             && matches!(at, GridRow::Loaded(r) if m.edits().is_deleted(r));
@@ -596,6 +626,34 @@ impl Render for RecordForm {
                     .text_sm()
                     .text_color(dim)
                     .child("No rows"),
+            );
+        }
+        let mode = has_document.then(|| {
+            div().flex_none().px_3().py_1().child(ui::segmented(
+                self.id("mode"),
+                &["Fields", "Document"],
+                usize::from(self.document_mode),
+                cx.listener(|this, ix: &usize, _, cx| this.set_document_mode(*ix == 1, cx)),
+                window,
+                cx,
+            ))
+        });
+        if let Some(text) = document_text {
+            let mono = cx.theme().mono_font_family.clone();
+            let mono_size = cx.theme().mono_font_size;
+            return root.children(mode).child(
+                div()
+                    .id(self.id("document"))
+                    .aria_label(text.clone())
+                    .test_support()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_3()
+                    .py(px(6.))
+                    .font_family(mono)
+                    .text_size(mono_size)
+                    .child(text),
             );
         }
         let lines: Vec<_> = fields.into_iter().map(|f| self.field(f, cx)).collect();
@@ -644,21 +702,22 @@ impl Render for RecordForm {
                 .children(deleted_mark);
             line(name_heading, value_heading, border)
         };
-        root.child(
-            div()
-                .id(self.id("header"))
-                .test_support()
-                .flex_none()
-                .child(header),
-        )
-        .child(
-            div()
-                .id(self.id("fields"))
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .when(deleted, |d| d.bg(theme::edit_deleted(cx)).line_through())
-                .children(lines),
-        )
+        root.children(mode)
+            .child(
+                div()
+                    .id(self.id("header"))
+                    .test_support()
+                    .flex_none()
+                    .child(header),
+            )
+            .child(
+                div()
+                    .id(self.id("fields"))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(deleted, |d| d.bg(theme::edit_deleted(cx)).line_through())
+                    .children(lines),
+            )
     }
 }

@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use dbento_core::{CellRef, ColumnInfo, ResultBatch};
+use dbento_core::{CellRef, ColumnInfo, DocumentRef, ResultBatch};
 
 use crate::grid::{cell_display, is_numeric};
 use crate::runner::StatementEnd;
@@ -191,6 +191,20 @@ impl ResultStore {
             None => row,
         };
         self.loaded_cell(row, col)
+    }
+
+    /// The stored document of shown row `row`, following a local sort; None for SQL engines or
+    /// past the loaded rows.
+    pub fn document(&self, row: u64) -> Option<DocumentRef<'_>> {
+        if row >= self.rows {
+            return None;
+        }
+        let row = match &self.local {
+            Some(l) => u64::from(l.order[row as usize]),
+            None => row,
+        };
+        let ix = self.starts.partition_point(|&start| start <= row) - 1;
+        self.batches[ix].document((row - self.starts[ix]) as usize)
     }
 
     /// Whether the cell at `row`, `col` was stored as a number, as `ResultBatch::is_number` says;
