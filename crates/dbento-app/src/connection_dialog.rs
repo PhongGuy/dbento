@@ -50,6 +50,8 @@ pub enum Field {
     Host,
     /// The Postgres port.
     Port,
+    /// The MongoDB connection string.
+    Uri,
     /// The SurrealDB namespace.
     Namespace,
     /// The Postgres database.
@@ -94,6 +96,7 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::TlsKey => Some("e.g. certs/client.key"),
         Field::KeyPassphrase => Some("only for an encrypted key"),
         Field::ReadOnlyUser => Some("e.g. dbento_reader"),
+        Field::Uri => Some("e.g. mongodb://user@host:27017/database"),
         Field::Namespace => Some("e.g. app"),
         Field::AuthLevel => Some("root, namespace or database"),
         Field::Timeout => Some("e.g. 30s"),
@@ -162,6 +165,7 @@ pub struct ConnectionForm {
     path: Entity<InputState>,
     host: Entity<InputState>,
     port: Entity<InputState>,
+    uri: Entity<InputState>,
     namespace: Entity<InputState>,
     database: Entity<InputState>,
     user: Entity<InputState>,
@@ -230,6 +234,7 @@ impl ConnectionForm {
         let path = text(Field::Path, &shown.path);
         let host = text(Field::Host, &shown.host);
         let port = text(Field::Port, &shown.port);
+        let uri = text(Field::Uri, &shown.uri);
         let namespace = text(Field::Namespace, &shown.namespace);
         let database = text(Field::Database, &shown.database);
         let user = text(Field::User, &shown.user);
@@ -258,6 +263,7 @@ impl ConnectionForm {
             &path,
             &host,
             &port,
+            &uri,
             &namespace,
             &database,
             &user,
@@ -288,6 +294,7 @@ impl ConnectionForm {
             path,
             host,
             port,
+            uri,
             namespace,
             database,
             user,
@@ -387,6 +394,7 @@ impl ConnectionForm {
             (Field::Path, was.path, now.path),
             (Field::Host, was.host, now.host),
             (Field::Port, was.port, now.port),
+            (Field::Uri, was.uri, now.uri),
             (Field::Namespace, was.namespace, now.namespace),
             (Field::Database, was.database, now.database),
             (Field::User, was.user, now.user),
@@ -495,6 +503,7 @@ impl ConnectionForm {
             Field::Path => &self.path,
             Field::Host => &self.host,
             Field::Port => &self.port,
+            Field::Uri => &self.uri,
             Field::Namespace => &self.namespace,
             Field::Database => &self.database,
             Field::User => &self.user,
@@ -631,6 +640,7 @@ impl ConnectionForm {
                     let (was, key) = match field {
                         Field::Path => (&shown.path, &mut spec.path),
                         Field::Host => (&shown.host, &mut spec.host),
+                        Field::Uri => (&shown.uri, &mut spec.uri),
                         Field::Namespace => (&shown.namespace, &mut spec.namespace),
                         Field::Database => (&shown.database, &mut spec.database),
                         Field::User => (&shown.user, &mut spec.user),
@@ -1166,6 +1176,7 @@ impl Render for ConnectionForm {
                 "DuckDB",
                 "SQL Server",
                 "SurrealDB",
+                "MongoDB",
             ],
             // An engine the picker does not offer highlights no option.
             ENGINES
@@ -1350,6 +1361,7 @@ struct Shown {
     path: String,
     host: String,
     port: String,
+    uri: String,
     namespace: String,
     database: String,
     user: String,
@@ -1373,6 +1385,7 @@ impl Shown {
             Field::Path => &self.path,
             Field::Host => &self.host,
             Field::Port => &self.port,
+            Field::Uri => &self.uri,
             Field::Namespace => &self.namespace,
             Field::Database => &self.database,
             Field::User => &self.user,
@@ -1400,6 +1413,7 @@ impl Shown {
             path: text(&spec.path),
             host: text(&spec.host),
             port: spec.port.map(|p| p.to_string()).unwrap_or_default(),
+            uri: text(&spec.uri),
             namespace: text(&spec.namespace),
             database: text(&spec.database),
             user: text(&spec.user),
@@ -1430,13 +1444,14 @@ impl Shown {
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 6] = [
+const ENGINES: [Engine; 7] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
     Engine::Duckdb,
     Engine::Mssql,
     Engine::Surrealdb,
+    Engine::Mongodb,
 ];
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {
@@ -1453,6 +1468,7 @@ fn field_of(key: &str) -> Option<(Field, &'static str)> {
         "path" => (Field::Path, "conn-path"),
         "host" => (Field::Host, "conn-host"),
         "port" => (Field::Port, "conn-port"),
+        "uri" => (Field::Uri, "conn-uri"),
         "namespace" => (Field::Namespace, "conn-namespace"),
         "database" => (Field::Database, "conn-database"),
         "user" => (Field::User, "conn-user"),
@@ -1486,6 +1502,7 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     for (key, slot) in [
         ("path", &mut spec.path),
         ("host", &mut spec.host),
+        ("uri", &mut spec.uri),
         ("namespace", &mut spec.namespace),
         ("database", &mut spec.database),
         ("user", &mut spec.user),

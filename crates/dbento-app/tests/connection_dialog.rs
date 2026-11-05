@@ -529,9 +529,15 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
     form(cx, &o);
     cx.update_window(o.win, |_, w, cx| {
         w.render_frame(cx);
-        let last = w.within("conn-engine").find(5usize).bounds();
         let name = w.find("conn-name").bounds();
-        assert!(last.right() <= name.right(), "{last:?} overflows {name:?}");
+        for ix in 0..7usize {
+            let option = w.within("conn-engine").find(ix).bounds();
+            assert!(
+                option.right() <= name.right(),
+                "{ix}: {option:?} overflows {name:?}"
+            );
+            assert!(option.size.width > px(0.), "{ix}: {option:?} is hidden");
+        }
     })
     .unwrap();
     cx.update_window(o.win, |_, w, cx| w.within("conn-engine").click(3usize, cx))

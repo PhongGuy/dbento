@@ -1,8 +1,10 @@
 mod support;
 use dbento_app::query_tab::connection_chip_text;
 use dbento_app::query_tab::{
-    READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP, READ_ONLY_MSSQL_READER_TOOLTIP, READ_ONLY_MYSQL_TOOLTIP,
-    READ_ONLY_PG_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP, READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+    READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP, READ_ONLY_MONGO_READER_TOOLTIP,
+    READ_ONLY_MONGO_UNCONNECTED_TOOLTIP, READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
+    READ_ONLY_MSSQL_READER_TOOLTIP, READ_ONLY_MYSQL_TOOLTIP, READ_ONLY_PG_TOOLTIP,
+    READ_ONLY_SQLITE_TOOLTIP, READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
     READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP, READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_explanation,
     confirm_title, editor_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
 };
@@ -437,4 +439,27 @@ fn empty_filter_kinds_explain_what_they_change() {
         confirm_title(Unguarded::DeleteAllDocuments, "shop"),
         "deleteMany with an empty filter on 'shop'"
     );
+}
+
+#[test]
+fn a_mongodb_badge_names_the_level_its_users_privileges_give() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.mg]\nengine = \"mongodb\"\nuri = \"mongodb://reader@h/app\"\n\
+         secret = { env = \"X\" }\nread_only = true\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    let c = ws.connection("mg").unwrap();
+    let text = |level| read_only_badge_text(c, level);
+    assert_eq!(
+        text(Some(ReadOnlyEnforcement::Database)),
+        READ_ONLY_MONGO_READER_TOOLTIP
+    );
+    assert_eq!(
+        text(Some(ReadOnlyEnforcement::BestEffort)),
+        READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP
+    );
+    assert_eq!(text(None), READ_ONLY_MONGO_UNCONNECTED_TOOLTIP);
 }

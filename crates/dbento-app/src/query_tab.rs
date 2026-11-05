@@ -86,6 +86,13 @@ pub const READ_ONLY_SURREAL_VIEWER_TOOLTIP: &str = "Read-only: this VIEWER login
 pub const READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: Dbento runs each statement in a transaction it cancels and refuses the writes it can see. Use a VIEWER login for enforcement.";
 /// The SurrealDB badge's head before the session has reported its level.
 pub const READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP: &str = "Read-only: Dbento runs each statement in a transaction it cancels; the level shows once connected.";
+/// The MongoDB badge when the URI user holds only read privileges.
+pub const READ_ONLY_MONGO_READER_TOOLTIP: &str = "Read-only: this user holds only read privileges, so MongoDB refuses writes, and Dbento refuses the writes it can see before sending them.";
+/// The MongoDB badge when the URI user can write and only Dbento's own refusal holds.
+pub const READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: this user can write, so Dbento refuses every statement it reads as a write or cannot classify before sending it. Use a user with only the read role for enforcement.";
+/// The MongoDB badge before the session has reported its level.
+pub const READ_ONLY_MONGO_UNCONNECTED_TOOLTIP: &str =
+    "Read-only: the level follows the privileges of the user in the URI and shows once connected.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -148,10 +155,20 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
 }
 
 /// The badge text for `c` with the session's `level`: on SurrealDB the level's head, a space and
-/// the residual; on every other engine `read_only_tooltip_of(c)`.
+/// the residual; on MongoDB the level's text alone; on every other engine `read_only_tooltip_of(c)`.
 pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
-    if c.engine() != Engine::Surrealdb {
-        return read_only_tooltip_of(c).to_owned();
+    match c.engine() {
+        // MongoDB's level follows the URI user's privileges, which only the session knows.
+        Engine::Mongodb => {
+            return match level {
+                Some(ReadOnlyEnforcement::Database) => READ_ONLY_MONGO_READER_TOOLTIP,
+                Some(ReadOnlyEnforcement::BestEffort) => READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP,
+                _ => READ_ONLY_MONGO_UNCONNECTED_TOOLTIP,
+            }
+            .to_owned();
+        }
+        Engine::Surrealdb => {}
+        _ => return read_only_tooltip_of(c).to_owned(),
     }
     // SurrealDB's level comes from the login's role, which only the session knows.
     let head = match level {

@@ -15,7 +15,7 @@ default = ["duckdb", "mongodb", "surrealdb"]
 # Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
 duckdb = ["dbento-core/duckdb", "dbento-testkit/duckdb"]
 # Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
-mongodb = ["dbento-core/mongodb"]
+mongodb = ["dbento-core/mongodb", "dbento-testkit/mongodb"]
 # Forwarded so a default edge to core cannot switch SurrealDB on through feature unification.
 surrealdb = ["dbento-core/surrealdb"]
 # A self-driving bench window run by `cargo xtask app-bench`; off in a normal build.
