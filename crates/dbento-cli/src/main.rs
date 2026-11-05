@@ -59,9 +59,9 @@ enum Command {
         #[command(flatten)]
         exec: exec::ExecArgs,
     },
-    /// Run a SQL file; its connection is its `queries/<conn>/` folder unless `--conn` is given.
+    /// Run a saved query file; its connection is its `queries/<conn>/` folder unless `--conn` is given.
     Run {
-        /// The SQL file.
+        /// The query file (.sql, .js or .surql, matching the connection's language).
         file: PathBuf,
         /// The connection to run on.
         #[arg(long)]

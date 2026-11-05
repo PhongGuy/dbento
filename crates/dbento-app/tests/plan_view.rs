@@ -196,3 +196,24 @@ fn a_plan_result_hides_the_export_button(cx: &mut TestAppContext) {
     o.idle(cx);
     assert!(present(cx, o.win, "result-export"));
 }
+
+#[gpui_kit::test]
+fn a_narrow_plan_header_keeps_the_toggle_whole(cx: &mut TestAppContext) {
+    init(cx);
+    let mut result = PlanResult::new(ExplainMode::Analyze, false);
+    result.output = Some(Arc::new(ExplainOutput::from_postgres(ANALYZE.to_owned())));
+    let win: gpui_kit::AnyWindowHandle = cx
+        .add_window(|window, cx| PlanView::new(&result, window, cx))
+        .into();
+    let toggle_at = |cx: &mut TestAppContext, width: f32| {
+        cx.simulate_window_resize(win, gpui_kit::size(gpui_kit::px(width), gpui_kit::px(400.)));
+        cx.update_window(win, |_, w, cx| {
+            w.render_frame(cx);
+            w.find("plan-toggle").bounds().size
+        })
+        .unwrap()
+    };
+    let wide = toggle_at(cx, 1200.);
+    let narrow = toggle_at(cx, 200.);
+    assert_eq!(narrow, wide, "the toggle shrank in a narrow header");
+}

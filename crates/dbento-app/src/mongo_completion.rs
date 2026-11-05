@@ -16,6 +16,32 @@ pub const DB_METHODS: &[&str] = &[
     "runCommand",
 ];
 
+/// Further Database members the shell resolves before a collection of the same name; they are
+/// not offered, but such a collection must still insert through `getCollection`.
+const DB_MEMBERS: &[&str] = &[
+    "adminCommand",
+    "aggregate",
+    "auth",
+    "commandHelp",
+    "createUser",
+    "currentOp",
+    "dropUser",
+    "getCollectionInfos",
+    "getMongo",
+    "getName",
+    "getProfilingStatus",
+    "getUser",
+    "getUsers",
+    "help",
+    "hostInfo",
+    "killOp",
+    "logout",
+    "serverStatus",
+    "setProfilingLevel",
+    "version",
+    "watch",
+];
+
 /// Methods offered on a collection.
 pub const COLLECTION_METHODS: &[&str] = &[
     "find",
@@ -419,9 +445,12 @@ fn unquote(lit: &str) -> String {
 }
 
 /// A collection candidate: an identifier inserts bare, any other name through `getCollection`.
+/// A name the shell resolves as a Database member (`stats`, `version`) also needs it.
 fn collection(name: &str, detail: &str) -> Candidate {
     let ident = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && name.bytes().all(is_word);
+        && name.bytes().all(is_word)
+        && !DB_METHODS.contains(&name)
+        && !DB_MEMBERS.contains(&name);
     let insert = if ident {
         name.to_owned()
     } else {

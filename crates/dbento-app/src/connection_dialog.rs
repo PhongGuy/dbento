@@ -1190,7 +1190,7 @@ impl Render for ConnectionForm {
             window,
             cx,
         );
-        // Each choice row sits in a flex row so its outline hugs the options, not the field width.
+        // Each choice row sits in a flex row; the engine picker wraps within the field column.
         let mut sections: Vec<(&'static str, Vec<AnyElement>)> = vec![(
             "Connection",
             vec![

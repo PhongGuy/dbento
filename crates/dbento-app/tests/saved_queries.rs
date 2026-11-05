@@ -1,4 +1,5 @@
-//! Saved queries in the app: Ctrl+O lists and opens `queries/*.sql`, Ctrl+S names and saves.
+//! Saved queries in the app: Ctrl+O lists and opens saved queries (`.sql`, `.surql`, `.js`),
+//! Ctrl+S names and saves.
 mod support;
 use dbento_app::query_files::{name_problem, query_file_name};
 use gpui_kit::test::TestWindowExt as _;

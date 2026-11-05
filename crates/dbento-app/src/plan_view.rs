@@ -596,7 +596,8 @@ impl Render for PlanView {
             .px_3()
             .border_b_1()
             .border_color(border)
-            .children(toggle)
+            // The segmented toggle would shrink and wrap its labels in a narrow 32 px bar.
+            .children(toggle.map(|t| div().flex_none().child(t)))
             .children(header.map(|h| {
                 div()
                     .flex_none()

@@ -832,6 +832,34 @@ fn db_dot_offers_the_collections_and_the_database_methods() {
 }
 
 #[test]
+fn a_collection_named_like_a_database_method_inserts_through_get_collection() {
+    let mut t = mg_tree();
+    put(
+        &mut t,
+        "mg",
+        relations_of("app"),
+        rels(&[
+            ("stats", RelationKind::Table),
+            ("version", RelationKind::Table),
+        ]),
+    );
+    let c = mg_at("db.st", &t);
+    let relation = c
+        .items
+        .iter()
+        .find(|i| i.label == "stats" && i.kind == CandidateKind::Relation)
+        .expect("the stats collection is offered");
+    assert_eq!(relation.insert, "getCollection(\"stats\")");
+    let c = mg_at("db.ver", &t);
+    let relation = c
+        .items
+        .iter()
+        .find(|i| i.label == "version" && i.kind == CandidateKind::Relation)
+        .expect("the version collection is offered");
+    assert_eq!(relation.insert, "getCollection(\"version\")");
+}
+
+#[test]
 fn an_unloaded_database_asks_for_its_collections() {
     let c = mg_at("db.", &CatalogTree::new());
     assert!(c.wants.contains(&relations_of("app")), "{:?}", c.wants);

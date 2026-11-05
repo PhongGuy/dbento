@@ -291,7 +291,14 @@ pub fn capped_document(mut text: String, cap: usize) -> String {
         .find(|&i| text.is_char_boundary(i))
         .unwrap_or(0);
     text.truncate(end);
-    text.push_str("\n/* document cut at 64 KiB; Copy as JSON copies all of it */");
+    let size = if cap.is_multiple_of(1024) {
+        format!("{} KiB", cap / 1024)
+    } else {
+        format!("{cap} bytes")
+    };
+    text.push_str(&format!(
+        "\n/* document cut at {size}; Copy as JSON copies all of it */"
+    ));
     text
 }
 

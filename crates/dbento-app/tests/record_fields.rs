@@ -179,6 +179,9 @@ fn a_document_past_the_cap_is_cut_on_a_char_boundary_with_a_note() {
     let cut = capped_document(long, 10);
     assert!(cut.starts_with("xxxxxxxxx\n"), "{cut}");
     assert!(cut.contains("Copy as JSON"), "{cut}");
+    assert!(cut.contains("cut at 10 bytes"), "{cut}");
     let big = "z".repeat(DOCUMENT_CAP * 4);
-    assert!(capped_document(big, DOCUMENT_CAP).len() < DOCUMENT_CAP + 200);
+    let capped = capped_document(big, DOCUMENT_CAP);
+    assert!(capped.len() < DOCUMENT_CAP + 200);
+    assert!(capped.contains("cut at 64 KiB"), "the note names the cap");
 }
