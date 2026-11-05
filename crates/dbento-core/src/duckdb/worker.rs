@@ -22,6 +22,9 @@ use crate::session::{ExecuteError, Limits, OnTruncate, Outcome, Prepared, Trunca
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ResultBatch};
 use crate::workspace::Engine;
 
+#[cfg(test)]
+mod tests;
+
 /// A catalog read on the session's connection; handed `None` once the lease is gone.
 pub(crate) type Job = Box<dyn FnOnce(Option<&Connection>) + Send>;
 
@@ -315,6 +318,13 @@ fn execute(
     started.map_err(fail)?;
     if duckdb_sets_session(text) {
         shared.settings_changed.store(true, Ordering::SeqCst);
+    }
+    // Execution start may have cleared the cancel's every fire, so a read the cancel reached
+    // fails here rather than after its columns; a write already applied its changes.
+    if writes == Writes::No
+        && let Some(stop) = cancel.stopped()
+    {
+        return Err(stop.into());
     }
     let schema = st.schema();
     if let Some(counts) = status(text, &schema) {
