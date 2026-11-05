@@ -756,3 +756,189 @@ fn surrealql_inserts_names_in_backticks() {
     let c = complete(Engine::Surrealdb, sql, 16, &sr_tree(), "sr", Some("app"));
     assert_eq!(labels(&c), ["status"]);
 }
+
+/// `mg`: database app holds orders, "order lines" and the view recent; logs holds events.
+fn mg_tree() -> CatalogTree {
+    let mut t = CatalogTree::new();
+    let dbs = vec![SchemaInfo::new("app"), SchemaInfo::new("logs")];
+    put(
+        &mut t,
+        "mg",
+        CatalogQuery::Schemas,
+        CatalogData::Schemas(dbs),
+    );
+    put(
+        &mut t,
+        "mg",
+        relations_of("app"),
+        rels(&[
+            ("orders", RelationKind::Table),
+            ("order lines", RelationKind::Table),
+            ("recent", RelationKind::View),
+        ]),
+    );
+    put(
+        &mut t,
+        "mg",
+        relations_of("logs"),
+        rels(&[("events", RelationKind::Table)]),
+    );
+    t
+}
+fn mg_at(text: &str, tree: &CatalogTree) -> Completion {
+    complete(Engine::Mongodb, text, text.len(), tree, "mg", Some("app"))
+}
+fn mg(text: &str) -> Vec<String> {
+    let mut got: Vec<String> = labels(&mg_at(text, &mg_tree()))
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    got.sort();
+    got
+}
+
+#[test]
+fn db_dot_offers_the_collections_and_the_database_methods() {
+    assert_eq!(mg("db.ord"), ["order lines", "orders"]);
+    let all = mg("db.");
+    for want in [
+        "orders",
+        "order lines",
+        "recent",
+        "getCollection",
+        "getSiblingDB",
+        "getCollectionNames",
+        "createCollection",
+        "dropDatabase",
+        "stats",
+        "runCommand",
+    ] {
+        assert!(offers(&all, want), "{want}: {all:?}");
+    }
+    assert!(!offers(&all, "find"), "{all:?}");
+    assert_eq!(mg("db.getSiblingDB(\"logs\").ev"), ["events"]);
+    let c = mg_at("db.ord", &mg_tree());
+    let inserts: Vec<(&str, &str)> = c
+        .items
+        .iter()
+        .map(|i| (i.label.as_str(), i.insert.as_str()))
+        .collect();
+    assert!(inserts.contains(&("orders", "orders")), "{inserts:?}");
+    assert!(
+        inserts.contains(&("order lines", "getCollection(\"order lines\")")),
+        "{inserts:?}"
+    );
+    assert_eq!(c.replace, 3..6);
+}
+
+#[test]
+fn a_collection_named_like_a_database_method_inserts_through_get_collection() {
+    let mut t = mg_tree();
+    put(
+        &mut t,
+        "mg",
+        relations_of("app"),
+        rels(&[
+            ("stats", RelationKind::Table),
+            ("version", RelationKind::Table),
+        ]),
+    );
+    let c = mg_at("db.st", &t);
+    let relation = c
+        .items
+        .iter()
+        .find(|i| i.label == "stats" && i.kind == CandidateKind::Relation)
+        .expect("the stats collection is offered");
+    assert_eq!(relation.insert, "getCollection(\"stats\")");
+    let c = mg_at("db.ver", &t);
+    let relation = c
+        .items
+        .iter()
+        .find(|i| i.label == "version" && i.kind == CandidateKind::Relation)
+        .expect("the version collection is offered");
+    assert_eq!(relation.insert, "getCollection(\"version\")");
+}
+
+#[test]
+fn an_unloaded_database_asks_for_its_collections() {
+    let c = mg_at("db.", &CatalogTree::new());
+    assert!(c.wants.contains(&relations_of("app")), "{:?}", c.wants);
+}
+
+#[test]
+fn a_collection_offers_its_methods_and_a_find_its_cursor_methods() {
+    for text in [
+        "db.orders.",
+        "db[\"order lines\"].",
+        "db.getCollection('order lines').",
+        "db.getSiblingDB(\"logs\").events.",
+    ] {
+        let got = mg(text);
+        for want in [
+            "find",
+            "findOne",
+            "aggregate",
+            "insertMany",
+            "updateMany",
+            "deleteMany",
+            "findOneAndUpdate",
+            "createIndex",
+            "drop",
+        ] {
+            assert!(offers(&got, want), "{text} {want}: {got:?}");
+        }
+        assert!(
+            !offers(&got, "orders") && !offers(&got, "sort"),
+            "{text}: {got:?}"
+        );
+    }
+    assert_eq!(mg("db.orders.count"), ["countDocuments"]);
+    assert_eq!(mg("db.orders.find({}).so"), ["sort"]);
+    assert_eq!(mg("db.orders.find({a: 1})\n  .limit(5).sk"), ["skip"]);
+    assert!(mg("db.orders.insertOne({}).").is_empty());
+}
+
+#[test]
+fn a_dollar_word_offers_operators_and_stages() {
+    assert_eq!(mg("db.orders.find({qty: {$gt"), ["$gt", "$gte"]);
+    assert!(offers(&mg("db.orders.aggregate([{$mat"), "$match"));
+    let set = mg("db.orders.updateMany({}, {$se");
+    assert!(
+        offers(&set, "$set") && offers(&set, "$setOnInsert"),
+        "{set:?}"
+    );
+    assert_eq!(mg_at("db.orders.find({$o", &mg_tree()).replace, 16..18);
+}
+
+#[test]
+fn a_bare_word_offers_helpers_in_arguments_and_db_or_use_at_the_start() {
+    assert_eq!(mg("db.orders.find({_id: Obj"), ["ObjectId"]);
+    assert_eq!(mg("db.orders.find({at: {$gt: ISO"), ["ISODate"]);
+    assert_eq!(mg("db.orders.insertOne({n: NumberL"), ["NumberLong"]);
+    assert_eq!(mg("d"), ["db"]);
+    assert_eq!(mg("us"), ["use"]);
+    assert_eq!(mg("use lo"), ["logs"]);
+}
+
+#[test]
+fn strings_comments_and_regexes_complete_nothing() {
+    for inside in [
+        "db.orders.find({s: \"db.",
+        "db.orders.find({s: 'it\\'s $g",
+        "db.orders.find({s: \"a\\\"b $g",
+        "// db.",
+        "/* db.",
+        "db.orders.find({s: /db.",
+    ] {
+        let got = mg(inside);
+        assert!(got.is_empty(), "{inside}: {got:?}");
+    }
+    for after in [
+        "db.orders.find({s: \"x\"}).so",
+        "// note\ndb.orders.find().so",
+        "db.orders.find({s: /a\\/b/i}).so",
+        "/* c */ db.orders.find().so",
+    ] {
+        assert_eq!(mg(after), ["sort"], "{after}");
+    }
+}

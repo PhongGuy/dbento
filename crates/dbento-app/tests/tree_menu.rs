@@ -532,3 +532,40 @@ fn surrealdb_menus_offer_no_generated_sql(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn mongodb_menus_generate_find_and_no_sql(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let entries = |k: RowKind| catalog_entries(&k, Engine::Mongodb, cx);
+        let table = entries(RowKind::Relation(RelationKind::Table));
+        let ids: Vec<_> = table.iter().map(|e| e.id).collect();
+        assert_eq!(
+            ids,
+            [
+                "tree-menu-open",
+                "tree-menu-new-query",
+                "tree-menu-copy-name",
+                "tree-menu-generate-select",
+                "tree-menu-refresh",
+            ]
+        );
+        let find = table
+            .iter()
+            .find(|e| e.id == "tree-menu-generate-select")
+            .unwrap();
+        assert_eq!(find.label.to_string(), "Generate find");
+        let view = entries(RowKind::Relation(RelationKind::View));
+        assert!(view.iter().all(|e| e.id != "tree-menu-view-definition"));
+        let pg = catalog_entries(
+            &RowKind::Relation(RelationKind::Table),
+            Engine::Postgres,
+            cx,
+        );
+        let label = &pg
+            .iter()
+            .find(|e| e.id == "tree-menu-generate-select")
+            .unwrap()
+            .label;
+        assert_eq!(label.to_string(), "Generate SELECT");
+    });
+}

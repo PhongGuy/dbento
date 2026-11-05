@@ -1392,7 +1392,15 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
     let refresh = entry("tree-menu-refresh", "Refresh");
     let view_definition = entry("tree-menu-view-definition", "View definition");
     // Counting, INSERT templates and qualified names are SQL text; a SurrealQL engine gets none.
-    let sql = engine.capabilities().language == QueryLanguage::Sql;
+    let language = engine.capabilities().language;
+    let sql = language == QueryLanguage::Sql;
+    // A MongoDB collection opens with a find and keeps no definition to view.
+    let mongo = language == QueryLanguage::MongoShell;
+    let generate_select = if mongo {
+        "Generate find"
+    } else {
+        "Generate SELECT"
+    };
     let copy_qualified = sql.then_some(copy_qualified);
     match kind {
         RowKind::Relation(kind) => vec![
@@ -1410,7 +1418,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         .into_iter()
         .chain(copy_qualified)
         .chain(sql.then(|| entry("tree-menu-count", "Count rows")))
-        .chain([entry("tree-menu-generate-select", "Generate SELECT")])
+        .chain([entry("tree-menu-generate-select", generate_select)])
         .chain(
             (sql && *kind == RelationKind::Table)
                 .then(|| entry("tree-menu-generate-insert", "Generate INSERT")),
@@ -1418,6 +1426,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         // A table offers its definition only where the engine keeps one (SQLite, MySQL, DuckDB).
         .chain(
             match kind {
+                _ if mongo => false,
                 RelationKind::View | RelationKind::MaterializedView => true,
                 RelationKind::Table => engine.capabilities().table_definition,
                 _ => false,
@@ -1447,8 +1456,12 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
 
 /// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`
 /// with default options (`"SELECT *\nFROM main.Album"` on SQLite). SurrealDB names the table
-/// alone, `` SELECT * FROM `t` ``, since a dotted name reads as a field path there.
+/// alone, `` SELECT * FROM `t` ``, since a dotted name reads as a field path there. MongoDB
+/// gets `db.getCollection("<name>").find()`, the name JSON-quoted.
 pub fn select_sql(engine: Engine, rel: &RelationRef) -> String {
+    if engine == Engine::Mongodb {
+        return format!("db.getCollection({}).find()", json_string(rel.name()));
+    }
     if engine == Engine::Surrealdb {
         return format!("SELECT * FROM {}", quote_ident(engine, rel.name()));
     }
@@ -1460,15 +1473,27 @@ pub fn select_sql(engine: Engine, rel: &RelationRef) -> String {
     format_sql(engine, &raw, &FormatOptions::default())
 }
 
-/// The text that opens `rel` on `conn`: `select_sql`, and on SurrealDB a `USE DB` first when
-/// the relation's database is not the connection's.
+/// The text that opens `rel` on `conn`: `select_sql`, and when the relation's database is not
+/// the connection's, a `USE DB` first on SurrealDB or `db.getSiblingDB(..)` on MongoDB.
 pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
     let engine = conn.engine();
     let select = select_sql(engine, rel);
-    if engine != Engine::Surrealdb || conn.database() == Some(rel.schema()) {
+    if conn.database() == Some(rel.schema()) {
         return select;
     }
-    format!("USE DB {};\n{select};", quote_ident(engine, rel.schema()))
+    match engine {
+        Engine::Surrealdb => format!("USE DB {};\n{select};", quote_ident(engine, rel.schema())),
+        Engine::Mongodb => select.replacen(
+            "db.",
+            &format!("db.getSiblingDB({}).", json_string(rel.schema())),
+            1,
+        ),
+        _ => select,
+    }
+}
+
+fn json_string(s: &str) -> String {
+    serde_json::Value::from(s).to_string()
 }
 
 /// `INSERT INTO <q> (<cols>)\nVALUES (NULL, ...)` with one NULL per column, every name

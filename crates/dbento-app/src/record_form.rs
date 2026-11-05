@@ -14,8 +14,8 @@ use gpui_kit::{
 
 use crate::keymap::{CancelRecordEdit, CommitRecordEdit};
 use crate::record::{
-    Marker, RecordField, Was, display_text, edit_text, edits_as_bytes, parse_edit, record_at,
-    record_fields,
+    DOCUMENT_CAP, Marker, RecordField, Was, capped_document, display_text, edit_text,
+    edits_as_bytes, parse_edit, record_at, record_fields,
 };
 use crate::staged::{self, GridRow};
 use crate::tab_model::{SaveState, TabModel};
@@ -80,6 +80,10 @@ pub struct RecordForm {
     prefix: &'static str,
     /// Each field as a name line over a filled value box, for a narrow dock.
     stacked: bool,
+    /// Whether a row with a stored document shows it whole instead of its fields.
+    document_mode: bool,
+    /// The capped shell text of the last document shown, so a notify does not render it again.
+    document_cache: Option<(DocumentKey, SharedString)>,
     _observe: Subscription,
     _leave: Subscription,
     _typed: Subscription,
@@ -141,6 +145,8 @@ impl RecordForm {
             error: None,
             prefix,
             stacked,
+            document_mode: false,
+            document_cache: None,
             _observe: observe,
             _leave: leave,
             _typed: typed,
@@ -154,6 +160,20 @@ impl RecordForm {
             self.end_edit(true, false, window, cx);
             self.stmt = stmt;
             self.row = row;
+            cx.notify();
+        }
+    }
+
+    /// Whether a row with a stored document shows it instead of its fields.
+    pub fn document_mode(&self) -> bool {
+        self.document_mode
+    }
+
+    /// Shows (true) or leaves (false) the document of each row that has one; rows without a
+    /// document keep showing their fields.
+    pub fn set_document_mode(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.document_mode != on {
+            self.document_mode = on;
             cx.notify();
         }
     }
@@ -489,6 +509,10 @@ impl RecordForm {
     }
 }
 
+/// What a cached document text was rendered for: run id, epoch, result, shown row, local sort
+/// and, under a sort, the loaded row count.
+type DocumentKey = (u64, u64, usize, u64, Option<(usize, bool)>, u64);
+
 /// The shared line height, so the sans name and the mono type and value sit on one baseline.
 const LINE: gpui_kit::Pixels = px(18.);
 
@@ -559,10 +583,39 @@ impl Focusable for RecordForm {
 }
 
 impl Render for RecordForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = self.model.read(cx);
         let fields = record_fields(m, self.stmt, self.row);
         let at = record_at(m, self.stmt, self.row);
+        // Only a loaded row of an engine with documents offers the mode; the shell text is
+        // built only while it is shown.
+        let document = match at {
+            GridRow::Loaded(r) => m
+                .results()
+                .get(self.stmt)
+                .and_then(|res| res.store.document(r)),
+            GridRow::Inserted(_) => None,
+        };
+        let has_document = document.is_some();
+        let document_text = match (document, at) {
+            (Some(doc), GridRow::Loaded(r)) if self.document_mode => {
+                let store = &m.results()[self.stmt].store;
+                // A sorted store reorders as rows arrive, so its shown rows key by count too.
+                let sorted = store.local_sort();
+                let rows = if sorted.is_some() { store.rows() } else { 0 };
+                let key = (m.run_id(), m.epoch(), self.stmt, r, sorted, rows);
+                match &self.document_cache {
+                    Some((k, text)) if *k == key => Some(text.clone()),
+                    _ => {
+                        let text: SharedString =
+                            capped_document(doc.to_shell(true), DOCUMENT_CAP).into();
+                        self.document_cache = Some((key, text.clone()));
+                        Some(text)
+                    }
+                }
+            }
+            _ => None,
+        };
         let deleted = self.stmt == 0
             && m.browse_result()
             && matches!(at, GridRow::Loaded(r) if m.edits().is_deleted(r));
@@ -596,6 +649,34 @@ impl Render for RecordForm {
                     .text_sm()
                     .text_color(dim)
                     .child("No rows"),
+            );
+        }
+        let mode = has_document.then(|| {
+            div().flex_none().px_3().py_1().child(ui::segmented(
+                self.id("mode"),
+                &["Fields", "Document"],
+                usize::from(self.document_mode),
+                cx.listener(|this, ix: &usize, _, cx| this.set_document_mode(*ix == 1, cx)),
+                window,
+                cx,
+            ))
+        });
+        if let Some(text) = document_text {
+            let mono = cx.theme().mono_font_family.clone();
+            let mono_size = cx.theme().mono_font_size;
+            return root.children(mode).child(
+                div()
+                    .id(self.id("document"))
+                    .aria_label(text.clone())
+                    .test_support()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_3()
+                    .py(px(6.))
+                    .font_family(mono)
+                    .text_size(mono_size)
+                    .child(text),
             );
         }
         let lines: Vec<_> = fields.into_iter().map(|f| self.field(f, cx)).collect();
@@ -644,21 +725,22 @@ impl Render for RecordForm {
                 .children(deleted_mark);
             line(name_heading, value_heading, border)
         };
-        root.child(
-            div()
-                .id(self.id("header"))
-                .test_support()
-                .flex_none()
-                .child(header),
-        )
-        .child(
-            div()
-                .id(self.id("fields"))
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .when(deleted, |d| d.bg(theme::edit_deleted(cx)).line_through())
-                .children(lines),
-        )
+        root.children(mode)
+            .child(
+                div()
+                    .id(self.id("header"))
+                    .test_support()
+                    .flex_none()
+                    .child(header),
+            )
+            .child(
+                div()
+                    .id(self.id("fields"))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(deleted, |d| d.bg(theme::edit_deleted(cx)).line_through())
+                    .children(lines),
+            )
     }
 }

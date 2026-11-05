@@ -512,3 +512,40 @@ fn an_open_dialog_closes_when_another_window_answers_it(cx: &mut TestAppContext)
     });
     assert_eq!(store(&s).claim(r.id()).unwrap(), Claim::Denied);
 }
+
+#[test]
+fn a_mongodb_headline_names_the_method() {
+    assert_eq!(
+        headline("shop", "db.orders.deleteMany({})"),
+        "shop \u{B7} deleteMany"
+    );
+    assert_eq!(
+        headline(
+            "shop",
+            "  // purge\ndb[\"order lines\"].updateMany({}, {$set: {a: 1}})"
+        ),
+        "shop \u{B7} updateMany"
+    );
+    assert_eq!(
+        headline("shop", "db.getSiblingDB(\"x(\").getCollection('o)').drop()"),
+        "shop \u{B7} drop"
+    );
+    assert_eq!(
+        headline("shop", "db.runCommand({drop: \"o\"})"),
+        "shop \u{B7} runCommand"
+    );
+    assert_eq!(headline("shop", "db.orders"), "shop");
+    assert_eq!(headline("shop", "UPDATE t SET x = 1"), "shop \u{B7} UPDATE");
+}
+
+#[test]
+fn comments_inside_a_mongosh_chain_never_name_the_method() {
+    assert_eq!(
+        headline("shop", "db.orders/*find(*/.deleteMany({})"),
+        "shop \u{B7} deleteMany"
+    );
+    assert_eq!(
+        headline("shop", "db.orders // find(\n  .deleteMany({})"),
+        "shop \u{B7} deleteMany"
+    );
+}

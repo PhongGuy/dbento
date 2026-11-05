@@ -1662,15 +1662,23 @@ impl Shell {
             return self.save_bound(&tab, &rel, window, cx);
         }
         let conn = tab.read(cx).model().read(cx).spec().connection.clone();
+        // The file takes the extension of the connection's query language (`.js` on MongoDB).
+        let ext = tab
+            .read(cx)
+            .conn()
+            .engine()
+            .capabilities()
+            .language
+            .file_extension();
         let tab = tab.downgrade();
-        let reply = ask_name("untitled", window, cx);
+        let reply = ask_name("untitled", ext, window, cx);
         cx.spawn_in(window, async move |this, cx| {
             let Ok(name) = reply.recv().await else {
                 return;
             };
             let _ = this.update_in(cx, |shell, window, cx| {
                 if let Some(tab) = tab.upgrade() {
-                    shell.save_as(&tab, &conn, name.trim(), window, cx);
+                    shell.save_as(&tab, &conn, name.trim(), ext, window, cx);
                 }
             });
         })
@@ -1706,6 +1714,7 @@ impl Shell {
                     .into(),
                 ),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "save-conflict-cancel",
@@ -1775,12 +1784,14 @@ impl Shell {
         cx.notify();
     }
 
-    // Saves `tab` as `name` in `conn`'s folder; an existing file is replaced only on Replace.
+    // Saves `tab` as `name` with extension `ext` in `conn`'s folder; an existing file is
+    // replaced only on Replace.
     fn save_as(
         &mut self,
         tab: &Entity<QueryTab>,
         conn: &str,
         name: &str,
+        ext: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1788,10 +1799,12 @@ impl Shell {
             return;
         };
         // The dialog refuses these; a caller that skipped it writes nothing.
-        if name_problem(name).is_some() {
+        if name_problem(name, ext).is_some() {
             return;
         }
-        let rel = Path::new("queries").join(conn).join(query_file_name(name));
+        let rel = Path::new("queries")
+            .join(conn)
+            .join(query_file_name(name, ext));
         // Ask about the target itself, not the listing, which skips linked folders; a check
         // that fails shows its error and writes nothing.
         match ws.query_exists(&rel) {
@@ -1804,6 +1817,7 @@ impl Shell {
                 title: "Replace the saved query?".into(),
                 detail: Some(format!("{} already exists.", rel.display()).into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "overwrite-keep",
@@ -2301,6 +2315,7 @@ impl Shell {
                 title: format!("Reconnect {name}?").into(),
                 detail: Some("An open transaction will be rolled back.".into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "reconnect-cancel",
@@ -2472,6 +2487,7 @@ impl Shell {
                 title: "dbento.toml changed".into(),
                 detail: Some(detail.into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "edit-error-ok",
@@ -2648,6 +2664,7 @@ impl Shell {
                 title: format!("Delete folder {}?", path.name()).into(),
                 detail: Some(detail.into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "delete-cancel",
@@ -3419,6 +3436,7 @@ impl Shell {
                 title: format!("Delete {name}?").into(),
                 detail: Some(format!("Its saved queries stay in queries/{name}/.").into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "delete-cancel",
@@ -4828,6 +4846,7 @@ fn ask_discard(
             title: title.into(),
             detail: Some(detail.into()),
             sql: None,
+            language: "sql",
             choices: vec![
                 choice("discard-keep", keep, false),
                 choice("discard-close", "Close", true),
@@ -4912,6 +4931,7 @@ fn show_error(title: &'static str, detail: String, window: &mut Window, cx: &mut
             title: title.into(),
             detail: Some(detail.into()),
             sql: None,
+            language: "sql",
             choices: vec![ok],
             default: 0,
             cancel: 0,

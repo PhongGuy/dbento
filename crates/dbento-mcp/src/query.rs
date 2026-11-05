@@ -30,7 +30,8 @@ pub(crate) const CELL_CUT: usize = 4 << 10;
 pub(crate) struct QueryArgs {
     /// The connection's name, as `list_connections` gives it.
     connection: String,
-    /// Exactly one SQL statement; it runs in a read-only session.
+    /// Exactly one statement in the connection's query language (`language` in
+    /// list_connections); it runs in a read-only session.
     sql: String,
     /// default 100, at most 1000
     max_rows: Option<u64>,
@@ -43,6 +44,10 @@ pub(crate) struct QueryResult {
     /// Each cell is a string, null, `{"hex"}` for bytes, or `{"text"|"hex", "cut": true}`
     /// when it was longer than 4 KiB.
     rows: Vec<Vec<Value>>,
+    /// Each returned row's stored document as relaxed Extended JSON text, cut like a cell;
+    /// absent on engines whose rows carry none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documents: Option<Vec<Value>>,
     row_count: u64,
     /// More rows existed than were returned.
     truncated: bool,
@@ -134,12 +139,12 @@ pub(crate) async fn run_read(
             opened.conn.name(),
             sql,
             elapsed,
-            history_outcome(collected.as_ref().map(|(_, _, o)| o)),
+            history_outcome(collected.as_ref().map(|(_, _, _, o)| o)),
         )
         .with_source(HistorySource::Mcp);
         record(path, entry).await;
     }
-    let (columns, rows, outcome) = collected?;
+    let (columns, rows, documents, outcome) = collected?;
     let truncated_by = match outcome.truncated_by {
         None => None,
         Some(TruncatedBy::Rows) => Some(Bound::Rows),
@@ -155,6 +160,7 @@ pub(crate) async fn run_read(
             })
             .collect(),
         rows,
+        documents,
         row_count: outcome.rows,
         truncated: outcome.truncated,
         truncated_by,
@@ -165,13 +171,14 @@ pub(crate) async fn run_read(
     })
 }
 
-/// Executes the script's only statement, walks every batch into JSON rows and, unless a cut
-/// stopped it, reads the rest of the script to its end.
+/// Executes the script's only statement, walks every batch into JSON rows (and the rows'
+/// documents, when the first row carries one) and, unless a cut stopped it, reads the rest of
+/// the script to its end.
 async fn collect(
     session: &mut dbento_core::Session,
     sql: &str,
     limits: Limits,
-) -> Result<(Vec<ColumnInfo>, Vec<Vec<Value>>, Outcome), ToolError> {
+) -> Result<Collected, ToolError> {
     let engine = session.engine();
     let enforcement = session.read_only_enforcement();
     let failed = |e: ExecuteError| ToolError::from_execute_on(&e, engine);
@@ -182,8 +189,19 @@ async fn collect(
     };
     let mut stream = pending.execute(limits).await.map_err(failed)?;
     let mut rows = Vec::new();
+    let mut documents: Option<Vec<Value>> = None;
     while let Some(batch) = stream.next_batch().await.map_err(failed)? {
         for r in 0..batch.len() {
+            // Whether rows carry documents is the engine's, so the first row decides for all.
+            let document = batch
+                .document(r)
+                .map(|d| cell(CellRef::Text(&d.to_extended_json(false))))
+                .transpose()?;
+            match (&mut documents, document) {
+                (Some(docs), Some(d)) => docs.push(d),
+                (None, Some(d)) if rows.is_empty() => documents = Some(vec![d]),
+                _ => {}
+            }
             rows.push(
                 (0..batch.column_count())
                     .map(|c| cell(batch.cell(r, c)))
@@ -202,8 +220,16 @@ async fn collect(
         let extra = discard(&mut script, enforcement).await.map_err(failed)?;
         outcome.extra_results = outcome.extra_results.saturating_add(extra);
     }
-    Ok((columns, rows, outcome))
+    Ok((columns, rows, documents, outcome))
 }
+
+/// A collected result: its columns, rows, documents (on engines with them) and outcome.
+type Collected = (
+    Vec<ColumnInfo>,
+    Vec<Vec<Value>>,
+    Option<Vec<Value>>,
+    Outcome,
+);
 
 /// Reads the script's later results to their end, keeping no rows, and counts those with
 /// columns. An error fails the call on a best-effort session or as a read-only violation, where

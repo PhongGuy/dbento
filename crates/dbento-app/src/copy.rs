@@ -147,6 +147,18 @@ pub fn copy_rows(
         CopyFormat::Tsv => delimited("\t", tsv_quote, &mut lines),
         CopyFormat::Csv => delimited(",", csv_quote, &mut lines),
         CopyFormat::Json => {
+            // Rows that carry a stored document copy it whole, since the cells are only a flat
+            // view of it; any row without one falls back to the cell objects for every row.
+            let documents: Option<Vec<String>> = loaded
+                .clone()
+                .map(|row| {
+                    let doc = store.document(row)?.to_extended_json(false);
+                    Some(format!("  {}", document_json(&doc)))
+                })
+                .collect();
+            if let Some(documents) = documents.filter(|d| !d.is_empty()) {
+                return format!("[\n{}\n]", documents.join(",\n"));
+            }
             let objects: Vec<String> = loaded_cells()
                 .map(|row| {
                     let pairs: Vec<String> = names
@@ -330,6 +342,16 @@ pub fn json_literal(
 fn bare_number(text: &str, type_name: &str, pg_oid: Option<u32>, stored_number: bool) -> bool {
     let numeric = is_numeric(type_name, pg_oid) || stored_number;
     numeric && text.trim() == text && serde_json::from_str::<serde_json::Number>(text).is_ok()
+}
+
+/// A document's relaxed Extended JSON as JSON: as is when it is an object, else (a document
+/// that will not decode renders as a comment) quoted as a string.
+pub fn document_json(ext_json: &str) -> String {
+    if ext_json.starts_with('{') {
+        ext_json.to_owned()
+    } else {
+        json_string(ext_json)
+    }
 }
 
 fn json_string(text: &str) -> String {

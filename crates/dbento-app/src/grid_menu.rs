@@ -1,7 +1,8 @@
 //! The grid's context menu: which items a right-click offers and which apply.
 
 use dbento_core::{
-    CellRef, EditValue, Engine, RelationRef, default_schema, quote_ident, single_source,
+    CellRef, EditValue, Engine, QueryLanguage, RelationRef, default_schema, quote_ident,
+    single_source,
 };
 use gpui_kit::App;
 
@@ -105,9 +106,14 @@ pub fn menu_sections(m: &TabModel, stmt: usize, target: GridTarget, cx: &App) ->
             entries,
         });
     }
-    let Some(store) = m.results().get(stmt).map(|r| &r.store) else {
+    let Some(result) = m.results().get(stmt) else {
         return sections;
     };
+    let store = &result.store;
+    // An INSERT statement only makes sense for a result that came from SQL.
+    let sql_result = result
+        .engine
+        .is_none_or(|e| e.capabilities().language == QueryLanguage::Sql);
     if store.columns().is_empty() {
         return sections;
     }
@@ -138,10 +144,12 @@ pub fn menu_sections(m: &TabModel, stmt: usize, target: GridTarget, cx: &App) ->
             entry("grid-menu-copy-csv", "Copy as CSV", copyable),
             entry("grid-menu-copy-json", "Copy as JSON", copyable),
             entry("grid-menu-copy-markdown", "Copy as Markdown", copyable),
-            entry("grid-menu-copy-sql", "Copy as SQL INSERT", sql),
-            // Export writes every loaded row, so it needs rows rather than a target.
-            entry("grid-menu-export", "Export…", store.rows() > 0),
-        ],
+        ]
+        .into_iter()
+        .chain(sql_result.then(|| entry("grid-menu-copy-sql", "Copy as SQL INSERT", sql)))
+        // Export writes every loaded row, so it needs rows rather than a target.
+        .chain([entry("grid-menu-export", "Export…", store.rows() > 0)])
+        .collect(),
     });
     sections
 }

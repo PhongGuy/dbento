@@ -3,7 +3,9 @@
 
 use std::ops::Range;
 
-use dbento_core::{Engine, RelationKind, RelationRef, quote_ident, statement_ranges};
+use dbento_core::{
+    Engine, QueryLanguage, RelationKind, RelationRef, quote_ident, statement_ranges,
+};
 
 use crate::catalog::CatalogQuery;
 use crate::schema_tree::CatalogTree;
@@ -254,6 +256,16 @@ pub fn complete_in(
     conn: &str,
     default_schema: Option<&str>,
 ) -> Completion {
+    if engine.capabilities().language == QueryLanguage::MongoShell {
+        return crate::mongo_completion::complete_mongo(
+            stmt,
+            start,
+            offset,
+            tree,
+            conn,
+            default_schema,
+        );
+    }
     let none = nothing(offset);
     let Some(off) = offset.checked_sub(start) else {
         return none;
@@ -482,7 +494,7 @@ fn sorted(mut v: Vec<Candidate>) -> Vec<Candidate> {
     v
 }
 
-fn starts(name: &str, prefix: &str) -> bool {
+pub(crate) fn starts(name: &str, prefix: &str) -> bool {
     name.to_lowercase().starts_with(&prefix.to_lowercase())
 }
 
@@ -495,7 +507,7 @@ fn pick<'n>(names: impl Iterator<Item = &'n str> + Clone, want: &str) -> Option<
     })
 }
 
-fn kind_detail(kind: RelationKind) -> &'static str {
+pub(crate) fn kind_detail(kind: RelationKind) -> &'static str {
     match kind {
         RelationKind::Table => "table",
         RelationKind::View => "view",

@@ -58,24 +58,24 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
         Some(true),
         "Tab skips the engine row"
     );
-    assert_eq!(chosen(cx, o.win, "conn-engine", 6), 0);
+    assert_eq!(chosen(cx, o.win, "conn-engine", 7), 0);
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 6), 1, "Right picks SQLite");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 7), 1, "Right picks SQLite");
     assert!(
         support::present(cx, o.win, "conn-path"),
         "the SQLite form shows"
     );
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 6), 2, "Right picks MySQL");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 7), 2, "Right picks MySQL");
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 6), 3, "Right picks DuckDB");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 7), 3, "Right picks DuckDB");
     assert!(
         support::present(cx, o.win, "conn-path"),
         "the DuckDB form shows"
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 6),
+        chosen(cx, o.win, "conn-engine", 7),
         4,
         "Right picks SQL Server"
     );
@@ -85,7 +85,7 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 6),
+        chosen(cx, o.win, "conn-engine", 7),
         5,
         "Right picks SurrealDB"
     );
@@ -95,17 +95,27 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 6),
-        5,
+        chosen(cx, o.win, "conn-engine", 7),
+        6,
+        "Right picks MongoDB"
+    );
+    assert!(
+        support::present(cx, o.win, "conn-uri"),
+        "the MongoDB form shows"
+    );
+    press(cx, o.win, "right");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 7),
+        6,
         "Right stops at the end"
     );
-    for want in [4, 3, 2, 1, 0] {
+    for want in [5, 4, 3, 2, 1, 0] {
         press(cx, o.win, "left");
-        assert_eq!(chosen(cx, o.win, "conn-engine", 6), want, "Left steps back");
+        assert_eq!(chosen(cx, o.win, "conn-engine", 7), want, "Left steps back");
     }
     press(cx, o.win, "left");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 6),
+        chosen(cx, o.win, "conn-engine", 7),
         0,
         "Left stops at the start"
     );

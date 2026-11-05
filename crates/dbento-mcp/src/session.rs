@@ -69,6 +69,13 @@ static SURREALDB: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+// As SurrealDB's, the level follows who connects: here the privileges of the URI's user.
+const MONGODB: &str = "The level of a read-only session on this connection follows the \
+    privileges of the user in its `uri` and is known only after connecting: `database` when \
+    every privilege is a read action, so the server refuses writes, and `best_effort` otherwise, \
+    where Dbento refuses every statement it reads as a write or cannot classify before sending \
+    it but the user itself can write. Each `query` result carries the level.";
+
 const UNKNOWN: &str = "The enforcement of read-only sessions on this connection is unknown to \
     this server.";
 
@@ -94,13 +101,16 @@ fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static s
 }
 
 /// The level name and text `list_connections` shows for a connection configured at `level`.
-/// SurrealDB's level follows the login, which only a connection reveals.
+/// SurrealDB's and MongoDB's levels follow the login, which only a connection reveals.
 pub(crate) fn listed_level(
     engine: Engine,
     level: ReadOnlyEnforcement,
 ) -> (&'static str, &'static str) {
     if engine == Engine::Surrealdb {
         return ("unknown", SURREALDB.as_str());
+    }
+    if engine == Engine::Mongodb {
+        return ("unknown", MONGODB);
     }
     (enforcement_name(level), session_description(engine, level))
 }

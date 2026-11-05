@@ -1358,3 +1358,27 @@ fn surrealdb_selects_name_the_table_alone_and_switch_database_only_when_needed()
         "SELECT *\nFROM main.Album"
     );
 }
+
+#[test]
+fn mongodb_opens_a_collection_with_find_and_names_another_database() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.mg]\nengine = \"mongodb\"\nuri = \"mongodb://h/shop\"\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    let mg = ws.connection("mg").unwrap();
+    assert_eq!(
+        select_sql(Engine::Mongodb, &RelationRef::new("shop", "orders")),
+        "db.getCollection(\"orders\").find()"
+    );
+    assert_eq!(
+        select_text(mg, &RelationRef::new("shop", "order lines")),
+        "db.getCollection(\"order lines\").find()"
+    );
+    assert_eq!(
+        select_text(mg, &RelationRef::new("logs", "a\"b")),
+        "db.getSiblingDB(\"logs\").getCollection(\"a\\\"b\").find()"
+    );
+}

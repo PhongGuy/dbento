@@ -14,6 +14,7 @@ fn ask(choices: [(&'static str, bool); 2], default: usize) -> Ask {
         title: "t".into(),
         detail: None,
         sql: None,
+        language: "sql",
         choices: choices
             .iter()
             .map(|&(id, danger)| Choice {
@@ -99,7 +100,12 @@ fn the_explanation_names_what_happens_to_every_row() {
 }
 #[test]
 fn the_unguarded_ask_reads_cancel_and_run_anyway_and_carries_the_sql() {
-    let a = unguarded_ask(Some(Unguarded::DeleteWithoutWhere), "prod", "DELETE FROM t");
+    let a = unguarded_ask(
+        Some(Unguarded::DeleteWithoutWhere),
+        "prod",
+        "DELETE FROM t",
+        "sql",
+    );
     let buttons: Vec<_> = a
         .choices
         .iter()
@@ -170,4 +176,19 @@ fn the_dialog_is_480_px_under_the_toolbar_with_a_48_px_footer(cx: &mut TestAppCo
         assert!((below - 8.).abs() <= 1., "{run:?} in {surface:?}");
     })
     .unwrap();
+}
+
+#[test]
+fn a_mongodb_prompt_previews_in_javascript() {
+    let a = unguarded_ask(
+        Some(Unguarded::DeleteAllDocuments),
+        "shop",
+        "db.orders.deleteMany({})",
+        "javascript",
+    );
+    assert_eq!(a.language, "javascript");
+    assert_eq!(
+        a.title.as_ref(),
+        "deleteMany with an empty filter on 'shop'"
+    );
 }

@@ -31,6 +31,7 @@ pub mod inspector;
 pub mod keymap;
 pub mod labels;
 pub mod link;
+mod mongo_completion;
 pub mod nav;
 pub mod palette;
 mod parks;

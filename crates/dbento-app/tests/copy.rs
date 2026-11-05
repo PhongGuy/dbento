@@ -1,6 +1,7 @@
 mod support;
 use dbento_app::copy::{
-    CopyFormat, cell_copy, copy_as, copy_rows, copy_text, insert_maps_nothing, json_literal,
+    CopyFormat, cell_copy, copy_as, copy_rows, copy_text, document_json, insert_maps_nothing,
+    json_literal,
 };
 use dbento_app::results::ResultStore;
 use dbento_app::results_pane::ResultsPane;
@@ -864,5 +865,24 @@ fn a_sql_server_insert_brackets_names_and_writes_bytes_as_hex() {
         )
         .as_deref(),
         Some("INSERT INTO [dbo].[t] ([v]) VALUES (N'it''s');")
+    );
+}
+
+#[test]
+fn an_sql_result_carries_no_documents_and_copies_json_from_its_cells() {
+    let s = store("SELECT 1 AS a");
+    assert!(s.document(0).is_none());
+    assert_eq!(
+        copy_rows(&s, 0..1, &[0], &CopyFormat::Json, false),
+        "[\n  {\"a\": 1}\n]"
+    );
+}
+
+#[test]
+fn a_document_that_will_not_decode_copies_as_a_json_string() {
+    assert_eq!(document_json("{\"a\":1}"), "{\"a\":1}");
+    assert_eq!(
+        document_json("/* undecodable document: x */"),
+        "\"/* undecodable document: x */\""
     );
 }

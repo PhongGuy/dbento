@@ -781,16 +781,6 @@ fn a_loaded_surrealdb_connection_selects_surrealdb(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn an_engine_the_picker_does_not_offer_selects_no_option(cx: &mut TestAppContext) {
-    let mut mongo = ConnectionSpec::new(Engine::Mongodb);
-    mongo.uri = Some("mongodb://db.example/app".into());
-    let (win, _f) = open(cx, Some(("mg", mongo)));
-    for ix in 0..6 {
-        assert_eq!(engine_option(cx, win, ix).1, Some(false), "{ix}");
-    }
-}
-
-#[gpui_kit::test]
 fn surrealdb_to_postgres_and_back_restores_namespace_and_auth_level(cx: &mut TestAppContext) {
     let (win, f) = open(cx, Some(("sr", sr())));
     radio(cx, win, "conn-engine", 0);
@@ -818,4 +808,52 @@ fn a_client_certificate_stays_with_postgres_when_switching_to_surrealdb(cx: &mut
     assert_eq!(edit(cx, &f), Ok(("pg".into(), want)));
     radio(cx, win, "conn-engine", 0);
     assert_eq!(edit(cx, &f), Ok(("pg".into(), pg)));
+}
+
+const MG_URI: &str = "mongodb://app@db.example:27017/shop?authSource=admin";
+fn mg() -> ConnectionSpec {
+    let mut s = ConnectionSpec::new(Engine::Mongodb);
+    s.uri = Some(MG_URI.into());
+    s
+}
+
+#[gpui_kit::test]
+fn the_seventh_engine_is_mongodb_and_writes_only_its_uri(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(engine_option(cx, win, 6).0.as_deref(), Some("MongoDB"));
+    radio(cx, win, "conn-engine", 6);
+    assert!(present(cx, win, "conn-uri"));
+    for id in [
+        "conn-host",
+        "conn-port",
+        "conn-database",
+        "conn-user",
+        "conn-path",
+    ] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    set(cx, win, &f, Field::Name, "mg");
+    set(cx, win, &f, Field::Uri, MG_URI);
+    assert_eq!(edit(cx, &f), Ok(("mg".into(), mg())));
+}
+
+#[gpui_kit::test]
+fn a_loaded_mongodb_connection_selects_mongodb_and_shows_its_uri(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("mg", mg())));
+    assert_eq!(engine_option(cx, win, 6).1, Some(true));
+    for ix in 0..6 {
+        assert_eq!(engine_option(cx, win, ix).1, Some(false), "{ix}");
+    }
+    assert_eq!(value_and_hint(cx, &f, Field::Uri).0, MG_URI);
+    assert_eq!(edit(cx, &f), Ok(("mg".into(), mg())));
+}
+
+#[gpui_kit::test]
+fn leaving_mongodb_drops_its_uri_and_coming_back_restores_it(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("mg", mg())));
+    radio(cx, win, "conn-engine", 0);
+    let (_, pg) = edit(cx, &f).unwrap();
+    assert_eq!((pg.engine, pg.uri), (Engine::Postgres, None));
+    radio(cx, win, "conn-engine", 6);
+    assert_eq!(edit(cx, &f), Ok(("mg".into(), mg())));
 }

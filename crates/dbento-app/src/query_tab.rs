@@ -86,6 +86,13 @@ pub const READ_ONLY_SURREAL_VIEWER_TOOLTIP: &str = "Read-only: this VIEWER login
 pub const READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: Dbento runs each statement in a transaction it cancels and refuses the writes it can see. Use a VIEWER login for enforcement.";
 /// The SurrealDB badge's head before the session has reported its level.
 pub const READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP: &str = "Read-only: Dbento runs each statement in a transaction it cancels; the level shows once connected.";
+/// The MongoDB badge when the URI user holds only read privileges.
+pub const READ_ONLY_MONGO_READER_TOOLTIP: &str = "Read-only: this user holds only read privileges, so MongoDB refuses writes, and Dbento refuses the writes it can see before sending them.";
+/// The MongoDB badge when the URI user can write and only Dbento's own refusal holds.
+pub const READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: this user can write, so Dbento refuses every statement it reads as a write or cannot classify before sending it. Use a user with only the read role for enforcement.";
+/// The MongoDB badge before the session has reported its level.
+pub const READ_ONLY_MONGO_UNCONNECTED_TOOLTIP: &str =
+    "Read-only: the level follows the privileges of the user in the URI and shows once connected.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -148,10 +155,20 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
 }
 
 /// The badge text for `c` with the session's `level`: on SurrealDB the level's head, a space and
-/// the residual; on every other engine `read_only_tooltip_of(c)`.
+/// the residual; on MongoDB the level's text alone; on every other engine `read_only_tooltip_of(c)`.
 pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
-    if c.engine() != Engine::Surrealdb {
-        return read_only_tooltip_of(c).to_owned();
+    match c.engine() {
+        // MongoDB's level follows the URI user's privileges, which only the session knows.
+        Engine::Mongodb => {
+            return match level {
+                Some(ReadOnlyEnforcement::Database) => READ_ONLY_MONGO_READER_TOOLTIP,
+                Some(ReadOnlyEnforcement::BestEffort) => READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP,
+                _ => READ_ONLY_MONGO_UNCONNECTED_TOOLTIP,
+            }
+            .to_owned();
+        }
+        Engine::Surrealdb => {}
+        _ => return read_only_tooltip_of(c).to_owned(),
     }
     // SurrealDB's level comes from the login's role, which only the session knows.
     let head = match level {
@@ -177,13 +194,25 @@ pub fn confirm_explanation(kind: Option<Unguarded>) -> &'static str {
         Some(Unguarded::DeleteWithoutWhere) => "It has no WHERE clause, so it deletes every row.",
         Some(Unguarded::Drop) => "It removes the object and everything in it.",
         Some(Unguarded::Truncate) => "It removes every row of the table.",
+        Some(Unguarded::UpdateAllDocuments) => {
+            "Its filter is empty, so it changes every document in the collection."
+        }
+        Some(Unguarded::DeleteAllDocuments) => {
+            "Its filter is empty, so it deletes every document in the collection."
+        }
         _ => "It may change rows.",
     }
 }
 
 /// The question asked before a guarded statement runs: Cancel (Enter and Escape) or a
-/// destructive "Run anyway", with the statement boxed under the explanation.
-pub fn unguarded_ask(kind: Option<Unguarded>, connection: &str, sql: &str) -> Ask {
+/// destructive "Run anyway", with the statement boxed under the explanation and highlighted
+/// as `language`.
+pub fn unguarded_ask(
+    kind: Option<Unguarded>,
+    connection: &str,
+    sql: &str,
+    language: &'static str,
+) -> Ask {
     let title = match kind {
         Some(kind) => confirm_title(kind, connection),
         None => format!("Run this statement on '{connection}'?"),
@@ -192,6 +221,7 @@ pub fn unguarded_ask(kind: Option<Unguarded>, connection: &str, sql: &str) -> As
         title: title.into(),
         detail: Some(confirm_explanation(kind).into()),
         sql: Some(sql.to_owned().into()),
+        language,
         choices: vec![
             Choice {
                 id: "confirm-skip",
@@ -223,6 +253,7 @@ pub fn analyze_ask(kinds: &[Unguarded], connection: &str, sql: &str) -> Ask {
         title: format!("EXPLAIN ANALYZE runs this statement on '{connection}'").into(),
         detail: Some(detail.into()),
         sql: Some(sql.to_owned().into()),
+        language: "sql",
         choices: vec![
             Choice {
                 id: "confirm-skip",
@@ -263,16 +294,26 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     )
 }
 
+// The prompt previews mongosh text as JavaScript; SurrealQL keeps the SQL grammar, which
+// colours its shared keywords better than plain text.
+fn preview_language(engine: Engine) -> &'static str {
+    match engine.capabilities().language {
+        QueryLanguage::MongoShell => "javascript",
+        _ => "sql",
+    }
+}
+
 // Format SQL applies only to SQL engines; the formatter knows no other language.
 fn formats(engine: Engine) -> bool {
     engine.capabilities().language == QueryLanguage::Sql
 }
 
-/// The highlighter language for `engine`'s query editor: "sql" for an SQL engine, "text"
-/// (plain, no highlighting) for SurrealQL or the MongoDB shell.
+/// The highlighter language for `engine`'s query editor: "sql" for an SQL engine,
+/// "javascript" for the MongoDB shell, "text" (plain, no highlighting) for SurrealQL.
 pub fn editor_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::Sql => "sql",
+        QueryLanguage::MongoShell => "javascript",
         _ => "text",
     }
 }
@@ -1023,7 +1064,8 @@ impl QueryTab {
         let spec = if analyze {
             analyze_ask(&kinds, connection, &sql)
         } else {
-            unguarded_ask(kinds.first().copied(), connection, &sql)
+            let language = preview_language(self.session_conn.engine());
+            unguarded_ask(kinds.first().copied(), connection, &sql, language)
         };
         let reply = ask(spec, window, cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -1070,6 +1112,7 @@ impl QueryTab {
             title: prompt.title.clone().into(),
             detail: Some(prompt.detail.clone().into()),
             sql: Some(prompt.sql.clone().into()),
+            language: "sql",
             choices: vec![
                 Choice {
                     id: "apply-rollback",
@@ -1134,6 +1177,7 @@ impl QueryTab {
             title: title.into(),
             detail: Some("They have not been saved to the database.".into()),
             sql: None,
+            language: "sql",
             choices: vec![
                 Choice {
                     id: "discard-keep",

@@ -492,8 +492,10 @@ fn segmented_row(
                 on_key(&to, window, cx);
             }
         })
+        // Options that do not fit the row's column flow onto another line, never past its edge.
         .flex()
-        .flex_none()
+        .flex_wrap()
+        .max_w_full()
         .items_center()
         .gap_0p5()
         .p(px(2.))

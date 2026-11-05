@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use dbento_core::{CellRef, ColumnInfo, ResultBatch};
+use dbento_core::{CellRef, ColumnInfo, DocumentRef, ResultBatch};
 
 use crate::grid::{cell_display, is_numeric};
 use crate::runner::StatementEnd;
@@ -183,28 +183,37 @@ impl ResultStore {
 
     /// The cell at `row`, `col`, or `None` when either is out of range.
     pub fn cell(&self, row: u64, col: usize) -> Option<CellRef<'_>> {
-        if row >= self.rows || col >= self.columns.len() {
+        if col >= self.columns.len() {
             return None;
         }
-        let row = match &self.local {
-            Some(l) => u64::from(l.order[row as usize]),
-            None => row,
-        };
-        self.loaded_cell(row, col)
+        self.loaded_cell(self.loaded_row(row)?, col)
+    }
+
+    /// The stored document of shown row `row`, following a local sort; None for SQL engines or
+    /// past the loaded rows.
+    pub fn document(&self, row: u64) -> Option<DocumentRef<'_>> {
+        let row = self.loaded_row(row)?;
+        let ix = self.starts.partition_point(|&start| start <= row) - 1;
+        self.batches[ix].document((row - self.starts[ix]) as usize)
     }
 
     /// Whether the cell at `row`, `col` was stored as a number, as `ResultBatch::is_number` says;
     /// false when either is out of range.
     pub fn is_number(&self, row: u64, col: usize) -> bool {
-        if row >= self.rows || col >= self.columns.len() {
-            return false;
+        self.loaded_row(row)
+            .and_then(|row| self.locate(row, col))
+            .is_some_and(|(batch, r)| batch.is_number(r, col))
+    }
+
+    /// The loaded row that shown row `row` reads under any local sort; None past the loaded rows.
+    fn loaded_row(&self, row: u64) -> Option<u64> {
+        if row >= self.rows {
+            return None;
         }
-        let row = match &self.local {
+        Some(match &self.local {
             Some(l) => u64::from(l.order[row as usize]),
             None => row,
-        };
-        self.locate(row, col)
-            .is_some_and(|(batch, r)| batch.is_number(r, col))
+        })
     }
 
     /// The cell at loaded row `row`, ignoring any local sort.

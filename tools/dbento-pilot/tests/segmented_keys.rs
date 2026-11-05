@@ -1,6 +1,6 @@
 //! The connection dialog's engine row driven by keys in the running app: Tab from Name
 //! reaches it, and Right, Home, End and Left swap the form between Postgres, SQLite, MySQL,
-//! DuckDB, SQL Server and SurrealDB.
+//! DuckDB, SQL Server, SurrealDB and MongoDB.
 //! Set DBENTO_SHOTS_DIR to keep a shot of the focused row.
 mod common;
 
@@ -27,7 +27,7 @@ async fn key(pilot: &Pilot, keys: &str) {
 
 /// The file forms show a File field and no Host, the server forms the reverse, and only
 /// MySQL's and DuckDB's carry the read-only help line; only SQL Server's has a reader user
-/// and only SurrealDB's a namespace.
+/// and only SurrealDB's a namespace; MongoDB's has a URI in place of Host.
 fn sqlite_form(tree: &Value) -> bool {
     file_form(tree) && find_node(tree, "conn-read-only-help").is_none()
 }
@@ -64,6 +64,10 @@ fn surreal_form(tree: &Value) -> bool {
     server_form(tree) && find_node(tree, "conn-namespace").is_some()
 }
 
+fn mongo_form(tree: &Value) -> bool {
+    find_node(tree, "conn-uri").is_some() && find_node(tree, "conn-host").is_none()
+}
+
 fn server_form(tree: &Value) -> bool {
     find_node(tree, "conn-host").is_some() && find_node(tree, "conn-path").is_none()
 }
@@ -97,17 +101,19 @@ async fn the_engine_row_is_reached_by_tab_and_driven_by_arrows() {
     key(&pilot, "home").await;
     until(&pilot, "Home picked Postgres", postgres_form).await;
     key(&pilot, "end").await;
-    until(&pilot, "End picked SurrealDB", surreal_form).await;
+    until(&pilot, "End picked MongoDB", mongo_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left picked SQL Server", mssql_form).await;
+    until(&pilot, "Left picked SurrealDB", surreal_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left again picked DuckDB", duckdb_form).await;
+    until(&pilot, "Left again picked SQL Server", mssql_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a third time picked MySQL", mysql_form).await;
+    until(&pilot, "Left a third time picked DuckDB", duckdb_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a fourth time picked SQLite", sqlite_form).await;
+    until(&pilot, "Left a fourth time picked MySQL", mysql_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a fifth time picked Postgres", postgres_form).await;
+    until(&pilot, "Left a fifth time picked SQLite", sqlite_form).await;
+    key(&pilot, "left").await;
+    until(&pilot, "Left a sixth time picked Postgres", postgres_form).await;
 
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();
