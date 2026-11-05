@@ -280,8 +280,8 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
 // The prompt previews mongosh text as JavaScript; SurrealQL keeps the SQL grammar, which
 // colours its shared keywords better than plain text.
 fn preview_language(engine: Engine) -> &'static str {
-    match editor_language(engine) {
-        "javascript" => "javascript",
+    match engine.capabilities().language {
+        QueryLanguage::MongoShell => "javascript",
         _ => "sql",
     }
 }

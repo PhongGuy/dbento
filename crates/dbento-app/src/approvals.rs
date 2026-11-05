@@ -199,7 +199,7 @@ fn shell_target(text: &str) -> Option<&str> {
 }
 
 // The first identifier called at bracket depth 0, skipping the getSiblingDB and getCollection
-// hops; quoted strings are stepped over so a bracket inside one never counts.
+// hops; quoted strings and comments are stepped over so a bracket inside one never counts.
 fn shell_method(text: &str) -> Option<&str> {
     let mut depth = 0usize;
     let mut ident: Option<(usize, usize)> = None;
@@ -210,6 +210,19 @@ fn shell_method(text: &str) -> Option<&str> {
             continue;
         }
         let called = ident.take().map(|(start, end)| &text[start..end]);
+        // A comment between chain segments is stepped over whole, so a call inside it never
+        // names the method.
+        let comment_end = match &text.as_bytes()[i..] {
+            [b'/', b'/', ..] => Some(text[i..].find('\n').map_or(text.len(), |n| i + n)),
+            [b'/', b'*', ..] => Some(text[i + 2..].find("*/").map_or(text.len(), |n| i + n + 4)),
+            _ => None,
+        };
+        if let Some(end) = comment_end {
+            while chars.clone().next().is_some_and(|(j, _)| j < end) {
+                chars.next();
+            }
+            continue;
+        }
         match c {
             '\'' | '"' => {
                 while let Some((_, s)) = chars.next() {

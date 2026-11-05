@@ -537,3 +537,15 @@ fn a_mongodb_headline_names_the_method() {
     assert_eq!(headline("shop", "db.orders"), "shop");
     assert_eq!(headline("shop", "UPDATE t SET x = 1"), "shop \u{B7} UPDATE");
 }
+
+#[test]
+fn comments_inside_a_mongosh_chain_never_name_the_method() {
+    assert_eq!(
+        headline("shop", "db.orders/*find(*/.deleteMany({})"),
+        "shop \u{B7} deleteMany"
+    );
+    assert_eq!(
+        headline("shop", "db.orders // find(\n  .deleteMany({})"),
+        "shop \u{B7} deleteMany"
+    );
+}
