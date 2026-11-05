@@ -4,9 +4,10 @@
 use std::collections::{HashMap, HashSet};
 
 use dbento_core::{
-    ColumnMeta, ConstraintInfo, ConstraintKind, Engine, FormatOptions, IndexInfo, ObjectRef,
-    RELATION_CAP, RelationKind, RelationList, RelationObjects, RelationRef, RoutineKind,
-    SchemaInfo, SchemaObjects, TriggerState, TypeKind, format_sql, quote_ident,
+    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Engine, FormatOptions, IndexInfo,
+    ObjectRef, QueryLanguage, RELATION_CAP, RelationKind, RelationList, RelationObjects,
+    RelationRef, RoutineKind, SchemaInfo, SchemaObjects, TriggerState, TypeKind, format_sql,
+    quote_ident,
 };
 use gpui_kit::App;
 
@@ -1390,6 +1391,9 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
     let copy_qualified = entry("tree-menu-copy-qualified", "Copy qualified name");
     let refresh = entry("tree-menu-refresh", "Refresh");
     let view_definition = entry("tree-menu-view-definition", "View definition");
+    // Counting, INSERT templates and qualified names are SQL text; a SurrealQL engine gets none.
+    let sql = engine.capabilities().language == QueryLanguage::Sql;
+    let copy_qualified = sql.then_some(copy_qualified);
     match kind {
         RowKind::Relation(kind) => vec![
             MenuEntry {
@@ -1402,13 +1406,13 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
                 "New query on view"
             }),
             copy_name,
-            copy_qualified,
-            entry("tree-menu-count", "Count rows"),
-            entry("tree-menu-generate-select", "Generate SELECT"),
         ]
         .into_iter()
+        .chain(copy_qualified)
+        .chain(sql.then(|| entry("tree-menu-count", "Count rows")))
+        .chain([entry("tree-menu-generate-select", "Generate SELECT")])
         .chain(
-            (*kind == RelationKind::Table)
+            (sql && *kind == RelationKind::Table)
                 .then(|| entry("tree-menu-generate-insert", "Generate INSERT")),
         )
         // A table offers its definition only where the engine keeps one (SQLite, MySQL, DuckDB).
@@ -1424,7 +1428,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         .collect(),
         RowKind::Schema => vec![new_query("New query"), copy_name, refresh],
         RowKind::Kind(_) => vec![new_query("New query"), refresh],
-        RowKind::Column { .. } => vec![copy_name, copy_qualified],
+        RowKind::Column { .. } => [copy_name].into_iter().chain(copy_qualified).collect(),
         RowKind::Failed { .. } => vec![
             entry("tree-menu-retry", "Retry"),
             entry("tree-menu-copy-error", "Copy error"),
@@ -1442,14 +1446,29 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
 }
 
 /// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`
-/// with default options (`"SELECT *\nFROM main.Album"` on SQLite).
+/// with default options (`"SELECT *\nFROM main.Album"` on SQLite). SurrealDB names the table
+/// alone, `` SELECT * FROM `t` ``, since a dotted name reads as a field path there.
 pub fn select_sql(engine: Engine, rel: &RelationRef) -> String {
+    if engine == Engine::Surrealdb {
+        return format!("SELECT * FROM {}", quote_ident(engine, rel.name()));
+    }
     let raw = format!(
         "SELECT * FROM {}.{}",
         quote_ident(engine, rel.schema()),
         quote_ident(engine, rel.name())
     );
     format_sql(engine, &raw, &FormatOptions::default())
+}
+
+/// The text that opens `rel` on `conn`: `select_sql`, and on SurrealDB a `USE DB` first when
+/// the relation's database is not the connection's.
+pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
+    let engine = conn.engine();
+    let select = select_sql(engine, rel);
+    if engine != Engine::Surrealdb || conn.database() == Some(rel.schema()) {
+        return select;
+    }
+    format!("USE DB {};\n{select};", quote_ident(engine, rel.schema()))
 }
 
 /// `INSERT INTO <q> (<cols>)\nVALUES (NULL, ...)` with one NULL per column, every name

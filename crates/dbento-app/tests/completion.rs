@@ -639,3 +639,120 @@ fn sql_server_inserts_names_in_brackets() {
         [("Order Lines", "[Order Lines]"), ("orders", "[orders]")]
     );
 }
+
+/// `sr`: database app holds orders (id, status) and "Order Lines".
+fn sr_tree() -> CatalogTree {
+    let mut t = CatalogTree::new();
+    put(
+        &mut t,
+        "sr",
+        CatalogQuery::Schemas,
+        CatalogData::Schemas(vec![SchemaInfo::new("app")]),
+    );
+    put(
+        &mut t,
+        "sr",
+        relations_of("app"),
+        rels(&[
+            ("orders", RelationKind::Table),
+            ("Order Lines", RelationKind::Table),
+        ]),
+    );
+    put(
+        &mut t,
+        "sr",
+        CatalogQuery::Columns {
+            rel: RelationRef::new("app", "orders"),
+        },
+        CatalogData::Columns(vec![col("id", "record"), col("status", "string")]),
+    );
+    t
+}
+fn sr(sql: &str) -> Vec<String> {
+    let c = complete(
+        Engine::Surrealdb,
+        sql,
+        sql.len(),
+        &sr_tree(),
+        "sr",
+        Some("app"),
+    );
+    labels(&c).into_iter().map(str::to_owned).collect()
+}
+
+#[test]
+fn surrealql_strings_names_and_comments_lex_as_the_server_reads_them() {
+    for inside in [
+        "SELECT 'it\\'s or",
+        "SELECT \"Al",
+        "SELECT \"a\\\"b",
+        "SELECT r'Al",
+        "SELECT d'2024",
+        "SELECT `Al",
+        "SELECT ⟨Al",
+        "SELECT 1 -- Al",
+        "SELECT 1 // Al",
+        "SELECT 1 # Al",
+    ] {
+        let got = sr(inside);
+        assert!(got.is_empty(), "{inside}: {got:?}");
+    }
+    for after in [
+        "SELECT * FROM ord",
+        "SELECT 'it\\'s' FROM ord",
+        "SELECT \"x\\\"y\" FROM ord",
+        "SELECT r\"x\" FROM ord",
+        "SELECT `a\\`b` FROM ord",
+        "SELECT ⟨a`b⟩ FROM ord",
+        "/* a /* b */ SELECT * FROM ord",
+        "SELECT * // c\nFROM ord",
+        "SELECT * # c\rFROM ord",
+        "SELECT [1, 2] FROM ord",
+    ] {
+        let got = sr(after);
+        assert!(offers(&got, "orders"), "{after}: {got:?}");
+    }
+}
+
+#[test]
+fn surrealql_offers_its_own_keywords_and_function_paths() {
+    assert_eq!(sr("SELECT string::lo"), ["string::lowercase"]);
+    assert_eq!(
+        sr("SELECT math::m"),
+        ["math::max", "math::mean", "math::min"]
+    );
+    assert!(offers(&sr("UPS"), "UPSERT"));
+    assert!(offers(&sr("rel"), "relate"));
+    assert!(sr("ANALY").is_empty(), "SQL-only keywords stay out");
+    assert!(
+        sr("SELECT * FROM $or").is_empty(),
+        "a parameter is no catalog name"
+    );
+    let pg = complete(Engine::Postgres, "UPS", 3, &sr_tree(), "sr", Some("app"));
+    assert!(labels(&pg).is_empty(), "SQL engines keep the SQL list");
+}
+
+#[test]
+fn surrealql_inserts_names_in_backticks() {
+    let sql = "SELECT * FROM Ord";
+    let c = complete(
+        Engine::Surrealdb,
+        sql,
+        sql.len(),
+        &sr_tree(),
+        "sr",
+        Some("app"),
+    );
+    let got: Vec<(&str, &str)> = c
+        .items
+        .iter()
+        .map(|i| (i.label.as_str(), i.insert.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [("Order Lines", "`Order Lines`"), ("orders", "`orders`")]
+    );
+    let sql = "SELECT orders.st FROM orders";
+    let c = complete(Engine::Surrealdb, sql, 16, &sr_tree(), "sr", Some("app"));
+    assert_eq!(labels(&c), ["status"]);
+}

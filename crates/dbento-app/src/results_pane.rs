@@ -189,6 +189,21 @@ pub fn result_mark(
     }
 }
 
+/// The footer note for a completed statement: "N affected", "any changes were rolled back",
+/// or both joined by ", "; None when neither applies.
+pub fn outcome_note(o: &Outcome) -> Option<String> {
+    let affected = o
+        .rows_affected
+        .map(|n| format!("{} affected", format_rows(n)));
+    let rolled_back = o
+        .rolled_back
+        .then(|| "any changes were rolled back".to_owned());
+    match (affected, rolled_back) {
+        (Some(a), Some(r)) => Some(format!("{a}, {r}")),
+        (a, r) => a.or(r),
+    }
+}
+
 /// One line describing how a statement ended, or "running" while it has not.
 pub fn summary(r: &StatementResult) -> String {
     let outcome = |o: &Outcome| match o.rows_affected {
@@ -2493,9 +2508,7 @@ impl Render for ResultsPane {
                 Some(StatementEnd::Truncated(o)) => {
                     Some((format!("truncated at {}", format_rows(o.rows)), warning))
                 }
-                Some(StatementEnd::Complete(o)) => o
-                    .rows_affected
-                    .map(|n| (format!("{} affected", format_rows(n)), dim)),
+                Some(StatementEnd::Complete(o)) => outcome_note(o).map(|n| (n, dim)),
                 Some(StatementEnd::Failed(e)) => Some((e.to_string(), danger)),
                 _ => None,
             };

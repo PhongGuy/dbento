@@ -296,9 +296,14 @@ async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, Intro
         CatalogQuery::RelationObjects { rel } => {
             CatalogData::RelationObjects(s.relation_objects(rel).await?)
         }
-        CatalogQuery::SchemaObjects { schema } => {
-            CatalogData::SchemaObjects(s.schema_objects(schema).await?)
-        }
+        // An engine that keeps no schema objects lists none, so the explorer draws no group
+        // for them rather than an error row.
+        CatalogQuery::SchemaObjects { schema } => match s.schema_objects(schema).await {
+            Err(IntrospectError::Unsupported { .. }) => {
+                CatalogData::SchemaObjects(SchemaObjects::new(Vec::new(), Vec::new(), false))
+            }
+            r => CatalogData::SchemaObjects(r?),
+        },
         // `load` sends definitions down their own arm, never here.
         CatalogQuery::Definition { .. } => {
             return Err(IntrospectError::Unexpected {

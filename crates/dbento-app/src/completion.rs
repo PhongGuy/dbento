@@ -123,6 +123,65 @@ pub const KEYWORDS: &[&str] = &[
     "CAST",
 ];
 
+/// The SurrealQL keywords offered, uppercase.
+pub const SURREAL_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IS", "NULL", "NONE", "TRUE", "FALSE", "ONLY",
+    "VALUE", "AS", "GROUP", "ALL", "ORDER", "BY", "ASC", "DESC", "LIMIT", "START", "FETCH",
+    "SPLIT", "OMIT", "CREATE", "UPDATE", "UPSERT", "DELETE", "INSERT", "INTO", "RELATE", "CONTENT",
+    "MERGE", "SET", "UNSET", "RETURN", "LET", "IF", "ELSE", "THEN", "END", "FOR", "BEGIN",
+    "COMMIT", "CANCEL", "INFO", "DEFINE", "REMOVE", "TABLE", "FIELD", "INDEX", "TYPE", "USE", "NS",
+    "DB", "CONTAINS", "INSIDE",
+];
+
+/// The SurrealQL functions offered, as the server spells them (each one runs on v3.3.5).
+pub const SURREAL_FUNCTIONS: &[&str] = &[
+    "count",
+    "array::distinct",
+    "array::flatten",
+    "array::len",
+    "array::sort",
+    "crypto::argon2::compare",
+    "crypto::argon2::generate",
+    "crypto::sha256",
+    "duration::secs",
+    "math::ceil",
+    "math::floor",
+    "math::max",
+    "math::mean",
+    "math::min",
+    "math::round",
+    "math::sum",
+    "object::entries",
+    "object::keys",
+    "object::values",
+    "rand::ulid",
+    "rand::uuid",
+    "rand::uuid::v7",
+    "record::id",
+    "record::tb",
+    "session::db",
+    "session::ns",
+    "string::concat",
+    "string::contains",
+    "string::ends_with",
+    "string::join",
+    "string::len",
+    "string::lowercase",
+    "string::replace",
+    "string::split",
+    "string::starts_with",
+    "string::trim",
+    "string::uppercase",
+    "time::floor",
+    "time::format",
+    "time::now",
+    "type::float",
+    "type::int",
+    "type::record",
+    "type::string",
+    "type::table",
+];
+
 /// Keywords after which only relations and schemas make sense.
 const RELATION_KEYWORDS: [&str; 5] = ["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
 
@@ -248,7 +307,7 @@ pub fn complete_in(
             out.extend(ctx.columns(&from, prefix));
             out.extend(ctx.schema_relations(None, prefix));
             out.extend(ctx.schemas(prefix));
-            out.extend(keywords(prefix));
+            out.extend(keywords(engine, prefix));
         }
     }
     out.truncate(MAX_ITEMS);
@@ -378,10 +437,13 @@ impl Ctx<'_> {
     }
 }
 
-/// Keywords matching `prefix`, uppercase when the prefix holds an uppercase letter.
-fn keywords(prefix: &str) -> Vec<Candidate> {
+/// `engine`'s keywords matching `prefix`, uppercase when the prefix holds an uppercase letter;
+/// SurrealDB adds its function paths, which keep their own lowercase spelling.
+fn keywords(engine: Engine, prefix: &str) -> Vec<Candidate> {
     let upper = prefix.chars().any(char::is_uppercase);
-    let mut out: Vec<Candidate> = KEYWORDS
+    let sr = engine == Engine::Surrealdb;
+    let list = if sr { SURREAL_KEYWORDS } else { KEYWORDS };
+    let mut out: Vec<Candidate> = list
         .iter()
         .filter(|k| starts(k, prefix))
         .map(|k| {
@@ -398,6 +460,19 @@ fn keywords(prefix: &str) -> Vec<Candidate> {
             }
         })
         .collect();
+    if sr {
+        out.extend(
+            SURREAL_FUNCTIONS
+                .iter()
+                .filter(|f| starts(f, prefix))
+                .map(|f| Candidate {
+                    label: (*f).to_owned(),
+                    insert: (*f).to_owned(),
+                    kind: CandidateKind::Keyword,
+                    detail: "function".into(),
+                }),
+        );
+    }
     out.sort_by(|a, b| a.label.cmp(&b.label));
     out
 }
@@ -475,10 +550,14 @@ fn is_word_char(c: char) -> bool {
 /// SQL Server mirrors core's T-SQL lexer: `[..]` and `"..."` quote names with the close
 /// doubled, `N'..'` is a string, `--` runs to `\n` or `\r`, comments nest, and `@` and `#` are
 /// word characters.
+/// SurrealDB reads `'..'` and `"..."` as strings with backslash escapes (one `rdubsf` prefix
+/// letter joins them), backticks and `⟨..⟩` as names, `--`, `//` and `#` as line comments, and
+/// `::` as part of a function path word.
 pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
     let pg = matches!(engine, Engine::Postgres | Engine::Duckdb);
     let my = matches!(engine, Engine::Mysql);
     let ms = engine == Engine::Mssql;
+    let sr = engine == Engine::Surrealdb;
     let word_char = |c: char| is_word_char(c) || (ms && matches!(c, '@' | '#'));
     let b = s.as_bytes();
     let mut toks = Vec::new();
@@ -488,6 +567,8 @@ pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
         let start = i;
         let line_comment = if my {
             c == '#' || (s[i..].starts_with("--") && mysql_dashes_comment(b.get(i + 2)))
+        } else if sr {
+            c == '#' || s[i..].starts_with("--") || s[i..].starts_with("//")
         } else {
             s[i..].starts_with("--")
         };
@@ -496,26 +577,51 @@ pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
             continue;
         } else if line_comment {
             let end = s[i..]
-                .find(|ch| ch == '\n' || (ms && ch == '\r'))
+                .find(|ch| {
+                    ch == '\n'
+                        || ((ms || sr) && ch == '\r')
+                        || (sr && matches!(ch, '\u{85}' | '\u{2028}' | '\u{2029}'))
+                })
                 .map_or(s.len(), |n| i + n);
             (TokKind::Comment, end, true)
         } else if s[i..].starts_with("/*") {
             let (end, open) = block_comment(s, i, pg || ms);
             (TokKind::Comment, end, open)
+        } else if sr && matches!(c, '\'' | '"') {
+            let (end, open) = quoted(b, i, c as u8, true, false);
+            (TokKind::Str, end, open)
+        } else if sr && "rdubsf".contains(c) && matches!(b.get(i + 1), Some(b'\'' | b'"')) {
+            // A prefix letter touching the quote types the string: r'..', d'..', u'..' and kin.
+            let (end, open) = quoted(b, i + 1, b[i + 1], true, false);
+            (TokKind::Str, end, open)
+        } else if sr && c == '`' {
+            let (end, open) = quoted(b, i, b'`', true, false);
+            let inner = &s[i + 1..if open { end } else { end - 1 }];
+            (TokKind::Quoted(unescape_backticks(inner)), end, open)
+        } else if sr && c == '⟨' {
+            let from = i + c.len_utf8();
+            match s[from..].find('⟩') {
+                Some(n) => (
+                    TokKind::Quoted(s[from..from + n].to_owned()),
+                    from + n + '⟩'.len_utf8(),
+                    false,
+                ),
+                None => (TokKind::Quoted(s[from..].to_owned()), s.len(), true),
+            }
         } else if c == '\'' || (my && c == '"') {
-            let (end, open) = quoted(b, i, c as u8, my);
+            let (end, open) = quoted(b, i, c as u8, my, true);
             (TokKind::Str, end, open)
         } else if ms && c.eq_ignore_ascii_case(&'n') && b.get(i + 1) == Some(&b'\'') {
             // A lone `N` touching a quote is the Unicode string prefix, part of the string.
-            let (end, open) = quoted(b, i + 1, b'\'', false);
+            let (end, open) = quoted(b, i + 1, b'\'', false, true);
             (TokKind::Str, end, open)
         } else if c == '"' || (!pg && !ms && c == '`') || (ms && c == '[') {
             let close = if c == '[' { ']' } else { c };
-            let (end, open) = quoted(b, i, close as u8, false);
+            let (end, open) = quoted(b, i, close as u8, false, true);
             let inner = &s[i + 1..if open { end } else { end - 1 }];
             let d = close.to_string();
             (TokKind::Quoted(inner.replace(&d.repeat(2), &d)), end, open)
-        } else if !pg && !my && c == '[' {
+        } else if !pg && !my && !sr && c == '[' {
             match s[i..].find(']') {
                 Some(n) => (
                     TokKind::Quoted(s[i + 1..i + n].to_owned()),
@@ -530,9 +636,16 @@ pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
                 None => (TokKind::Str, s.len(), true),
             }
         } else if word_char(c) {
-            let end = s[i..]
-                .find(|ch: char| !word_char(ch))
-                .map_or(s.len(), |n| i + n);
+            let word_end = |j: usize| {
+                s[j..]
+                    .find(|ch: char| !word_char(ch))
+                    .map_or(s.len(), |n| j + n)
+            };
+            let mut end = word_end(i);
+            // A SurrealQL function path such as `string::lowercase` reads as one word.
+            while sr && s[end..].starts_with("::") {
+                end = word_end(end + 2);
+            }
             (TokKind::Word, end, false)
         } else {
             (TokKind::Punct(c), i + c.len_utf8(), false)
@@ -553,9 +666,9 @@ fn mysql_dashes_comment(next: Option<&u8>) -> bool {
     next.is_none_or(|c| c.is_ascii_whitespace() || c.is_ascii_control())
 }
 
-/// The end of the quoted run at `i` closed by `q` (doubled `q` escapes it, as does a backslash
-/// when `backslash`), and whether it is open.
-fn quoted(b: &[u8], i: usize, q: u8, backslash: bool) -> (usize, bool) {
+/// The end of the quoted run at `i` closed by `q` (a doubled `q` escapes it when `doubled`, as
+/// does a backslash when `backslash`), and whether it is open.
+fn quoted(b: &[u8], i: usize, q: u8, backslash: bool, doubled: bool) -> (usize, bool) {
     let mut j = i + 1;
     while j < b.len() {
         if backslash && b[j] == b'\\' {
@@ -563,7 +676,7 @@ fn quoted(b: &[u8], i: usize, q: u8, backslash: bool) -> (usize, bool) {
             continue;
         }
         if b[j] == q {
-            if b.get(j + 1) == Some(&q) {
+            if doubled && b.get(j + 1) == Some(&q) {
                 j += 2;
                 continue;
             }
@@ -572,6 +685,22 @@ fn quoted(b: &[u8], i: usize, q: u8, backslash: bool) -> (usize, bool) {
         j += 1;
     }
     (b.len(), true)
+}
+
+/// A SurrealQL backtick name with its `` \` `` and `\\` escapes undone.
+fn unescape_backticks(inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('`' | '\\'))) => {
+                out.push(n);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// The end of the block comment at `i`, and whether it is open; Postgres nests them.

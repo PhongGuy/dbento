@@ -3,7 +3,7 @@ use dbento_app::format::format_edit;
 use dbento_core::Engine::{Postgres, Sqlite};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, opened};
+use support::{Opened, open_connection_row, opened, present, started};
 
 const RAW: &str = "select 1 as a;\nselect b, c from t;";
 
@@ -245,4 +245,42 @@ fn formatting_formatted_text_leaves_undo_alone(cx: &mut TestAppContext) {
     assert_eq!(selected(cx, &o), 3..3);
     key(cx, &o, "ctrl-z");
     assert_eq!(text(cx, &o), "SELECT 1;");
+}
+
+/// A SurrealDB connection that never connects; the tab opens and its preconnect fails quietly.
+const SR_CLOSED: &str = "dbento = 1\n[connections.sr]\nengine = \"surrealdb\"\nhost = \"127.0.0.1\"\nport = 9\nnamespace = \"app\"\ndatabase = \"main\"\n";
+
+#[gpui_kit::test]
+fn surrealdb_has_no_format_button_menu_item_or_working_keys(cx: &mut TestAppContext) {
+    let s = started(cx, SR_CLOSED);
+    open_connection_row(cx, s.win, "sr");
+    assert!(present(cx, s.win, "editor"));
+    assert!(!present(cx, s.win, "format"));
+    assert!(!present(cx, s.win, "format-tip"));
+
+    let tab = s.shell.read_with(cx, |sh, _| sh.tab().unwrap().clone());
+    let e = s
+        .shell
+        .read_with(cx, |sh, cx| sh.tab().unwrap().read(cx).editor().clone());
+    let raw = "select * from person where age > 1";
+    cx.update_window(s.win, |_, w, cx| {
+        tab.update(cx, |t, cx| t.set_sql(raw, w, cx));
+        e.update(cx, |e, cx| {
+            e.focus(w, cx);
+            e.set_selected_range(0..raw.len(), cx);
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for k in ["ctrl-shift-f", "alt-shift-f", "ctrl-alt-l"] {
+        cx.update_window(s.win, |_, w, cx| w.press(k, cx)).unwrap();
+        cx.run_until_parked();
+        assert_eq!(tab.read_with(cx, |t, cx| t.sql(cx)), raw, "{k}");
+    }
+
+    cx.update_window(s.win, |_, w, cx| w.right_click("editor", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(present(cx, s.win, "editor-menu-run"));
+    assert!(!present(cx, s.win, "editor-menu-format"));
 }

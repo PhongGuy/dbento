@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dbento_core::{
-    ConnectionConfig, Engine, ExplainMode, ReadOnlyEnforcement, RelationRef, Unguarded, Workspace,
-    explain_request,
+    ConnectionConfig, Engine, ExplainMode, QueryLanguage, ReadOnlyEnforcement, RelationRef,
+    Unguarded, Workspace, explain_request, read_only_residual,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
@@ -80,6 +80,12 @@ pub const READ_ONLY_DUCKDB_TOOLTIP: &str = "Read-only: DuckDB opens the file rea
 pub const READ_ONLY_MSSQL_READER_TOOLTIP: &str = "Read-only: runs as the read_only_user principal, so SQL Server refuses writes. Procedures granted to public can still write.";
 /// The read-only badge's tooltip on a SQL Server connection without a read_only_user.
 pub const READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: each batch is fenced in a rolled-back transaction and parseable writes are refused, but a hidden commit can get past it. Set read_only_user for enforcement.";
+/// The SurrealDB badge's head when the session runs as a VIEWER.
+pub const READ_ONLY_SURREAL_VIEWER_TOOLTIP: &str = "Read-only: this VIEWER login cannot write, and Dbento runs each statement in a transaction it cancels.";
+/// The SurrealDB badge's head when the login could write and only the fence holds.
+pub const READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: Dbento runs each statement in a transaction it cancels and refuses the writes it can see. Use a VIEWER login for enforcement.";
+/// The SurrealDB badge's head before the session has reported its level.
+pub const READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP: &str = "Read-only: Dbento runs each statement in a transaction it cancels; the level shows once connected.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -138,6 +144,24 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
         (Engine::Mssql, ReadOnlyEnforcement::Database) => READ_ONLY_MSSQL_READER_TOOLTIP,
         (Engine::Mssql, ReadOnlyEnforcement::BestEffort) => READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
         _ => read_only_tooltip(c.engine()),
+    }
+}
+
+/// The badge text for `c` with the session's `level`: on SurrealDB the level's head, a space and
+/// the residual; on every other engine `read_only_tooltip_of(c)`.
+pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
+    if c.engine() != Engine::Surrealdb {
+        return read_only_tooltip_of(c).to_owned();
+    }
+    // SurrealDB's level comes from the login's role, which only the session knows.
+    let head = match level {
+        Some(ReadOnlyEnforcement::Database) => READ_ONLY_SURREAL_VIEWER_TOOLTIP,
+        Some(ReadOnlyEnforcement::BestEffort) => READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+        _ => READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
+    };
+    match read_only_residual(Engine::Surrealdb) {
+        Some(residual) => format!("{head} {residual}"),
+        None => head.to_owned(),
     }
 }
 
@@ -217,13 +241,19 @@ pub fn analyze_ask(kinds: &[Unguarded], connection: &str, sql: &str) -> Ask {
 }
 
 /// The connection chip's text, "name · engine · target": the Postgres database, the MySQL or
-/// SQL Server database when set, or else the target as written in dbento.toml.
+/// SQL Server database when set, SurrealDB's "namespace/database", or else the target as
+/// written in dbento.toml.
 pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     let target = match c.engine() {
         Engine::Postgres => c.database().unwrap_or_default().to_owned(),
         Engine::Mysql | Engine::Mssql => c
             .database()
             .map_or_else(|| c.display_target(), str::to_owned),
+        Engine::Surrealdb => format!(
+            "{}/{}",
+            c.namespace().unwrap_or_default(),
+            c.database().unwrap_or_default()
+        ),
         _ => c.display_target(),
     };
     format!(
@@ -233,25 +263,49 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     )
 }
 
+// Format SQL applies only to SQL engines; the formatter knows no other language.
+fn formats(engine: Engine) -> bool {
+    engine.capabilities().language == QueryLanguage::Sql
+}
+
+/// The highlighter language for `engine`'s query editor: "sql" for an SQL engine, "text"
+/// (plain, no highlighting) for SurrealQL or the MongoDB shell.
+pub fn editor_language(engine: Engine) -> &'static str {
+    match engine.capabilities().language {
+        QueryLanguage::Sql => "sql",
+        _ => "text",
+    }
+}
+
 /// The editor's right-click menu in order: Run, Format and Save with their effective key
 /// chips, then the clipboard items, whose keys the kit binds and the menu does not repeat.
 /// Cut and Copy are enabled only when `selected` (the editor holds a non-empty selection);
-/// both explain entries appear only when `explain` (the engine's `capabilities().explain`).
-pub fn editor_menu_entries(selected: bool, explain: bool, cx: &App) -> Vec<MenuEntry> {
+/// both explain entries appear only when `explain` (the engine's `capabilities().explain`),
+/// and Format only when `format` (the engine's query language is SQL).
+pub fn editor_menu_entries(
+    selected: bool,
+    explain: bool,
+    format: bool,
+    cx: &App,
+) -> Vec<MenuEntry> {
     let entry = |id, label, keys| MenuEntry {
         id,
         label,
         enabled: selected || !matches!(id, "editor-menu-cut" | "editor-menu-copy"),
         keys,
     };
-    let mut entries = vec![
-        entry(
-            "editor-menu-run",
-            "Run statement",
-            keys_for(&RunStatement, cx),
-        ),
-        entry("editor-menu-format", "Format SQL", keys_for(&FormatSql, cx)),
-    ];
+    let mut entries = vec![entry(
+        "editor-menu-run",
+        "Run statement",
+        keys_for(&RunStatement, cx),
+    )];
+    if format {
+        entries.push(entry(
+            "editor-menu-format",
+            "Format SQL",
+            keys_for(&FormatSql, cx),
+        ));
+    }
     if explain {
         entries.push(entry(
             "editor-menu-explain",
@@ -371,7 +425,8 @@ impl QueryTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor = cx.new(|cx| EditorState::new(window, cx).language("sql"));
+        let editor =
+            cx.new(|cx| EditorState::new(window, cx).language(editor_language(conn.engine())));
         let completion = cx.new(|cx| CompletionPopup::new(&editor, cx));
         if let Some(sidebar) = sidebar.clone() {
             Self::complete_from(&editor, &completion, sidebar, &conn, cx);
@@ -467,7 +522,8 @@ impl QueryTab {
         }
     }
 
-    // Points the editor's completion at `conn`'s catalog in the explorer.
+    // Points the editor's completion at `conn`'s catalog in the explorer, and its highlighter at
+    // `conn`'s language, so a tab moved to another engine stops or starts reading SQL.
     fn complete_from(
         editor: &Entity<EditorState>,
         popup: &Entity<CompletionPopup>,
@@ -479,8 +535,12 @@ impl QueryTab {
         let default = dbento_core::default_schema(engine, conn);
         let provider =
             SqlCompletionProvider::new(sidebar, popup.downgrade(), name, engine, default);
-        editor.update(cx, |e, _| {
+        let lang = editor_language(engine);
+        editor.update(cx, |e, cx| {
             e.lsp_mut().completion_provider = Some(std::rc::Rc::new(provider));
+            if e.language_name() != lang {
+                e.set_highlighter(lang, cx);
+            }
         });
     }
 
@@ -850,6 +910,9 @@ impl QueryTab {
     /// on its own: only the keys, the toolbar button and the editor menu call it.
     pub fn format_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_completion(cx);
+        if !formats(self.session_conn.engine()) {
+            return;
+        }
         let e = self.editor.read(cx);
         let edit = format_edit(self.session_conn.engine(), &e.value(), e.selected_range());
         let Some((range, new)) = edit else {
@@ -1299,6 +1362,7 @@ impl Render for QueryTab {
         let closed = m.closed();
         // Explain shows only where the session's engine has it; its keys still explain why not.
         let explain = self.session_conn.engine().capabilities().explain;
+        let format = formats(self.session_conn.engine());
         let staged = m.edits().len();
         // The summary appears once a statement has ended; its timing lives in the result footer.
         let summary = run_elapsed(m.results()).map(|_| {
@@ -1306,6 +1370,10 @@ impl Render for QueryTab {
             let s = if n == 1 { "" } else { "s" };
             format!("{n} statement{s}")
         });
+        // A VIEWER login is read-only whatever the config says, so the session can raise the badge.
+        let read_only = self.session_conn.read_only() || m.read_only() == Some(true);
+        let badge_text: SharedString =
+            read_only_badge_text(&self.session_conn, m.read_only_level()).into();
         let production = self.conn.is_production();
         // Production is a loud chip in the toolbar; its id keeps the old band's name.
         let prod_chip = production.then(|| {
@@ -1316,8 +1384,9 @@ impl Render for QueryTab {
         });
         let chip = self.chip(cx);
         let connection = self.connection_chip(cx);
-        let badge = self.session_conn.read_only().then(|| {
-            let tip = read_only_tooltip_of(&self.session_conn);
+        let badge = read_only.then(|| {
+            let tip = badge_text.clone();
+            let tooltip = badge_text;
             ui::chip_base(cx)
                 .id("read-only-badge")
                 .aria_label(tip)
@@ -1325,7 +1394,7 @@ impl Render for QueryTab {
                 .text_color(dim)
                 .child(ui::icon(ui::Icons::Lock, px(12.), dim))
                 .child("read-only")
-                .tooltip(move |window, cx| theme::tooltip(tip, window, cx))
+                .tooltip(move |window, cx| theme::tooltip(tooltip.clone(), window, cx))
         });
         let run_summary = summary.map(|text| {
             div()
@@ -1415,26 +1484,28 @@ impl Render for QueryTab {
                             .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
                     ),
             )
-            .child(
+            .when(format, |d| {
                 // The kit button takes only a text tooltip, so the keyed one sits on a wrapper.
-                div()
-                    .id("format-tip")
-                    .test_support()
-                    .tooltip(|window, cx| {
-                        theme::tooltip_keys(
-                            format_tooltip(cx),
-                            keys_for(&FormatSql, cx),
-                            window,
-                            cx,
-                        )
-                    })
-                    .child(
-                        tool_button("format", ui::Icons::WandSparkles, "Format SQL", muted)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.format_sql(window, cx)),
-                            ),
-                    ),
-            )
+                d.child(
+                    div()
+                        .id("format-tip")
+                        .test_support()
+                        .tooltip(|window, cx| {
+                            theme::tooltip_keys(
+                                format_tooltip(cx),
+                                keys_for(&FormatSql, cx),
+                                window,
+                                cx,
+                            )
+                        })
+                        .child(
+                            tool_button("format", ui::Icons::WandSparkles, "Format SQL", muted)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.format_sql(window, cx)),
+                                ),
+                        ),
+                )
+            })
             .when(explain, |d| {
                 d.child(
                     div()
@@ -1605,12 +1676,15 @@ fn editor_menu(
     let explain = tab
         .as_ref()
         .is_some_and(|t| t.read(cx).session_conn.engine().capabilities().explain);
+    let format = tab
+        .as_ref()
+        .is_some_and(|t| formats(t.read(cx).session_conn.engine()));
     for MenuEntry {
         id,
         label,
         keys,
         enabled,
-    } in editor_menu_entries(selected, explain, cx)
+    } in editor_menu_entries(selected, explain, format, cx)
     {
         if id == "editor-menu-cut" {
             menu = menu.separator();

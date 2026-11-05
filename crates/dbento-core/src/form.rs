@@ -240,7 +240,13 @@ fn surrealdb_form() -> ConnectionForm {
                         "Leave empty for anonymous access.",
                     ),
                     help(
-                        field("auth_level", "Auth level", FieldKind::Text, "root", false),
+                        field(
+                            "auth_level",
+                            "Auth level",
+                            FieldKind::Text,
+                            "root, namespace or database",
+                            false,
+                        ),
                         "root, namespace or database, as the user was defined.",
                     ),
                 ],

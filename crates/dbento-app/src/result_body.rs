@@ -147,6 +147,9 @@ pub fn code_label(engine: Option<Engine>, v: &ErrorView) -> Option<String> {
         (Some(Engine::Mysql), Some(s)) => format!("error {code} \u{b7} SQLSTATE {s}"),
         (Some(Engine::Mysql), None) | (Some(Engine::Mssql), _) => format!("error {code}"),
         (Some(Engine::Duckdb), _) => format!("{code} Error"),
+        // A statement-level SurrealDB error carries code 0, which names nothing.
+        (Some(Engine::Surrealdb), _) if code == "0" => return None,
+        (Some(Engine::Surrealdb), _) => format!("error {code}"),
         _ => format!("code {code}"),
     })
 }

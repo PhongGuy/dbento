@@ -1,7 +1,9 @@
 mod support;
 
 use dbento_app::connection_dialog::{ConnectionForm, Field};
-use dbento_core::{Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form};
+use dbento_core::{
+    AuthLevel, Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form,
+};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
 use support::{label_of, present};
@@ -283,10 +285,7 @@ fn the_ca_field_edits_tls_ca_and_hides_when_tls_is_off(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn the_third_engine_is_mysql_and_writes_only_its_keys(cx: &mut TestAppContext) {
     let (win, f) = open(cx, None);
-    assert_eq!(
-        engine_option(cx, win, 2).0.as_deref(),
-        Some("MySQL / MariaDB")
-    );
+    assert_eq!(engine_option(cx, win, 2).0.as_deref(), Some("MySQL"));
     radio(cx, win, "conn-engine", 2);
     for id in [
         "conn-host",
@@ -643,4 +642,180 @@ fn a_client_certificate_stays_with_postgres_when_switching_to_sql_server(cx: &mu
         typed.map(|s| s.expose().to_owned()).as_deref(),
         Some("typed")
     );
+}
+
+fn sr() -> ConnectionSpec {
+    let mut s = ConnectionSpec::new(Engine::Surrealdb);
+    (s.host, s.namespace, s.database, s.user, s.auth_level) = (
+        Some("db.example".into()),
+        Some("app".into()),
+        Some("main".into()),
+        Some("reader".into()),
+        Some(AuthLevel::Database),
+    );
+    (s.tls, s.tls_ca) = (Some(TlsMode::Verify), Some("certs/ca.pem".into()));
+    s
+}
+
+#[gpui_kit::test]
+fn a_loaded_surrealdb_connection_shows_its_fields_and_returns_unchanged(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    for id in [
+        "conn-host",
+        "conn-port",
+        "conn-namespace",
+        "conn-database",
+        "conn-user",
+        "conn-user-help",
+        "conn-auth-level",
+        "conn-auth-level-help",
+        "conn-password",
+        "conn-secret",
+        "conn-tls",
+        "conn-tls-ca",
+        "conn-read-only",
+        "conn-read-only-help",
+    ] {
+        assert!(present(cx, win, id), "{id}");
+    }
+    for id in [
+        "conn-path",
+        "conn-read-only-user",
+        "conn-tls-cert",
+        "conn-tls-key",
+        "conn-tls-key-passphrase",
+    ] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    let form = connection_form(Engine::Surrealdb);
+    assert_eq!(
+        label_of(cx, win, "conn-auth-level-help").as_deref(),
+        form.sections[0].fields[5].help
+    );
+    assert_eq!(
+        label_of(cx, win, "conn-user-help").as_deref(),
+        form.sections[0].fields[4].help
+    );
+    assert_eq!(
+        value_and_hint(cx, &f, Field::Namespace),
+        ("app".into(), "e.g. app".into())
+    );
+    assert_eq!(
+        value_and_hint(cx, &f, Field::AuthLevel),
+        ("database".into(), "root, namespace or database".into())
+    );
+    assert_eq!(value_and_hint(cx, &f, Field::Port).1, "8000");
+    assert_eq!(value_and_hint(cx, &f, Field::User).1, "optional");
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), sr())));
+}
+
+#[gpui_kit::test]
+fn namespace_and_auth_level_edit_and_clear(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    set(cx, win, &f, Field::Namespace, "other");
+    set(cx, win, &f, Field::AuthLevel, " Root ");
+    let mut want = sr();
+    (want.namespace, want.auth_level) = (Some("other".into()), Some(AuthLevel::Root));
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want.clone())));
+    set(cx, win, &f, Field::AuthLevel, "");
+    want.auth_level = None;
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
+    set(cx, win, &f, Field::AuthLevel, "admin");
+    assert_eq!(
+        edit(cx, &f),
+        Err("Auth level must be root, namespace or database".into())
+    );
+}
+
+#[gpui_kit::test]
+fn a_reload_moves_an_untouched_namespace_and_auth_level(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    let mut now = sr();
+    (now.namespace, now.auth_level) = (Some("moved".into()), Some(AuthLevel::Namespace));
+    cx.update_window(win, |_, w, cx| {
+        f.update(cx, |f, cx| f.rebase(Some(now.clone()), Vec::new(), w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(value_and_hint(cx, &f, Field::Namespace).0, "moved");
+    assert_eq!(value_and_hint(cx, &f, Field::AuthLevel).0, "namespace");
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), now)));
+}
+
+#[gpui_kit::test]
+fn leaving_surrealdb_drops_its_namespace_and_auth_level(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    radio(cx, win, "conn-engine", 0);
+    assert!(!present(cx, win, "conn-namespace"));
+    assert!(!present(cx, win, "conn-auth-level"));
+    let mut want = sr();
+    (want.engine, want.namespace, want.auth_level) = (Engine::Postgres, None, None);
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
+}
+
+#[gpui_kit::test]
+fn the_sixth_engine_is_surrealdb_and_writes_only_its_keys(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(engine_option(cx, win, 5).0.as_deref(), Some("SurrealDB"));
+    radio(cx, win, "conn-engine", 5);
+    assert!(present(cx, win, "conn-namespace"));
+    assert_eq!(value_and_hint(cx, &f, Field::Port).1, "8000");
+    set(cx, win, &f, Field::Name, "sr");
+    set(cx, win, &f, Field::Host, "db.example");
+    set(cx, win, &f, Field::Namespace, "app");
+    set(cx, win, &f, Field::Database, "main");
+    let mut want = ConnectionSpec::new(Engine::Surrealdb);
+    (want.host, want.namespace, want.database) = (
+        Some("db.example".into()),
+        Some("app".into()),
+        Some("main".into()),
+    );
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), want)));
+}
+
+#[gpui_kit::test]
+fn a_loaded_surrealdb_connection_selects_surrealdb(cx: &mut TestAppContext) {
+    let (win, _f) = open(cx, Some(("sr", sr())));
+    assert_eq!(engine_option(cx, win, 5).1, Some(true));
+    assert_eq!(engine_option(cx, win, 0).1, Some(false));
+}
+
+#[gpui_kit::test]
+fn an_engine_the_picker_does_not_offer_selects_no_option(cx: &mut TestAppContext) {
+    let mut mongo = ConnectionSpec::new(Engine::Mongodb);
+    mongo.uri = Some("mongodb://db.example/app".into());
+    let (win, _f) = open(cx, Some(("mg", mongo)));
+    for ix in 0..6 {
+        assert_eq!(engine_option(cx, win, ix).1, Some(false), "{ix}");
+    }
+}
+
+#[gpui_kit::test]
+fn surrealdb_to_postgres_and_back_restores_namespace_and_auth_level(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("sr", sr())));
+    radio(cx, win, "conn-engine", 0);
+    radio(cx, win, "conn-engine", 5);
+    assert_eq!(value_and_hint(cx, &f, Field::Namespace).0, "app");
+    assert_eq!(value_and_hint(cx, &f, Field::AuthLevel).0, "database");
+    assert_eq!(edit(cx, &f), Ok(("sr".into(), sr())));
+}
+
+#[gpui_kit::test]
+fn a_client_certificate_stays_with_postgres_when_switching_to_surrealdb(cx: &mut TestAppContext) {
+    let mut pg = nopg();
+    (pg.tls, pg.tls_cert, pg.tls_key) = (
+        Some(TlsMode::Verify),
+        Some("certs/me.crt".into()),
+        Some("certs/me.key".into()),
+    );
+    let (win, f) = open(cx, Some(("pg", pg.clone())));
+    radio(cx, win, "conn-engine", 5);
+    for id in ["conn-tls-cert", "conn-tls-key", "conn-tls-key-passphrase"] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    let mut want = pg.clone();
+    (want.engine, want.tls_cert, want.tls_key) = (Engine::Surrealdb, None, None);
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), want)));
+    radio(cx, win, "conn-engine", 0);
+    assert_eq!(edit(cx, &f), Ok(("pg".into(), pg)));
 }

@@ -2,11 +2,13 @@ mod support;
 use dbento_app::query_tab::connection_chip_text;
 use dbento_app::query_tab::{
     READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP, READ_ONLY_MSSQL_READER_TOOLTIP, READ_ONLY_MYSQL_TOOLTIP,
-    READ_ONLY_PG_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP, confirm_title, read_only_tooltip,
-    read_only_tooltip_of,
+    READ_ONLY_PG_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP, READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+    READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP, READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_title,
+    editor_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
 };
 use dbento_app::result_body::{ErrorView, code_label};
 use dbento_core::{Engine, Unguarded};
+use dbento_core::{ReadOnlyEnforcement, read_only_residual};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
 use support::{LONG, label_of, opened, present, wait_real};
@@ -315,4 +317,92 @@ fn the_sql_server_chip_names_its_database_and_its_errors_their_number() {
         code_label(Some(Engine::Mssql), &v).as_deref(),
         Some("error 208")
     );
+}
+
+fn sr_workspace() -> (tempfile::TempDir, dbento_core::Workspace) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n\n[connections.sr]\nengine = \"surrealdb\"\nhost = \"db.example\"\n\
+         namespace = \"app\"\ndatabase = \"main\"\nread_only = true\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    (dir, ws)
+}
+
+#[test]
+fn the_surrealdb_badge_names_the_session_s_level_and_what_the_fence_cannot_undo() {
+    let (_dir, ws) = sr_workspace();
+    let c = ws.connection("sr").unwrap();
+    let residual = read_only_residual(Engine::Surrealdb).unwrap();
+    for (level, head) in [
+        (
+            Some(ReadOnlyEnforcement::Database),
+            READ_ONLY_SURREAL_VIEWER_TOOLTIP,
+        ),
+        (
+            Some(ReadOnlyEnforcement::BestEffort),
+            READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+        ),
+        (None, READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP),
+    ] {
+        assert_eq!(read_only_badge_text(c, level), format!("{head} {residual}"));
+    }
+    assert_eq!(
+        READ_ONLY_SURREAL_VIEWER_TOOLTIP,
+        "Read-only: this VIEWER login cannot write, and Dbento runs each statement in a \
+         transaction it cancels."
+    );
+    assert_eq!(
+        READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+        "Read-only is best effort: Dbento runs each statement in a transaction it cancels and \
+         refuses the writes it can see. Use a VIEWER login for enforcement."
+    );
+    let (_ms_dir, ms) = ms_workspace();
+    assert_eq!(
+        read_only_badge_text(
+            ms.connection("ms").unwrap(),
+            Some(ReadOnlyEnforcement::Database)
+        ),
+        READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
+        "other engines read their config"
+    );
+}
+
+#[test]
+fn the_surrealdb_chip_names_namespace_and_database_and_its_errors_their_code() {
+    let (_dir, ws) = sr_workspace();
+    assert_eq!(
+        connection_chip_text(ws.connection("sr").unwrap()),
+        "sr \u{b7} surrealdb \u{b7} app/main"
+    );
+    let view = |code: &str| ErrorView {
+        message: "The table 'nope' does not exist".into(),
+        code: Some(code.into()),
+        sqlstate: None,
+        detail: None,
+        hint: None,
+        position: None,
+        sql: "SELECT * FROM nope".into(),
+    };
+    assert_eq!(code_label(Some(Engine::Surrealdb), &view("0")), None);
+    assert_eq!(
+        code_label(Some(Engine::Surrealdb), &view("-32000")).as_deref(),
+        Some("error -32000")
+    );
+}
+
+#[test]
+fn surrealql_is_not_highlighted_as_sql() {
+    assert_eq!(editor_language(Engine::Surrealdb), "text");
+    assert_eq!(editor_language(Engine::Mongodb), "text");
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+    ] {
+        assert_eq!(editor_language(e), "sql", "{e:?}");
+    }
 }

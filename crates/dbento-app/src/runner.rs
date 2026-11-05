@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use async_channel::{Receiver, Sender, TryRecvError};
 use dbento_core::{
     CancelHandle, ColumnInfo, ConnectionConfig, EditTarget, Engine, ExecuteError, ExplainMode,
-    ExplainOutput, ExplainRequest, ForeignKey, Limits, OnTruncate, Outcome, RelationRef,
-    ResultBatch, ResultStream, Secret, SecretError, SecretStore, Session, SessionOptions,
-    TruncatedBy, Unguarded, Workspace, Writes, connect, resolve_key_passphrase, resolve_secret,
-    secret_hint,
+    ExplainOutput, ExplainRequest, ForeignKey, Limits, OnTruncate, Outcome, ReadOnlyEnforcement,
+    RelationRef, ResultBatch, ResultStream, Secret, SecretError, SecretStore, Session,
+    SessionOptions, TruncatedBy, Unguarded, Workspace, Writes, connect, resolve_key_passphrase,
+    resolve_secret, secret_hint,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
@@ -72,6 +72,8 @@ pub enum Command {
 pub enum Event {
     Connected {
         read_only: bool,
+        /// How the session refuses writes; None when it is not read-only.
+        level: Option<ReadOnlyEnforcement>,
         engine: Engine,
         cancel: CancelHandle,
     },
@@ -501,6 +503,7 @@ async fn ensure_open(spec: &RunnerSpec, session: &mut Option<Session>, events: &
             let _ = events
                 .send(Event::Connected {
                     read_only: s.is_read_only(),
+                    level: s.read_only_enforcement(),
                     engine: s.engine(),
                     cancel: s.cancel_handle(),
                 })
