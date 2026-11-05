@@ -90,6 +90,8 @@ fn table_stops_at_1000_rows_by_default_while_json_and_csv_do_not() {
     assert!(err.contains("(3 rows, truncated by --max-rows"), "{err}");
     let (_, doc) = query_json(ws.path(), MANY, &[]);
     assert_eq!(doc["statements"][0]["row_count"], 5000);
+    // A SQL row carries no document, so it stays a plain array of cells.
+    assert!(doc["statements"][0]["rows"][0].is_array(), "{doc}");
     let (_, out, _) = query(&ws, &[MANY, "--format", "csv"]);
     assert_eq!(out.lines().count(), 5001);
 }

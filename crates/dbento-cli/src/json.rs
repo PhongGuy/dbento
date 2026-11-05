@@ -113,12 +113,23 @@ pub(crate) fn error_code(e: &ExecuteError, engine: Engine) -> (String, String) {
         ExecuteError::Unsupported { reason } => ("unsupported".to_owned(), reason.clone()),
         // The CLI's JSON contract predates the split; transaction control stays "unsupported".
         ExecuteError::TransactionControl { reason } => ("unsupported".to_owned(), reason.clone()),
+        ExecuteError::Syntax { .. } => ("syntax".to_owned(), e.message_for(engine)),
         ExecuteError::SessionClosed | ExecuteError::SessionEnded { .. } => {
             ("session_closed".to_owned(), e.message_for(engine))
         }
         // The session is gone either way, so the code stays; the message says why.
         ExecuteError::StoppedAtDrainCap => ("session_closed".to_owned(), described(e, engine)),
         _ => ("error".to_owned(), e.message_for(engine)),
+    }
+}
+
+/// The JSON text for a document's relaxed Extended JSON: as is when it is an object, else
+/// quoted as a string (an undecodable document renders as a comment).
+fn json_document_text(ext_json: &str) -> String {
+    if ext_json.starts_with('{') {
+        ext_json.to_owned()
+    } else {
+        quote(ext_json)
     }
 }
 
@@ -159,7 +170,13 @@ impl<W: Write> Sink for JsonSink<W> {
         let mut line = String::new();
         for row in 0..batch.len() {
             line.clear();
-            line.push_str(if written == 0 { "\n[" } else { ",\n[" });
+            line.push_str(if written == 0 { "\n" } else { ",\n" });
+            // A row with a document wraps its cells in an object that carries the document too.
+            let document = batch.document(row);
+            if document.is_some() {
+                line.push_str("{\"cells\":");
+            }
+            line.push('[');
             for col in 0..batch.column_count() {
                 if col > 0 {
                     line.push(',');
@@ -170,6 +187,11 @@ impl<W: Write> Sink for JsonSink<W> {
                 }
             }
             line.push(']');
+            if let Some(document) = document {
+                line.push_str(",\"document\":");
+                line.push_str(&json_document_text(&document.to_extended_json(false)));
+                line.push('}');
+            }
             self.out.write_all(line.as_bytes())?;
             written += 1;
         }
@@ -246,6 +268,15 @@ impl<W: Write> Sink for JsonSink<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_document_that_will_not_decode_is_quoted() {
+        assert_eq!(json_document_text("{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(
+            json_document_text("/* undecodable document: x */"),
+            "\"/* undecodable document: x */\""
+        );
+    }
 
     #[test]
     fn a_session_that_ended_keeps_the_code_and_says_why() {

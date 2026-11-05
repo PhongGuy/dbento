@@ -241,6 +241,10 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
             let config = ws
                 .connection(&name)
                 .ok_or_else(|| anyhow::anyhow!("no connection named {name:?} in dbento.toml"))?;
+            // A file of another language would only reach the server to fail confusingly.
+            if let Some(why) = run::language_mismatch(&file, config.engine()) {
+                anyhow::bail!(why);
+            }
             return exec::execute(&ws, config, &sql, &exec).await;
         }
         Command::Import {
