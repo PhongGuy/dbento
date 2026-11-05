@@ -348,3 +348,41 @@ fn a_sql_server_select_offers_no_table(cx: &mut TestAppContext) {
         assert_eq!(insert_table(m, m.results().len() - 1), None);
     });
 }
+
+#[cfg(feature = "mongodb")]
+#[gpui_kit::test]
+fn a_mongodb_result_offers_no_sql_insert(cx: &mut TestAppContext) {
+    use dbento_testkit::{MG_SECRET_VAR, MgUser};
+    use std::sync::Arc;
+    support::init(cx);
+    support::init_tokio(cx);
+    let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
+    let _enter = rt.enter();
+    let db = rt.block_on(dbento_testkit::mongo_db());
+    let dir = tempfile::tempdir().unwrap();
+    let toml = db.connection_toml("mg", MgUser::Writer, "");
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        format!("dbento = 1\n{toml}"),
+    )
+    .unwrap();
+    let password = db.password(MgUser::Writer).unwrap().to_owned();
+    let spec = dbento_app::runner::RunnerSpec {
+        workspace: Arc::new(dbento_core::Workspace::open(dir.path()).unwrap()),
+        connection: "mg".into(),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(move |v| (v == MG_SECRET_VAR).then(|| password.clone())),
+    };
+    let m = cx.new(|_| dbento_app::tab_model::TabModel::new(spec));
+    let text = "db.t.insertOne({_id: 1, name: \"a\"});\ndb.t.find()";
+    m.update(cx, |m, cx| m.run(text.into(), cx));
+    wait_real(cx, "the run", |cx| m.read_with(cx, |m, _| !m.running()));
+    m.read_with(cx, |m, cx| {
+        let last = m.results().len() - 1;
+        assert_eq!(m.results()[last].engine, Some(Engine::Mongodb));
+        let s = menu_sections(m, last, GridTarget::Cell(0, 1), cx);
+        let ids: Vec<_> = s.iter().flat_map(|s| &s.entries).map(|e| e.id).collect();
+        assert!(ids.contains(&"grid-menu-copy-json"));
+        assert!(!ids.contains(&"grid-menu-copy-sql"), "{ids:?}");
+    });
+}

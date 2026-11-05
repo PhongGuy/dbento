@@ -1,5 +1,6 @@
 //! Saved queries in the app: Ctrl+O lists and opens `queries/*.sql`, Ctrl+S names and saves.
 mod support;
+use dbento_app::query_files::{name_problem, query_file_name};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Focusable as _, TestAppContext};
 use std::fs;
@@ -296,4 +297,18 @@ fn replacing_a_file_open_in_another_tab_unbinds_that_tab(cx: &mut TestAppContext
         label_of(cx, o.win, ("tab", 1usize)).as_deref(),
         Some("Query 3")
     );
+}
+
+#[test]
+fn a_saved_name_takes_the_connections_extension() {
+    assert_eq!(query_file_name("orders", "js"), "orders.js");
+    assert_eq!(query_file_name("orders.JS", "js"), "orders.JS");
+    assert_eq!(query_file_name("q.sql", "js"), "q.sql.js");
+    assert_eq!(query_file_name(" q ", "sql"), "q.sql");
+    assert_eq!(
+        name_problem(".js", "js").as_deref(),
+        Some("Enter a name before .js.")
+    );
+    assert_eq!(name_problem("", "sql").as_deref(), Some("Enter a name."));
+    assert_eq!(name_problem("orders", "js"), None);
 }
