@@ -1706,6 +1706,7 @@ impl Shell {
                     .into(),
                 ),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "save-conflict-cancel",
@@ -1804,6 +1805,7 @@ impl Shell {
                 title: "Replace the saved query?".into(),
                 detail: Some(format!("{} already exists.", rel.display()).into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "overwrite-keep",
@@ -2301,6 +2303,7 @@ impl Shell {
                 title: format!("Reconnect {name}?").into(),
                 detail: Some("An open transaction will be rolled back.".into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "reconnect-cancel",
@@ -2472,6 +2475,7 @@ impl Shell {
                 title: "dbento.toml changed".into(),
                 detail: Some(detail.into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "edit-error-ok",
@@ -2648,6 +2652,7 @@ impl Shell {
                 title: format!("Delete folder {}?", path.name()).into(),
                 detail: Some(detail.into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "delete-cancel",
@@ -3419,6 +3424,7 @@ impl Shell {
                 title: format!("Delete {name}?").into(),
                 detail: Some(format!("Its saved queries stay in queries/{name}/.").into()),
                 sql: None,
+                language: "sql",
                 choices: vec![
                     Choice {
                         id: "delete-cancel",
@@ -4828,6 +4834,7 @@ fn ask_discard(
             title: title.into(),
             detail: Some(detail.into()),
             sql: None,
+            language: "sql",
             choices: vec![
                 choice("discard-keep", keep, false),
                 choice("discard-close", "Close", true),
@@ -4912,6 +4919,7 @@ fn show_error(title: &'static str, detail: String, window: &mut Window, cx: &mut
             title: title.into(),
             detail: Some(detail.into()),
             sql: None,
+            language: "sql",
             choices: vec![ok],
             default: 0,
             cancel: 0,

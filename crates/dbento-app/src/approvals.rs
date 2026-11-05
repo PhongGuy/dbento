@@ -166,13 +166,78 @@ pub fn cli_hint(cli: &CliPath) -> Option<&'static str> {
     matches!(cli, CliPath::AppImage).then_some(APPIMAGE_HINT)
 }
 
-/// The connection and the statement's leading keyword in capitals, "shop · UPDATE"; the
-/// connection alone when the SQL opens with no keyword.
+/// The connection and what the statement does: for mongosh text opening with `db.` or `db[`,
+/// its method, "shop · deleteMany"; otherwise the SQL's leading keyword in capitals,
+/// "shop · UPDATE". The connection alone when neither is found.
 pub fn headline(connection: &str, sql: &str) -> String {
-    match leading_keyword(sql) {
+    let what = match shell_target(sql) {
+        Some(rest) => shell_method(rest).unwrap_or_default().to_owned(),
+        None => leading_keyword(sql).to_ascii_uppercase(),
+    };
+    match what.as_str() {
         "" => connection.to_owned(),
-        keyword => format!("{connection} · {}", keyword.to_ascii_uppercase()),
+        what => format!("{connection} · {what}"),
     }
+}
+
+// The text after a leading `db`, when the statement (past whitespace and comments) opens with
+// `db.` or `db[`; None for anything else, SQL included.
+fn shell_target(text: &str) -> Option<&str> {
+    let mut rest = text;
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix("//") {
+            rest = after.split_once('\n').map_or("", |(_, tail)| tail);
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        } else {
+            break;
+        }
+    }
+    let rest = rest.strip_prefix("db")?;
+    rest.starts_with(['.', '[']).then_some(rest)
+}
+
+// The first identifier called at bracket depth 0, skipping the getSiblingDB and getCollection
+// hops; quoted strings are stepped over so a bracket inside one never counts.
+fn shell_method(text: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    let mut ident: Option<(usize, usize)> = None;
+    let mut chars = text.char_indices();
+    while let Some((i, c)) = chars.next() {
+        if c.is_alphanumeric() || c == '_' || c == '$' {
+            ident = Some((ident.map_or(i, |(start, _)| start), i + c.len_utf8()));
+            continue;
+        }
+        let called = ident.take().map(|(start, end)| &text[start..end]);
+        match c {
+            '\'' | '"' => {
+                while let Some((_, s)) = chars.next() {
+                    match s {
+                        '\\' => {
+                            chars.next();
+                        }
+                        s if s == c => break,
+                        _ => {}
+                    }
+                }
+            }
+            '(' => {
+                if depth == 0
+                    && let Some(name) = called
+                    && name != "getSiblingDB"
+                    && name != "getCollection"
+                {
+                    return Some(name);
+                }
+                depth += 1;
+            }
+            '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// None for a parsed write or read with nothing unguarded; otherwise "may write (not parsed)"

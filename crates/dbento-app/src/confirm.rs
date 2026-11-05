@@ -51,6 +51,8 @@ pub struct Ask {
     pub detail: Option<SharedString>,
     /// SQL shown boxed in mono under the explanation.
     pub sql: Option<SharedString>,
+    /// The grammar id the boxed text is highlighted with ("sql", "javascript").
+    pub language: &'static str,
     /// The buttons, left to right.
     pub choices: Vec<Choice>,
     /// Index into `choices` that Enter answers.
@@ -167,14 +169,25 @@ pub fn dialog_top(window: &Window) -> Pixels {
 
 /// A read-only SQL editor holding `sql`: highlighted, no line numbers, folding or soft wrap.
 pub fn sql_preview(sql: &str, window: &mut Window, cx: &mut App) -> Entity<EditorState> {
-    let sql = sql.to_owned();
+    code_preview(sql, "sql", window, cx)
+}
+
+/// A read-only editor holding `text` highlighted as `language`, with no line numbers, folding
+/// or soft wrap.
+pub fn code_preview(
+    text: &str,
+    language: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<EditorState> {
+    let text = text.to_owned();
     cx.new(|cx| {
         let mut state = EditorState::new(window, cx)
-            .language("sql")
+            .language(language)
             .line_number(false)
             .folding(false)
             .soft_wrap(false)
-            .default_value(sql);
+            .default_value(text);
         state.set_readonly(true, cx);
         state
     })
@@ -234,7 +247,11 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
     window.defer(cx, move |window, cx| {
         // The builder runs every frame, so the preview's editor is made once, here, and each
         // handler clones what it captures.
-        let preview = spec.sql.as_ref().map(|sql| sql_preview(sql, window, cx));
+        let language = spec.language;
+        let preview = spec
+            .sql
+            .as_ref()
+            .map(|sql| code_preview(sql, language, window, cx));
         window.open_dialog(cx, move |dialog, window, cx| {
             // Once the first frame holding the buttons is drawn, step focus from the dialog to
             // its first button (Cancel beside a danger choice), so Space never answers Run.
