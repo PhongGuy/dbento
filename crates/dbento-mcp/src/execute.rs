@@ -22,7 +22,8 @@ use crate::session::{record, until_cancelled};
 pub(crate) struct ExecuteArgs {
     /// The connection's name, as `list_connections` gives it.
     connection: String,
-    /// Exactly one write or DDL statement; an approval covers this exact text only.
+    /// Exactly one write or DDL statement in the connection's query language; an approval
+    /// covers this exact text only.
     sql: String,
 }
 

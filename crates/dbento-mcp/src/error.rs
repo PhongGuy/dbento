@@ -102,6 +102,7 @@ impl ToolError {
             ExecuteError::Cancelled => "cancelled",
             ExecuteError::TransactionControl { .. } => "transaction_control",
             ExecuteError::Unsupported { .. } => "unsupported",
+            ExecuteError::Syntax { .. } => "syntax",
             ExecuteError::SessionClosed
             | ExecuteError::SessionEnded { .. }
             | ExecuteError::StoppedAtDrainCap => "session_closed",

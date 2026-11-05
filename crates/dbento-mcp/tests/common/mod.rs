@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use dbento_core::MemoryStore;
 use dbento_mcp::{DbentoServer, McpOptions};
+#[cfg(feature = "mongodb")]
+use dbento_testkit::{MG_SECRET_VAR, MgDb, MgUser};
 use dbento_testkit::{MS_SECRET_VAR, MY_SECRET_VAR, MsDb, MyDb, PgDb, SECRET_VAR, SrDb};
 use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, Tool};
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService};
@@ -131,6 +133,17 @@ impl TestServer {
         let password = db.password().to_owned();
         TestServer::start_with(&toml, move |o| {
             o.env_lookup(move |v| (v == SR_SECRET_VAR).then(|| password.clone()))
+        })
+        .await
+    }
+
+    #[cfg(feature = "mongodb")]
+    /// Serve a workspace whose connection `mg` is `db` as `user`, its secret from the env lookup.
+    pub async fn mongo(db: &MgDb, user: MgUser, extra_toml: &str) -> TestServer {
+        let toml = format!("dbento = 1\n{}", db.connection_toml("mg", user, extra_toml));
+        let password = db.password(user).map(str::to_owned);
+        TestServer::start_with(&toml, move |o| {
+            o.env_lookup(move |v| (v == MG_SECRET_VAR).then(|| password.clone()).flatten())
         })
         .await
     }
