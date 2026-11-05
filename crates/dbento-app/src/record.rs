@@ -277,6 +277,24 @@ pub fn edit_text(value: &EditValue) -> String {
     }
 }
 
+/// Bytes of a document's shell text the document view lays out; a MongoDB document can reach
+/// 16 MB, which would stall every frame.
+pub const DOCUMENT_CAP: usize = 64 * 1024;
+
+/// `text` cut to at most `cap` bytes on a char boundary, with a closing note when cut.
+pub fn capped_document(mut text: String, cap: usize) -> String {
+    if text.len() <= cap {
+        return text;
+    }
+    let end = (0..=cap)
+        .rev()
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
+    text.truncate(end);
+    text.push_str("\n/* document cut at 64 KiB; Copy as JSON copies all of it */");
+    text
+}
+
 /// Characters of loaded text the "was" line keeps before its ellipsis.
 pub const ORIGINAL_CAP: usize = 200;
 

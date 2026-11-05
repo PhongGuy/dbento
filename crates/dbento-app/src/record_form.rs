@@ -14,8 +14,8 @@ use gpui_kit::{
 
 use crate::keymap::{CancelRecordEdit, CommitRecordEdit};
 use crate::record::{
-    Marker, RecordField, Was, display_text, edit_text, edits_as_bytes, parse_edit, record_at,
-    record_fields,
+    DOCUMENT_CAP, Marker, RecordField, Was, capped_document, display_text, edit_text,
+    edits_as_bytes, parse_edit, record_at, record_fields,
 };
 use crate::staged::{self, GridRow};
 use crate::tab_model::{SaveState, TabModel};
@@ -82,6 +82,8 @@ pub struct RecordForm {
     stacked: bool,
     /// Whether a row with a stored document shows it whole instead of its fields.
     document_mode: bool,
+    /// The capped shell text of the last document shown, so a notify does not render it again.
+    document_cache: Option<(DocumentKey, SharedString)>,
     _observe: Subscription,
     _leave: Subscription,
     _typed: Subscription,
@@ -144,6 +146,7 @@ impl RecordForm {
             prefix,
             stacked,
             document_mode: false,
+            document_cache: None,
             _observe: observe,
             _leave: leave,
             _typed: typed,
@@ -506,6 +509,10 @@ impl RecordForm {
     }
 }
 
+/// What a cached document text was rendered for: run id, epoch, result, shown row, local sort
+/// and, under a sort, the loaded row count.
+type DocumentKey = (u64, u64, usize, u64, Option<(usize, bool)>, u64);
+
 /// The shared line height, so the sans name and the mono type and value sit on one baseline.
 const LINE: gpui_kit::Pixels = px(18.);
 
@@ -590,9 +597,25 @@ impl Render for RecordForm {
             GridRow::Inserted(_) => None,
         };
         let has_document = document.is_some();
-        let document_text = document
-            .filter(|_| self.document_mode)
-            .map(|d| d.to_shell(true));
+        let document_text = match (document, at) {
+            (Some(doc), GridRow::Loaded(r)) if self.document_mode => {
+                let store = &m.results()[self.stmt].store;
+                // A sorted store reorders as rows arrive, so its shown rows key by count too.
+                let sorted = store.local_sort();
+                let rows = if sorted.is_some() { store.rows() } else { 0 };
+                let key = (m.run_id(), m.epoch(), self.stmt, r, sorted, rows);
+                match &self.document_cache {
+                    Some((k, text)) if *k == key => Some(text.clone()),
+                    _ => {
+                        let text: SharedString =
+                            capped_document(doc.to_shell(true), DOCUMENT_CAP).into();
+                        self.document_cache = Some((key, text.clone()));
+                        Some(text)
+                    }
+                }
+            }
+            _ => None,
+        };
         let deleted = self.stmt == 0
             && m.browse_result()
             && matches!(at, GridRow::Loaded(r) if m.edits().is_deleted(r));

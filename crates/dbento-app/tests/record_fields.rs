@@ -1,8 +1,8 @@
 //! One result row as record fields: markers, shown values, display and edit text.
 mod support;
 use dbento_app::record::{
-    Marker, display_text, edit_text, parse_edit, pretty_json, record_at, record_fields,
-    record_position,
+    DOCUMENT_CAP, Marker, capped_document, display_text, edit_text, parse_edit, pretty_json,
+    record_at, record_fields, record_position,
 };
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::EditValue;
@@ -168,4 +168,17 @@ fn a_sign_is_not_a_hex_digit() {
         Err(bad.clone())
     );
     assert_eq!(parse_edit("\\x-1", &EditValue::Null, true), Err(bad));
+}
+
+#[test]
+fn a_document_past_the_cap_is_cut_on_a_char_boundary_with_a_note() {
+    let short = "{ a: 1 }".to_owned();
+    assert_eq!(capped_document(short.clone(), DOCUMENT_CAP), short);
+    // A two-byte char straddles the cap, so the cut must step back to its start.
+    let long = format!("{}é{}", "x".repeat(9), "y".repeat(100));
+    let cut = capped_document(long, 10);
+    assert!(cut.starts_with("xxxxxxxxx\n"), "{cut}");
+    assert!(cut.contains("Copy as JSON"), "{cut}");
+    let big = "z".repeat(DOCUMENT_CAP * 4);
+    assert!(capped_document(big, DOCUMENT_CAP).len() < DOCUMENT_CAP + 200);
 }
