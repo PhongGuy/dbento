@@ -1,5 +1,5 @@
 //! The resolved dependency graph: no aws-lc, OpenSSL or native-tls, one rustls, the pinned client
-//! crates, no SurrealDB crate, and tiberius from the patched copy in vendor/tiberius.
+//! crates, no SurrealDB crate, and tiberius and mongodb from their patched copies in vendor/.
 use std::collections::BTreeSet;
 use std::process::Command;
 
@@ -110,10 +110,29 @@ fn the_vendored_copy_keeps_its_licences_and_lists_its_patches() {
 }
 
 #[test]
-fn mongodb_and_bson_resolve_once_at_their_pins() {
+fn mongodb_resolves_once_to_the_vendored_copy_and_bson_at_its_pin() {
     let packages = packages();
-    assert_eq!(named(&packages, "mongodb"), ["mongodb v3.9.1"]);
+    let mongodb = named(&packages, "mongodb");
+    assert_eq!(mongodb.len(), 1, "{mongodb:?}");
+    assert!(
+        mongodb[0].starts_with("mongodb v3.9.1 (") && mongodb[0].ends_with("vendor/mongodb)"),
+        "{}",
+        mongodb[0]
+    );
     assert_eq!(named(&packages, "bson"), ["bson v3.1.0"]);
+}
+
+#[test]
+fn the_vendored_mongodb_keeps_its_licence_and_lists_its_patch() {
+    let dir = xtask::workspace_root().join("vendor/mongodb");
+    assert!(dir.join("LICENSE").is_file());
+    let patches = std::fs::read_to_string(dir.join("DBENTO-PATCHES")).unwrap();
+    assert!(
+        patches.contains("P1")
+            && patches.contains("MAX_REPLY_DEPTH")
+            && patches.contains("MAX_BATCH_DEPTH"),
+        "{patches}"
+    );
 }
 
 #[test]
