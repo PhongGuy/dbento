@@ -1,5 +1,13 @@
 //! A connection's link state, as the explorer and the status bar show it.
 
+use dbento_core::ConnectionConfig;
+
+/// Whether `conn` shows as read-only, given what its session reported once connected: the
+/// config's rule alone before a session, and a session can raise it, as a VIEWER login does.
+pub fn shows_read_only(conn: &ConnectionConfig, session: Option<bool>) -> bool {
+    conn.read_only() || session == Some(true)
+}
+
 /// Whether a connection has a live session: one per catalog or tab, merged per connection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]

@@ -1,5 +1,6 @@
 //! SurrealDB in the app under gpui-pilot: a connection made in the dialog tests, saves,
-//! opens, runs a query and browses a table, and each read-only badge names its level.
+//! opens, runs a query and browses a table, and each read-only badge names its level beside
+//! the explorer's lock.
 mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -240,6 +241,12 @@ async fn each_surrealdb_badge_names_the_session_s_level() {
         assert_eq!(
             name(&tree, "read-only-badge"),
             Some(says.as_str()),
+            "{conn}"
+        );
+        // The explorer's lock reads the same session, so rv's VIEWER login draws it too.
+        assert_eq!(
+            name(&tree, &format!("connection-lock-{conn}")),
+            Some("read-only"),
             "{conn}"
         );
         assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));

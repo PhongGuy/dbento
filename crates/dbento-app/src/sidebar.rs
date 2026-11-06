@@ -37,7 +37,7 @@ use crate::keymap::{
     NewConnection, OpenSelected, ReloadWorkspace, TreeCollapse, TreeExpand, TreeSelectFirst,
     TreeSelectLast, TreeSelectNext, TreeSelectPrev, keys_for,
 };
-use crate::link::LinkState;
+use crate::link::{LinkState, shows_read_only};
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, LoadRequest, NodeKey, ObjectGroup, RevealStep, RowKind,
@@ -221,6 +221,8 @@ pub struct Sidebar {
     pending_insert: Option<(String, RelationRef, Engine)>,
     // The merged link of every tab session, per connection name; the shell keeps it current.
     session_links: HashMap<String, LinkState>,
+    // The connections with a tab session that reported read-only; the shell keeps it current.
+    session_read_only: HashSet<String>,
     // Set while the context menu shows, so no row tooltip draws over it.
     menu_open: bool,
     // The connection row under the pointer, which shows its gear alongside the selected one.
@@ -278,6 +280,7 @@ impl Sidebar {
             focus: cx.focus_handle(),
             pending_insert: None,
             session_links: HashMap::new(),
+            session_read_only: HashSet::new(),
             menu_open: false,
             hovered: None,
             selection_serial: 0,
@@ -313,6 +316,20 @@ impl Sidebar {
             self.session_links = links;
             cx.notify();
         }
+    }
+
+    /// Replaces the connections whose tab session reported read-only.
+    pub fn set_session_read_only(&mut self, names: HashSet<String>, cx: &mut Context<Self>) {
+        if self.session_read_only != names {
+            self.session_read_only = names;
+            cx.notify();
+        }
+    }
+
+    /// Whether connection `c`'s row draws the lock: the badge's rule over its tab sessions.
+    pub fn shows_lock(&self, c: &ConnectionConfig) -> bool {
+        let session = self.session_read_only.contains(c.name()).then_some(true);
+        shows_read_only(c, session)
     }
 
     /// The catalog's state merged with the sessions'.
@@ -1462,8 +1479,15 @@ impl Sidebar {
                         |row, glyph| row.child(glyph),
                     )
                     .child(div().flex_1())
-                    .when(c.read_only(), |row| {
-                        row.child(ui::icon(Icons::Lock, px(GLYPH), dim))
+                    .when(self.shows_lock(c), |row| {
+                        row.child(
+                            div()
+                                .id(part_id("connection-lock", c.name()))
+                                .aria_label("read-only")
+                                .test_support()
+                                .flex_none()
+                                .child(ui::icon(Icons::Lock, px(GLYPH), dim)),
+                        )
                     })
                     .children(new_query)
                     .children(edit);
