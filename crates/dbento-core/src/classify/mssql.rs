@@ -259,20 +259,45 @@ fn transaction_control(batch: &str) -> bool {
     })
 }
 
-/// Whether the batch switches database with a USE statement; text in strings, quoted names and
-/// comments never counts, nor a USE inside parentheses, such as an `OPTION (USE HINT(...))`.
+/// Whether the batch switches database with USE or changes a session option with SET, at
+/// paren depth 0; strings, quoted names, comments and `SET @variable` never count.
 pub(crate) fn mssql_changes_settings(batch: &str) -> bool {
+    let tokens: Vec<(TsqlKind, &str)> = tsql_tokens(batch)
+        .into_iter()
+        .filter(|t| {
+            t.kind == TsqlKind::Word || t.kind == TsqlKind::Punct || t.kind == TsqlKind::Ident
+        })
+        .map(|t| (t.kind, &batch[t.range]))
+        .collect();
     let mut depth = 0usize;
-    tsql_tokens(batch).into_iter().any(|t| {
-        let text = &batch[t.range];
-        match (t.kind, text) {
+    (0..tokens.len()).any(|i| {
+        match tokens[i] {
             (TsqlKind::Punct, "(") => depth += 1,
             (TsqlKind::Punct, ")") => depth = depth.saturating_sub(1),
-            (TsqlKind::Word, _) => return depth == 0 && text.eq_ignore_ascii_case("USE"),
+            (TsqlKind::Word, w) if depth == 0 => {
+                return w.eq_ignore_ascii_case("USE")
+                    || (w.eq_ignore_ascii_case("SET") && sets_session_option(&tokens[i + 1..]));
+            }
             _ => {}
         }
         false
     })
+}
+
+/// Whether the tokens after a SET name a session option. Every option counts, those Dbento
+/// itself sets included; a clause SET (`UPDATE ... SET a = 1`, `ON DELETE SET NULL`) does not.
+fn sets_session_option(after: &[(TsqlKind, &str)]) -> bool {
+    let punct =
+        |k: usize, p: &[&str]| matches!(after.get(k), Some((TsqlKind::Punct, t)) if p.contains(t));
+    let Some((TsqlKind::Word, word)) = after.first() else {
+        return false;
+    };
+    let assigns = punct(1, &["=", "."])
+        || (punct(1, &["+", "-", "*", "/", "%", "&", "^", "|"]) && punct(2, &["="]));
+    !word.starts_with('@')
+        && !word.eq_ignore_ascii_case("NULL")
+        && !word.eq_ignore_ascii_case("DEFAULT")
+        && !assigns
 }
 
 #[cfg(test)]

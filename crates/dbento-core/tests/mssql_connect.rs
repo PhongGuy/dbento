@@ -1,4 +1,4 @@
-//! Connecting to SQL Server with tls = "off": the server info, and a USE marking the session.
+//! Connecting to SQL Server with tls = "off": the server info, and USE or SET marking a session.
 mod support;
 
 use dbento_core::{Engine, Flavor, Limits, SessionOptions};
@@ -37,5 +37,27 @@ async fn a_use_marks_the_session_as_having_changed_settings() {
         .remove(0)
         .unwrap();
     assert!(s.settings_changed(), "USE");
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_session_set_marks_the_session_but_a_variable_assignment_does_not() {
+    dbento_testkit::skip_without_mssql!();
+    let fx = ms_off().await;
+    let mut s = fx.session(SessionOptions::default()).await;
+    run(
+        &mut s,
+        "DECLARE @x INT; SET @x = 1; SELECT @x",
+        Limits::default(),
+    )
+    .await
+    .remove(0)
+    .unwrap();
+    assert!(!s.settings_changed(), "a variable assignment");
+    run(&mut s, "SET LANGUAGE British", Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert!(s.settings_changed(), "SET LANGUAGE");
     s.close().await.unwrap();
 }

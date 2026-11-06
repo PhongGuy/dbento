@@ -37,7 +37,7 @@ pub(crate) struct MssqlDriver {
     cancel: Arc<MssqlCancel>,
     /// The session runs as a reader principal, so the database refuses its writes.
     reader: bool,
-    /// Set once a USE is sent on this session; see `Session::settings_changed`.
+    /// Set once a USE or session SET is sent on this session; see `Session::settings_changed`.
     settings_changed: Arc<AtomicBool>,
 }
 
