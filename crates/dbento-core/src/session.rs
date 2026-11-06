@@ -769,9 +769,9 @@ impl Session {
         self.read_only
     }
 
-    /// Whether this session ran a statement that changes session settings (SET or RESET on
-    /// Postgres, SET on MySQL, SET, RESET or USE on DuckDB, `use` on MongoDB); text it returns
-    /// may then differ from what a fresh session reads back. Always false on SQLite.
+    /// Whether this session sent a statement that switches database or changes settings (SET
+    /// or RESET on Postgres, SET or USE on MySQL, USE on SQL Server and SurrealDB, SET, RESET or
+    /// USE on DuckDB, `use` on MongoDB); a reopened session would lose it. Never on SQLite.
     pub fn settings_changed(&self) -> bool {
         match &self.inner {
             SessionInner::Sqlite(_) => false,

@@ -48,7 +48,7 @@ pub(crate) struct MysqlDriver {
     server: ServerInfo,
     cancel: Arc<MysqlCancel>,
     door: Arc<KillDoor>,
-    /// Set once a SET is sent on this session; see `Session::settings_changed`.
+    /// Set once a SET or USE is sent on this session; see `Session::settings_changed`.
     settings_changed: Arc<AtomicBool>,
     /// net_write_timeout was raised since connect or the last user SET.
     net_write_raised: Arc<AtomicBool>,
@@ -811,7 +811,7 @@ impl Driver for MysqlDriver {
             }
             script.net_write_raised.fetch_or(raise, Ordering::SeqCst);
         }
-        // Marked before sending: a SET that then fails may still have changed settings.
+        // Marked before sending: a SET or USE that then fails may still have taken effect.
         if mysql_changes_settings(&sql) {
             script.settings_changed.store(true, Ordering::SeqCst);
             script.net_write_raised.store(false, Ordering::SeqCst);

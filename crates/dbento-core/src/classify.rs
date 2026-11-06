@@ -81,10 +81,13 @@ pub(crate) fn mysql_leading_keyword(sql: &str) -> &str {
     &rest[..end]
 }
 
-/// Whether `sql`'s leading MySQL keyword is SET, read as written or with every versioned
-/// comment's body as code, since the server may run either reading.
+/// Whether `sql`'s leading MySQL keyword is SET or USE, read as written or with every
+/// versioned comment's body as code, since the server may run either reading.
 pub(crate) fn mysql_changes_settings(sql: &str) -> bool {
-    let set = |text: &str| mysql_leading_keyword(text).eq_ignore_ascii_case("SET");
+    let set = |text: &str| {
+        let keyword = mysql_leading_keyword(text);
+        keyword.eq_ignore_ascii_case("SET") || keyword.eq_ignore_ascii_case("USE")
+    };
     set(sql) || mysql_readings(&mysql_lexemes(sql, true), false).is_some_and(|[code, _]| set(&code))
 }
 
@@ -1133,7 +1136,7 @@ mod mysql_keyword_tests {
     }
 
     #[test]
-    fn a_set_counts_bare_or_inside_a_versioned_comment() {
+    fn a_set_or_use_counts_bare_or_inside_a_versioned_comment() {
         for sql in [
             "SET @x = 1",
             "# c\nset names utf8mb4",
@@ -1141,6 +1144,9 @@ mod mysql_keyword_tests {
             "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
             "/*M!100100 SET @x = 1 */",
             "  /*! SET autocommit = 0 */",
+            "USE shop",
+            "# c\nuse `shop`",
+            "/*!40101 USE shop */",
         ] {
             assert!(mysql_changes_settings(sql), "{sql}");
         }
@@ -1150,6 +1156,8 @@ mod mysql_keyword_tests {
             "/* SET x = 1 */ SELECT 1",
             "SELECT '/*!40101 SET NAMES utf8mb4 */'",
             "-- SET\nSELECT 1",
+            "SELECT 'USE shop'",
+            "/* USE shop */ SELECT 1",
         ] {
             assert!(!mysql_changes_settings(sql), "{sql}");
         }

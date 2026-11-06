@@ -36,6 +36,15 @@ async fn a_set_that_fails_still_marks_the_session() {
 }
 
 #[tokio::test]
+async fn a_search_path_change_marks_the_session() {
+    let fx = pg_fixture("").await;
+    let mut s = fx.session(SessionOptions::default()).await;
+    let results = run(&mut s, "SET search_path TO public", Limits::default()).await;
+    assert!(results[0].is_ok());
+    assert!(s.settings_changed());
+}
+
+#[tokio::test]
 async fn sqlite_sessions_are_never_marked() {
     let fx = sqlite_fixture("CREATE TABLE t(a);", "");
     let mut s = fx.session(SessionOptions::default()).await;
