@@ -440,9 +440,58 @@ fn a_use_anywhere_in_the_batch_changes_settings_but_text_and_set_do_not() {
         "SELECT 1",
         "EXEC('USE master')",
         "UPDATE t SET a = 1",
-        "SET NOCOUNT ON",
         "SELECT [USE] FROM t -- USE master",
         "SELECT a FROM t OPTION (USE HINT('DISABLE_OPTIMIZED_NESTED_LOOP'))",
+    ] {
+        assert!(!mssql_changes_settings(sql), "{sql}");
+    }
+}
+
+#[test]
+fn a_session_set_anywhere_in_the_batch_changes_settings() {
+    for sql in [
+        "SET LANGUAGE British",
+        "SET DATEFORMAT dmy",
+        "SET ANSI_NULLS OFF",
+        "set ansi_nulls, quoted_identifier off",
+        "SET NOCOUNT ON",
+        "SET STATISTICS IO ON",
+        "SET SHOWPLAN_XML ON",
+        "SET ROWCOUNT 10",
+        "SET XACT_ABORT ON",
+        "SET IMPLICIT_TRANSACTIONS ON",
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET DEADLOCK_PRIORITY -5",
+        "SET IDENTITY_INSERT dbo.t ON",
+        "-- c\n/* d */ SET LANGUAGE British",
+        "SELECT 1; SET LANGUAGE British",
+        "SELECT 1 SET DATEFORMAT dmy",
+        "UPDATE t SET a = 1 SET ANSI_NULLS OFF",
+        "IF (1 = 1) SET NOCOUNT ON",
+    ] {
+        assert!(mssql_changes_settings(sql), "{sql}");
+    }
+}
+
+#[test]
+fn a_variable_assignment_a_clause_set_or_set_as_text_does_not_change_settings() {
+    for sql in [
+        "SELECT 1",
+        "SET @x = 1",
+        "DECLARE @x INT; SET @x = 1; SELECT @x",
+        "UPDATE t SET a = 1",
+        "UPDATE t SET nocount = 1, b = 2",
+        "UPDATE t SET t.language = 'x'",
+        "UPDATE t SET [language] = 'x'",
+        "UPDATE t SET a += 1, b -= 2",
+        "UPDATE t SET @v = a = a + 1",
+        "MERGE t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = s.a;",
+        "ALTER TABLE t ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES p (id) ON DELETE SET NULL",
+        "ALTER TABLE t SET (LOCK_ESCALATION = AUTO)",
+        "SELECT 'SET LANGUAGE British'",
+        "-- SET LANGUAGE British\nSELECT 1",
+        "/* SET ANSI_NULLS OFF */ SELECT 1",
+        "EXEC('SET NOCOUNT ON')",
     ] {
         assert!(!mssql_changes_settings(sql), "{sql}");
     }

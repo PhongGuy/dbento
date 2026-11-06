@@ -102,7 +102,7 @@ pub(crate) struct Rules {
     pub(crate) read_only: bool,
     /// The principal a read-only session impersonates, so the database refuses its writes.
     pub(crate) reader: Option<String>,
-    /// The driver's flag, set before a batch that switches database is sent.
+    /// The driver's flag, set before a batch with a USE or session SET is sent.
     pub(crate) settings_changed: Arc<AtomicBool>,
 }
 
@@ -732,7 +732,7 @@ async fn serve_script(
                     queue = Default::default();
                     continue;
                 }
-                // Marked before sending: a USE in a batch that then fails may still have switched.
+                // Marked before sending: a USE or SET in a batch that then fails may still have taken effect.
                 if mssql_changes_settings(send.text) {
                     session.rules.settings_changed.store(true, Ordering::SeqCst);
                 }
