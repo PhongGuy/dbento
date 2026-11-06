@@ -1,7 +1,7 @@
 mod support;
 use dbento_app::copy::{
     CopyFormat, cell_copy, copy_as, copy_rows, copy_text, document_json, insert_maps_nothing,
-    json_literal,
+    insert_unwritable, json_literal,
 };
 use dbento_app::results::ResultStore;
 use dbento_app::results_pane::ResultsPane;
@@ -528,6 +528,44 @@ fn an_insert_writes_table_column_names_and_names_what_it_skips() {
         TableSelection::Row(0),
         &CopyFormat::Csv
     ));
+}
+
+/// SurrealDB has no bytes literal here, so an INSERT never guesses one: the copy is refused
+/// naming the column, and `copy_rows` says which row it left out instead of dropping it unseen.
+#[test]
+fn a_value_with_no_sql_literal_is_named_never_dropped_silently() {
+    let s = store("SELECT 1 AS a, x'00ff' AS d UNION ALL SELECT 2, NULL");
+    let f = insert(Engine::Surrealdb, "main", &s);
+    assert_eq!(
+        insert_unwritable(&s, TableSelection::Row(0), &f).as_deref(),
+        Some("d")
+    );
+    assert_eq!(
+        insert_unwritable(&s, TableSelection::Column(2), &f).as_deref(),
+        Some("d"),
+        "a column selection covers every loaded row"
+    );
+    assert_eq!(insert_unwritable(&s, TableSelection::Row(1), &f), None);
+    assert_eq!(insert_unwritable(&s, TableSelection::Cell(0, 1), &f), None);
+    let unmapped = CopyFormat::Insert {
+        engine: Engine::Surrealdb,
+        table: RelationRef::new("main", "t"),
+        columns: vec![Some("a".into()), None],
+    };
+    assert_eq!(
+        insert_unwritable(&s, TableSelection::Row(0), &unmapped),
+        None,
+        "a column left out of the INSERT writes no value"
+    );
+    assert_eq!(
+        insert_unwritable(&s, TableSelection::Row(0), &CopyFormat::Csv),
+        None
+    );
+    assert_eq!(
+        copy_rows(&s, 0..2, &[0, 1], &f, false),
+        "-- Skipped row 1: d holds a value with no SQL literal\n\
+         INSERT INTO `main`.`t` (`a`, `d`) VALUES (2, NULL);"
+    );
 }
 
 const ALIAS_SETUP: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT); \

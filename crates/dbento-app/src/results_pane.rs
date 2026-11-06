@@ -29,7 +29,9 @@ use gpui_kit::{
 use crate::browse::{BrowseEvent, and_filter};
 use crate::catalog::CatalogQuery;
 use crate::confirm::{self, ChoiceStyle};
-use crate::copy::{CopyCells, CopyFormat, copy_as, insert_maps_nothing, insert_target};
+use crate::copy::{
+    CopyCells, CopyFormat, copy_as, insert_maps_nothing, insert_target, insert_unwritable,
+};
 use crate::export::{chosen_path, export_format, export_text, write_export};
 use crate::grid::{ColumnView, ResultsDelegate, data_col, loaded_selection};
 use crate::grid_menu::{
@@ -1245,7 +1247,8 @@ impl ResultsPane {
 
     /// Copies the selection of `shown` (run id, statement) into `table` with result columns
     /// written as `columns` names them; a newer run or another statement shown meanwhile copies
-    /// nothing, and a selection with no column of the table gives a notice instead.
+    /// nothing, and a selection with no column of the table, or holding a value with no SQL
+    /// literal, gives a notice instead.
     fn finish_insert_copy(
         &mut self,
         shown: (u64, usize),
@@ -1268,12 +1271,17 @@ impl ResultsPane {
             table,
             columns,
         };
-        if self
-            .loaded_store(cx)
-            .is_some_and(|(store, sel)| insert_maps_nothing(store, sel, &format))
-        {
-            let text =
-                format!("Nothing copied as SQL INSERT: no selected column comes from {target}");
+        // A value with no literal refuses the whole copy rather than leave rows out of it.
+        let refusal = self.loaded_store(cx).and_then(|(store, sel)| {
+            if insert_maps_nothing(store, sel, &format) {
+                Some(format!("no selected column comes from {target}"))
+            } else {
+                insert_unwritable(store, sel, &format)
+                    .map(|col| format!("{col} holds a value with no SQL literal"))
+            }
+        });
+        if let Some(reason) = refusal {
+            let text = format!("Nothing copied as SQL INSERT: {reason}");
             ui::notice(
                 window,
                 cx,

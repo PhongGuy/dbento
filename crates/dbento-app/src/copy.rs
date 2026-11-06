@@ -96,8 +96,9 @@ pub enum CopyFormat {
 
 /// Rows `rows` and data columns `cols` of `store` as `format`; the renderer `copy_as` and
 /// `export::export_text` share. Rows past the loaded ones, unknown columns, a row missing a cell
-/// (as in `copy_text`) and an INSERT row holding a value it cannot write are left out; `headers`
-/// adds a header line to TSV and CSV, while the other formats always name columns.
+/// (as in `copy_text`) are left out, and an INSERT row holding a value it cannot write becomes a
+/// comment naming the column; `headers` adds a header line to TSV and CSV, while the other
+/// formats always name columns.
 pub fn copy_rows(
     store: &ResultStore,
     rows: Range<u64>,
@@ -193,27 +194,15 @@ pub fn copy_rows(
             columns: targets,
         } => {
             let target = insert_target(*engine, table);
-            // A result label is not a table column: write each mapped column under the name
-            // it has in the table, once, since a column named twice fails the INSERT. The
-            // labels left out are listed on one comment line.
-            let mut written: Vec<String> = Vec::new();
-            let writes: Vec<Option<String>> = cols
-                .iter()
-                .map(|&c| {
-                    let name = targets.get(c).cloned().flatten()?;
-                    (!written.contains(&name)).then(|| {
-                        written.push(name.clone());
-                        name
-                    })
-                })
-                .collect();
+            // The labels left out are listed on one comment line.
+            let writes = insert_writes(&cols, targets);
             let target_of = |i: usize| writes[i].clone();
             let kept: Vec<usize> = (0..cols.len())
                 .filter(|&i| target_of(i).is_some())
                 .collect();
             let skipped: Vec<String> = (0..cols.len())
                 .filter(|&i| target_of(i).is_none())
-                .map(|i| names[i].replace("\r\n", " ").replace(['\r', '\n'], " "))
+                .map(|i| skipped_label(names[i]))
                 .collect();
             if !skipped.is_empty() {
                 lines.push(format!(
@@ -226,16 +215,25 @@ pub fn copy_rows(
                 .filter_map(|&i| target_of(i))
                 .map(|n| quote_ident(*engine, &n))
                 .collect();
-            for row in loaded_cells() {
-                let Some(values) = kept
+            // A value with no literal is never guessed: its row becomes a comment naming it.
+            for (n, row) in loaded.clone().filter_map(|r| Some((r, cells(r)?))) {
+                let values: Result<Vec<String>, usize> = kept
                     .iter()
                     .map(|&i| {
                         let (cell, t, oid, num) = row[i];
-                        sql_literal(*engine, cell, t, oid, num)
+                        sql_literal(*engine, cell, t, oid, num).ok_or(i)
                     })
-                    .collect::<Option<Vec<String>>>()
-                else {
-                    continue;
+                    .collect();
+                let values = match values {
+                    Ok(values) => values,
+                    Err(i) => {
+                        lines.push(format!(
+                            "-- Skipped row {}: {} holds a value with no SQL literal",
+                            n + 1,
+                            skipped_label(names[i])
+                        ));
+                        continue;
+                    }
                 };
                 lines.push(format!(
                     "INSERT INTO {target} ({}) VALUES ({});",
@@ -274,6 +272,57 @@ pub fn insert_maps_nothing(store: &ResultStore, sel: TableSelection, format: &Co
         cols.iter()
             .all(|&c| columns.get(c).is_none_or(Option::is_none))
     })
+}
+
+/// The first selected column `format`, an INSERT, writes that holds a loaded value with no SQL
+/// literal for its engine, so the copy can be refused naming it; None when every value has one.
+pub fn insert_unwritable(
+    store: &ResultStore,
+    sel: TableSelection,
+    format: &CopyFormat,
+) -> Option<String> {
+    let CopyFormat::Insert {
+        engine, columns, ..
+    } = format
+    else {
+        return None;
+    };
+    let (rows, cols) = selected(store, sel)?;
+    let info = store.columns();
+    let writes = insert_writes(&cols, columns);
+    cols.iter()
+        .zip(&writes)
+        .filter(|(_, w)| w.is_some())
+        .find(|&(&c, _)| {
+            rows.clone().any(|row| {
+                store.cell(row, c).is_some_and(|cell| {
+                    let (t, oid) = (info[c].type_name(), info[c].pg_type_oid());
+                    sql_literal(*engine, cell, t, oid, store.is_number(row, c)).is_none()
+                })
+            })
+        })
+        .map(|(&c, _)| info[c].name().to_owned())
+}
+
+/// Per entry of `cols`, the table column `targets` maps it to, or None when it is unmapped or
+/// repeats a column already written: a result label is not a table column, and a column named
+/// twice fails the INSERT.
+fn insert_writes(cols: &[usize], targets: &[Option<String>]) -> Vec<Option<String>> {
+    let mut written: Vec<String> = Vec::new();
+    cols.iter()
+        .map(|&c| {
+            let name = targets.get(c).cloned().flatten()?;
+            (!written.contains(&name)).then(|| {
+                written.push(name.clone());
+                name
+            })
+        })
+        .collect()
+}
+
+/// A result label on one line, so it cannot end the SQL comment that names it.
+fn skipped_label(name: &str) -> String {
+    name.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 /// The `schema.name` an INSERT into `table` names, quoted as `engine` needs.
