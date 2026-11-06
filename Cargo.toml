@@ -58,7 +58,7 @@ sha2 = "0.11.0"
 gpui-kit = { version = "=0.7.1", features = ["tree-sitter", "tree-sitter-javascript", "tree-sitter-sql"] }
 async-channel = "2.5.0"
 rust-embed = { version = "=8.13.0", features = ["debug-embed"] }
-dirs = "6.0.0"
+dirs = "7.0.0"
 rmcp = { version = "=3.8.0", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1.2.2"
 getrandom = "0.4.3"
