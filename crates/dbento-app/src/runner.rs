@@ -148,9 +148,14 @@ pub enum Event {
     Stopped {
         message: String,
     },
-    /// Sent before `RunDone` once a run has left the Postgres session's settings changed;
-    /// the mark lasts until the session closes.
+    /// Sent before `RunDone` once a run has left the session's settings changed, on any
+    /// engine; the mark lasts until the session closes.
     SettingsChanged,
+    /// Sent instead of any statement event, then `RunDone`, for the first `Run` or `Explain`
+    /// after the runner reopened a session whose USE/SET changes were lost.
+    SettingsLost {
+        run_id: u64,
+    },
     /// The session ended; the next `Run` reconnects.
     Disconnected {
         reason: String,
@@ -334,11 +339,13 @@ async fn run(
 ) {
     // Held for the task's whole life; a panic drops it while unwinding, freeing `guarded`.
     let mut session = slot.lock().await;
-    let mut next = idle(&inbox, &mut session, &events).await;
+    // Set when the runner drops a session whose USE/SET changes a reopen would lose.
+    let mut lost_settings = false;
+    let mut next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
     while let Some(command) = next.take() {
         if matches!(command, Command::Connect) {
             ensure_open(&spec, &mut session, &events).await;
-            next = idle(&inbox, &mut session, &events).await;
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
         if let Command::Target { rel } = command {
@@ -373,7 +380,7 @@ async fn run(
                     foreign_keys,
                 })
                 .await;
-            next = idle(&inbox, &mut session, &events).await;
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
         if let Command::SourceColumns {
@@ -391,7 +398,7 @@ async fn run(
                 None => Err("not connected".to_owned()),
             };
             let _ = reply.try_send(result);
-            next = idle(&inbox, &mut session, &events).await;
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
         let (run_id, work) = match command {
@@ -403,10 +410,18 @@ async fn run(
             Command::Explain { run_id, request } => (run_id, Work::Explain(request)),
             Command::Close => break,
             _ => {
-                next = idle(&inbox, &mut session, &events).await; // a Confirm, Skip, Pull or Fetch nobody waits for
+                next = idle(&inbox, &mut session, &mut lost_settings, &events).await; // a Confirm, Skip, Pull or Fetch nobody waits for
                 continue;
             }
         };
+        // A reopened session would run on the configured database, so the first run after
+        // losing a switch is refused once and the next one proceeds.
+        if std::mem::take(&mut lost_settings) {
+            let _ = events.send(Event::SettingsLost { run_id }).await;
+            let _ = events.send(Event::RunDone { run_id }).await;
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
+            continue;
+        }
         // A Run connects if no pre-connect did, and again after a failure, so it retries.
         ensure_open(&spec, &mut session, &events).await;
         let cx = Ctx {
@@ -434,7 +449,7 @@ async fn run(
                     after,
                     After::Idle | After::Next(Command::Run { .. } | Command::Explain { .. })
                 ) {
-                    finish(&mut session, tail, run_id, &events).await;
+                    finish(&mut session, &mut lost_settings, tail, run_id, &events).await;
                 }
                 after
             }
@@ -445,7 +460,7 @@ async fn run(
         }
         let _ = events.send(Event::RunDone { run_id }).await;
         next = match after {
-            After::Idle => idle(&inbox, &mut session, &events).await,
+            After::Idle => idle(&inbox, &mut session, &mut lost_settings, &events).await,
             After::Next(command) => Some(command),
             After::Hangup => None,
         };
@@ -465,6 +480,7 @@ async fn run(
 async fn idle(
     inbox: &Receiver<Command>,
     session: &mut Option<Session>,
+    lost: &mut bool,
     events: &Sender<Event>,
 ) -> Option<Command> {
     let Some(s) = session.as_ref() else {
@@ -481,7 +497,7 @@ async fn idle(
     if let Some(command) = command {
         return command;
     }
-    if let Some(s) = session.take() {
+    if let Some(s) = drop_session(session, lost) {
         let _ = s.close().await;
     }
     let _ = events
@@ -519,10 +535,18 @@ async fn ensure_open(spec: &RunnerSpec, session: &mut Option<Session>, events: &
 /// Why a session ends: a cut-short read-only result, or a lost connection.
 const CUT_READ_ONLY: &str = "the read-only session closed to end a cut-short result";
 const LOST: &str = "the session closed; any open transaction is lost";
+/// Why the first run after a reopen that lost the session's settings was refused.
+pub const SETTINGS_LOST: &str = "The connection was reopened and this session's USE/SET changes were lost. Run again to continue on the configured database.";
 
 /// Ends a run's use of the session. A cut-short read-only result closes it outright; any
 /// other run settles, reporting a drain error or closing the session past the drain cap.
-async fn finish(session: &mut Option<Session>, tail: Tail, run_id: u64, events: &Sender<Event>) {
+async fn finish(
+    session: &mut Option<Session>,
+    lost: &mut bool,
+    tail: Tail,
+    run_id: u64,
+    events: &Sender<Event>,
+) {
     let Some(s) = session.as_mut() else { return };
     let reason = match tail {
         Tail::Lost => LOST.to_owned(),
@@ -548,10 +572,17 @@ async fn finish(session: &mut Option<Session>, tail: Tail, run_id: u64, events: 
         }
     };
     // The session is already lost or read-only here, so close has no write to report.
-    if let Some(s) = session.take() {
+    if let Some(s) = drop_session(session, lost) {
         let _ = s.close().await;
     }
     let _ = events.send(Event::Disconnected { reason }).await;
+}
+
+/// Takes a session the runner will reopen later, marking `lost` if it carried USE/SET changes.
+fn drop_session(session: &mut Option<Session>, lost: &mut bool) -> Option<Session> {
+    let s = session.take();
+    *lost |= s.as_ref().is_some_and(Session::settings_changed);
+    s
 }
 
 /// Resolves the secret off the async threads (a keychain call can block) and connects. A
