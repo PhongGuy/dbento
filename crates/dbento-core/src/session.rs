@@ -781,7 +781,7 @@ impl Session {
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.settings_changed(),
             #[cfg(feature = "surrealdb")]
-            SessionInner::Surreal(_) => false,
+            SessionInner::Surreal(d) => d.settings_changed(),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.settings_changed(),
         }
