@@ -396,13 +396,15 @@ impl<'a> Layout<'a> {
         (self.brk, self.prev) = (None, None);
         let (mut space, mut nl) = (false, false);
         let mut gap = 0;
-        for i in r {
+        let mut i = r.start;
+        while i < r.end {
             if self.toks[i].kind == Kind::Space {
                 if !space {
                     gap = self.toks[i].range.start;
                 }
                 space = true;
                 nl |= self.text(i).contains('\n');
+                i += 1;
                 continue;
             }
             let gap = if space {
@@ -411,8 +413,37 @@ impl<'a> Layout<'a> {
                 ""
             };
             self.token(i, gap, nl);
+            // A continued string is one literal to the server, comments and all, so
+            // everything after its first piece is copied verbatim.
+            let last = self.continuation_end(i, r.end);
+            if last > i {
+                let tail = self.toks[i].range.end..self.toks[last].range.end;
+                self.out.push_str(&self.sql[tail]);
+                self.prev = Some(last);
+                i = last;
+            }
             (space, nl) = (false, false);
+            i += 1;
         }
+    }
+
+    /// The last piece of the string continuation starting at token `i`, or `i` itself.
+    /// Postgres joins string literals separated by whitespace and `--` comments that hold
+    /// a newline; a block comment ends the continuation.
+    fn continuation_end(&self, i: usize, end: usize) -> usize {
+        let (mut last, mut nl) = (i, false);
+        if self.toks[i].kind != Kind::String {
+            return i;
+        }
+        for k in i + 1..end {
+            match self.toks[k].kind {
+                Kind::Space => nl |= self.text(k).contains(['\n', '\r']),
+                Kind::LineComment => {}
+                Kind::String if nl => (last, nl) = (k, false),
+                _ => break,
+            }
+        }
+        last
     }
 
     /// Emits token `i`; `gap` is the source whitespace before it and `nl` whether it
@@ -445,14 +476,7 @@ impl<'a> Layout<'a> {
         if text == ";" && brk.is_some() {
             brk = Some(0);
         }
-        // Postgres joins adjacent string literals across a newline into one literal that
-        // spans the gap, so that gap is copied verbatim.
-        let continued = nl
-            && kind == Kind::String
-            && self.prev.is_some_and(|p| self.toks[p].kind == Kind::String);
-        if continued {
-            self.out.push_str(gap);
-        } else if let Some(c) = brk.filter(|_| !touching) {
+        if let Some(c) = brk.filter(|_| !touching) {
             self.out.push('\n');
             self.out.extend(std::iter::repeat_n(' ', c));
         } else if prev.is_some()
