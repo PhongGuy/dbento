@@ -423,3 +423,44 @@ async fn a_drain_past_the_cap_after_a_set_refuses_the_next_run_once() {
     )));
     refused_then_proceeds(&r, &ev, 3).await;
 }
+
+// Each run after a change says where the session is now: a schema off the configured one,
+// then nothing once the search path is back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_that_moves_the_search_path_reports_the_schema() {
+    let (_db, _dir, spec) = pg_spec("").await;
+    let r = spawn_tuned(&here(), spec, tuning());
+    let ev = r.events();
+    let moved = |seen: &[Event]| {
+        seen.iter().find_map(|e| match e {
+            Event::SettingsChanged { database } => Some(database.clone()),
+            _ => None,
+        })
+    };
+    r.send(run_cmd(1, "SELECT 1", Some(10)));
+    assert_eq!(
+        moved(&run_done(&ev, 1).await),
+        None,
+        "no change, no question"
+    );
+    let to = "CREATE SCHEMA IF NOT EXISTS curdb_runner; SET search_path TO curdb_runner";
+    r.send(run_cmd(2, to, Some(10)));
+    assert_eq!(
+        moved(&run_done(&ev, 2).await),
+        Some(Some("schema: curdb_runner".to_owned()))
+    );
+    r.send(run_cmd(3, "RESET search_path", Some(10)));
+    assert_eq!(moved(&run_done(&ev, 3).await), Some(None));
+}
+
+#[test]
+fn the_database_label_names_what_moved() {
+    use dbento_app::runner::database_label;
+    use dbento_core::Engine;
+    assert_eq!(database_label(Engine::Mysql, "analytics"), "db: analytics");
+    assert_eq!(
+        database_label(Engine::Surrealdb, "app/prod"),
+        "ns/db: app/prod"
+    );
+    assert_eq!(database_label(Engine::Postgres, "audit"), "schema: audit");
+}

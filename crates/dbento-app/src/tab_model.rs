@@ -295,6 +295,8 @@ pub struct TabModel {
     settings_changed: bool,
     /// The tab dropped a session whose settings had changed; the next run is refused once.
     lost_settings: bool,
+    /// The open session's database label while a USE keeps it off the configured one.
+    current_database: Option<String>,
     results: Vec<StatementResult>,
     confirm: Option<PendingConfirm>,
     error: Option<String>,
@@ -469,6 +471,7 @@ impl TabModel {
             connected: false,
             settings_changed: false,
             lost_settings: false,
+            current_database: None,
             results: Vec::new(),
             confirm: None,
             error: None,
@@ -868,6 +871,7 @@ impl TabModel {
         self.pump = None;
         self.cancel = None;
         self.connected = false;
+        self.current_database = None;
         self.running = false;
         self.confirm = None;
         self.paused = None;
@@ -898,11 +902,15 @@ impl TabModel {
                 self.read_only_level = level;
                 self.connected = true;
                 self.settings_changed = false;
+                self.current_database = None;
                 self.cancel = Some(cancel);
                 self.error = None;
             }
             Event::ConnectFailed { message } => self.error = Some(message),
-            Event::SettingsChanged => self.settings_changed = true,
+            Event::SettingsChanged { database } => {
+                self.settings_changed = true;
+                self.current_database = database;
+            }
             // The runner already refused this run for the session it lost, so the tab does not
             // refuse the next one again.
             Event::SettingsLost { run_id } if run_id == self.run_id => {
@@ -916,6 +924,7 @@ impl TabModel {
                 self.lost_settings |= std::mem::take(&mut self.settings_changed);
                 self.cancel = None;
                 self.connected = false;
+                self.current_database = None;
                 self.running = false;
                 self.confirm = None;
                 self.paused = None;
@@ -934,6 +943,7 @@ impl TabModel {
             Event::Disconnected { reason } => {
                 self.cancel = None;
                 self.connected = false;
+                self.current_database = None;
                 if self.read_only != Some(true) {
                     self.notice = Some(reason);
                 }
@@ -2821,6 +2831,12 @@ impl TabModel {
     /// The last settle failure or read-write disconnect; a new run clears it.
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
+    }
+
+    /// The open session's database, as the runner labelled it, while it differs from the
+    /// configured one; None once the session ends.
+    pub fn current_database(&self) -> Option<&str> {
+        self.current_database.as_deref()
     }
 
     /// Sets the row cap for the next run.

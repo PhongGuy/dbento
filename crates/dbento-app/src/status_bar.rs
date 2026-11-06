@@ -158,6 +158,15 @@ pub fn status_bar(
         );
     }
     left = left.child(connection.child(div().min_w_0().truncate().child(label)));
+    // Where a USE took the session, beside the configured connection it no longer matches.
+    if let Some(text) = model.current_database() {
+        left = left.child(
+            ui::chip("status-database", text.to_owned(), cx)
+                .flex_none()
+                .border_color(warning)
+                .text_color(warning),
+        );
+    }
     let results = model.results();
     let shown_ix = shown(results);
     let shown = shown_ix.map(|ix| &results[ix]);
