@@ -153,6 +153,23 @@ fn string_continuation_gap_is_kept_verbatim() {
 }
 
 #[test]
+fn line_comments_inside_a_string_continuation_are_kept_verbatim() {
+    // `--` comments between the pieces belong to the one literal, so neither they nor
+    // their whitespace move.
+    assert_eq!(
+        fmt(
+            Postgres,
+            "select 'c' -- note\n'd' -- more\n\n  'e', x from t"
+        ),
+        "SELECT 'c' -- note\n'd' -- more\n\n  'e',\n       x\nFROM t"
+    );
+    assert_eq!(
+        fmt(Postgres, "select x, 'c'\n   -- note\n 'd' from t"),
+        "SELECT x,\n       'c'\n   -- note\n 'd'\nFROM t"
+    );
+}
+
+#[test]
 fn is_distinct_from_stays_in_its_condition() {
     both(
         "select * from t where a is distinct from b and c is not distinct from d or e = 1",
@@ -356,9 +373,10 @@ fn a_line_comment_on_its_own_line_stays_on_its_own_line() {
         "update t set a = 1\n-- c\nwhere b = 2",
         "UPDATE t\nSET a = 1\n-- c\nWHERE b = 2",
     );
+    // Between continued strings the comment is inside one literal, so it is not re-indented.
     assert_eq!(
         fmt(Postgres, "select 'a'\n-- c\n'b' from t"),
-        "SELECT 'a'\n       -- c\n       'b'\nFROM t"
+        "SELECT 'a'\n-- c\n'b'\nFROM t"
     );
 }
 

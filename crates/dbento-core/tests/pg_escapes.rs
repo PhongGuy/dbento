@@ -185,11 +185,7 @@ async fn session_advisory_locks_are_released() {
 #[tokio::test]
 async fn a_statement_pg_query_cannot_parse_still_runs_inside_the_wrapper() {
     let mut e = escape().await;
-    let codes = attempt(
-        &mut e,
-        "CREATE TABLE v (a int GENERATED ALWAYS AS (1) VIRTUAL)",
-    )
-    .await;
+    let codes = attempt(&mut e, "CREATE TABLE v AS SELECT a FROM t GROUP BY ALL").await;
     assert!(codes == ["42601"] || codes == ["read_only"], "{codes:?}");
     assert_eq!(
         e.fx.db

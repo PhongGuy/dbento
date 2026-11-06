@@ -517,7 +517,7 @@ pub(crate) struct PgClass {
 /// `Writes::Unknown` and never a refusal. COPY to or from the client and changes to
 /// `client_encoding` are refused because the driver cannot honour them.
 pub(crate) fn pg_classification(sql: &str) -> PgClass {
-    let Ok(parsed) = pg_query::parse(sql) else {
+    let Ok(parsed) = pg_query::parse(sql, pg_query::ParserOptions::DEFAULT) else {
         return PgClass {
             classification: Classification {
                 writes: Writes::Unknown,
@@ -633,7 +633,7 @@ pub(crate) struct PgReach {
 /// Collects every function, operator, relation, type and attribute name `sql` reaches, or
 /// `None` when it does not parse or names one in a form the check cannot look up.
 pub(crate) fn pg_reach(sql: &str) -> Option<PgReach> {
-    let parsed = pg_query::parse(sql).ok()?;
+    let parsed = pg_query::parse(sql, pg_query::ParserOptions::DEFAULT).ok()?;
     // pg_query's own walker skips some expression nodes, such as ARRAY[...], so the whole
     // tree is walked in its serialized form instead.
     let tree = serde_json::to_value(&parsed.protobuf).ok()?;
@@ -956,10 +956,22 @@ mod pg_tests {
     #[test]
     fn a_parse_failure_is_unknown_and_unchecked() {
         assert_eq!(class("SELEC x"), (Writes::Unknown, vec![]));
+        // Newer-server syntax the bundled parser rejects: a bare GROUP BY ALL.
         assert_eq!(
-            class("CREATE TABLE v (a int GENERATED ALWAYS AS (1) VIRTUAL)"),
+            class("CREATE TABLE v AS SELECT a FROM t GROUP BY ALL"),
             (Writes::Unknown, vec![])
         );
+    }
+
+    #[test]
+    fn a_virtual_generated_column_is_ddl_like_any_other() {
+        for sql in [
+            "CREATE TABLE v (a int GENERATED ALWAYS AS (1) VIRTUAL)",
+            "CREATE TABLE v (a int GENERATED ALWAYS AS (1) STORED)",
+            "ALTER TABLE t ADD COLUMN b int GENERATED ALWAYS AS (1) VIRTUAL",
+        ] {
+            assert_eq!(class(sql), (Writes::Yes, vec![]), "{sql}");
+        }
     }
 
     #[test]

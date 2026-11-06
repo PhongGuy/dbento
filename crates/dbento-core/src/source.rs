@@ -47,7 +47,7 @@ pub fn single_source(
 /// Postgres: the top-level SelectStmt must have one RangeVar in FROM, and the whole tree
 /// must hold no subquery, function or join; the parser has already folded unquoted names.
 fn pg_source(sql: &str) -> Option<RelationRef> {
-    let parsed = pg_query::parse(sql).ok()?;
+    let parsed = pg_query::parse(sql, pg_query::ParserOptions::DEFAULT).ok()?;
     let [raw] = parsed.protobuf.stmts.as_slice() else {
         return None;
     };
