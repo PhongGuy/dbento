@@ -2,7 +2,7 @@
 members = ["crates/dbento-core", "crates/dbento-cli", "crates/dbento-mcp", "crates/dbento-app", "crates/dbento-testkit", "crates/dbento-bench", "crates/xtask"]
 resolver = "3"
 # A path dependency under the root would otherwise become a workspace member.
-exclude = ["vendor/tiberius"]
+exclude = ["vendor/tiberius", "vendor/mongodb"]
 
 [workspace.package]
 version = "0.1.0"
@@ -96,3 +96,4 @@ lto = "thin"
 # The vendored tiberius with its DBENTO-PATCHES applied.
 [patch.crates-io]
 tiberius = { path = "vendor/tiberius" }
+mongodb = { path = "vendor/mongodb" }
