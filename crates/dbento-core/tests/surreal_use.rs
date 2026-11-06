@@ -143,3 +143,38 @@ async fn a_use_marks_the_session_but_a_plain_statement_or_catalog_call_does_not(
         .unwrap();
     assert!(s.settings_changed());
 }
+
+#[tokio::test]
+async fn a_use_names_the_namespace_and_database_the_session_is_in() {
+    let db = surreal_db().await;
+    db.admin("DEFINE NAMESPACE elsewhere; USE NS elsewhere; DEFINE DATABASE fresh")
+        .await;
+    let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
+    assert_eq!(s.current_database().await, None, "a fresh session");
+    let ran = run(
+        &mut s,
+        "RETURN session::ns(); RETURN session::db()",
+        Limits::default(),
+    )
+    .await;
+    let own: Vec<_> = ran
+        .into_iter()
+        .map(|r| r.unwrap().rows[0][0].clone())
+        .collect();
+    run(&mut s, "USE NS elsewhere DB fresh", Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert_eq!(
+        s.current_database().await.as_deref(),
+        Some("elsewhere/fresh")
+    );
+    let [support::Cell::Text(ns), support::Cell::Text(dbn)] = &own[..] else {
+        panic!("{own:?}")
+    };
+    run(&mut s, &format!("USE NS {ns} DB {dbn}"), Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert_eq!(s.current_database().await, None, "back where it opened");
+}

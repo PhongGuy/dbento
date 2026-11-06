@@ -204,6 +204,16 @@ async fn a_use_marks_the_session_bare_or_versioned() {
             .remove(0)
             .unwrap();
         assert!(s.settings_changed(), "{label}: USE");
+        assert_eq!(s.current_database().await, None, "{label}: USE of its own");
+        run(&mut s, "USE information_schema", Limits::default())
+            .await
+            .remove(0)
+            .unwrap();
+        assert_eq!(
+            s.current_database().await.as_deref(),
+            Some("information_schema"),
+            "{label}: USE of another"
+        );
         let mut v = fx.session(SessionOptions::default()).await;
         run(
             &mut v,

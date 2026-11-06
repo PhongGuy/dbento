@@ -256,6 +256,13 @@ impl MssqlDriver {
         }
         Ok(wait.await.unwrap_or(Err(ExecuteError::SessionClosed))?)
     }
+
+    /// The session's database once a USE moved it off the login's; None on failure.
+    pub(crate) async fn moved_database(&mut self) -> Option<String> {
+        let (reply, wait) = oneshot::channel();
+        self.requests.send(Request::Moved { reply }).ok()?;
+        wait.await.ok().flatten()
+    }
 }
 
 /// A dropped session stops its send in flight; the thread reads through the acknowledgement,

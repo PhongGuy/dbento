@@ -20,6 +20,8 @@ pub(crate) enum Ask {
     Relations(String),
     Columns(RelationRef),
     Objects(RelationRef),
+    /// Where RPC `use` has put the session.
+    Place,
 }
 
 /// The serving task's answer, one variant per [`Ask`].
@@ -28,6 +30,8 @@ pub(crate) enum Answer {
     Relations(RelationList),
     Columns(Vec<ColumnMeta>),
     Objects(RelationObjects),
+    /// The namespace and database.
+    Place(String, String),
 }
 
 /// One statement of a `query` reply: its result, or its error with the server's message.

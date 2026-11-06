@@ -58,6 +58,10 @@ pub(crate) enum Request {
         params: Vec<String>,
         reply: oneshot::Sender<Result<Vec<Vec<Option<String>>>, ExecuteError>>,
     },
+    /// `DB_NAME()` in the session's own database, when a USE moved it off the login's.
+    Moved {
+        reply: oneshot::Sender<Option<String>>,
+    },
 }
 
 pub(crate) enum Ctl {
@@ -335,6 +339,22 @@ async fn serve(client: MsClient, session: &Thread, mut requests: mpsc::Unbounded
                 });
                 let _ = reply.send(answer);
             }
+            Request::Moved { reply } => {
+                let answer = match client.as_mut() {
+                    Some(c) => catalog_in(c, session, None, "SELECT DB_NAME()", &[]).await,
+                    None => Ok(Err(ExecuteError::SessionClosed)),
+                };
+                session.cancel.end();
+                let now = match answer {
+                    Ok(Ok(rows)) => rows.into_iter().next().and_then(|r| r.into_iter().next()),
+                    Ok(Err(_)) => None,
+                    Err(_) => {
+                        client = None;
+                        None
+                    }
+                };
+                let _ = reply.send(now.flatten().filter(|db| *db != session.database));
+            }
         }
     }
 }
@@ -350,12 +370,23 @@ async fn catalog(
     sql: &str,
     params: &[String],
 ) -> Result<Result<Vec<Vec<Option<String>>>, ExecuteError>, Lost> {
+    catalog_in(client, session, Some(&session.database), sql, params).await
+}
+
+/// `catalog` through `database`'s `sp_executesql`, or for None the unqualified one, which runs
+/// in whatever database the session's USE left it in.
+async fn catalog_in(
+    client: &mut MsClient,
+    session: &Thread,
+    database: Option<&str>,
+    sql: &str,
+    params: &[String],
+) -> Result<Result<Vec<Vec<Option<String>>>, ExecuteError>, Lost> {
     let n = params.len();
-    let mut text = format!(
-        "EXEC {}.sys.sp_executesql @P{}",
-        quote_ident(Engine::Mssql, &session.database),
-        n + 1
-    );
+    let prefix = database.map_or(String::new(), |d| {
+        format!("{}.", quote_ident(Engine::Mssql, d))
+    });
+    let mut text = format!("EXEC {prefix}sys.sp_executesql @P{}", n + 1);
     if n > 0 {
         let decl: Vec<String> = (1..=n).map(|i| format!("@P{i} nvarchar(max)")).collect();
         let args: Vec<String> = (1..=n).map(|i| format!("@P{i}")).collect();

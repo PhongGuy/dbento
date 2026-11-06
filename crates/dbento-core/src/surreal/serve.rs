@@ -1043,6 +1043,10 @@ impl Served {
                 };
                 Ok(Answer::Objects(catalog::relation_objects(&rel, &reply[1])?))
             }
+            Ask::Place => Ok(Answer::Place(
+                self.place.namespace.clone(),
+                self.place.database.clone(),
+            )),
         }
     }
 

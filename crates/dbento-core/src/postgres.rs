@@ -1347,6 +1347,18 @@ impl Driver for PgDriver {
     }
 }
 
+/// The search path's first schema, and the one its value at session start resolves to: the
+/// first entry, `$user` read as the role, that names an existing schema.
+const CURRENT_SCHEMA_SQL: &str = "\
+SELECT current_schema()::text, (
+    SELECT n.nspname::text
+    FROM unnest(string_to_array(s.reset_val, ',')) WITH ORDINALITY AS p(entry, ord)
+    JOIN pg_catalog.pg_namespace n ON n.nspname = CASE
+        WHEN btrim(p.entry) IN ('$user', '\"$user\"') THEN current_user::text
+        ELSE btrim(btrim(p.entry), '\"') END
+    ORDER BY p.ord LIMIT 1)
+FROM pg_catalog.pg_settings s WHERE s.name = 'search_path'";
+
 const SCHEMAS_SQL: &str = "SELECT nspname::text FROM pg_catalog.pg_namespace \
 WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' ORDER BY nspname";
 
@@ -1396,6 +1408,16 @@ impl PgDriver {
 
     pub(crate) fn settings_changed(&self) -> bool {
         self.settings_changed.load(Ordering::SeqCst)
+    }
+
+    /// The current schema once a search path change moved it off the session's first one;
+    /// None on failure, since the database itself never changes on Postgres.
+    pub(crate) async fn moved_schema(&mut self) -> Option<String> {
+        let rows = self.catalog(CURRENT_SCHEMA_SQL, &[]).await.ok()?;
+        let row = rows.first()?;
+        let now = cell::<Option<String>>(row, 0).ok()??;
+        let opened = cell::<Option<String>>(row, 1).ok()?;
+        (Some(&now) != opened.as_ref()).then_some(now)
     }
 
     /// Runs one fixed catalog query after settling what earlier statements owe. A read-only

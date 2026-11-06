@@ -313,7 +313,9 @@ fn a_disconnect_after_a_settings_change_refuses_the_next_run_once(cx: &mut TestA
     let fx = fixture(T, "");
     let m = model(cx, &fx);
     run_to_end(cx, &m, "SELECT 1");
-    m.update(cx, |m, _| m.apply(Event::SettingsChanged));
+    m.update(cx, |m, _| {
+        m.apply(Event::SettingsChanged { database: None })
+    });
     drop(m.update(cx, |m, cx| m.disconnect(cx)));
     m.update(cx, |m, cx| m.run("INSERT INTO t VALUES (9)".into(), cx));
     m.read_with(cx, |m, _| {
@@ -334,7 +336,7 @@ fn a_stopped_runner_after_a_settings_change_refuses_the_next_run(cx: &mut TestAp
     let m = model(cx, &fx);
     run_to_end(cx, &m, "SELECT 1");
     m.update(cx, |m, _| {
-        m.apply(Event::SettingsChanged);
+        m.apply(Event::SettingsChanged { database: None });
         m.apply(Event::Stopped {
             message: "session stopped".into(),
         });
@@ -366,7 +368,9 @@ fn a_switched_connection_does_not_inherit_lost_settings(cx: &mut TestAppContext)
     let fx = fixture(T, extra);
     let m = model(cx, &fx);
     run_to_end(cx, &m, "SELECT 1");
-    m.update(cx, |m, _| m.apply(Event::SettingsChanged));
+    m.update(cx, |m, _| {
+        m.apply(Event::SettingsChanged { database: None })
+    });
     drop(m.update(cx, |m, cx| m.disconnect(cx)));
     let ws = fx.ws.clone();
     let switched = m.update(cx, |m, cx| m.switch_connection("lite2", ws, cx));
@@ -375,5 +379,31 @@ fn a_switched_connection_does_not_inherit_lost_settings(cx: &mut TestAppContext)
     m.read_with(cx, |m, _| {
         assert_eq!(m.notice(), None);
         assert_eq!(m.results()[0].store.cell(0, 0), Some(CellRef::Text("2")));
+    });
+}
+#[gpui_kit::test]
+fn the_current_database_follows_the_runner_and_clears_with_the_session(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    run_to_end(cx, &m, "SELECT 1");
+    let moved = || Event::SettingsChanged {
+        database: Some("db: analytics".into()),
+    };
+    m.update(cx, |m, _| {
+        assert_eq!(m.current_database(), None);
+        m.apply(moved());
+        assert_eq!(m.current_database(), Some("db: analytics"));
+        m.apply(Event::SettingsChanged { database: None });
+        assert_eq!(m.current_database(), None, "back on the configured one");
+        m.apply(moved());
+        m.apply(Event::Disconnected {
+            reason: "gone".into(),
+        });
+        assert_eq!(m.current_database(), None, "the session ended");
+        m.apply(moved());
+    });
+    drop(m.update(cx, |m, cx| m.disconnect(cx)));
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.current_database(), None, "disconnect")
     });
 }

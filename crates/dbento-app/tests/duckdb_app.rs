@@ -4,7 +4,7 @@
 mod support;
 use std::sync::Arc;
 
-use dbento_app::explorer::part_id;
+use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::query_tab::{READ_ONLY_DUCKDB_TOOLTIP, read_only_tooltip};
 use dbento_app::result_body::{ErrorView, code_label};
 use dbento_app::sidebar::{SidebarEvent, connection_tooltip};
@@ -201,5 +201,30 @@ fn a_failed_duckdb_statement_shows_its_class(cx: &mut TestAppContext) {
     assert!(
         says.contains("nope") && !says.starts_with("Catalog Error"),
         "{says}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_use_shows_the_database_beside_the_connection_until_the_session_ends(cx: &mut TestAppContext) {
+    let o = duck(cx, SETUP, "", "");
+    open_connection_row(cx, o.win, "duck");
+    o.run(cx, "SELECT 1");
+    o.idle(cx);
+    assert!(
+        !present(cx, o.win, "status-database"),
+        "on the configured one"
+    );
+    o.run(cx, "ATTACH ':memory:' AS side; USE side");
+    o.idle(cx);
+    wait_real(cx, "the database chip", |cx| {
+        label_of(cx, o.win, "status-database").as_deref() == Some("db: side")
+    });
+    cx.update_window(o.win, |_, w, cx| w.right_click(connection_id("duck"), cx))
+        .unwrap();
+    cx.run_until_parked();
+    click_id(cx, o.win, "menu-disconnect");
+    assert!(
+        !present(cx, o.win, "status-database"),
+        "gone with the session"
     );
 }

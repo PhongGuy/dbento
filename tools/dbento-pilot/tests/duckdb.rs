@@ -112,3 +112,25 @@ async fn a_file_held_read_write_by_another_process_says_so() {
     pilot.assert_bus_untouched();
     held.close().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_use_shows_the_database_until_the_connection_closes() {
+    let ws = workspace();
+    let pilot = launch(ws.path()).await;
+    query(&pilot, "ATTACH ':memory:' AS side; USE side").await;
+    until(&pilot, "the database chip", |t| {
+        name(t, "status-database") == Some("db: side")
+    })
+    .await;
+    click(&pilot, "connection-duck", json!({ "button": "right" })).await;
+    pilot
+        .ok("tree", json!({ "wait_for": { "id": ["menu-disconnect"] } }))
+        .await;
+    click(&pilot, "menu-disconnect", json!({})).await;
+    until(&pilot, "the chip gone with the session", |t| {
+        find_node(t, "status-database").is_none()
+    })
+    .await;
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+    pilot.assert_bus_untouched();
+}

@@ -300,3 +300,32 @@ async fn a_use_of_the_attached_database_marks_the_session() {
         .unwrap();
     assert!(s.settings_changed());
 }
+
+#[tokio::test]
+async fn a_use_of_an_attached_database_is_the_current_database() {
+    let fx = duckdb_fixture("", "");
+    let mut s = fx.session(SessionOptions::default()).await;
+    assert_eq!(s.current_database().await, None, "a fresh session");
+    run(&mut s, "SET threads = 2", Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert_eq!(s.current_database().await, None, "a SET");
+    let ran = run(
+        &mut s,
+        "SELECT current_database(); ATTACH ':memory:' AS other; USE other",
+        Limits::default(),
+    )
+    .await;
+    assert!(ran.iter().all(Result::is_ok));
+    assert_eq!(s.current_database().await.as_deref(), Some("other"));
+    let Cell::Text(own) = ran[0].as_ref().unwrap().rows[0][0].clone() else {
+        panic!("current_database() gave no text")
+    };
+    run(&mut s, &format!("USE \"{own}\""), Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert_eq!(s.current_database().await, None, "back on its own");
+    s.close().await.unwrap();
+}

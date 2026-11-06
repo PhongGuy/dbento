@@ -149,8 +149,11 @@ pub enum Event {
         message: String,
     },
     /// Sent before `RunDone` once a run has left the session's settings changed, on any
-    /// engine; the mark lasts until the session closes.
-    SettingsChanged,
+    /// engine; the mark lasts until the session closes. `database` is the session's
+    /// [`database_label`] while a USE or search path keeps it off the configured one.
+    SettingsChanged {
+        database: Option<String>,
+    },
     /// Sent instead of any statement event, then `RunDone`, for the first `Run` or `Explain`
     /// after the runner reopened a session whose USE/SET changes were lost.
     SettingsLost {
@@ -445,10 +448,7 @@ async fn run(
                 settings_changed = s.settings_changed();
                 // A Close or a hangup closes the session next anyway, and core's close
                 // drains a write's rows itself so its commit is kept.
-                if matches!(
-                    after,
-                    After::Idle | After::Next(Command::Run { .. } | Command::Explain { .. })
-                ) {
+                if keeps_session(&after) {
                     finish(&mut session, &mut lost_settings, tail, run_id, &events).await;
                 }
                 after
@@ -456,7 +456,15 @@ async fn run(
             None => After::Idle,
         };
         if settings_changed {
-            let _ = events.send(Event::SettingsChanged).await;
+            // Only a session that switched pays for asking where it now is, once it settled.
+            let database = match session.as_mut() {
+                Some(s) if keeps_session(&after) => s
+                    .current_database()
+                    .await
+                    .map(|d| database_label(s.engine(), &d)),
+                _ => None,
+            };
+            let _ = events.send(Event::SettingsChanged { database }).await;
         }
         let _ = events.send(Event::RunDone { run_id }).await;
         next = match after {
@@ -472,6 +480,14 @@ async fn run(
     {
         log::warn!("closing the session: {e}");
     }
+}
+
+/// Whether the runner goes on with the session after a run, rather than closing it next.
+fn keeps_session(after: &After) -> bool {
+    matches!(
+        after,
+        After::Idle | After::Next(Command::Run { .. } | Command::Explain { .. })
+    )
 }
 
 /// Waits for the next command, or None once every `Runner` is gone. An open session that
@@ -530,6 +546,17 @@ async fn ensure_open(spec: &RunnerSpec, session: &mut Option<Session>, events: &
             let _ = events.send(Event::ConnectFailed { message }).await;
         }
     }
+}
+
+/// The status bar's words for the database a session moved to: the schema on Postgres,
+/// namespace and database on SurrealDB, the database elsewhere.
+pub fn database_label(engine: Engine, name: &str) -> String {
+    let kind = match engine {
+        Engine::Postgres => "schema",
+        Engine::Surrealdb => "ns/db",
+        _ => "db",
+    };
+    format!("{kind}: {name}")
 }
 
 /// Why a session ends: a cut-short read-only result, or a lost connection.

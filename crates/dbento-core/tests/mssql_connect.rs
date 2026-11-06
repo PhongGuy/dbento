@@ -61,3 +61,27 @@ async fn a_session_set_marks_the_session_but_a_variable_assignment_does_not() {
     assert!(s.settings_changed(), "SET LANGUAGE");
     s.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_use_of_another_database_is_the_current_database() {
+    dbento_testkit::skip_without_mssql!();
+    let fx = ms_off().await;
+    let mut s = fx.session(SessionOptions::default()).await;
+    assert_eq!(s.current_database().await, None, "a fresh session");
+    let ran = run(&mut s, "SELECT DB_NAME() AS d", Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    let own = ran.rows[0][0].clone();
+    let other = if own == text("tempdb") {
+        "master"
+    } else {
+        "tempdb"
+    };
+    run(&mut s, &format!("USE {other}"), Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert_eq!(s.current_database().await.as_deref(), Some(other));
+    s.close().await.unwrap();
+}

@@ -787,6 +787,28 @@ impl Session {
         }
     }
 
+    /// The database the session is in when a statement moved it off the one it opened on, as
+    /// the engine reports it: the name, `ns/db` on SurrealDB, or the search path's first schema
+    /// on Postgres. `None` while it has not moved, on SQLite, and when the engine cannot say.
+    /// Asks the engine only once `settings_changed` holds.
+    pub async fn current_database(&mut self) -> Option<String> {
+        if !self.settings_changed() {
+            return None;
+        }
+        match &mut self.inner {
+            SessionInner::Sqlite(_) => None,
+            SessionInner::Postgres(d) => d.moved_schema().await,
+            SessionInner::Mysql(d) => d.moved_database().await,
+            SessionInner::Mssql(d) => d.moved_database().await,
+            #[cfg(feature = "duckdb")]
+            SessionInner::Duckdb(d) => d.moved_database().await,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(d) => d.moved_database().await,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(d) => d.moved_database(),
+        }
+    }
+
     /// What the session's engine supports.
     pub fn capabilities(&self) -> Capabilities {
         self.engine().capabilities()
