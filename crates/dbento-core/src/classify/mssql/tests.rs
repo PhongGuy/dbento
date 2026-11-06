@@ -1,6 +1,6 @@
 //! `mssql_classification`: what a parsed batch writes, what needs the no-WHERE confirmation,
 //! and transaction control found from tokens.
-use super::mssql_classification;
+use super::{mssql_changes_settings, mssql_classification};
 use crate::session::{Unguarded, Writes};
 
 fn writes(sql: &str) -> Writes {
@@ -423,4 +423,27 @@ fn the_forms_the_best_effort_description_quotes_are_not_refused() {
         mssql_classification("EXEC('COMMIT COMMIT')").writes,
         Writes::Yes
     );
+}
+
+#[test]
+fn a_use_anywhere_in_the_batch_changes_settings_but_text_and_set_do_not() {
+    for sql in [
+        "USE master",
+        "  -- c\n use [db]",
+        "/* x */USE db",
+        "/* a /* nested */ b */ USE db",
+        "SELECT 1; USE master",
+    ] {
+        assert!(mssql_changes_settings(sql), "{sql}");
+    }
+    for sql in [
+        "SELECT 1",
+        "EXEC('USE master')",
+        "UPDATE t SET a = 1",
+        "SET NOCOUNT ON",
+        "SELECT [USE] FROM t -- USE master",
+        "SELECT a FROM t OPTION (USE HINT('DISABLE_OPTIMIZED_NESTED_LOOP'))",
+    ] {
+        assert!(!mssql_changes_settings(sql), "{sql}");
+    }
 }

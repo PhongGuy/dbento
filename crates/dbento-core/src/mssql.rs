@@ -7,6 +7,7 @@ pub(crate) mod catalog;
 mod conn;
 mod types;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -36,6 +37,8 @@ pub(crate) struct MssqlDriver {
     cancel: Arc<MssqlCancel>,
     /// The session runs as a reader principal, so the database refuses its writes.
     reader: bool,
+    /// Set once a USE is sent on this session; see `Session::settings_changed`.
+    settings_changed: Arc<AtomicBool>,
 }
 
 /// The async handle to one script on the connection thread.
@@ -221,6 +224,10 @@ impl MssqlDriver {
         self.server
     }
 
+    pub(crate) fn settings_changed(&self) -> bool {
+        self.settings_changed.load(Ordering::SeqCst)
+    }
+
     /// A read-only session's level: the database's with a reader principal, otherwise Dbento's
     /// fence and refusals.
     pub(crate) fn enforcement(&self) -> ReadOnlyEnforcement {
@@ -296,10 +303,12 @@ impl Driver for MssqlDriver {
             .filter(|_| params.read_only)
             .map(str::to_owned);
         let reads_as_reader = reader.is_some();
+        let settings_changed = Arc::new(AtomicBool::new(false));
         let rules = conn::Rules {
             timeout: params.timeout,
             read_only: params.read_only,
             reader,
+            settings_changed: Arc::clone(&settings_changed),
         };
         let (requests, server, cancel) =
             conn::start(config, host, conn.display_target(), rules).await?;
@@ -308,6 +317,7 @@ impl Driver for MssqlDriver {
             server,
             cancel,
             reader: reads_as_reader,
+            settings_changed,
         })
     }
 

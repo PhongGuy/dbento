@@ -777,7 +777,7 @@ impl Session {
             SessionInner::Sqlite(_) => false,
             SessionInner::Postgres(d) => d.settings_changed(),
             SessionInner::Mysql(d) => d.settings_changed(),
-            SessionInner::Mssql(_) => false,
+            SessionInner::Mssql(d) => d.settings_changed(),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => d.settings_changed(),
             #[cfg(feature = "surrealdb")]

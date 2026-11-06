@@ -259,5 +259,21 @@ fn transaction_control(batch: &str) -> bool {
     })
 }
 
+/// Whether the batch switches database with a USE statement; text in strings, quoted names and
+/// comments never counts, nor a USE inside parentheses, such as an `OPTION (USE HINT(...))`.
+pub(crate) fn mssql_changes_settings(batch: &str) -> bool {
+    let mut depth = 0usize;
+    tsql_tokens(batch).into_iter().any(|t| {
+        let text = &batch[t.range];
+        match (t.kind, text) {
+            (TsqlKind::Punct, "(") => depth += 1,
+            (TsqlKind::Punct, ")") => depth = depth.saturating_sub(1),
+            (TsqlKind::Word, _) => return depth == 0 && text.eq_ignore_ascii_case("USE"),
+            _ => {}
+        }
+        false
+    })
+}
+
 #[cfg(test)]
 mod tests;
