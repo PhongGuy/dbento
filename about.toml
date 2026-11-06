@@ -12,6 +12,8 @@ accepted = [
     "CC0-1.0",
     "bzip2-1.0.6",
     "CDLA-Permissive-2.0",
+    # Boost (xxhash-rust, under redis); not the Business Source License.
+    "BSL-1.0",
 ]
 # The release triples, so platform-only crates are covered and nothing else is.
 targets = [

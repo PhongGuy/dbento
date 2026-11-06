@@ -1,3 +1,4 @@
 datasets/chinook/* -text
 assets/icon/generated/** binary
 vendor/** -text
+crates/dbento-core/tests/fixtures/redis/*.resp3 binary

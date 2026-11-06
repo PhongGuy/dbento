@@ -150,3 +150,8 @@ fn the_surrealdb_client_crates_resolve_at_their_pins_and_no_bsl_crate_does() {
         .collect();
     assert!(bsl.is_empty(), "{bsl:?}");
 }
+
+#[test]
+fn the_redis_crate_resolves_once_at_its_pin() {
+    assert_eq!(named(&packages(), "redis"), ["redis v1.8.1"]);
+}
