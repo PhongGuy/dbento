@@ -7,7 +7,7 @@ JOBS ?= 4
 PREFIX :=
 
 .DEFAULT_GOAL := install
-.PHONY: install uninstall demo check fmt fmt-check lint test pilot-check icons-check windows-check xwin-check xwin-build notices-check script-test package clean workflows-lint screenshots
+.PHONY: install uninstall demo check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test package clean workflows-lint screenshots
 
 install:
 	CARGO="$(CARGO)" JOBS="$(JOBS)" DBENTO_PREFIX="$(PREFIX)" scripts/install.sh install
@@ -38,7 +38,19 @@ pilot-check:
 	$(CARGO) fmt --check $(PILOT)
 	$(CARGO) clippy $(PILOT) --all-targets --all-features -- -Dwarnings
 	$(CARGO) build -p dbento-app --bin dbento-app --profile timing
-	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(PILOT)
+	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(PILOT) -- --skip wheel_scroll_headless --skip wheel_scroll_session
+
+# The two wheel recordings, which wait for a quiet machine and refuse a loaded one. A measured
+# pass stamps the committed tree it ran on, which `timing-guard` asks for.
+pilot-timing:
+	$(CARGO) build -p dbento-app --bin dbento-app --profile timing
+	tree=$$(scripts/timing-guard.sh tree) && \
+	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(PILOT) --test wheel_scroll -- --exact wheel_scroll_headless wheel_scroll_session && \
+	scripts/timing-guard.sh stamp "$$tree"
+
+# Fails when a grid, scroll or render change since BASE (default origin/master) has no stamp.
+timing-guard:
+	scripts/timing-guard.sh
 
 icons-check:
 	$(CARGO) xtask icons --check

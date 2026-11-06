@@ -250,7 +250,9 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 | Target | What it does |
 | --- | --- |
 | `make check` | The merge gate: `cargo fmt --check`, clippy with warnings as errors, and the full test suite. |
-| `make pilot-check` | Builds and runs the gpui-pilot tests in `tools/dbento-pilot`, which drive the real app. |
+| `make pilot-check` | Builds and runs the gpui-pilot tests in `tools/dbento-pilot`, which drive the real app, except the two wheel-scroll timing recordings. |
+| `make pilot-timing` | The wheel-scroll timing recordings alone. They wait for a quiet machine and refuse to measure a loaded one; a pass stamps the committed tree it ran on. |
+| `make timing-guard` | Fails when the grid, its scrolling or rendering, the wheel test or the gpui pins changed since `BASE` (default `origin/master`) and the current tree has no `pilot-timing` stamp. |
 | `make script-test` | The bash suites under `scripts/tests`. |
 | `make workflows-lint` | actionlint over `.github/workflows`. |
 | `make icons-check`, `make notices-check`, `make windows-check` | The icon exports, the third-party notices, and a Windows type-check through mingw. |
@@ -264,6 +266,8 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 ```sh
 cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.1.0 gpui-pilot
 ```
+
+A change to the results grid, its scrolling or rendering merges only once `make timing-guard` passes: run `make pilot-timing` on a quiet machine on the commit you merge. The paths it watches are listed in `scripts/timing-guard.sh`.
 
 ### Tests against real databases
 
