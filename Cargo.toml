@@ -14,7 +14,7 @@ license = "MIT OR Apache-2.0"
 log = "0.4.34"
 roxmltree = "0.21.1"
 percent-encoding = "2.3.2"
-rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype", "limits", "hooks", "column_metadata"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "column_decltype", "limits", "hooks", "column_metadata"] }
 sqlite3-parser = "0.17.0"
 tokio = { version = "1.53.2", features = ["sync"] }
 tokio-util = { version = "0.7.20", features = ["compat"] }
