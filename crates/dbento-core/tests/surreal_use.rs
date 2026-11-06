@@ -122,3 +122,24 @@ async fn prepare_never_refuses() {
     let pending = script.next().await.unwrap().unwrap();
     assert_eq!(pending.classification().writes, dbento_core::Writes::Yes);
 }
+
+// Only the user's own `USE` marks the session; a catalog call into another database does not.
+#[tokio::test]
+async fn a_use_marks_the_session_but_a_plain_statement_or_catalog_call_does_not() {
+    let db = surreal_db().await;
+    db.admin("DEFINE DATABASE other; DEFINE NAMESPACE elsewhere; USE NS elsewhere; DEFINE DATABASE fresh")
+        .await;
+    let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
+    assert!(!s.settings_changed());
+    run(&mut s, "RETURN 1", Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    s.relations("other").await.unwrap();
+    assert!(!s.settings_changed());
+    run(&mut s, "USE NS elsewhere DB fresh", Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert!(s.settings_changed());
+}

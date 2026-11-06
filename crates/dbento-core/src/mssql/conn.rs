@@ -6,6 +6,7 @@ use std::fmt::Display;
 use std::future::Future;
 use std::pin::{Pin, pin};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::TryStreamExt as _;
@@ -23,7 +24,7 @@ use super::{
     ATTENTION_BOUND, CONNECT_TIMEOUT, MssqlCancel, Stop, connect_error, database_error,
     product_version, stream_error,
 };
-use crate::classify::mssql::{mssql_classification, mssql_single_query};
+use crate::classify::mssql::{mssql_changes_settings, mssql_classification, mssql_single_query};
 use crate::introspect::{quote_ident, quote_literal};
 use crate::ranges::mssql_ranges;
 use crate::session::{
@@ -101,6 +102,8 @@ pub(crate) struct Rules {
     pub(crate) read_only: bool,
     /// The principal a read-only session impersonates, so the database refuses its writes.
     pub(crate) reader: Option<String>,
+    /// The driver's flag, set before a batch that switches database is sent.
+    pub(crate) settings_changed: Arc<AtomicBool>,
 }
 
 /// Starts the session's thread on a current-thread runtime of its own and waits for its
@@ -728,6 +731,10 @@ async fn serve_script(
                     let _ = reply.send(Err(refused));
                     queue = Default::default();
                     continue;
+                }
+                // Marked before sending: a USE in a batch that then fails may still have switched.
+                if mssql_changes_settings(send.text) {
+                    session.rules.settings_changed.store(true, Ordering::SeqCst);
                 }
                 let guard = Guard { cancel, g };
                 let mut out = Out::new(reply, &events, limits, resume, guard);

@@ -2,6 +2,7 @@
 //! scripts, and through it to the socket task.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
@@ -28,6 +29,8 @@ pub(crate) struct SurrealDriver {
     cancel: Arc<SurrealCancel>,
     read_only: Option<ReadOnlyEnforcement>,
     warning: Option<String>,
+    /// Set once a `USE` is sent on this session; see `Session::settings_changed`.
+    settings_changed: Arc<AtomicBool>,
 }
 
 pub(crate) struct SurrealScript {
@@ -43,6 +46,10 @@ pub(crate) struct SurrealStream {
 impl SurrealDriver {
     pub(crate) fn server(&self) -> ServerInfo {
         self.server
+    }
+
+    pub(crate) fn settings_changed(&self) -> bool {
+        self.settings_changed.load(Ordering::SeqCst)
     }
 
     /// What the shell should say about the server: set for a prerelease or a higher major.
@@ -113,7 +120,15 @@ impl Driver for SurrealDriver {
             park_bound: params.bounds.park.unwrap_or(PARK_BOUND),
         };
         let (requests, rx) = mpsc::unbounded_channel();
-        tokio::spawn(serve(rpc, rules, Arc::clone(&cancel), logged.place, rx));
+        let settings_changed = Arc::new(AtomicBool::new(false));
+        tokio::spawn(serve(
+            rpc,
+            rules,
+            Arc::clone(&cancel),
+            logged.place,
+            Arc::clone(&settings_changed),
+            rx,
+        ));
         Ok(SurrealDriver {
             requests,
             server: ServerInfo {
@@ -123,6 +138,7 @@ impl Driver for SurrealDriver {
             cancel,
             read_only: logged.read_only,
             warning: logged.warning,
+            settings_changed,
         })
     }
 

@@ -278,3 +278,25 @@ async fn a_variant_column_is_refused_by_its_position() {
     );
     s.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_use_of_the_attached_database_marks_the_session() {
+    let fx = duckdb_fixture("", "");
+    let mut s = fx.session(SessionOptions::default()).await;
+    let db = run(&mut s, "SELECT current_database() AS d", Limits::default())
+        .await
+        .remove(0)
+        .unwrap()
+        .rows
+        .remove(0)
+        .remove(0);
+    let Cell::Text(db) = db else {
+        panic!("current_database() gave {db:?}")
+    };
+    assert!(!s.settings_changed());
+    run(&mut s, &format!("USE \"{db}\""), Limits::default())
+        .await
+        .remove(0)
+        .unwrap();
+    assert!(s.settings_changed());
+}

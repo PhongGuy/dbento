@@ -323,3 +323,103 @@ async fn a_postgres_stop_at_the_write_confirmation_skips_it_and_keeps_the_sessio
     );
     assert_eq!(rows, 1, "{seen:?}");
 }
+
+const SET: &str = "SET search_path TO public";
+const CUT: &str = "SELECT x FROM generate_series(1, 100000) x";
+
+/// Sends `run_id` after a reopen that lost a SET: it is refused without a session or a
+/// statement, and the run after it opens and returns its row.
+async fn refused_then_proceeds(
+    r: &dbento_app::runner::Runner,
+    ev: &async_channel::Receiver<Event>,
+    id: u64,
+) {
+    r.send(run_cmd(id, "SELECT 1", Some(10)));
+    let seen = run_done(ev, id).await;
+    assert!(
+        has(
+            &seen,
+            |e| matches!(e, Event::SettingsLost { run_id } if *run_id == id)
+        ),
+        "{seen:?}"
+    );
+    assert!(
+        !has(&seen, |e| matches!(
+            e,
+            Event::Connected { .. } | Event::Executing { .. } | Event::StatementStarted { .. }
+        )),
+        "{seen:?}"
+    );
+    r.send(run_cmd(id + 1, "SELECT 1", Some(10)));
+    let (seen, rows) = until_event(
+        ev,
+        |e| matches!(e, Event::RunDone { run_id } if *run_id == id + 1),
+    )
+    .await;
+    assert!(
+        !has(&seen, |e| matches!(e, Event::SettingsLost { .. })),
+        "{seen:?}"
+    );
+    assert_eq!(rows, 1, "{seen:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_cut_after_a_set_refuses_the_next_run_once() {
+    let (_db, _dir, spec) = pg_spec("read_only = true").await;
+    let r = spawn_tuned(&here(), spec, tuning());
+    let ev = r.events();
+    r.send(run_cmd(1, SET, Some(10)));
+    run_done(&ev, 1).await;
+    r.send(run_cmd(2, CUT, Some(10)));
+    assert!(has(&run_done(&ev, 2).await, |e| matches!(
+        e,
+        Event::Disconnected { .. }
+    )));
+    refused_then_proceeds(&r, &ev, 3).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_cut_without_a_set_reconnects_silently() {
+    let (_db, _dir, spec) = pg_spec("read_only = true").await;
+    let r = spawn_tuned(&here(), spec, tuning());
+    let ev = r.events();
+    r.send(run_cmd(1, CUT, Some(10)));
+    assert!(has(&run_done(&ev, 1).await, |e| matches!(
+        e,
+        Event::Disconnected { .. }
+    )));
+    r.send(run_cmd(2, "SELECT 1", Some(10)));
+    let (seen, rows) = until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 2 })).await;
+    assert!(
+        !has(&seen, |e| matches!(e, Event::SettingsLost { .. })),
+        "{seen:?}"
+    );
+    assert_eq!(rows, 1, "{seen:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_idle_connection_after_a_set_refuses_the_next_run_once() {
+    let (db, _dir, spec) = pg_spec("").await;
+    let r = spawn_tuned(&here(), spec, tuning());
+    let ev = r.events();
+    r.send(run_cmd(1, SET, Some(10)));
+    run_done(&ev, 1).await;
+    db.scalar("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()").await;
+    assert!(matches!(next_event(&ev).await, Event::Disconnected { .. }));
+    refused_then_proceeds(&r, &ev, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_drain_past_the_cap_after_a_set_refuses_the_next_run_once() {
+    let (_db, _dir, spec) = pg_spec("").await;
+    let r = spawn_tuned(&here(), spec, tuning());
+    let ev = r.events();
+    r.send(run_cmd(1, SET, Some(10)));
+    run_done(&ev, 1).await;
+    r.send(run_cmd(2, SLOW, Some(1)));
+    assert!(has(&run_done(&ev, 2).await, |e| matches!(
+        e,
+        Event::Disconnected { reason } if reason.contains("rolled back")
+    )));
+    refused_then_proceeds(&r, &ev, 3).await;
+}

@@ -178,3 +178,41 @@ async fn statements_without_rows_report_what_they_changed() {
         assert!(v.settings_changed(), "{label}: a versioned SET");
     }
 }
+
+#[tokio::test]
+async fn a_use_marks_the_session_bare_or_versioned() {
+    for (label, fx) in my_fixtures("").await {
+        // Switch to the fixture's own database so the test holds whatever it is named.
+        let mut s = fx.session(SessionOptions::default()).await;
+        let db = run(&mut s, "SELECT DATABASE() AS d", Limits::default())
+            .await
+            .remove(0)
+            .unwrap()
+            .rows
+            .remove(0)
+            .remove(0);
+        let Cell::Text(db) = db else {
+            panic!("{label}: DATABASE() gave {db:?}")
+        };
+        run(&mut s, "SELECT 1", Limits::default())
+            .await
+            .remove(0)
+            .unwrap();
+        assert!(!s.settings_changed(), "{label}: a plain SELECT");
+        run(&mut s, &format!("USE `{db}`"), Limits::default())
+            .await
+            .remove(0)
+            .unwrap();
+        assert!(s.settings_changed(), "{label}: USE");
+        let mut v = fx.session(SessionOptions::default()).await;
+        run(
+            &mut v,
+            &format!("/*!40101 USE `{db}` */"),
+            Limits::default(),
+        )
+        .await
+        .remove(0)
+        .unwrap();
+        assert!(v.settings_changed(), "{label}: a versioned USE");
+    }
+}

@@ -1,7 +1,7 @@
 //! Which browse cells can be edited, and staging edits and deletes on the tab model.
 mod support;
 use dbento_app::browse::EditBlock;
-use dbento_app::runner::RunnerTuning;
+use dbento_app::runner::{RunnerTuning, SETTINGS_LOST};
 use gpui_kit::TestAppContext;
 use support::{browsing, fixture, init_tokio, pg_ready, ready, wait_real};
 
@@ -160,8 +160,11 @@ fn a_postgres_session_whose_settings_changed_cannot_edit_until_it_reconnects(
         "session settings changed; reconnect to edit"
     );
     assert!(!m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
-    // A fresh session starts from the connection's settings again.
+    // A fresh session starts from the connection's settings again, once the first run after
+    // the disconnect has said those settings were lost.
     drop(m.update(cx, |m, cx| m.disconnect(cx)));
+    m.update(cx, |m, cx| m.run(browse_sql.clone(), cx));
+    m.read_with(cx, |m, _| assert_eq!(m.notice(), Some(SETTINGS_LOST)));
     run_to_end(cx, &m, &browse_sql);
     m.read_with(cx, |m, _| {
         assert_eq!(m.edit_block(), None);

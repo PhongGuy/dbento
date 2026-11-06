@@ -1,6 +1,6 @@
 mod support;
 use dbento_app::link::LinkState;
-use dbento_app::runner::{Event, StatementEnd};
+use dbento_app::runner::{Event, SETTINGS_LOST, StatementEnd};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, ExecuteError};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
@@ -291,5 +291,89 @@ fn a_run_after_a_withdrawn_one_can_cancel_its_live_statement(cx: &mut TestAppCon
             m.results()[0].store.end(),
             Some(StatementEnd::Failed(ExecuteError::Cancelled))
         ))
+    });
+}
+#[gpui_kit::test]
+fn a_run_the_runner_refuses_shows_why_and_ends(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    m.update(cx, |m, cx| {
+        m.run(LONG.into(), cx);
+        let run_id = m.run_id();
+        m.apply(Event::SettingsLost { run_id });
+        m.apply(Event::RunDone { run_id });
+        assert_eq!(m.notice(), Some(SETTINGS_LOST));
+        assert!(!m.running());
+        assert!(m.results().is_empty(), "no statement is listed");
+    });
+}
+#[gpui_kit::test]
+// A tab that drops a session whose settings changed refuses the next run itself, once.
+fn a_disconnect_after_a_settings_change_refuses_the_next_run_once(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    run_to_end(cx, &m, "SELECT 1");
+    m.update(cx, |m, _| m.apply(Event::SettingsChanged));
+    drop(m.update(cx, |m, cx| m.disconnect(cx)));
+    m.update(cx, |m, cx| m.run("INSERT INTO t VALUES (9)".into(), cx));
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.notice(), Some(SETTINGS_LOST));
+        assert!(!m.running());
+        assert_eq!(m.link(), LinkState::Idle, "no runner was started");
+    });
+    assert_eq!(fx.count("SELECT count(*) FROM t WHERE x = 9"), 0);
+    run_to_end(cx, &m, "SELECT 2");
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.notice(), None);
+        assert_eq!(m.results()[0].store.cell(0, 0), Some(CellRef::Text("2")));
+    });
+}
+#[gpui_kit::test]
+fn a_stopped_runner_after_a_settings_change_refuses_the_next_run(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    run_to_end(cx, &m, "SELECT 1");
+    m.update(cx, |m, _| {
+        m.apply(Event::SettingsChanged);
+        m.apply(Event::Stopped {
+            message: "session stopped".into(),
+        });
+    });
+    m.update(cx, |m, cx| m.run("SELECT 2".into(), cx));
+    m.read_with(cx, |m, _| {
+        assert_eq!((m.notice(), m.running()), (Some(SETTINGS_LOST), false))
+    });
+    run_to_end(cx, &m, "SELECT 3");
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.results()[0].store.cell(0, 0), Some(CellRef::Text("3")))
+    });
+}
+#[gpui_kit::test]
+fn a_disconnect_without_a_settings_change_runs_on(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    run_to_end(cx, &m, "SELECT 1");
+    drop(m.update(cx, |m, cx| m.disconnect(cx)));
+    run_to_end(cx, &m, "SELECT 2");
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.notice(), None);
+        assert_eq!(m.results()[0].store.cell(0, 0), Some(CellRef::Text("2")));
+    });
+}
+#[gpui_kit::test]
+fn a_switched_connection_does_not_inherit_lost_settings(cx: &mut TestAppContext) {
+    let extra = "\n[connections.lite2]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
+    let fx = fixture(T, extra);
+    let m = model(cx, &fx);
+    run_to_end(cx, &m, "SELECT 1");
+    m.update(cx, |m, _| m.apply(Event::SettingsChanged));
+    drop(m.update(cx, |m, cx| m.disconnect(cx)));
+    let ws = fx.ws.clone();
+    let switched = m.update(cx, |m, cx| m.switch_connection("lite2", ws, cx));
+    drop(switched.expect("lite2 is another connection"));
+    run_to_end(cx, &m, "SELECT 2");
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.notice(), None);
+        assert_eq!(m.results()[0].store.cell(0, 0), Some(CellRef::Text("2")));
     });
 }

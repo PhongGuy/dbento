@@ -110,6 +110,8 @@ struct Served {
     quiet: bool,
     /// The caller has heard why the session ended.
     told: AtomicBool,
+    /// The driver's flag, set before a user's `USE` is sent as RPC `use`.
+    settings_changed: Arc<AtomicBool>,
 }
 
 /// Serves `requests` until the session drops them, then ends the socket, which stops whatever
@@ -119,6 +121,7 @@ pub(crate) async fn serve(
     rules: Rules,
     cancel: Arc<SurrealCancel>,
     place: Place,
+    settings_changed: Arc<AtomicBool>,
     mut requests: mpsc::UnboundedReceiver<Request>,
 ) {
     let mut s = Served {
@@ -129,6 +132,7 @@ pub(crate) async fn serve(
         owed: Owed::default(),
         quiet: false,
         told: AtomicBool::new(false),
+        settings_changed,
     };
     while let Some(request) = requests.recv().await {
         match request {
@@ -517,6 +521,8 @@ impl Served {
             })?;
         let params = [&target.namespace, &target.database]
             .map(|part| part.as_deref().map_or(Param::None, Param::Text));
+        // Marked before the call: a `use` whose reply is lost may still have moved the session.
+        self.settings_changed.store(true, Ordering::SeqCst);
         let reply = self
             .rpc
             .call("use", &params, None)
