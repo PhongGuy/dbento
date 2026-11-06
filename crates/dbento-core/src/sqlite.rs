@@ -122,6 +122,10 @@ impl SqliteCancel {
 /// A dropped write's failed commit that no caller has reported; `settle` or `close` does.
 type Unreported = Arc<Mutex<Option<ExecuteError>>>;
 
+/// The running statement's generation and deadline, which the connection's one progress
+/// handler polls. Empty between statements, so nothing else is ever interrupted.
+type Armed = Arc<Mutex<Option<(u64, Option<Instant>)>>>;
+
 /// Takes the dropped write's failed commit no caller has reported yet.
 fn take_unreported(unreported: &Unreported) -> Option<ExecuteError> {
     unreported
@@ -538,20 +542,33 @@ fn open(path: &Path, read_only: bool) -> Result<Connection, ConnectError> {
 /// Serves requests until the session drops its sender. After `Close` the connection is
 /// gone, and every later script call is answered with `SessionClosed`.
 fn worker(
-    conn: Connection,
+    mut conn: Connection,
     read_only: bool,
     cancel: &Arc<SqliteCancel>,
     unreported: &Unreported,
     requests: std_mpsc::Receiver<Request>,
 ) {
+    // The handler is installed once here, since installing needs the connection mutably and
+    // a script's statements borrow it for the whole script.
+    let armed = Armed::default();
+    let (slot, stop_cancel) = (Arc::clone(&armed), Arc::clone(cancel));
+    let _ = conn.progress_handler(
+        1000,
+        Some(move || {
+            slot.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_some_and(|(generation, deadline)| {
+                    stop_cancel.hits(generation) || deadline.is_some_and(|d| Instant::now() >= d)
+                })
+        }),
+    );
     let mut conn = Some(conn);
     for request in requests {
         match request {
             Request::Script { sql, ctl } => {
-                if conn
-                    .as_ref()
-                    .is_some_and(|c| serve_script(c, read_only, cancel, unreported, &sql, &ctl))
-                {
+                if conn.as_ref().is_some_and(|c| {
+                    serve_script(c, read_only, cancel, unreported, &armed, &sql, &ctl)
+                }) {
                     conn = None;
                 }
                 for msg in ctl.iter() {
@@ -578,6 +595,7 @@ fn serve_script(
     read_only: bool,
     cancel: &Arc<SqliteCancel>,
     unreported: &Unreported,
+    armed: &Armed,
     sql: &str,
     ctl: &std_mpsc::Receiver<Ctl>,
 ) -> bool {
@@ -648,6 +666,7 @@ fn serve_script(
                         read_only,
                         resume,
                         unreported: Arc::clone(unreported),
+                        armed: Arc::clone(armed),
                     };
                     if run_statement(conn, &mut stmt, limits, control, reply, &events, counts) {
                         return true;
@@ -671,6 +690,8 @@ struct Control {
     resume: Option<std_mpsc::Receiver<Option<u64>>>,
     /// Where a dropped write leaves its failed commit for the session to report.
     unreported: Unreported,
+    /// The slot the connection's progress handler polls for this statement's stop condition.
+    armed: Armed,
 }
 
 impl Control {
@@ -708,16 +729,10 @@ fn run_statement(
         let _ = reply.send(Err(ExecuteError::Cancelled));
         return false;
     }
-    let (cancel, generation, deadline) = (
-        Arc::clone(&control.cancel),
-        control.generation,
-        control.deadline,
-    );
-    let stop = move || cancel.hits(generation) || deadline.is_some_and(|d| Instant::now() >= d);
-    // Installing a handler only fails on a closed connection, which then fails the step.
-    let _ = conn.progress_handler(1000, Some(stop));
+    let arm = |value| *control.armed.lock().unwrap_or_else(PoisonError::into_inner) = value;
+    arm(Some((control.generation, control.deadline)));
     let (truncated, abandoned) = stream_rows(conn, stmt, limits, &control, reply, events, counts);
-    let _ = conn.progress_handler(0, None::<fn() -> bool>);
+    arm(None);
     (truncated || abandoned) && limits.on_truncate == OnTruncate::Close
 }
 
@@ -891,7 +906,6 @@ fn stream_rows(
 /// Each result column of `stmt` with its declared type and the table column it reads.
 fn column_infos(stmt: &Statement<'_>) -> Vec<ColumnInfo> {
     stmt.columns()
-        .iter()
         .zip(stmt.columns_with_metadata())
         .map(|(c, m)| {
             let source = match (m.database_name(), m.table_name(), m.origin_name()) {

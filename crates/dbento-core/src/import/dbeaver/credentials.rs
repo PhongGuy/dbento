@@ -3,7 +3,7 @@
 
 use super::DBeaverError;
 use crate::Secret;
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -133,7 +133,7 @@ pub(crate) fn decrypt(bytes: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
     let iv: [u8; 16] = iv.try_into().ok()?;
     let mut buf = Zeroizing::new(body.to_vec());
     let len = cbc::Decryptor::<aes::Aes128>::new(&KEY.into(), &iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .ok()?
         .len();
     buf.truncate(len);
@@ -143,11 +143,11 @@ pub(crate) fn decrypt(bytes: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
 /// Encrypts as DBeaver writes the file: the IV first, then the padded ciphertext.
 #[cfg(test)]
 pub(crate) fn encrypt(plain: &[u8], iv: [u8; 16]) -> Vec<u8> {
-    use aes::cipher::BlockEncryptMut;
+    use aes::cipher::BlockModeEncrypt;
     let mut buf = vec![0; plain.len() + 16];
     buf[..plain.len()].copy_from_slice(plain);
     let len = cbc::Encryptor::<aes::Aes128>::new(&KEY.into(), &iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plain.len())
+        .encrypt_padded::<Pkcs7>(&mut buf, plain.len())
         .expect("one spare block holds the padding")
         .len();
     let mut out = iv.to_vec();
