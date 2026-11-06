@@ -11,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 ))]
 use crate::options::Compressor;
 use crate::{
-    bson::{RawArrayBuf, RawDocumentBuf},
+    bson::{spec::ElementType, RawArrayBuf, RawDocument, RawDocumentBuf},
     bson_util,
     checked::Checked,
     cmap::{conn::wire::util::SyncCountReader, Command},
@@ -217,6 +217,7 @@ impl Message {
             let next_section = MessageSection::read(&mut count_reader)?;
             match next_section {
                 MessageSection::Document(document) => {
+                    check_depth(&document, true)?;
                     if document_payload.is_some() {
                         return Err(ErrorKind::InvalidResponse {
                             message: "an OP_MSG response must contain exactly one payload type 0 \
@@ -402,6 +403,62 @@ impl Message {
 }
 
 const DEFAULT_MAX_MESSAGE_SIZE_BYTES: i32 = 48 * 1024 * 1024;
+
+// Deep enough for any reply field a server sends, shallow enough for bson's recursive decode.
+const MAX_REPLY_DEPTH: usize = 32;
+// Cursor batch documents stay raw in the driver, so they may nest as deep as stored data.
+const MAX_BATCH_DEPTH: usize = 256;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Place {
+    Root,
+    Cursor,
+    Batch,
+    Other,
+}
+
+/// Refuses a reply nested deeper than `MAX_REPLY_DEPTH`, or than `MAX_BATCH_DEPTH` inside
+/// `cursor.firstBatch` or `cursor.nextBatch` when `batches` is set. The walk keeps its own stack.
+pub(crate) fn check_depth(reply: &RawDocument, batches: bool) -> Result<()> {
+    let refuse = |message: String| Error::from(ErrorKind::InvalidResponse { message });
+    let mut stack = vec![(reply.as_bytes(), reply.iter_elements(), 4, Place::Root)];
+    while let Some((bytes, elements, next, place)) = stack.last_mut() {
+        let Some(element) = elements.next() else {
+            stack.pop();
+            continue;
+        };
+        let element = element?;
+        let bytes = *bytes;
+        // A value follows its type byte and NUL-terminated key.
+        let start = *next + 1 + element.key().len() + 1;
+        *next = start + element.size();
+        let value = bytes.get(start..*next);
+        let kind = element.element_type();
+        let child = match kind {
+            ElementType::EmbeddedDocument | ElementType::Array => value,
+            // Total length, code length, the code with its NUL, then the scope.
+            ElementType::JavaScriptCodeWithScope => value.and_then(|v| {
+                let code = i32::from_le_bytes(v.get(4..8)?.try_into().ok()?);
+                v.get(8 + usize::try_from(code).ok()?..)
+            }),
+            _ => continue,
+        };
+        let child = child.ok_or_else(|| refuse("malformed nested reply document".into()))?;
+        let at = match (*place, element.key().as_str(), kind) {
+            (Place::Root, "cursor", ElementType::EmbeddedDocument) if batches => Place::Cursor,
+            (Place::Cursor, "firstBatch" | "nextBatch", ElementType::Array) => Place::Batch,
+            (Place::Batch, ..) => Place::Batch,
+            _ => Place::Other,
+        };
+        let max = if at == Place::Batch { MAX_BATCH_DEPTH } else { MAX_REPLY_DEPTH };
+        if stack.len() == max {
+            return Err(refuse(format!("reply nested deeper than {max} levels")));
+        }
+        let child = RawDocument::from_bytes(child)?;
+        stack.push((child.as_bytes(), child.iter_elements(), 4, at));
+    }
+    Ok(())
+}
 
 bitflags! {
     /// Represents the bitwise flags for an OP_MSG as defined in the spec.

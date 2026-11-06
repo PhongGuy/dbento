@@ -79,6 +79,8 @@ impl BaseOperation for RunCommand<'_> {
         response: &'a RawCommandResponse,
         _context: ExecutionContext<'a>,
     ) -> Result<Self::O> {
+        // The whole body is decoded here, cursor batches included, so none is let deeper.
+        crate::cmap::conn::wire::message::check_depth(response.raw_body(), false)?;
         Ok(response.raw_body().try_into()?)
     }
 

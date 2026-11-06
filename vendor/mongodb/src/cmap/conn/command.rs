@@ -253,6 +253,8 @@ impl RawCommandResponse {
     }
 
     pub(crate) fn body<'a, T: Deserialize<'a>>(&'a self) -> Result<T> {
+        // Serde walks the whole body, cursor batches included, so none is let deeper.
+        super::wire::message::check_depth(&self.raw, false)?;
         deserialize_from_slice(self.raw.as_bytes()).map_err(|e| {
             Error::from(ErrorKind::InvalidResponse {
                 message: format!("{e}"),

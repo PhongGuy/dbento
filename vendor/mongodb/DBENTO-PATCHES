@@ -1,0 +1,25 @@
+Source: crates.io mongodb 3.9.1 (mongodb-3.9.1.crate),
+sha256 af84443ae9878f59a6818686f339064479f42cdf293c4c637d8fc9c0a8c5eed6.
+The tarball is unchanged except for the patches below. LICENSE is the
+Apache-2.0 text the upstream repository ships; the tarball has none.
+
+P1
+  Change: every reply is walked iteratively as it is read off the wire,
+          before any decode, and refused with ErrorKind::InvalidResponse
+          when a path through it nests too deep. bson decodes nested
+          documents recursively, so a hostile server's deep reply otherwise
+          overflows the stack and aborts the process.
+          MAX_REPLY_DEPTH = 32 bounds every part the driver decodes with
+          serde or TryFrom ($clusterTime, error bodies, hello, auth, plain
+          run_command replies). In a debug build the serde decode costs about
+          24 KiB of stack per level, so 32 levels fit a 2 MiB thread with
+          over 2x margin; real servers nest these parts a few levels deep.
+          MAX_BATCH_DEPTH = 256, counted from the reply root, bounds the
+          documents of cursor.firstBatch and cursor.nextBatch, which the
+          cursor operations keep raw; it admits a stored document nested 200
+          deep under its three wrapper levels.
+          RawCommandResponse::body and RunCommand::handle_response decode the
+          whole body, batches included, so they re-walk it at 32 everywhere.
+  Files: src/cmap/conn/wire/message.rs, src/cmap/conn/command.rs,
+         src/operation/run_command.rs
+  Upstream: none filed (project rule: own issue and local workaround)
