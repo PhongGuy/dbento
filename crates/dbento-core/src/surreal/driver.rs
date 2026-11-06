@@ -31,6 +31,8 @@ pub(crate) struct SurrealDriver {
     warning: Option<String>,
     /// Set once a `USE` is sent on this session; see `Session::settings_changed`.
     settings_changed: Arc<AtomicBool>,
+    /// The namespace and database the login put the session in.
+    opened_on: (String, String),
 }
 
 pub(crate) struct SurrealScript {
@@ -65,6 +67,16 @@ impl SurrealDriver {
         match self.ask(Ask::Objects(rel.clone())).await? {
             Answer::Objects(objects) => Ok(objects),
             _ => Err(wrong_answer("relation objects")),
+        }
+    }
+
+    /// `ns/db` once RPC `use` has moved the session off where it opened; None on failure.
+    pub(crate) async fn moved_database(&self) -> Option<String> {
+        match self.ask(Ask::Place).await {
+            Ok(Answer::Place(ns, db)) if (&ns, &db) != (&self.opened_on.0, &self.opened_on.1) => {
+                Some(format!("{ns}/{db}"))
+            }
+            _ => None,
         }
     }
 
@@ -121,6 +133,10 @@ impl Driver for SurrealDriver {
         };
         let (requests, rx) = mpsc::unbounded_channel();
         let settings_changed = Arc::new(AtomicBool::new(false));
+        let opened_on = (
+            logged.place.namespace.clone(),
+            logged.place.database.clone(),
+        );
         tokio::spawn(serve(
             rpc,
             rules,
@@ -139,6 +155,7 @@ impl Driver for SurrealDriver {
             read_only: logged.read_only,
             warning: logged.warning,
             settings_changed,
+            opened_on,
         })
     }
 

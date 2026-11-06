@@ -58,6 +58,8 @@ pub(crate) struct MysqlDriver {
     read_only: bool,
     /// `@@lower_case_table_names` was 1 or 2 at connect, so the server folds names.
     fold_names: bool,
+    /// `DATABASE()` at connect: the configured database, or None without one.
+    opened_on: Option<String>,
 }
 
 /// One script: the trimmed statement texts not yet prepared and the one prepared last.
@@ -629,6 +631,13 @@ impl MysqlDriver {
     pub(crate) fn fold_names(&self) -> bool {
         self.fold_names
     }
+
+    /// `DATABASE()` once a USE moved the session off the one it opened on; None on failure.
+    pub(crate) async fn moved_database(&mut self) -> Option<String> {
+        let rows = self.catalog("SELECT DATABASE()").await.ok()?;
+        let now = catalog::cell(rows.first()?, 0).ok()??;
+        (Some(&now) != self.opened_on.as_ref()).then_some(now)
+    }
 }
 
 impl Driver for MysqlDriver {
@@ -658,8 +667,8 @@ impl Driver for MysqlDriver {
             let mut c = Conn::new(opts.clone())
                 .await
                 .map_err(|e| connect_error(conn, &e))?;
-            let (version, lower_case): (String, u8) = c
-                .query_first("SELECT VERSION(), @@lower_case_table_names")
+            let (version, lower_case, opened_on): (String, u8, Option<String>) = c
+                .query_first("SELECT VERSION(), @@lower_case_table_names, DATABASE()")
                 .await
                 .map_err(|e| connect_error(conn, &e))?
                 .unwrap_or_default();
@@ -678,9 +687,9 @@ impl Driver for MysqlDriver {
                     .await
                     .map_err(|e| connect_error(conn, &e))?;
             }
-            Ok::<_, ConnectError>((c, server, lower_case != 0))
+            Ok::<_, ConnectError>((c, server, lower_case != 0, opened_on))
         };
-        let (c, server, fold_names) = tokio::time::timeout(CONNECT_TIMEOUT, handshake)
+        let (c, server, fold_names, opened_on) = tokio::time::timeout(CONNECT_TIMEOUT, handshake)
             .await
             .map_err(|_| ConnectError::Open {
                 message: format!(
@@ -708,6 +717,7 @@ impl Driver for MysqlDriver {
             timeout: params.timeout,
             read_only: params.read_only,
             fold_names,
+            opened_on,
         })
     }
 

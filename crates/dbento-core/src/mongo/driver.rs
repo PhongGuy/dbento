@@ -176,6 +176,12 @@ impl MongoDriver {
     pub(crate) fn settings_changed(&self) -> bool {
         self.shared.settings_changed.load(Ordering::Relaxed)
     }
+
+    /// The `use` target, when it is not the URI's database; the driver keeps it, not the server.
+    pub(crate) fn moved_database(&self) -> Option<String> {
+        let current = self.shared.current_database();
+        (*current != self.uri_database).then(|| current.clone())
+    }
 }
 
 impl Driver for MongoDriver {

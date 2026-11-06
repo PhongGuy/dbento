@@ -59,4 +59,30 @@ async fn sqlite_sessions_are_never_marked() {
         .all(Result::is_ok)
     );
     assert!(!s.settings_changed());
+    assert_eq!(s.current_database().await, None);
+}
+
+// Postgres cannot switch database, so the search path's first schema stands in for it.
+#[tokio::test]
+async fn a_search_path_onto_another_schema_is_the_current_database() {
+    let fx = pg_fixture("").await;
+    let mut s = fx.session(SessionOptions::default()).await;
+    assert_eq!(s.current_database().await, None, "a fresh session");
+    let steps = [
+        ("CREATE SCHEMA IF NOT EXISTS curdb_other", None),
+        ("SET DateStyle = 'SQL, DMY'", None),
+        ("SET search_path TO public", None),
+        (
+            "SET search_path TO curdb_other, public",
+            Some("curdb_other"),
+        ),
+        ("RESET search_path", None),
+    ];
+    for (sql, want) in steps {
+        assert!(
+            run(&mut s, sql, Limits::default()).await[0].is_ok(),
+            "{sql}"
+        );
+        assert_eq!(s.current_database().await.as_deref(), want, "{sql}");
+    }
 }

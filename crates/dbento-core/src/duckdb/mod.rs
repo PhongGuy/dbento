@@ -35,6 +35,8 @@ pub(crate) struct DuckDriver {
     shared: Arc<Shared>,
     cancel: Arc<DuckCancel>,
     timeout: Option<Duration>,
+    /// `current_database()` right after the open; None if it could not be read.
+    opened_on: Option<String>,
 }
 
 /// The async handle to one script on the worker.
@@ -108,6 +110,18 @@ impl DuckDriver {
         Ok(answer.await.unwrap_or(Err(ExecuteError::SessionClosed))?)
     }
 
+    /// `current_database()` once a USE moved the session off the one it opened on.
+    pub(crate) async fn moved_database(&mut self) -> Option<String> {
+        let now = self.current().await?;
+        (Some(&now) != self.opened_on.as_ref()).then_some(now)
+    }
+
+    async fn current(&mut self) -> Option<String> {
+        self.introspect(|c| c.query_row("SELECT current_database()", [], |r| r.get(0)))
+            .await
+            .ok()
+    }
+
     /// Whether the worker answers within `DRAIN_CAP`, or within `INTERRUPT_WAIT` of the cancel
     /// that follows it.
     async fn answered(&self, mut wait: oneshot::Receiver<()>) -> bool {
@@ -173,12 +187,15 @@ impl Driver for DuckDriver {
         opened_rx.await.map_err(|_| ConnectError::Open {
             message: "the DuckDB worker stopped while opening".to_owned(),
         })??;
-        Ok(DuckDriver {
+        let mut driver = DuckDriver {
             requests,
             shared,
             cancel,
             timeout,
-        })
+            opened_on: None,
+        };
+        driver.opened_on = driver.current().await;
+        Ok(driver)
     }
 
     fn start_script(&mut self, sql: &str) -> DuckScript {

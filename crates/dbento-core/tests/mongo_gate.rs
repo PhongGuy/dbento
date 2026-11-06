@@ -111,6 +111,7 @@ async fn a_script_prepares_each_statement_and_use_changes_settings() {
         assert!(script.next().await.is_none());
     }
     assert!(s.settings_changed());
+    assert_eq!(s.current_database().await.as_deref(), Some("other"));
 }
 
 #[tokio::test]
