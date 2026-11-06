@@ -129,21 +129,19 @@ pub(super) async fn cursor_of(
         .await
 }
 
-/// `countDocuments`' total. Its `$group` gives no document at all when nothing matched.
+/// `countDocuments`' `$group` document, left raw for `render::decode`. There is none at all
+/// when nothing matched.
 pub(crate) async fn counted(
     database: &Database,
     command: Document,
     writes: Writes,
-) -> mongodb::error::Result<Bson> {
+) -> mongodb::error::Result<Option<RawDocumentBuf>> {
     let mut cursor = cursor_of(database, command, writes).await?;
-    let group = if cursor.advance().await? {
-        Some(cursor.deserialize_current()?)
+    Ok(if cursor.advance().await? {
+        Some(cursor.current().to_owned())
     } else {
         None
-    };
-    Ok(group
-        .and_then(|mut g| g.remove("n"))
-        .unwrap_or(Bson::Int32(0)))
+    })
 }
 
 fn outcome(rows: u64, cut: Option<TruncatedBy>, rows_affected: Option<u64>) -> Outcome {

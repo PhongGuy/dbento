@@ -203,3 +203,71 @@ fn type_names_are_the_type_aliases() {
         assert_eq!(type_name(&value), want);
     }
 }
+
+// One path of `levels` containers, the outermost a document; inside it every level is an
+// array when `array`, else a document.
+fn nested(levels: usize, array: bool) -> Vec<u8> {
+    let (kind, key) = if array { (4u8, b'0') } else { (3u8, b'a') };
+    let mut bytes = vec![5, 0, 0, 0, 0];
+    for _ in 1..levels {
+        let len = i32::try_from(4 + 3 + bytes.len() + 1).unwrap();
+        let mut outer = len.to_le_bytes().to_vec();
+        outer.extend([kind, key, 0]);
+        outer.extend(&bytes);
+        outer.push(0);
+        bytes = outer;
+    }
+    bytes
+}
+
+fn refused(bytes: &[u8]) -> bool {
+    let raw = RawDocument::from_bytes(bytes).unwrap();
+    match decode(raw) {
+        Ok(_) => false,
+        Err(reason) => {
+            assert!(reason.contains("nested deeper than 200"), "{reason}");
+            true
+        }
+    }
+}
+
+#[test]
+fn a_document_nested_a_thousand_deep_is_refused_not_overflowed() {
+    assert!(refused(&nested(1000, false)));
+}
+
+#[test]
+fn arrays_nested_a_thousand_deep_are_refused_not_overflowed() {
+    assert!(refused(&nested(1000, true)));
+}
+
+#[test]
+fn two_hundred_levels_decode_and_render_and_one_more_is_refused() {
+    for array in [false, true] {
+        let bytes = nested(200, array);
+        let document = decode(RawDocument::from_bytes(&bytes).unwrap()).unwrap();
+        assert!(!shell_pretty(&document).is_empty());
+        assert!(!extended_json(document, false).is_empty());
+        assert!(refused(&nested(201, array)));
+    }
+}
+
+#[test]
+fn a_scope_nested_a_thousand_deep_is_refused_not_overflowed() {
+    // {c: Code('x', <scope>)}: total length, code length 2, "x", NUL, then the scope document.
+    let scope = nested(1000, false);
+    let mut value = i32::try_from(4 + 4 + 2 + scope.len())
+        .unwrap()
+        .to_le_bytes()
+        .to_vec();
+    value.extend([2, 0, 0, 0, b'x', 0]);
+    value.extend(&scope);
+    let mut bytes = i32::try_from(4 + 3 + value.len() + 1)
+        .unwrap()
+        .to_le_bytes()
+        .to_vec();
+    bytes.extend([0x0f, b'c', 0]);
+    bytes.extend(&value);
+    bytes.push(0);
+    assert!(refused(&bytes));
+}
