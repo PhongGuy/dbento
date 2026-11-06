@@ -2271,7 +2271,7 @@ dependencies = [
  "dbento-core",
  "dbento-testkit",
  "futures-util",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "rmcp",
  "rusqlite",
  "schemars 1.2.3",
