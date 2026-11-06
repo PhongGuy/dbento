@@ -17,6 +17,7 @@ use tokio::sync::watch;
 
 use super::catalog;
 use super::classify::mongo_classification;
+use super::columns::decode;
 use super::exec::{
     command_error, read_preference, reply_failure, rows_affected, sendable, write_failure,
 };
@@ -431,11 +432,13 @@ async fn reply_rows(
     {
         let command = sendable(&statement.op, shared.timeout)?;
         let database = script.client.database(&shared.database_of(statement));
-        let n = script
+        let group = script
             .cancel
             .guard(shared.deadline(counted(&database, command, writes)))
             .await??
             .map_err(|e| shared.failure(e, writes))?;
+        let n = group.as_deref().map(decode).transpose()?;
+        let n = n.and_then(|mut g| g.remove("n")).unwrap_or(Bson::Int32(0));
         Some(doc! { "n": n })
     } else {
         shown(&statement.op, send(script, statement, writes).await?)?

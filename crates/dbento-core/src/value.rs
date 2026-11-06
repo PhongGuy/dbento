@@ -849,6 +849,22 @@ mod tests {
 
     #[cfg(feature = "mongodb")]
     #[test]
+    fn a_document_nested_too_deep_renders_its_refusal_in_place() {
+        // {a: {a: ... {}}}, a thousand documents deep, built from the inside out.
+        let mut bytes = vec![5u8, 0, 0, 0, 0];
+        for _ in 1..1000 {
+            let len = i32::try_from(bytes.len() + 8).unwrap();
+            bytes = [&len.to_le_bytes()[..], &[3, b'a', 0], &bytes, &[0]].concat();
+        }
+        let document = DocumentRef { bytes: &bytes };
+        for text in [document.to_shell(true), document.to_extended_json(false)] {
+            assert!(text.starts_with("/* undecodable document: "), "{text}");
+            assert!(text.contains("nested deeper than 200 levels"), "{text}");
+        }
+    }
+
+    #[cfg(feature = "mongodb")]
+    #[test]
     fn an_undecodable_document_says_so_and_why() {
         // Too short to be a document, then a sound frame around an element type BSON lacks.
         for bytes in [&b"one"[..], &[8, 0, 0, 0, 0x42, b'a', 0, 0]] {

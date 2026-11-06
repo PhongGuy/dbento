@@ -5,6 +5,8 @@ use std::ops::Range;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use bson::raw::RawIter;
+use bson::spec::ElementType;
 use bson::{Binary, Bson, DateTime, Document, JavaScriptCodeWithScope, RawDocument, Utf8Lossy};
 use serde_json::{Value, json};
 
@@ -19,10 +21,78 @@ pub(crate) enum CellText {
     Number(String),
 }
 
-/// Decodes a stored document, invalid UTF-8 replaced, never failing on a string.
+// Past any nesting a real server stores, and shallow enough for bson's recursive decode.
+const MAX_DEPTH: usize = 200;
+
+/// Decodes a stored document, invalid UTF-8 replaced, never failing on a string. A document
+/// nested deeper than `MAX_DEPTH` is refused before bson's recursion can overflow the stack.
 pub(crate) fn decode(raw: &RawDocument) -> Result<Document, String> {
+    check_depth(raw)?;
     Utf8Lossy::<Document>::try_from(raw)
         .map(|lossy| lossy.0)
+        .map_err(|e| e.to_string())
+}
+
+// One open container in the depth walk: its bytes, its elements, and where the next one starts.
+struct Level<'a> {
+    bytes: &'a [u8],
+    elements: RawIter<'a>,
+    next: usize,
+}
+
+impl<'a> Level<'a> {
+    fn new(document: &'a RawDocument) -> Self {
+        let bytes = document.as_bytes();
+        Self {
+            bytes,
+            elements: document.iter_elements(),
+            next: 4,
+        }
+    }
+}
+
+// Walks every path through `raw` with its own stack, counting `raw` as the first level, so no
+// input depth can overflow the walk itself.
+fn check_depth(raw: &RawDocument) -> Result<(), String> {
+    let mut stack = vec![Level::new(raw)];
+    while let Some(level) = stack.last_mut() {
+        let Some(element) = level.elements.next() else {
+            stack.pop();
+            continue;
+        };
+        let element = element.map_err(|e| e.to_string())?;
+        // A value follows its type byte and NUL-terminated key.
+        let start = level.next + 1 + element.key().len() + 1;
+        level.next = start + element.size();
+        let bytes = level.bytes;
+        let value = bytes
+            .get(start..level.next)
+            .ok_or("element overruns its document")?;
+        if let Some(child) = container(element.element_type(), value)? {
+            if stack.len() == MAX_DEPTH {
+                return Err(format!("document nested deeper than {MAX_DEPTH} levels"));
+            }
+            stack.push(Level::new(child));
+        }
+    }
+    Ok(())
+}
+
+// The document a value holds, if any. Code with scope is read by hand, since bson's own reader
+// refuses invalid UTF-8 in the code that the lossy decode accepts.
+fn container(kind: ElementType, value: &[u8]) -> Result<Option<&RawDocument>, String> {
+    let bytes = match kind {
+        ElementType::EmbeddedDocument | ElementType::Array => value,
+        // Total length, code length, the code with its NUL, then the scope.
+        ElementType::JavaScriptCodeWithScope => value
+            .get(4..8)
+            .and_then(|n| usize::try_from(i32::from_le_bytes(n.try_into().ok()?)).ok())
+            .and_then(|code| value.get(8 + code..))
+            .ok_or("malformed code with scope")?,
+        _ => return Ok(None),
+    };
+    RawDocument::from_bytes(bytes)
+        .map(Some)
         .map_err(|e| e.to_string())
 }
 
