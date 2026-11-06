@@ -22,9 +22,9 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 
 /// The client key encrypted as PKCS#8 PBES2 (PBKDF2-SHA256, AES-256-CBC), as openssl writes it.
 fn encrypted_key(cert: &ClientCert, passphrase: &str) -> String {
-    let info = pkcs8::PrivateKeyInfo::try_from(cert.key_der.as_slice()).unwrap();
+    let info = pkcs8::PrivateKeyInfoRef::try_from(cert.key_der.as_slice()).unwrap();
     let (salt, iv) = (random_bytes::<16>(), random_bytes::<16>());
-    let params = pbes2::Parameters::pbkdf2_sha256_aes256cbc(2048, &salt, &iv).unwrap();
+    let params = pbes2::Parameters::generate_pbkdf2_sha256_aes256cbc(2048, &salt, iv).unwrap();
     let doc = info.encrypt_with_params(params, passphrase).unwrap();
     doc.to_pem("ENCRYPTED PRIVATE KEY", LineEnding::LF)
         .unwrap()
