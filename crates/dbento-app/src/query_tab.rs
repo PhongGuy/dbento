@@ -1414,8 +1414,7 @@ impl Render for QueryTab {
             let s = if n == 1 { "" } else { "s" };
             format!("{n} statement{s}")
         });
-        // A VIEWER login is read-only whatever the config says, so the session can raise the badge.
-        let read_only = self.session_conn.read_only() || m.read_only() == Some(true);
+        let read_only = crate::link::shows_read_only(&self.session_conn, m.read_only());
         let badge_text: SharedString =
             read_only_badge_text(&self.session_conn, m.read_only_level()).into();
         let production = self.conn.is_production();

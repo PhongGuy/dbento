@@ -1,7 +1,7 @@
 //! The window's root view: the title bar over either the welcome view or the open
 //! workspace's layout, with the status bar at the foot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -2048,19 +2048,27 @@ impl Shell {
         }
     }
 
-    // Hands the explorer every tab session's link, merged per connection name.
+    // Hands the explorer every tab session's link, merged per connection name, and the
+    // connections a tab session reported read-only, which the lock draws like the badge.
     fn sync_links(&self, cx: &mut Context<Self>) {
         let Some(sidebar) = self.sidebar.clone() else {
             return;
         };
         let mut links: HashMap<String, LinkState> = HashMap::new();
+        let mut read_only = HashSet::new();
         for tab in &self.tabs {
             let model = tab.read(cx).model().read(cx);
             let link = model.link();
             let entry = links.entry(model.spec().connection.clone()).or_default();
             *entry = std::mem::take(entry).merge(link);
+            if model.read_only() == Some(true) {
+                read_only.insert(model.spec().connection.clone());
+            }
         }
-        sidebar.update(cx, |s, cx| s.set_session_links(links, cx));
+        sidebar.update(cx, |s, cx| {
+            s.set_session_links(links, cx);
+            s.set_session_read_only(read_only, cx);
+        });
     }
 
     // Drops tab `ix` with its draft and closes its session without waiting. The active tab

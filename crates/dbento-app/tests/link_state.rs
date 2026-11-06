@@ -79,3 +79,57 @@ fn with_no_tab_the_bar_shows_the_selected_connection(cx: &mut TestAppContext) {
         label_of(cx, s.win, "status-connection").as_deref() == Some("top \u{B7} connected")
     });
 }
+
+// A tab's model reports `Connected` as read-only, the way a SurrealDB VIEWER login does
+// whatever its config says; the cancel handle comes from a real session on the same file.
+fn report_read_only(cx: &mut TestAppContext, o: &support::Opened) {
+    let m = o.model(cx);
+    wait_real(cx, "lite connected", |cx| {
+        m.read_with(cx, |m, _| m.read_only().is_some())
+    });
+    let conn = o.fx.ws.connection("lite").unwrap().clone();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let session = rt
+        .block_on(dbento_core::connect(
+            &o.fx.ws,
+            &conn,
+            None,
+            dbento_core::SessionOptions::default(),
+        ))
+        .unwrap();
+    m.update(cx, |m, cx| {
+        m.apply(dbento_app::runner::Event::Connected {
+            read_only: true,
+            level: Some(dbento_core::ReadOnlyEnforcement::Database),
+            engine: dbento_core::Engine::Sqlite,
+            cancel: session.cancel_handle(),
+        });
+        cx.notify();
+    });
+}
+
+#[gpui_kit::test]
+fn a_read_only_config_draws_the_lock_before_any_session(cx: &mut TestAppContext) {
+    let o = launched(cx, "", "read_only = true");
+    assert!(present(cx, o.win, part_id("connection-lock", "lite")));
+    assert!(!present(cx, o.win, part_id("connection-lock", "nopg")));
+}
+
+#[gpui_kit::test]
+fn a_session_that_reports_read_only_draws_the_lock_beside_the_badge(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    assert!(!present(cx, o.win, part_id("connection-lock", "lite")));
+    report_read_only(cx, &o);
+    assert!(
+        present(cx, o.win, "read-only-badge"),
+        "the badge reads the session"
+    );
+    assert!(
+        present(cx, o.win, part_id("connection-lock", "lite")),
+        "the lock reads the same session"
+    );
+    assert!(!present(cx, o.win, part_id("connection-lock", "nopg")));
+}
