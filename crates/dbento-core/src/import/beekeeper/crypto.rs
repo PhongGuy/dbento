@@ -3,7 +3,7 @@
 
 use super::BeekeeperError;
 use crate::Secret;
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
@@ -72,7 +72,7 @@ pub(crate) fn decrypt(key: &str, stored: &str) -> Option<Zeroizing<Vec<u8>>> {
     let iv: [u8; 16] = hex::decode(iv).ok()?.try_into().ok()?;
     let mut buf = Zeroizing::new(base64::engine::general_purpose::STANDARD.decode(ct).ok()?);
     let len = cbc::Decryptor::<aes::Aes256>::new(&(*k).into(), &iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .decrypt_padded::<Pkcs7>(&mut buf)
         .ok()?
         .len();
     buf.truncate(len);
@@ -90,12 +90,12 @@ pub(crate) fn decrypt_string(key: &str, stored: &str) -> Option<Secret> {
 /// Encrypts as simple-encryptor does, with a fixed IV so fixtures are reproducible.
 #[cfg(test)]
 pub(crate) fn encrypt(key: &str, plain: &[u8], iv: [u8; 16]) -> String {
-    use aes::cipher::BlockEncryptMut;
+    use aes::cipher::BlockModeEncrypt;
     let k: [u8; 32] = Sha256::digest(key.as_bytes()).into();
     let mut buf = vec![0; plain.len() + 16];
     buf[..plain.len()].copy_from_slice(plain);
     let len = cbc::Encryptor::<aes::Aes256>::new(&k.into(), &iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plain.len())
+        .encrypt_padded::<Pkcs7>(&mut buf, plain.len())
         .expect("one spare block holds the padding")
         .len();
     let body = format!(
