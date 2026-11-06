@@ -68,7 +68,7 @@ cbc = { version = "0.2.1", features = ["block-padding"] }
 hmac = "0.13.0"
 base64 = "0.23.1"
 hex = "0.4.3"
-pkcs8 = { version = "0.10.2", features = ["encryption", "pem", "std"] }
+pkcs8 = { version = "0.11.0", features = ["encryption", "pem", "std"] }
 
 # Optimised libduckdb keeps debug test binaries small.
 [profile.dev.package.libduckdb-sys]

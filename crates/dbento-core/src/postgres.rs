@@ -222,7 +222,7 @@ pub(crate) fn client_auth(
         let text = std::str::from_utf8(&pem).map_err(|_| fail("not a PEM file".to_owned()))?;
         let (_, encrypted) = pkcs8::SecretDocument::from_pem(text)
             .map_err(|e| fail(format!("not an encrypted PKCS#8 key: {e}")))?;
-        let info = pkcs8::EncryptedPrivateKeyInfo::try_from(encrypted.as_bytes())
+        let info = pkcs8::EncryptedPrivateKeyInfoRef::try_from(encrypted.as_bytes())
             .map_err(|e| fail(format!("not an encrypted PKCS#8 key: {e}")))?;
         // A wrong passphrase decrypts to garbage that fails the padding or DER check.
         let plain = info
