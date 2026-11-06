@@ -293,6 +293,8 @@ pub struct TabModel {
     connected: bool,
     /// The open session reported `Event::SettingsChanged`; a new session clears it.
     settings_changed: bool,
+    /// The tab dropped a session whose settings had changed; the next run is refused once.
+    lost_settings: bool,
     results: Vec<StatementResult>,
     confirm: Option<PendingConfirm>,
     error: Option<String>,
@@ -466,6 +468,7 @@ impl TabModel {
             read_only_level: None,
             connected: false,
             settings_changed: false,
+            lost_settings: false,
             results: Vec::new(),
             confirm: None,
             error: None,
@@ -598,6 +601,13 @@ impl TabModel {
     /// stale browse that reloads its table instead).
     fn begin_run(&mut self, text: &str, start: usize, cx: &mut Context<Self>) -> bool {
         if self.closed || self.commit_holds_edits() {
+            return false;
+        }
+        // The session this tab dropped had switched database or settings; a run now would land
+        // silently on the configured ones, so the first one is answered with why instead.
+        if std::mem::take(&mut self.lost_settings) {
+            self.notice = Some(runner::SETTINGS_LOST.into());
+            cx.notify();
             return false;
         }
         // Re-running a browse whose table changed shape describes the table afresh first, so
@@ -764,6 +774,7 @@ impl TabModel {
         self.abort_save(cx);
         let closing = self.retire_runner(cx);
         self.closed = true;
+        self.lost_settings = false;
         closing
     }
 
@@ -772,6 +783,7 @@ impl TabModel {
     pub fn disconnect(&mut self, cx: &mut Context<Self>) -> Closing {
         self.abort_save(cx);
         let closing = self.retire_runner(cx);
+        self.lost_settings |= std::mem::take(&mut self.settings_changed);
         self.read_only = None;
         self.read_only_level = None;
         self.error = None;
@@ -787,6 +799,7 @@ impl TabModel {
             return Closing(None);
         }
         let closing = self.retire_runner(cx);
+        self.lost_settings |= std::mem::take(&mut self.settings_changed);
         self.spec.workspace = workspace;
         self.epoch += 1;
         // Unknown until the new session reports whether it opened read-only.
@@ -824,6 +837,8 @@ impl TabModel {
         self.spec.workspace = workspace;
         self.spec.connection = name.to_owned();
         self.epoch += 1;
+        // A different connection never had the old session's settings to lose.
+        self.lost_settings = false;
         // The old connection's link and error say nothing about the new one.
         self.read_only = None;
         self.read_only_level = None;
@@ -888,10 +903,17 @@ impl TabModel {
             }
             Event::ConnectFailed { message } => self.error = Some(message),
             Event::SettingsChanged => self.settings_changed = true,
+            // The runner already refused this run for the session it lost, so the tab does not
+            // refuse the next one again.
+            Event::SettingsLost { run_id } if run_id == self.run_id => {
+                self.settings_changed = false;
+                self.notice = Some(runner::SETTINGS_LOST.into());
+            }
             Event::Stopped { message } => {
                 // The pump stays until the next run replaces it; dropping it here would
                 // drop the task that is applying this event.
                 self.runner = None;
+                self.lost_settings |= std::mem::take(&mut self.settings_changed);
                 self.cancel = None;
                 self.connected = false;
                 self.running = false;
