@@ -2,6 +2,7 @@
 //! flat rows the sidebar draws. Pure data with no GPUI types, so it is tested directly.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use dbento_core::{
     ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Engine, FormatOptions, IndexInfo,
@@ -16,6 +17,7 @@ use crate::keymap::{OpenSelected, keys_for};
 use crate::keys::{KeyFilter, KeyItem, KeyToken, display_key, key_levels};
 use crate::labels::{MenuEntry, group_digits};
 use crate::link::LinkState;
+use crate::redis_completion::RedisDoc;
 
 /// A group of schema objects under a relation (the first four) or a schema (the last two).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -243,6 +245,7 @@ pub struct CatalogTree {
     key_browsers: HashSet<String>,
     key_filters: HashMap<(String, u32), KeyFilter>,
     keys: HashMap<(String, u32), Load<KeyListing>>,
+    command_docs: HashMap<String, Load<Arc<[RedisDoc]>>>,
     generation: u64,
     // The oldest generation still current, for all connections and per refreshed one.
     floor: u64,
@@ -595,6 +598,9 @@ impl CatalogTree {
             } => {
                 self.keys.insert((c, *db), Load::Loading);
             }
+            CatalogQuery::CommandDocs => {
+                self.command_docs.insert(c, Load::Loading);
+            }
             // Counts and definitions are no tree level, and a later key page is tracked by
             // its listing.
             CatalogQuery::Count { .. }
@@ -614,6 +620,7 @@ impl CatalogTree {
         let c = conn.to_owned();
         let present = match query {
             CatalogQuery::Schemas => self.schemas.contains_key(&c),
+            CatalogQuery::CommandDocs => self.command_docs.contains_key(&c),
             CatalogQuery::Relations { schema } => self.relations.contains_key(&(c, schema.clone())),
             CatalogQuery::Columns { rel } => self.columns.contains_key(&(c, rel.clone())),
             CatalogQuery::RelationObjects { rel } => {
@@ -677,6 +684,13 @@ impl CatalogTree {
             }
             CatalogQuery::Keys { db, filter, after } => {
                 self.apply_keys((conn, db), &filter, after, result);
+            }
+            CatalogQuery::CommandDocs => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::CommandDocs(d) => Some(d),
+                    _ => None,
+                });
+                self.command_docs.insert(conn, load);
             }
             // Counts and definitions are no tree level.
             CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => {}
@@ -798,6 +812,7 @@ impl CatalogTree {
         self.relations.clear();
         self.columns.clear();
         self.keys.clear();
+        self.command_docs.clear();
         let rels = std::mem::take(&mut self.relation_objects)
             .into_keys()
             .collect();
@@ -819,6 +834,7 @@ impl CatalogTree {
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
         self.keys.retain(|(c, _), _| c != conn);
+        self.command_docs.remove(conn);
         let rels = self
             .relation_objects
             .extract_if(|(c, _), _| c == conn)
@@ -880,6 +896,7 @@ impl CatalogTree {
         self.schema_objects.retain(|(c, _), _| c != conn);
         self.keys.retain(|(c, _), _| c != conn);
         self.key_filters.retain(|(c, _), _| c != conn);
+        self.command_docs.remove(conn);
     }
 
     /// The schema level of `conn` as a link: absent Idle, loading Connecting, loaded
@@ -890,6 +907,14 @@ impl CatalogTree {
             Some(Load::Loading) => LinkState::Connecting,
             Some(Load::Ready(_)) => LinkState::Connected,
             Some(Load::Failed(m)) => LinkState::Failed(m.clone()),
+        }
+    }
+
+    /// Loaded COMMAND DOCS of Redis connection `conn`, for completion.
+    pub fn command_docs(&self, conn: &str) -> Option<&[RedisDoc]> {
+        match self.command_docs.get(conn) {
+            Some(Load::Ready(d)) => Some(d),
+            _ => None,
         }
     }
 

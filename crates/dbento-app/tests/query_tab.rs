@@ -522,3 +522,14 @@ fn a_key_tab_offers_no_run_or_save(cx: &mut TestAppContext) {
         assert!(!present(cx, o.win, id), "a key tab hides {id}");
     }
 }
+
+#[test]
+fn redis_command_lines_are_highlighted_as_shell() {
+    use gpui_kit::component::highlighter::LanguageRegistry;
+    assert_eq!(editor_language(Engine::Redis), "bash");
+    assert!(
+        LanguageRegistry::singleton()
+            .language(editor_language(Engine::Redis))
+            .is_some()
+    );
+}

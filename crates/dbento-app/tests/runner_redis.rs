@@ -313,3 +313,41 @@ fn a_key_that_changes_kind_between_pages_restarts_from_the_top(cx: &mut TestAppC
         assert!(matches!(store.end(), Some(StatementEnd::Complete(_))));
     });
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_docs_load_through_the_catalog_with_nested_arguments_flattened() {
+    let db = redis_db().await;
+    let (_dir, spec) = spec(&db);
+    let r = spawn_catalog(&here(), spec);
+    let replies = r.replies();
+    r.load(0, CatalogQuery::CommandDocs);
+    let reply = tokio::time::timeout(Duration::from_secs(30), replies.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let Ok(CatalogData::CommandDocs(docs)) = reply.result else {
+        panic!("{:?}", reply.result)
+    };
+    let find = |n: &str| {
+        docs.iter()
+            .find(|d| d.name == n)
+            .unwrap_or_else(|| panic!("no {n}"))
+    };
+    let set = find("set");
+    let tokens: Vec<&str> = set.args.iter().filter_map(|a| a.token.as_deref()).collect();
+    for t in ["EX", "NX", "GET"] {
+        assert!(tokens.contains(&t), "SET offers {t}: {tokens:?}");
+    }
+    let ex = set
+        .args
+        .iter()
+        .find(|a| a.token.as_deref() == Some("EX"))
+        .unwrap();
+    assert!(ex.optional, "EX sits under the optional expiration");
+    let subs: Vec<&str> = find("config")
+        .subcommands
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    assert!(subs.contains(&"config|get"), "{subs:?}");
+}

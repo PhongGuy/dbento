@@ -44,6 +44,7 @@ pub mod query_tab;
 pub mod recent_tabs;
 pub mod record;
 pub mod record_form;
+pub mod redis_completion;
 pub mod restore;
 pub mod result_body;
 pub mod results;

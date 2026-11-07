@@ -317,6 +317,7 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
 fn preview_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::MongoShell => "javascript",
+        QueryLanguage::RedisCommands => "bash",
         _ => "sql",
     }
 }
@@ -328,11 +329,13 @@ pub fn formats(engine: Engine) -> bool {
 }
 
 /// The highlighter language for `engine`'s query editor: "sql" for an SQL engine,
-/// "javascript" for the MongoDB shell, "text" (plain, no highlighting) for SurrealQL.
+/// "javascript" for the MongoDB shell, "bash" for Redis command lines (close enough to colour
+/// words and quotes), "text" (plain, no highlighting) for SurrealQL.
 pub fn editor_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::Sql => "sql",
         QueryLanguage::MongoShell => "javascript",
+        QueryLanguage::RedisCommands => "bash",
         _ => "text",
     }
 }

@@ -200,7 +200,12 @@ pub fn complete(
     if offset > text.len() || !text.is_char_boundary(offset) {
         return nothing(offset);
     }
-    let base = statement_base(&statement_ranges(engine, text), offset, text.len());
+    // Each Redis line is one command, and its trailing spaces still belong to it.
+    let base = if engine.capabilities().language == QueryLanguage::RedisCommands {
+        line_base(text, offset)
+    } else {
+        statement_base(&statement_ranges(engine, text), offset, text.len())
+    };
     complete_in(
         engine,
         &text[base.clone()],
@@ -237,6 +242,13 @@ pub fn statement_base(ranges: &[Range<usize>], offset: usize, len: usize) -> Ran
         })
 }
 
+/// The line of `text` holding byte `offset`, without its newline.
+fn line_base(text: &str, offset: usize) -> Range<usize> {
+    let start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[offset..].find('\n').map_or(text.len(), |i| offset + i);
+    start..end
+}
+
 fn nothing(offset: usize) -> Completion {
     Completion {
         replace: offset..offset,
@@ -256,6 +268,9 @@ pub fn complete_in(
     conn: &str,
     default_schema: Option<&str>,
 ) -> Completion {
+    if engine.capabilities().language == QueryLanguage::RedisCommands {
+        return crate::redis_completion::complete_redis(stmt, start, offset, tree, conn);
+    }
     if engine.capabilities().language == QueryLanguage::MongoShell {
         return crate::mongo_completion::complete_mongo(
             stmt,
