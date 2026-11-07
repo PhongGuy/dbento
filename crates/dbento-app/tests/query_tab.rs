@@ -505,3 +505,20 @@ fn a_flush_explains_that_every_key_goes() {
         "FLUSHDB or FLUSHALL on 'cache'"
     );
 }
+
+#[gpui_kit::test]
+fn a_key_tab_offers_no_run_or_save(cx: &mut TestAppContext) {
+    let o = opened(cx, T, "", 0);
+    for id in ["run", "run-all", "query-save"] {
+        assert!(present(cx, o.win, id), "a query tab shows {id}");
+    }
+    cx.update_window(o.win, |_, w, cx| {
+        o.shell
+            .update(cx, |s, cx| s.open_key(0, 0, b"k".to_vec(), w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for id in ["run", "run-all", "query-save"] {
+        assert!(!present(cx, o.win, id), "a key tab hides {id}");
+    }
+}

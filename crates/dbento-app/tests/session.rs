@@ -313,3 +313,43 @@ fn restored_untitled_tabs_are_numbered_in_restore_order(cx: &mut TestAppContext)
         .collect();
     assert_eq!(labels, ["Query 1", "Query 2", "Query 3"]);
 }
+
+// Opens a value tab on key `k` of DB 0, as the explorer's OpenKey does; it becomes active.
+fn open_key_tab(cx: &mut TestAppContext, win: AnyWindowHandle, shell: &Entity<Shell>) {
+    cx.update_window(win, |_, w, cx| {
+        shell.update(cx, |s, cx| s.open_key(0, 0, b"k".to_vec(), w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_key_tab_is_left_out_of_the_session_and_the_active_tab_still_maps(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    click(cx, o.win, "tab-new");
+    set(cx, o.win, &o.shell, 0, "SELECT 1");
+    settle(cx);
+    wait_real(cx, "the draft", |_| drafts(&o).len() == 1);
+    let query_tabs = |cx: &mut TestAppContext, shell: &Entity<Shell>| {
+        tabs(cx, shell).into_iter().map(|t| t.1).collect::<Vec<_>>()
+    };
+
+    // The key tab is the active one: the last query tab before it takes its place.
+    open_key_tab(cx, o.win, &o.shell);
+    assert_eq!(o.shell.read_with(cx, |s, _| s.active()), Some(2));
+    settle(cx);
+    let (win, shell) = restart(cx, &o);
+    assert_eq!(query_tabs(cx, &shell), ["SELECT 1", ""]);
+    assert_eq!(shell.read_with(cx, |s, _| s.active()), Some(1));
+
+    // The key tab sits after the active one, which keeps its index.
+    open_key_tab(cx, win, &shell);
+    cx.update_window(win, |_, w, cx| {
+        shell.update(cx, |s, cx| s.activate(0, w, cx))
+    })
+    .unwrap();
+    settle(cx);
+    let (_, shell) = restart(cx, &o);
+    assert_eq!(query_tabs(cx, &shell), ["SELECT 1", ""]);
+    assert_eq!(shell.read_with(cx, |s, _| s.active()), Some(0));
+}

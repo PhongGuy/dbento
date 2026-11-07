@@ -1443,6 +1443,7 @@ impl Render for QueryTab {
         let explain = self.session_conn.engine().capabilities().explain;
         let format = formats(self.session_conn.engine());
         let staged = m.edits().len();
+        let key_mode = self.key_title.is_some();
         // A key tab shows its value's header, last error and whether pages remain.
         let key = self.key_title.is_some().then(|| {
             let view = m.key_view();
@@ -1523,54 +1524,57 @@ impl Render for QueryTab {
             .children(badge)
             .children(prod_chip)
             // Run and Run all form one split button: square inner corners and a faint
-            // divider between them, so the pair reads as two halves of one control.
-            .child(
-                div()
-                    .id("run-split")
-                    .test_support()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .child(
-                        Button::new("run")
-                            .primary()
-                            .small()
-                            .h(px(28.))
-                            .px_2()
-                            .rounded_tr(px(0.))
-                            .rounded_br(px(0.))
-                            .icon(ui::Icons::Play)
-                            .label("Run")
-                            .children(run_keys)
-                            .disabled(closed)
-                            .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
-                    )
-                    .child(
-                        div()
-                            .w(px(1.))
-                            .h(px(28.))
-                            .bg(primary)
-                            // A closed tab's disabled halves draw primary at 15 %, so the
-                            // divider fades with them.
-                            .when(closed, |d| d.opacity(0.15))
-                            .child(div().size_full().bg(primary_fg.opacity(0.4))),
-                    )
-                    .child(
-                        ui::accessibility_id(Button::new("run-all"), "run-all")
-                            .primary()
-                            .small()
-                            .h(px(28.))
-                            .px_2()
-                            .rounded_tl(px(0.))
-                            .rounded_bl(px(0.))
-                            .icon(ui::Icons::FastForward)
-                            .label("All")
-                            .accessibility_label("Run all")
-                            .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
-                            .disabled(closed)
-                            .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
-                    ),
-            )
+            // divider between them, so the pair reads as two halves of one control. A key tab
+            // has no text to run or save, so it shows neither.
+            .when(!key_mode, |d| {
+                d.child(
+                    div()
+                        .id("run-split")
+                        .test_support()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .child(
+                            Button::new("run")
+                                .primary()
+                                .small()
+                                .h(px(28.))
+                                .px_2()
+                                .rounded_tr(px(0.))
+                                .rounded_br(px(0.))
+                                .icon(ui::Icons::Play)
+                                .label("Run")
+                                .children(run_keys)
+                                .disabled(closed)
+                                .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
+                        )
+                        .child(
+                            div()
+                                .w(px(1.))
+                                .h(px(28.))
+                                .bg(primary)
+                                // A closed tab's disabled halves draw primary at 15 %, so the
+                                // divider fades with them.
+                                .when(closed, |d| d.opacity(0.15))
+                                .child(div().size_full().bg(primary_fg.opacity(0.4))),
+                        )
+                        .child(
+                            ui::accessibility_id(Button::new("run-all"), "run-all")
+                                .primary()
+                                .small()
+                                .h(px(28.))
+                                .px_2()
+                                .rounded_tl(px(0.))
+                                .rounded_bl(px(0.))
+                                .icon(ui::Icons::FastForward)
+                                .label("All")
+                                .accessibility_label("Run all")
+                                .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
+                                .disabled(closed)
+                                .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
+                        ),
+                )
+            })
             .when(format, |d| {
                 // The kit button takes only a text tooltip, so the keyed one sits on a wrapper.
                 d.child(
@@ -1629,25 +1633,27 @@ impl Render for QueryTab {
             })
             // Like Ctrl+S, open editors are staged first and staged edits saved; otherwise the
             // shell owns saving the query, and focusing the editor first routes the action there.
-            .child(
-                div()
-                    .id("query-save-tip")
-                    .test_support()
-                    .tooltip(move |window, cx| {
-                        let keys = save_button_keys(cx);
-                        theme::tooltip_keys(save_tooltip(staged, cx), keys, window, cx)
-                    })
-                    .child(
-                        tool_button("query-save", ui::Icons::Save, "Save", muted).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                if !this.save_edits(window, cx) {
-                                    this.editor.update(cx, |e, cx| e.focus(window, cx));
-                                    window.dispatch_action(Box::new(SaveQuery), cx);
-                                }
-                            }),
+            .when(!key_mode, |d| {
+                d.child(
+                    div()
+                        .id("query-save-tip")
+                        .test_support()
+                        .tooltip(move |window, cx| {
+                            let keys = save_button_keys(cx);
+                            theme::tooltip_keys(save_tooltip(staged, cx), keys, window, cx)
+                        })
+                        .child(
+                            tool_button("query-save", ui::Icons::Save, "Save", muted).on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    if !this.save_edits(window, cx) {
+                                        this.editor.update(cx, |e, cx| e.focus(window, cx));
+                                        window.dispatch_action(Box::new(SaveQuery), cx);
+                                    }
+                                }),
+                            ),
                         ),
-                    ),
-            )
+                )
+            })
             .child(
                 ui::accessibility_id(Button::new("row-limit"), "row-limit")
                     .ghost()

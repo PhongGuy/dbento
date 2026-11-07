@@ -751,11 +751,19 @@ impl Shell {
         if self.restoring {
             return;
         }
-        let tabs = self
-            .tabs
+        // A tab without a draft slot (a key's value tab) has nothing to restore, so it is left
+        // out, and the active index moves to the kept tab at or before it.
+        let kept: Vec<usize> = (0..self.tabs.len())
+            .filter(|&i| self.tabs[i].read(cx).draft_id().is_some())
+            .collect();
+        let active = self.active.and_then(|a| {
+            let before = kept.iter().filter(|&&i| i <= a).count();
+            (!kept.is_empty()).then(|| before.saturating_sub(1))
+        });
+        let tabs = kept
             .iter()
-            .map(|tab| {
-                let tab = tab.read(cx);
+            .map(|&i| {
+                let tab = self.tabs[i].read(cx);
                 let model = tab.model().read(cx);
                 TabState {
                     connection: model.spec().connection.clone(),
@@ -768,7 +776,7 @@ impl Shell {
         let session = WorkspaceSession {
             workspace: ws.dir().to_path_buf(),
             tabs,
-            active: self.active,
+            active,
             collapsed: self
                 .sidebar
                 .as_ref()
@@ -1478,6 +1486,8 @@ impl Shell {
     ) {
         if let Some(tab) = self.open_unnumbered(connection, window, cx) {
             tab.update(cx, |t, cx| t.open_key(db, key, cx));
+            // Opening recorded the tab while it still had a draft; it now has none to keep.
+            self.save_session(cx);
         }
     }
 
