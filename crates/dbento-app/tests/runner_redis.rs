@@ -10,7 +10,7 @@ use dbento_app::catalog::{CatalogData, CatalogQuery, spawn_catalog};
 use dbento_app::key_view::{KeyView, VALUE_PAGE};
 use dbento_app::keys::{KEY_PAGE, KeyBatch, KeyFilter};
 use dbento_app::results::ResultStore;
-use dbento_app::runner::{Command, KeyValueAnswer, Runner, RunnerSpec, spawn_on};
+use dbento_app::runner::{Command, KeyValueAnswer, Runner, RunnerSpec, StatementEnd, spawn_on};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, KeyKind, KeyRead, KeyTtl, Workspace};
 use dbento_testkit::{RD_SECRET_VAR, RdUser, RedisDb, redis_db};
@@ -247,6 +247,7 @@ fn a_key_tab_loads_more_until_the_value_ends(cx: &mut TestAppContext) {
             "mk:h \u{B7} db ".to_owned() + &index.to_string()
         );
         assert!(m.results()[0].store.rows() >= u64::from(VALUE_PAGE));
+        assert!(m.results()[0].store.end().is_none(), "pages remain");
     });
     // A scan may end with an empty page, so more is asked for until the view says it ended.
     while m.update(cx, |m, cx| m.load_more_value(cx)) {
@@ -258,9 +259,57 @@ fn a_key_tab_loads_more_until_the_value_ends(cx: &mut TestAppContext) {
         });
         m.read_with(cx, |m, _| assert_eq!(m.key_view().unwrap().error(), None));
     }
-    m.read_with(cx, |m, _| assert_eq!(m.results()[0].store.rows(), 600));
+    m.read_with(cx, |m, _| {
+        let store = &m.results()[0].store;
+        assert_eq!(store.rows(), 600);
+        assert!(
+            matches!(store.end(), Some(StatementEnd::Complete(o)) if o.rows == 600),
+            "{:?}",
+            store.end()
+        );
+    });
     assert!(
         !m.update(cx, |m, cx| m.load_more_value(cx)),
         "nothing is left"
     );
+}
+
+// A key that turns into another kind between pages answers WRONGTYPE on the old cursor; the
+// runner restarts from the top and the tab replaces result 0 with the new kind's rows.
+#[gpui_kit::test]
+fn a_key_that_changes_kind_between_pages_restarts_from_the_top(cx: &mut TestAppContext) {
+    init_tokio(cx);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _inside = rt.enter();
+    let db = rt.block_on(redis_db());
+    let fields: String = (0..600).map(|i| format!(" f{i:03} {i}")).collect();
+    rt.block_on(seed(&db, &format!("HSET wk:k{fields}")));
+    let (_dir, spec) = spec(&db);
+    let m = cx.new(|_| TabModel::new(spec));
+    let index = db.index();
+    m.update(cx, |m, cx| m.open_key(index, b"wk:k".to_vec(), cx));
+    wait_real(cx, "the first page", |cx| {
+        m.read_with(cx, |m, _| {
+            m.key_view().is_some_and(|v| v.header().is_some())
+        })
+    });
+    assert!(m.read_with(cx, |m, _| m.key_view().unwrap().has_more()));
+    rt.block_on(seed(&db, "DEL wk:k\nRPUSH wk:k a b c"));
+    assert!(m.update(cx, |m, cx| m.load_more_value(cx)));
+    wait_real(cx, "the restarted read", |cx| {
+        m.read_with(cx, |m, _| {
+            m.key_view()
+                .is_some_and(|v| v.read().is_some() || !v.has_more())
+        })
+    });
+    m.read_with(cx, |m, _| {
+        let v = m.key_view().unwrap();
+        assert_eq!(v.error(), None);
+        assert_eq!(v.header(), Some("list \u{B7} 3 elements \u{B7} no TTL"));
+        let store = &m.results()[0].store;
+        let names: Vec<&str> = store.columns().iter().map(|c| c.name()).collect();
+        assert_eq!(names, ["index", "value"]);
+        assert_eq!(store.rows(), 3);
+        assert!(matches!(store.end(), Some(StatementEnd::Complete(_))));
+    });
 }

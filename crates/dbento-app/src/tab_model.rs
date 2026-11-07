@@ -1304,7 +1304,12 @@ impl TabModel {
                 plan: None,
             });
         }
-        self.results[0].store.push(batch);
+        let store = &mut self.results[0].store;
+        store.push(batch);
+        if !view.has_more() {
+            let rows = store.rows();
+            store.finish(StatementEnd::Complete(Outcome::complete(rows)));
+        }
     }
 
     /// Starts the runner if needed and asks it for `rel`'s target; the tab browses once it lands.
