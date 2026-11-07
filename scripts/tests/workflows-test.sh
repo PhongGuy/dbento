@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CI=$ROOT/.github/workflows/ci.yml
 RELEASE=$ROOT/.github/workflows/release.yml
+WEEKLY=$ROOT/.github/workflows/weekly.yml
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 
@@ -38,8 +39,22 @@ test_rust_toolchain_pinned_to_master() {
 }
 
 test_ci_gate_runs_every_check() {
-  grep -qxE '[[:space:]]+run: make check icons-check windows-check notices-check script-test workflows-lint' "$CI" \
+  grep -qxE '[[:space:]]+run: make LOCKED=--locked check icons-check windows-check notices-check script-test workflows-lint' "$CI" \
     || fail "ci gate line: $(grep -n 'run: make' "$CI")"
+}
+
+test_ci_runs_on_push_and_pull_request() {
+  grep -qxE '  push:' "$CI" && grep -qxF '    branches: [master]' "$CI" || fail "ci does not run on push to master"
+  grep -qxE '  pull_request:' "$CI" || fail "ci does not run on pull requests"
+  grep -qxE '  workflow_dispatch:' "$CI" || fail "ci lost workflow_dispatch"
+  grep -qxF '  cancel-in-progress: true' "$CI" || fail "ci lost cancel-in-progress"
+}
+
+# The SQL Server licence is accepted for the Linux gate only, never workflow-wide.
+test_ci_accepts_the_mssql_licence_in_the_gate_only() {
+  [[ $(grep -c 'DBENTO_MSSQL_ACCEPT_EULA' "$CI") == 1 ]] || fail "DBENTO_MSSQL_ACCEPT_EULA set more than once"
+  awk '/^  gate:$/ { on = 1; next } on && /^  [a-z]/ { on = 0 } on && /^      DBENTO_MSSQL_ACCEPT_EULA: "Y"$/ { ok = 1 } END { exit !ok }' "$CI" \
+    || fail "the gate job does not set DBENTO_MSSQL_ACCEPT_EULA=Y"
 }
 
 test_ci_installs_the_cross_and_notices_tools() {
@@ -50,8 +65,29 @@ test_ci_installs_the_cross_and_notices_tools() {
 }
 
 test_ci_gate_timeout_and_pins() {
-  [[ $(job_timeouts "$CI") == "gate=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
+  [[ $(job_timeouts "$CI") == "gate=120 macos-clippy=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
   pinned_uses_only "$CI"
+}
+
+# Tests need containers, so macOS runs clippy alone.
+test_ci_macos_runs_locked_clippy() {
+  grep -qxF '    runs-on: macos-latest' "$CI" || fail "no macos-latest job"
+  grep -qxF '        run: cargo clippy --workspace --all-targets --all-features --locked -- -Dwarnings' "$CI" \
+    || fail "macOS clippy line"
+}
+
+# Beta clippy plus a check after cargo update, unlocked on purpose, read-only and pinned.
+test_weekly_checks_beta_and_updated_deps() {
+  [[ -f $WEEKLY ]] || { fail "no weekly.yml"; return 0; }
+  [[ $(job_timeouts "$WEEKLY") == "beta-clippy=60 updated-deps=60 " ]] || fail "weekly timeouts: $(job_timeouts "$WEEKLY")"
+  pinned_uses_only "$WEEKLY"
+  grep -qxE '  schedule:' "$WEEKLY" && grep -qxE '  workflow_dispatch:' "$WEEKLY" || fail "weekly triggers"
+  grep -qxF '  contents: read' "$WEEKLY" || fail "weekly is not contents: read"
+  grep -qxF '          toolchain: beta' "$WEEKLY" || fail "no beta toolchain"
+  grep -qxF '        run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings' "$WEEKLY" || fail "beta clippy line"
+  grep -qxF '        run: cargo update' "$WEEKLY" || fail "no cargo update"
+  grep -qxF '        run: cargo check --workspace --all-targets --all-features' "$WEEKLY" || fail "updated check line"
+  grep -q 'libclang-dev' "$WEEKLY" || fail "weekly LINUX_BUILD_DEPS lacks libclang-dev"
 }
 
 test_release_jobs_have_their_timeouts() {
@@ -129,6 +165,28 @@ test_release_drafts_only_on_a_tag() {
   awk '/if: github.ref_type == .tag. && !inputs.dry_run/ { armed = NR } /gh release create/ { if (armed && NR - armed <= 6) ok = 1 } END { exit !ok }' "$RELEASE" \
     || fail "the draft step is not guarded by a tag and not-dry-run if"
   [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] || fail "contents: write outside the checksums job"
+}
+
+# The notes come from GitHub's generate-notes API, which needs the job token (the checksums job holds contents: write).
+test_release_notes_step_has_the_token() {
+  [[ -f $RELEASE ]] || return 0
+  local run start
+  run=$(grep -nF 'run: scripts/release-notes.sh' "$RELEASE" | cut -d: -f1) || true
+  [[ -n $run ]] || { fail "no step writes the notes"; return 0; }
+  start=$(awk -v run="$run" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
+  grep -qF 'GH_TOKEN: ${{ github.token }}' <<<"$(sed -n "${start},${run}p" "$RELEASE")" \
+    || fail "the notes step has no GH_TOKEN"
+  awk '/^  checksums:$/ { on = 1 } on && /scripts\/release-notes\.sh/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
+    || fail "the notes step is not in the checksums job"
+}
+
+# The attribution check is a shared template; it still pins every action to a commit.
+test_attribution_check_is_pinned_and_reads_the_base() {
+  local file=$ROOT/.github/workflows/attribution.yml
+  [[ -f $file ]] || { fail "no attribution.yml"; return 0; }
+  pinned_uses_only "$file"
+  grep -qF 'git show "$BASE:.github/scripts/attribution-lib.sh"' "$file" || fail "attribution.yml does not load the lib from the base"
+  [[ -f $ROOT/.github/scripts/attribution-lib.sh ]] || fail "no .github/scripts/attribution-lib.sh"
 }
 
 # What's Changed walks back to the previous tag, which a shallow checkout does not have.
