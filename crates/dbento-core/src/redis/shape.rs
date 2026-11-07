@@ -28,8 +28,8 @@ pub(crate) struct Shaped {
 /// A reply that is not rows.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum ShapeError {
-    /// A top-level error reply: its first word, and the rest.
-    #[error("{message} ({code})")]
+    /// A top-level error reply: its first word, and the rest, which may be empty.
+    #[error("{code}{}{message}", if message.is_empty() { "" } else { " " })]
     Server { code: String, message: String },
     #[error("the server sent a push reply")]
     Push,
