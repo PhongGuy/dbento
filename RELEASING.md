@@ -2,7 +2,7 @@
 
 ## Overview
 
-A release is a `v<version>` tag. Pushing it runs `.github/workflows/release.yml`, which checks that the tag matches the workspace version, builds the five targets (Linux x86_64 and arm64, Windows x64, macOS Apple silicon and Intel), adds a copy of every package and archive under a name without the version (such as `Dbento_aarch64.dmg`, which the README links through `/releases/latest/download/`), writes one `SHA256SUMS` over every file and drafts a GitHub release. The draft's notes come from `packaging/release-notes.md`, with the version filled in and a What's Changed section taken from GitHub's generated notes since the previous tag, which group the merged pull requests by label through `.github/release.yml`; `scripts/release-notes.sh v<version>` prints the same notes locally with an authenticated `gh`. A human reviews the draft and publishes it. Nothing is published automatically.
+A release is a `v<version>` tag. Pushing it runs `.github/workflows/release.yml`, which checks that the tag matches the workspace version, builds the five targets (Linux x86_64 and arm64, Windows x64, macOS Apple silicon and Intel), adds a copy of every package and archive under a name without the version (such as `Dbento_aarch64.dmg`, which the README links through `/releases/latest/download/`), writes one `SHA256SUMS` over every file, attests every file and drafts a GitHub release. The draft's notes come from `packaging/release-notes.md`, with the version filled in and a What's Changed section taken from GitHub's generated notes since the previous tag, which group the merged pull requests by label through `.github/release.yml`; `scripts/release-notes.sh v<version>` prints the same notes locally with an authenticated `gh`. A human reviews the draft and publishes it. Nothing is published automatically.
 
 The macOS and Windows legs of the workflow have not yet run on real runners. Their artifact names, ad-hoc signing and runner tools are taken from the scripts and are unconfirmed until the first rehearsal below has passed.
 
@@ -13,6 +13,14 @@ Pushing a tag, publishing the draft, uploading anything and dispatching any work
 ## Signing
 
 The build jobs compile, which runs every dependency's build script, so they get no secret and restore no cache. No release job holds a signing secret.
+
+Provenance comes from a GitHub build attestation instead. `checksums` adds the stable copies and `SHA256SUMS` and uploads the finished set as the `release-<version>` artifact. The `attest` job is the only job bound to the `release` environment, which accepts only `v*` tags and waits for the maintainer's approval, so a tag run pauses there. It downloads that artifact and attests every file in it, `SHA256SUMS` included, with `actions/attest`; it compiles and runs nothing, and only it holds `id-token: write`. `draft` then uploads the same artifact's files, so every file in the release is attested. Attesting `SHA256SUMS` too means a user who verifies only the sums file can trust every checksum in it.
+
+Anyone can check a download:
+
+```sh
+gh attestation verify <file> --repo PhongGuy/dbento
+```
 
 ### macOS
 
@@ -57,11 +65,11 @@ The platform tokens are `linux`, `windows`, `macos-arm64` and `macos-intel`. The
 2. `git tag v<version>`
 3. `git push origin v<version>`
 
-The guard fails on a tag that does not match the workspace version, before any build starts. A branch can only start a dry run. A run dispatched on a tag ref with `dry_run=false` drafts a release too, exactly as pushing the tag does.
+The guard fails on a tag that does not match the workspace version, before any build starts. A branch can only start a dry run. A run dispatched on a tag ref with `dry_run=false` drafts a release too, exactly as pushing the tag does. One dispatched on a tag ref with `dry_run=true` attests (after approval) but drafts nothing.
 
 ## Draft review
 
-1. Download the draft's files and run `sha256sum -c SHA256SUMS`.
+1. Download the draft's files, run `sha256sum -c SHA256SUMS`, and run `gh attestation verify` on one of them.
 2. Mount the `.dmg` and run `codesign -v` on the `.app`.
 3. Check that the Windows installer and CLI zip carry their plain versioned names.
 4. Install the `.deb` on stock Ubuntu 24.04; it installs `/usr/bin/dbento` and `/usr/bin/dbento-app`.
@@ -89,4 +97,4 @@ Each job is billed in whole minutes; Windows bills 2x and macOS 10x. No release 
 - ASSUMED: a full release is about 560: Linux about 60, Windows 30 x 2, macOS 2 x 22 x 10.
 - ASSUMED: the default `linux,windows,macos-arm64` rehearsal is about 340.
 
-Every job's `timeout-minutes` caps what a hung run can cost: `guard` 5, `build` 90, `checksums` 45, and the CI `gate` 60. Release jobs restore no cache, so every build compiles from scratch.
+Every job's `timeout-minutes` caps what a hung run can cost: `guard` 5, `build` 90, `checksums` 45, `attest` 15, `draft` 30, and the CI `gate` 60. Release jobs restore no cache, so every build compiles from scratch.

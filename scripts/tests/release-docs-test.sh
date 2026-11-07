@@ -62,6 +62,13 @@ test_releasing_doc_covers_the_release_steps() {
   done
 }
 
+# A tag run waits at the attest job for the owner, and every file verifies against the attestation.
+test_releasing_doc_covers_the_attestation() {
+  [[ -f $DOC ]] || return 0
+  need "$DOC" 'gh attestation verify <file> --repo PhongGuy/dbento'
+  need "$DOC" 'The `attest` job is the only job bound to the `release` environment'
+}
+
 test_releasing_doc_says_outward_steps_are_the_maintainers() {
   [[ -f $DOC ]] || return 0
   need "$DOC" "Pushing a tag, publishing the draft, uploading anything and dispatching any workflow run are the maintainer's own actions, each taken only with their explicit approval."

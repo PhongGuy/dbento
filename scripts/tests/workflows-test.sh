@@ -64,7 +64,7 @@ test_ci_gate_timeout_and_pins() {
 
 test_release_jobs_have_their_timeouts() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  [[ $(job_timeouts "$RELEASE") == "build=90 checksums=45 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
+  [[ $(job_timeouts "$RELEASE") == "attest=15 build=90 checksums=45 draft=30 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
   pinned_uses_only "$RELEASE"
 }
 
@@ -127,6 +127,34 @@ test_release_holds_no_signing_secret() {
   if grep -nE 'secrets\.|WINDOWS_CERTIFICATE|signtool' "$RELEASE"; then fail "release.yml still handles a signing secret"; fi
 }
 
+# The attest job compiles nothing and attests exactly the files the draft uploads, SHA256SUMS
+# included; it alone holds the release environment, so nothing is drafted without approval.
+test_release_attests_every_drafted_file() {
+  [[ -f $RELEASE ]] || return 0
+  local attest draft checksums
+  attest=$(job_body "$RELEASE" attest)
+  draft=$(job_body "$RELEASE" draft)
+  checksums=$(job_body "$RELEASE" checksums)
+  [[ -n $attest ]] || { fail "release.yml has no attest job"; return 0; }
+  grep -qxF '      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2' <<<"$attest" || fail "attest action pin"
+  grep -qxF '          subject-path: dist/*' <<<"$attest" || fail "attest does not cover every file in dist"
+  [[ $(grep -cE '^    environment:' "$RELEASE") == 1 ]] || fail "environment: outside one job: $(grep -n 'environment:' "$RELEASE")"
+  grep -qxF '    environment: release' <<<"$attest" || fail "the attest job is not bound to environment: release"
+  grep -qxF "    if: github.ref_type == 'tag'" <<<"$attest" || fail "the attest job does not run only on a tag"
+  local perms
+  perms=$(awk '/^    permissions:$/ { on = 1; next } on && /^      [a-z-]+: [a-z]+( #.*)?$/ { sub(/ #.*/, ""); print $0; next } { on = 0 }' <<<"$attest" | LC_ALL=C sort | tr -s ' ' | tr '\n' '|')
+  [[ $perms == " artifact-metadata: write| attestations: write| contents: read| id-token: write|" ]] || fail "attest permissions: $perms"
+  [[ $(grep -c 'id-token: write' "$RELEASE") == 1 ]] || fail "id-token: write outside the attest job"
+  if grep -nE '^        run:|cargo|make ' <<<"$attest"; then fail "the attest job runs commands"; fi
+  # One artifact carries the files from the sums to the attestation to the draft.
+  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$checksums" || fail "checksums does not upload the release files"
+  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$attest" || fail "attest does not download the release files"
+  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$draft" || fail "draft does not download the release files"
+  grep -qxF '    needs: [guard, checksums]' <<<"$attest" || fail "attest does not follow checksums"
+  grep -qxF '    needs: [guard, checksums, attest]' <<<"$draft" || fail "draft does not wait for attest"
+  grep -qxF "    if: github.ref_type == 'tag' && !inputs.dry_run" <<<"$draft" || fail "draft does not run only on a tag release"
+}
+
 # The stable copies must exist before the sums run, so SHA256SUMS covers them too.
 test_release_adds_stable_copies_before_the_sums() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
@@ -146,13 +174,12 @@ test_release_drafts_only_on_a_tag() {
   # gh puts a notes file before generated notes, so the two never mix.
   if grep -qF -- '--generate-notes' "$RELEASE"; then fail "release.yml still asks gh to generate notes"; fi
   grep -qF 'run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"' "$RELEASE" || fail "no step writes the notes"
-  # The draft step's if: sits at most six lines above its gh release line (if, env and two values, run).
-  awk '/if: github.ref_type == .tag. && !inputs.dry_run/ { armed = NR } /gh release create/ { if (armed && NR - armed <= 6) ok = 1 } END { exit !ok }' "$RELEASE" \
-    || fail "the draft step is not guarded by a tag and not-dry-run if"
-  [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] || fail "contents: write outside the checksums job"
+  grep -q 'gh release create' <<<"$(job_body "$RELEASE" draft)" || fail "the draft command is not in the draft job"
+  [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] && grep -q 'contents: write' <<<"$(job_body "$RELEASE" draft)" \
+    || fail "contents: write outside the draft job"
 }
 
-# The notes come from GitHub's generate-notes API, which needs the job token (the checksums job holds contents: write).
+# The notes come from GitHub's generate-notes API, which needs the job token (the draft job holds contents: write).
 test_release_notes_step_has_the_token() {
   [[ -f $RELEASE ]] || return 0
   local run start
@@ -161,8 +188,7 @@ test_release_notes_step_has_the_token() {
   start=$(awk -v run="$run" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
   grep -qF 'GH_TOKEN: ${{ github.token }}' <<<"$(sed -n "${start},${run}p" "$RELEASE")" \
     || fail "the notes step has no GH_TOKEN"
-  awk '/^  checksums:$/ { on = 1 } on && /scripts\/release-notes\.sh/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
-    || fail "the notes step is not in the checksums job"
+  grep -q 'scripts/release-notes\.sh' <<<"$(job_body "$RELEASE" draft)" || fail "the notes step is not in the draft job"
 }
 
 # The attribution check is a shared template; it still pins every action to a commit.
@@ -178,8 +204,7 @@ test_attribution_check_is_pinned_and_reads_the_base() {
 # What's Changed walks back to the previous tag, which a shallow checkout does not have.
 test_release_notes_checkout_has_full_history() {
   [[ -f $RELEASE ]] || return 0
-  awk '/^  checksums:$/ { on = 1 } on && /fetch-depth: 0/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
-    || fail "the checksums job checks out without fetch-depth: 0"
+  grep -q 'fetch-depth: 0' <<<"$(job_body "$RELEASE" draft)" || fail "the draft job checks out without fetch-depth: 0"
 }
 
 test_release_has_no_updater_pieces() {
