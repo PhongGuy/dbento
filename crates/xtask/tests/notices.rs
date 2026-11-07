@@ -225,7 +225,8 @@ fn about_toml_accepts_the_spec_list_for_the_release_targets() {
             "Unicode-3.0",
             "CC0-1.0",
             "bzip2-1.0.6",
-            "CDLA-Permissive-2.0"
+            "CDLA-Permissive-2.0",
+            "BSL-1.0"
         ]
     );
     assert_eq!(

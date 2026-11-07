@@ -32,6 +32,7 @@ pub(crate) fn sqlite_classification(sql: &str, readonly: bool) -> Classification
             sql,
             &["BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE"],
         ),
+        categories: Vec::new(),
     }
 }
 
@@ -173,6 +174,7 @@ fn mysql_text_classification(sql: &str) -> Classification {
         writes: Writes::No,
         unguarded: Vec::new(),
         transaction_control: false,
+        categories: Vec::new(),
     };
     for mut statement in &statements {
         // EXPLAIN ANALYZE runs the statement it explains, so that statement is what counts.
@@ -302,6 +304,7 @@ fn mysql_keyword_classification(sql: &str) -> Classification {
         },
         unguarded: unguarded.into_iter().chain(dml).collect(),
         transaction_control,
+        categories: Vec::new(),
     }
 }
 
@@ -523,6 +526,7 @@ pub(crate) fn pg_classification(sql: &str) -> PgClass {
                 writes: Writes::Unknown,
                 unguarded: vec![],
                 transaction_control: false,
+                categories: Vec::new(),
             },
             refusal: None,
             sets_session: false,
@@ -611,6 +615,7 @@ pub(crate) fn pg_classification(sql: &str) -> PgClass {
             writes: if writes { Writes::Yes } else { Writes::No },
             unguarded,
             transaction_control,
+            categories: Vec::new(),
         },
         refusal,
         sets_session,

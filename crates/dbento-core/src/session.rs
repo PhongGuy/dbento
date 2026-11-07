@@ -179,6 +179,8 @@ pub enum Unguarded {
     UpdateAllDocuments,
     /// `deleteMany` with an empty filter.
     DeleteAllDocuments,
+    /// `FLUSHDB` or `FLUSHALL`.
+    FlushKeys,
 }
 
 impl Unguarded {
@@ -191,6 +193,7 @@ impl Unguarded {
             Self::Truncate => "TRUNCATE",
             Self::UpdateAllDocuments => "updateMany with an empty filter",
             Self::DeleteAllDocuments => "deleteMany with an empty filter",
+            Self::FlushKeys => "FLUSHDB or FLUSHALL",
         }
     }
 }
@@ -205,6 +208,8 @@ pub struct Classification {
     pub unguarded: Vec<Unguarded>,
     /// The statement begins, ends or changes a transaction or savepoint.
     pub transaction_control: bool,
+    /// The server's ACL categories for the command, such as `@dangerous`; empty on other engines.
+    pub categories: Vec<String>,
 }
 
 /// What the session's engine supports.
@@ -229,6 +234,8 @@ pub struct Capabilities {
     pub table_definition: bool,
     /// The language the engine's query text is written in.
     pub language: QueryLanguage,
+    /// Keys can be scanned and their values read in pages.
+    pub key_browser: bool,
 }
 
 /// The language a connection's query text is written in.
@@ -241,24 +248,29 @@ pub enum QueryLanguage {
     MongoShell,
     /// SurrealQL.
     SurrealQl,
+    /// One redis-cli command per line.
+    RedisCommands,
 }
 
 impl QueryLanguage {
-    /// The name shells show for the language: "SQL", "MongoDB shell" or "SurrealQL".
+    /// The name shells show for the language: "SQL", "MongoDB shell", "SurrealQL" or
+    /// "Redis commands".
     pub fn name(self) -> &'static str {
         match self {
             Self::Sql => "SQL",
             Self::MongoShell => "MongoDB shell",
             Self::SurrealQl => "SurrealQL",
+            Self::RedisCommands => "Redis commands",
         }
     }
 
-    /// The saved-query file extension, without the dot: "sql", "js" or "surql".
+    /// The saved-query file extension, without the dot: "sql", "js", "surql" or "redis".
     pub fn file_extension(self) -> &'static str {
         match self {
             Self::Sql => "sql",
             Self::MongoShell => "js",
             Self::SurrealQl => "surql",
+            Self::RedisCommands => "redis",
         }
     }
 }
@@ -279,6 +291,10 @@ pub enum Flavor {
     MongoDb,
     /// SurrealDB.
     SurrealDb,
+    /// Redis OSS.
+    Redis,
+    /// Valkey.
+    Valkey,
 }
 
 /// The server a session is connected to, as its handshake reported it.
@@ -678,6 +694,9 @@ pub async fn connect(
         Engine::Surrealdb => Err(ConnectError::Unsupported {
             reason: "SurrealDB is not available in this build".to_owned(),
         }),
+        Engine::Redis => Err(ConnectError::Unsupported {
+            reason: "Redis sessions are not available in this version yet".to_owned(),
+        }),
     }
 }
 
@@ -705,6 +724,11 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
              computed field, can advance sequences and, on servers that allow them, call http::* \
              functions and write files; a root OWNER or anonymous login can also run ALTER \
              SYSTEM. The query text cannot reveal these.",
+        ),
+        Engine::Redis => Some(
+            "Redis has no read-only session: the ACL check runs once at connect, so a later ACL \
+             SETUSER, from this session or another, can widen the user mid-session. Dbento's own \
+             refusals follow the command table it read at connect.",
         ),
         _ => None,
     }

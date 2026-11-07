@@ -93,6 +93,7 @@ pub(crate) fn map_source(
         Engine::Duckdb => Err(SkipReason::UnsupportedDriver("duckdb".to_owned())),
         Engine::Mongodb => Err(SkipReason::UnsupportedDriver("mongodb".to_owned())),
         Engine::Surrealdb => Err(SkipReason::UnsupportedDriver("surrealdb".to_owned())),
+        Engine::Redis => Err(SkipReason::UnsupportedDriver("redis".to_owned())),
     }
 }
 

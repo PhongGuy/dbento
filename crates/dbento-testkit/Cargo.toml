@@ -25,3 +25,4 @@ bson = { workspace = true, optional = true }
 [features]
 duckdb = ["dep:duckdb"]
 mongodb = ["dep:mongodb", "dep:bson"]
+redis = []

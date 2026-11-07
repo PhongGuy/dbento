@@ -310,6 +310,7 @@ impl Served {
                                     writes: class.writes,
                                     unguarded: Vec::new(),
                                     transaction_control: false,
+                                    categories: Vec::new(),
                                 },
                             })));
                             continue;

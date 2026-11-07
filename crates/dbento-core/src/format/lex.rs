@@ -34,11 +34,11 @@ pub(crate) fn lex(engine: Engine, sql: &str) -> Option<Vec<Tok>> {
 }
 
 /// The tokens of `sql` that start before byte `upto`, so text past them need not lex;
-/// None when one of those tokens is unterminated, or on MongoDB and SurrealDB, which are not
-/// SQL, so the formatter leaves their text alone.
+/// None when one of those tokens is unterminated, or on MongoDB, SurrealDB and Redis, which are
+/// not SQL, so the formatter leaves their text alone.
 pub(crate) fn lex_to(engine: Engine, sql: &str, upto: usize) -> Option<Vec<Tok>> {
     match engine {
-        Engine::Mongodb | Engine::Surrealdb => return None,
+        Engine::Mongodb | Engine::Surrealdb | Engine::Redis => return None,
         Engine::Mssql => return mssql_toks(sql, upto),
         _ => {}
     }

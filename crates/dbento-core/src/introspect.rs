@@ -218,8 +218,8 @@ pub enum IntrospectError {
     },
 }
 
-/// The schema an unqualified name resolves to: `public`, `main`, `dbo`, or a MySQL, MongoDB or
-/// SurrealDB connection's `database` (None when it names none).
+/// The schema an unqualified name resolves to: `public`, `main`, `dbo`, a MySQL, MongoDB or
+/// SurrealDB connection's `database` (None when it names none), or `db<index>` on Redis.
 pub fn default_schema(engine: Engine, conn: &ConnectionConfig) -> Option<String> {
     match engine {
         Engine::Postgres => Some("public".to_owned()),
@@ -230,6 +230,7 @@ pub fn default_schema(engine: Engine, conn: &ConnectionConfig) -> Option<String>
         Engine::Duckdb => Some("main".to_owned()),
         Engine::Mongodb => conn.database().map(str::to_owned),
         Engine::Surrealdb => conn.database().map(str::to_owned),
+        Engine::Redis => Some(format!("db{}", conn.database().unwrap_or("0"))),
     }
 }
 
@@ -245,7 +246,8 @@ pub(crate) fn capped(mut items: Vec<Relation>) -> RelationList {
 
 /// `ident` as `engine` reads it inside SQL: bare when it is a plain non-keyword identifier,
 /// otherwise double-quoted with embedded quotes doubled. MySQL and SurrealDB always get
-/// backticks and SQL Server brackets. MongoDB has no SQL, so its names come back unchanged.
+/// backticks and SQL Server brackets. MongoDB and Redis have no SQL, so their names come back
+/// unchanged.
 pub fn quote_ident(engine: Engine, ident: &str) -> String {
     let bare = match engine {
         Engine::Postgres => pg_bare(ident),
@@ -253,7 +255,7 @@ pub fn quote_ident(engine: Engine, ident: &str) -> String {
         Engine::Mysql => return format!("`{}`", ident.replace('`', "``")),
         Engine::Mssql => return format!("[{}]", ident.replace(']', "]]")),
         Engine::Duckdb => pg_bare(ident) && DUCKDB_EXTRA_KEYWORDS.binary_search(&ident).is_err(),
-        Engine::Mongodb => return ident.to_owned(),
+        Engine::Mongodb | Engine::Redis => return ident.to_owned(),
         Engine::Surrealdb => return crate::surreal::lex::quote_ident(ident),
     };
     if bare {
@@ -289,7 +291,7 @@ const DUCKDB_EXTRA_KEYWORDS: &[&str] = &[
 /// so it reads the same whatever `standard_conforming_strings` says. On MySQL a backslash
 /// switches to a hex literal, which reads the same whatever `NO_BACKSLASH_ESCAPES` says.
 /// SQL Server takes `N'..'`, so non-ASCII text survives, and a backslash is plain text.
-/// MongoDB has no SQL, so its text comes back unchanged. SurrealDB takes `'..'` with
+/// MongoDB and Redis have no SQL, so their text comes back unchanged. SurrealDB takes `'..'` with
 /// backslash escapes.
 pub fn quote_literal(engine: Engine, text: &str) -> String {
     if engine == Engine::Mssql {
@@ -299,7 +301,7 @@ pub fn quote_literal(engine: Engine, text: &str) -> String {
         let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();
         return format!("CONVERT(X'{hex}' USING utf8mb4)");
     }
-    if engine == Engine::Mongodb {
+    if matches!(engine, Engine::Mongodb | Engine::Redis) {
         return text.to_owned();
     }
     if engine == Engine::Surrealdb {

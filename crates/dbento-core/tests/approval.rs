@@ -690,3 +690,23 @@ fn the_document_kinds_round_trip_through_a_request_file() {
         "{text}"
     );
 }
+
+#[test]
+fn flush_keys_round_trips_through_a_request_file() {
+    let (d, store) = store();
+    let r = ApprovalRequest::new(
+        Path::new(W),
+        "cache",
+        "FLUSHALL",
+        Writes::Yes,
+        vec![Unguarded::FlushKeys],
+    );
+    store.request(&r).unwrap();
+    assert_eq!(store.pending()[0].unguarded(), [Unguarded::FlushKeys]);
+    let file = d
+        .path()
+        .join("approvals/inbox")
+        .join(format!("{}.json", r.id()));
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains(r#""unguarded":["flush_keys"]"#), "{text}");
+}

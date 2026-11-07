@@ -1063,6 +1063,7 @@ async fn serve_send(
                             writes: send.class.writes,
                             unguarded: Vec::new(),
                             transaction_control: false,
+                            categories: Vec::new(),
                         },
                     })));
                 }

@@ -30,11 +30,13 @@ pub enum Engine {
     Mongodb,
     /// SurrealDB.
     Surrealdb,
+    /// Redis or Valkey.
+    Redis,
 }
 
 impl Engine {
     /// The engine as `dbento.toml` names it: `postgres`, `sqlite`, `mysql`, `mssql`, `duckdb`,
-    /// `mongodb` or `surrealdb`.
+    /// `mongodb`, `surrealdb` or `redis`.
     pub fn name(self) -> &'static str {
         match self {
             Engine::Postgres => "postgres",
@@ -44,6 +46,7 @@ impl Engine {
             Engine::Duckdb => "duckdb",
             Engine::Mongodb => "mongodb",
             Engine::Surrealdb => "surrealdb",
+            Engine::Redis => "redis",
         }
     }
 
@@ -59,6 +62,7 @@ impl Engine {
             explain: false,
             table_definition: false,
             language: QueryLanguage::Sql,
+            key_browser: false,
         };
         match self {
             Engine::Postgres => Capabilities {
@@ -116,11 +120,20 @@ impl Engine {
                 language: QueryLanguage::SurrealQl,
                 ..none
             },
+            Engine::Redis => Capabilities {
+                schemas: true,
+                password: true,
+                tls: true,
+                key_browser: true,
+                language: QueryLanguage::RedisCommands,
+                ..none
+            },
         }
     }
 
     /// The engine a `dbento.toml` `engine` value names; `mariadb` is an alias of `mysql`,
-    /// `sqlserver` one of `mssql`, `mongo` one of `mongodb` and `surreal` one of `surrealdb`.
+    /// `sqlserver` one of `mssql`, `mongo` one of `mongodb`, `surreal` one of `surrealdb` and
+    /// `valkey` one of `redis`.
     fn parse(name: &str) -> Option<Engine> {
         match name {
             "postgres" => Some(Engine::Postgres),
@@ -130,6 +143,7 @@ impl Engine {
             "duckdb" => Some(Engine::Duckdb),
             "mongodb" | "mongo" => Some(Engine::Mongodb),
             "surrealdb" | "surreal" => Some(Engine::Surrealdb),
+            "redis" | "valkey" => Some(Engine::Redis),
             _ => None,
         }
     }
@@ -343,13 +357,17 @@ impl SavedQuery {
     }
 
     /// The language its extension implies: `.js` (any case) is the shell, `.surql` is
-    /// SurrealQL, anything else SQL.
+    /// SurrealQL, `.redis` is Redis commands, anything else SQL.
     pub fn language(&self) -> QueryLanguage {
         let ext = self.path.extension();
-        [QueryLanguage::MongoShell, QueryLanguage::SurrealQl]
-            .into_iter()
-            .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
-            .unwrap_or(QueryLanguage::Sql)
+        [
+            QueryLanguage::MongoShell,
+            QueryLanguage::SurrealQl,
+            QueryLanguage::RedisCommands,
+        ]
+        .into_iter()
+        .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
+        .unwrap_or(QueryLanguage::Sql)
     }
 }
 
@@ -982,8 +1000,8 @@ impl Workspace {
     }
 }
 
-/// Recursively gathers `.sql`, `.js` and `.surql` files below `dir`, skipping any whose real path
-/// leaves `root` (the canonical `queries/`) and dangling links.
+/// Recursively gathers `.sql`, `.js`, `.surql` and `.redis` files below `dir`, skipping any whose
+/// real path leaves `root` (the canonical `queries/`) and dangling links.
 fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -995,6 +1013,7 @@ fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::
                 QueryLanguage::Sql,
                 QueryLanguage::MongoShell,
                 QueryLanguage::SurrealQl,
+                QueryLanguage::RedisCommands,
             ]
             .iter()
             .any(|l| e.eq_ignore_ascii_case(l.file_extension()))
@@ -1106,7 +1125,7 @@ impl ConnectionConfig {
 
         let engine = Engine::parse(&raw.engine).ok_or_else(|| {
             invalid(format!(
-                "unknown engine `{}`; use postgres, mysql, mssql, sqlite, duckdb, mongodb or surrealdb",
+                "unknown engine `{}`; use postgres, mysql, mssql, sqlite, duckdb, mongodb, surrealdb or redis",
                 raw.engine
             ))
         })?;
@@ -1267,34 +1286,19 @@ impl ConnectionConfig {
                     _ => 5432,
                 }));
                 config.secret_source = secret_source(raw.secret).map_err(invalid)?;
-                config.tls = Some(match raw.tls.as_deref() {
-                    Some(word) => tls_mode(word).map_err(invalid)?,
-                    // SQL Server verifies on every host: its `off` is not plaintext, so the
-                    // local-host exception of Postgres and MySQL does not carry over.
-                    None if engine != Engine::Mssql && is_local_host(&host) => TlsMode::Off,
-                    None => TlsMode::Verify,
-                });
-                config.tls_ca = raw.tls_ca.map(|p| dir.join(p));
-                // A client certificate is only sent inside verified TLS, and is useless
-                // without its key, so half a pair or a plaintext connection is an error.
-                match (raw.tls_cert, raw.tls_key) {
-                    (None, None) => {}
-                    (Some(_), None) => {
-                        return Err(invalid("`tls_cert` needs `tls_key`".to_owned()));
-                    }
-                    (None, Some(_)) => {
-                        return Err(invalid("`tls_key` needs `tls_cert`".to_owned()));
-                    }
-                    (Some(_), Some(_)) if config.tls != Some(TlsMode::Verify) => {
-                        return Err(invalid(
-                            "`tls_cert` and `tls_key` need tls = \"verify\"".to_owned(),
-                        ));
-                    }
-                    (Some(cert), Some(key)) => {
-                        config.tls_cert = Some(dir.join(cert));
-                        config.tls_key = Some(dir.join(key));
-                    }
-                }
+                // SQL Server verifies on every host: its `off` is not plaintext, so the
+                // local-host exception of Postgres and MySQL does not carry over.
+                let local_off = engine != Engine::Mssql && is_local_host(&host);
+                config
+                    .set_tls(
+                        local_off,
+                        raw.tls,
+                        raw.tls_ca,
+                        raw.tls_cert,
+                        raw.tls_key,
+                        dir,
+                    )
+                    .map_err(invalid)?;
                 for (key, value) in raw.settings.unwrap_or_default() {
                     if !valid_setting_name(&key) {
                         return Err(invalid(format!(
@@ -1421,8 +1425,75 @@ impl ConnectionConfig {
                 config.tls_ca = raw.tls_ca.map(|p| dir.join(p));
                 config.host = Some(host);
             }
+            Engine::Redis => {
+                for (key, present) in [
+                    ("path", raw.path.is_some()),
+                    ("settings", raw.settings.is_some()),
+                ] {
+                    if present {
+                        return Err(invalid(format!("`{key}` is not valid for redis")));
+                    }
+                }
+                let host = raw.host.unwrap_or_else(|| "127.0.0.1".to_owned());
+                // The DB index is stored canonical so `007` and `7` are the same session.
+                let database = raw.database.unwrap_or_else(|| "0".to_owned());
+                let index = database.parse::<u32>().map_err(|_| {
+                    invalid(format!(
+                        "redis `database` must be a DB index (0, 1, ...), not `{database}`"
+                    ))
+                })?;
+                config.database = Some(index.to_string());
+                // A blank user is the server's `default` user.
+                config.user = raw.user.filter(|u| !u.trim().is_empty());
+                config.port = Some(raw.port.unwrap_or(6379));
+                config.secret_source = secret_source(raw.secret).map_err(invalid)?;
+                config
+                    .set_tls(
+                        is_local_host(&host),
+                        raw.tls,
+                        raw.tls_ca,
+                        raw.tls_cert,
+                        raw.tls_key,
+                        dir,
+                    )
+                    .map_err(invalid)?;
+                config.host = Some(host);
+            }
         }
         Ok(config)
+    }
+
+    // Postgres's TLS keys: `verify` unless written or `local_off`, a CA path, and a client
+    // certificate only as a whole pair inside verified TLS, since it is useless otherwise.
+    fn set_tls(
+        &mut self,
+        local_off: bool,
+        tls: Option<String>,
+        ca: Option<String>,
+        cert: Option<String>,
+        key: Option<String>,
+        dir: &Path,
+    ) -> Result<(), String> {
+        let mode = match tls.as_deref() {
+            Some(word) => tls_mode(word)?,
+            None if local_off => TlsMode::Off,
+            None => TlsMode::Verify,
+        };
+        self.tls = Some(mode);
+        self.tls_ca = ca.map(|p| dir.join(p));
+        match (cert, key) {
+            (None, None) => {}
+            (Some(_), None) => return Err("`tls_cert` needs `tls_key`".to_owned()),
+            (None, Some(_)) => return Err("`tls_key` needs `tls_cert`".to_owned()),
+            (Some(_), Some(_)) if mode != TlsMode::Verify => {
+                return Err("`tls_cert` and `tls_key` need tls = \"verify\"".to_owned());
+            }
+            (Some(cert), Some(key)) => {
+                self.tls_cert = Some(dir.join(cert));
+                self.tls_key = Some(dir.join(key));
+            }
+        }
+        Ok(())
     }
 
     /// The connection name from `dbento.toml`.
@@ -1491,7 +1562,8 @@ impl ConnectionConfig {
 
     /// `user@host:port/database` for Postgres, `user@host:port` plus any `/database` for
     /// MySQL and SQL Server, the path as written for SQLite and DuckDB, the URI for MongoDB,
-    /// and `host:port/namespace/database` after any `user@` for SurrealDB.
+    /// `host:port/namespace/database` after any `user@` for SurrealDB, and
+    /// `host:port/<db index>` after any `user@` for Redis.
     pub fn display_target(&self) -> String {
         match self.engine {
             Engine::Sqlite | Engine::Duckdb => self.path.clone().unwrap_or_default(),
@@ -1531,6 +1603,16 @@ impl ConnectionConfig {
                 self.port.unwrap_or(8000),
                 self.namespace.as_deref().unwrap_or_default(),
                 self.database.as_deref().unwrap_or_default(),
+            ),
+            Engine::Redis => format!(
+                "{}{}:{}/{}",
+                self.user
+                    .as_deref()
+                    .map(|u| format!("{u}@"))
+                    .unwrap_or_default(),
+                self.host.as_deref().unwrap_or_default(),
+                self.port.unwrap_or(6379),
+                self.database.as_deref().unwrap_or("0"),
             ),
         }
     }

@@ -117,6 +117,7 @@ pub fn connection_form(engine: Engine) -> ConnectionForm {
         Engine::Mssql => mssql_form(),
         Engine::Mongodb => mongodb_form(),
         Engine::Surrealdb => surrealdb_form(),
+        Engine::Redis => redis_form(),
     }
 }
 
@@ -258,6 +259,47 @@ fn surrealdb_form() -> ConnectionForm {
             section("TLS", vec![field("tls", "TLS", FieldKind::Tls, "", false)]),
         ],
         read_only_help: Some(SURREALDB_READ_ONLY_HELP),
+    }
+}
+
+const REDIS_READ_ONLY_HELP: &str = "Redis has no read-only session. At connect Dbento checks that \
+     the user's ACL refuses every write, and otherwise refuses writes itself from the server's \
+     command table. For a server-enforced reader: ACL SETUSER dbento_ro on >… ~* &* -@all +@read \
+     +ping +echo +time +hello +select +command +multi +exec +discard +client|setname \
+     +client|setinfo +client|id +client|info";
+
+/// Redis's layout: the server shape with nothing required, since the host defaults to the
+/// local machine, a blank user is the `default` user and the database is a numbered index.
+fn redis_form() -> ConnectionForm {
+    ConnectionForm {
+        sections: vec![
+            section(
+                "Connection",
+                vec![
+                    field("host", "Host", FieldKind::Text, "127.0.0.1", false),
+                    field(
+                        "port",
+                        "Port",
+                        FieldKind::Port { default: 6379 },
+                        "6379",
+                        false,
+                    ),
+                    field("database", "DB index", FieldKind::Text, "0", false),
+                ],
+            ),
+            section(
+                "Authentication",
+                vec![
+                    field("user", "User", FieldKind::Text, "default", false),
+                    field("secret", "Password", FieldKind::Secret, "", false),
+                ],
+            ),
+            section(
+                "Options",
+                vec![field("tls", "TLS", FieldKind::Tls, "", false)],
+            ),
+        ],
+        read_only_help: Some(REDIS_READ_ONLY_HELP),
     }
 }
 
