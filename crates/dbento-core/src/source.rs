@@ -41,6 +41,7 @@ pub fn single_source(
         Engine::Duckdb => None,
         Engine::Mongodb => None,
         Engine::Surrealdb => None,
+        Engine::Redis => None,
     }
 }
 

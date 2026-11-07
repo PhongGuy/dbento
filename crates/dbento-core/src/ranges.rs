@@ -17,6 +17,7 @@ use crate::tsql::{TsqlKind, TsqlToken, tsql_tokens};
 /// belong to no range, and an unterminated string, name or comment makes the rest one batch.
 /// On MongoDB a range starts at the statement's first token and ends after its `;` or last token.
 /// On SurrealDB a range is a unit, which may hold several statements.
+/// On Redis a range is one command line, without its comments and blank lines.
 pub fn statement_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
     match engine {
         Engine::Postgres => split(sql)
@@ -31,6 +32,7 @@ pub fn statement_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
         Engine::Duckdb => statement_ranges(Engine::Postgres, sql),
         Engine::Mongodb => crate::mongo::split::statement_ranges(sql),
         Engine::Surrealdb => crate::surreal::units::statement_ranges(sql),
+        Engine::Redis => crate::redis::lex::statement_ranges(sql),
     }
 }
 

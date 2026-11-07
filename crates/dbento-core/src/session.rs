@@ -694,6 +694,9 @@ pub async fn connect(
         Engine::Surrealdb => Err(ConnectError::Unsupported {
             reason: "SurrealDB is not available in this build".to_owned(),
         }),
+        Engine::Redis => Err(ConnectError::Unsupported {
+            reason: "Redis sessions are not available in this version yet".to_owned(),
+        }),
     }
 }
 

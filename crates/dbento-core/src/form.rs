@@ -117,6 +117,7 @@ pub fn connection_form(engine: Engine) -> ConnectionForm {
         Engine::Mssql => mssql_form(),
         Engine::Mongodb => mongodb_form(),
         Engine::Surrealdb => surrealdb_form(),
+        Engine::Redis => server_form((6379, "6379"), "0", false, "default", None),
     }
 }
 
