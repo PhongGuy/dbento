@@ -53,6 +53,19 @@ pub(crate) struct Shared {
     /// Why the session ended, once it has.
     ended: watch::Sender<Option<String>>,
     pub(super) settings_changed: AtomicBool,
+    /// The statement timeout; each round trip is bounded by it.
+    timeout: Option<Duration>,
+    cancel: Arc<RedisCancel>,
+    state: Mutex<State>,
+}
+
+/// What the server's connection state is, as far as the session has seen it.
+#[derive(Debug)]
+struct State {
+    /// The selected DB index.
+    db: u32,
+    /// A `MULTI` was answered `OK` and no `EXEC` or `DISCARD` has answered since.
+    in_multi: bool,
 }
 
 /// Why a round trip did not answer.
@@ -60,13 +73,20 @@ pub(crate) struct Shared {
 pub(crate) enum Failure {
     /// The session ended, now or earlier, for this reason.
     Ended(String),
+    /// The statement timeout passed; the session has ended.
+    Timeout,
+    /// The statement was cancelled; the session has ended.
+    Cancelled,
 }
 
 impl From<Failure> for ExecuteError {
     fn from(failure: Failure) -> Self {
-        let Failure::Ended(reason) = failure;
-        ExecuteError::SessionEnded {
-            reason: format!("{reason}; reopen the session"),
+        match failure {
+            Failure::Ended(reason) => ExecuteError::SessionEnded {
+                reason: format!("{reason}; reopen the session"),
+            },
+            Failure::Timeout => ExecuteError::Timeout,
+            Failure::Cancelled => ExecuteError::Cancelled,
         }
     }
 }
@@ -82,10 +102,91 @@ impl Shared {
     /// the session.
     pub(super) async fn one(&self, cmd: &Cmd) -> Result<Value, Failure> {
         let mut conn = self.connection()?;
-        conn.send_packed_command(cmd).await.map_err(|e| {
-            self.end(format!("the connection failed: {e}"));
-            Failure::Ended(e.to_string())
-        })
+        self.guarded(async move { conn.send_packed_command(cmd).await })
+            .await
+    }
+
+    /// `f` under the statement timeout and the cancel; a timeout, a cancel or a transport error
+    /// ends the session. The connection clone inside `f` drops with `f`, so emptying the slot
+    /// drops the socket and the server stops waiting on the command.
+    async fn guarded<T>(
+        &self,
+        f: impl Future<Output = ::redis::RedisResult<T>>,
+    ) -> Result<T, Failure> {
+        let bounded = async {
+            match self.timeout {
+                Some(limit) => tokio::time::timeout(limit, f)
+                    .await
+                    .map_err(|_| Failure::Timeout),
+                None => Ok(f.await),
+            }
+        };
+        match self.cancel.guard(bounded).await {
+            Err(_) => {
+                self.end("the statement was cancelled".to_owned());
+                Err(Failure::Cancelled)
+            }
+            Ok(Err(timeout)) => {
+                self.end("the statement timed out".to_owned());
+                Err(timeout)
+            }
+            Ok(Ok(Err(e))) => {
+                let reason = format!("the connection failed: {e}");
+                self.end(reason.clone());
+                Err(Failure::Ended(reason))
+            }
+            Ok(Ok(Ok(v))) => Ok(v),
+        }
+    }
+
+    /// Follows `SELECT`, `MULTI`, `EXEC` and `DISCARD` from their replies. A `SELECT` queued in
+    /// a transaction moves the DB only at `EXEC`, so after one the server is asked where it is.
+    async fn track(&self, args: &[Vec<u8>], reply: &Value) -> Result<(), Failure> {
+        let Some(name) = args.first() else {
+            return Ok(());
+        };
+        let ok =
+            matches!(reply, Value::Okay) || matches!(reply, Value::SimpleString(s) if s == "OK");
+        let name = name.to_ascii_uppercase();
+        match name.as_slice() {
+            b"SELECT" if ok => {
+                let index = args
+                    .get(1)
+                    .and_then(|a| std::str::from_utf8(a).ok())
+                    .and_then(|a| a.parse::<u32>().ok());
+                let mut state = self.state();
+                if let Some(index) = index
+                    && !state.in_multi
+                {
+                    state.db = index;
+                    self.settings_changed.store(true, Ordering::Relaxed);
+                }
+            }
+            b"MULTI" if ok => self.state().in_multi = true,
+            b"DISCARD" => self.state().in_multi = false,
+            b"EXEC" => {
+                self.state().in_multi = false;
+                let info = self.one(::redis::cmd("CLIENT").arg("INFO")).await?;
+                let db = text_of(&info).and_then(|line| {
+                    line.split_whitespace()
+                        .find_map(|f| f.strip_prefix("db="))
+                        .and_then(|d| d.parse::<u32>().ok())
+                });
+                let mut state = self.state();
+                if let Some(db) = db
+                    && db != state.db
+                {
+                    state.db = db;
+                    self.settings_changed.store(true, Ordering::Relaxed);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Empties the slot and publishes `reason`; the first reason stands.
@@ -132,6 +233,26 @@ impl RedisCancel {
     pub(crate) fn spend(&self) {
         let generation = *self.generation.borrow();
         self.spent.store(generation, Ordering::Relaxed);
+    }
+
+    /// `Err(Cancelled)` at once for an unspent cancel, or when one arrives while `f` runs, which
+    /// drops `f`.
+    pub(crate) async fn guard<F: Future>(&self, f: F) -> Result<F::Output, ExecuteError> {
+        let mut generation = self.generation.subscribe();
+        // Discards `wait_for`'s reply here: it holds the channel's lock, which `spend` needs.
+        let cancelled = async {
+            let unspent = |g: &u64| *g != self.spent.load(Ordering::Relaxed);
+            let _ = generation.wait_for(unspent).await;
+        };
+        // Biased so an unspent cancel wins before `f` is first polled, and nothing is sent.
+        tokio::select! {
+            biased;
+            () = cancelled => {
+                self.spend();
+                Err(ExecuteError::Cancelled)
+            }
+            out = f => Ok(out),
+        }
     }
 }
 
@@ -220,6 +341,7 @@ impl Driver for RedisSession {
         } else {
             (None, BTreeSet::new())
         };
+        let cancel = Arc::new(RedisCancel::new());
         Ok(RedisSession {
             shared: Arc::new(Shared {
                 conn: Mutex::new(Some(connection)),
@@ -228,9 +350,15 @@ impl Driver for RedisSession {
                 unprobeable,
                 ended: watch::Sender::new(None),
                 settings_changed: AtomicBool::new(false),
+                timeout: params.timeout,
+                cancel: Arc::clone(&cancel),
+                state: Mutex::new(State {
+                    db: db_index(conn)?,
+                    in_multi: false,
+                }),
             }),
             server,
-            cancel: Arc::new(RedisCancel::new()),
+            cancel,
         })
     }
 
@@ -294,6 +422,7 @@ impl Driver for RedisSession {
             cmd.arg(word.as_slice());
         }
         let reply = shared.one(&cmd).await?;
+        shared.track(&statement.args, &reply).await?;
         // The ACL fencing a command that may write is the read-only session working as meant.
         if let Value::ServerError(e) = &reply
             && e.code() == "NOPERM"
@@ -450,13 +579,9 @@ pub(crate) fn client(
     let invalid = |e: RedisError| ConnectError::Open {
         message: format!("{}: {e}", conn.display_target()),
     };
-    let db = conn.database().unwrap_or("0");
-    let db = db.parse::<i64>().map_err(|_| ConnectError::Open {
-        message: format!("{}: `{db}` is not a DB index", conn.display_target()),
-    })?;
     let mut settings = RedisConnectionInfo::default()
         .set_protocol(ProtocolVersion::RESP3)
-        .set_db(db)
+        .set_db(i64::from(db_index(conn)?))
         .set_lib_name("dbento", env!("CARGO_PKG_VERSION"));
     if let Some(user) = conn.user() {
         settings = settings.set_username(user);
@@ -474,6 +599,14 @@ pub(crate) fn client(
         }
         None => Client::open(info).map_err(invalid),
     }
+}
+
+/// The connection's DB index, 0 when it names none.
+fn db_index(conn: &ConnectionConfig) -> Result<u32, ConnectError> {
+    let db = conn.database().unwrap_or("0");
+    db.parse::<u32>().map_err(|_| ConnectError::Open {
+        message: format!("{}: `{db}` is not a DB index", conn.display_target()),
+    })
 }
 
 /// The CA and client pair under `tls = "verify"`, PEM-encoded as redis-rs takes them; `None`

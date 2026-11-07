@@ -603,6 +603,10 @@ impl RdFixture {
             .await
             .unwrap()
     }
+    /// A DB index other than the fixture's own.
+    pub fn other_db(&self) -> u32 {
+        if self.db.index() == 0 { 1 } else { 0 }
+    }
     /// A session as an ad-hoc `login`, in a workspace of its own.
     pub async fn session_for(
         &self,

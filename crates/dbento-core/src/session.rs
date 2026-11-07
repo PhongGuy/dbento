@@ -466,6 +466,11 @@ impl ExecuteError {
                  it ends or hits the time limit"
                     .to_owned()
             }
+            // The server may still be running the command, so only closing the socket stops it.
+            (ExecuteError::Cancelled | ExecuteError::Timeout, Engine::Redis) => format!(
+                "{self}; the connection was closed, since the server may still be running the \
+                 command, and the session ended"
+            ),
             // Attention ends the batch; what it already ran stays unless a transaction undoes it.
             (ExecuteError::Cancelled | ExecuteError::Timeout, Engine::Mssql) => format!(
                 "{self}; statements of the batch that already finished may have kept what \
@@ -1639,5 +1644,14 @@ mod tests {
         let text = ExecuteError::StoppedAtDrainCap.message_for(Engine::Surrealdb);
         assert!(text.contains("earlier statements"), "{text}");
         assert!(text.contains("socket was closed"), "{text}");
+    }
+
+    #[test]
+    fn redis_says_a_timeout_or_cancel_closed_the_connection() {
+        for e in [ExecuteError::Timeout, ExecuteError::Cancelled] {
+            let text = e.message_for(Engine::Redis);
+            assert!(text.contains("connection was closed"), "{text}");
+            assert_ne!(text, e.message_for(Engine::Postgres));
+        }
     }
 }
