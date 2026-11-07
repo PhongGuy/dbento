@@ -81,6 +81,9 @@ mod numtext;
 mod postgres;
 mod ranges;
 mod redis;
+pub use crate::redis::browse::{
+    KeyBrowseError, KeyCursor, KeyEntry, KeyKind, KeyPage, KeyScan, KeyTtl,
+};
 mod tsql;
 pub use ranges::{result_ranges, statement_count, statement_ranges};
 mod session;

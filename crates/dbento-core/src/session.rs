@@ -23,6 +23,7 @@ use crate::objects::{
     pg_relation_objects, pg_schema_objects, sqlite_definition, sqlite_relation_objects,
 };
 use crate::postgres::{PgCancel, PgDriver};
+use crate::redis::browse::{KeyBrowseError, KeyPage, KeyScan};
 #[cfg(feature = "redis")]
 use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
 use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
@@ -1138,6 +1139,19 @@ impl Session {
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(DefinitionError::Unsupported {
                 what: object.label(),
+            }),
+        }
+    }
+
+    /// One page of the key browser over `req.db`, leaving the session's own DB where it was.
+    /// Redis only; refused inside `MULTI`, and every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn scan_keys(&mut self, req: &KeyScan) -> Result<KeyPage, KeyBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.scan_keys(req).await,
+            _ => Err(KeyBrowseError::Unsupported {
+                reason: "only a Redis session has keys to browse".to_owned(),
             }),
         }
     }

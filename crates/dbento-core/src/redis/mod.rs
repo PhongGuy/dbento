@@ -1,6 +1,7 @@
 //! Redis and Valkey: command lines, the server's command table, write classification, reply rows
 //! and the driver.
 #![allow(dead_code)] // until the driver calls these modules
+pub(crate) mod browse;
 #[cfg(feature = "redis")]
 pub(crate) mod classify;
 #[cfg(feature = "redis")]

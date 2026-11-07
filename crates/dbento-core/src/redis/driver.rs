@@ -10,13 +10,15 @@ use std::time::Duration;
 use ::redis::aio::MultiplexedConnection;
 use ::redis::{
     AsyncConnectionConfig, Client, ClientTlsConfig, Cmd, ConnectionAddr, ErrorKind,
-    IntoConnectionInfo, ProtocolVersion, RedisConnectionInfo, RedisError, TlsCertificates, Value,
+    IntoConnectionInfo, Pipeline, ProtocolVersion, RedisConnectionInfo, RedisError,
+    TlsCertificates, Value,
 };
 use pkcs8::der::pem::{self, LineEnding};
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject as _;
 use tokio::sync::watch;
 
+use super::browse::{KeyBrowseError, server_error};
 use super::classify::redis_classification;
 use super::lex::{RedisStatement, SyntaxError, parse_script};
 use super::probe::{gate, probe};
@@ -104,6 +106,47 @@ impl Shared {
         let mut conn = self.connection()?;
         self.guarded(async move { conn.send_packed_command(cmd).await })
             .await
+    }
+
+    /// Sends `pipe` and returns one reply per command, under the same guard as `one`.
+    pub(super) async fn many(&self, pipe: &Pipeline) -> Result<Vec<Value>, Failure> {
+        let mut conn = self.connection()?;
+        self.guarded(async move { conn.send_packed_commands(pipe, 0, pipe.len()).await })
+            .await
+    }
+
+    /// Runs `pipe` on DB `db` and returns its replies: `SELECT db`, the pipe and a `SELECT` back
+    /// to the session's DB go as one pipeline, so the editor's DB is where it was after.
+    pub(super) async fn bracketed(
+        &self,
+        db: u32,
+        pipe: Pipeline,
+    ) -> Result<Vec<Value>, KeyBrowseError> {
+        let back = {
+            let state = self.state();
+            if state.in_multi {
+                return Err(KeyBrowseError::Unsupported {
+                    reason: "the session is inside MULTI; send EXEC or DISCARD first".to_owned(),
+                });
+            }
+            state.db
+        };
+        let mut whole = Pipeline::with_capacity(pipe.len() + 2);
+        whole.cmd("SELECT").arg(db);
+        for cmd in pipe.cmd_iter() {
+            whole.add_command(cmd.clone());
+        }
+        whole.cmd("SELECT").arg(back);
+        let mut replies = self.many(&whole).await?;
+        if replies.len() != whole.len() {
+            return Err(KeyBrowseError::Database {
+                code: "ERR".to_owned(),
+                message: format!("{} replies to {} commands", replies.len(), whole.len()),
+            });
+        }
+        replies.pop();
+        server_error(replies.remove(0))?;
+        Ok(replies)
     }
 
     /// `f` under the statement timeout and the cancel; a timeout, a cancel or a transport error
@@ -258,7 +301,7 @@ impl RedisCancel {
 }
 
 pub(crate) struct RedisSession {
-    shared: Arc<Shared>,
+    pub(super) shared: Arc<Shared>,
     server: ServerInfo,
     cancel: Arc<RedisCancel>,
 }
