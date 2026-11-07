@@ -29,6 +29,7 @@ pub mod history_panel;
 pub mod identity;
 pub mod inspector;
 pub mod keymap;
+pub mod keys;
 pub mod labels;
 pub mod link;
 mod mongo_completion;

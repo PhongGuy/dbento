@@ -14,6 +14,7 @@ use dbento_core::{
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
+use crate::keys::{KeyBatch, KeyFilter, KeyToken};
 use crate::runner::{self, RunnerSpec};
 
 /// The longest a catalog query may run; a shorter connection timeout wins.
@@ -61,6 +62,15 @@ pub enum CatalogQuery {
         /// The object to show.
         object: ObjectRef,
     },
+    /// One page of the keys of Redis DB `db`.
+    Keys {
+        /// The DB index.
+        db: u32,
+        /// Which keys the scan matches.
+        filter: KeyFilter,
+        /// Where the scan resumes; None for its first page.
+        after: Option<KeyToken>,
+    },
 }
 
 /// A loaded catalog level, matching its [`CatalogQuery`].
@@ -80,6 +90,8 @@ pub enum CatalogData {
     SchemaObjects(SchemaObjects),
     /// The answer to [`CatalogQuery::Definition`].
     Definition(Definition),
+    /// The answer to [`CatalogQuery::Keys`].
+    Keys(KeyBatch),
 }
 
 /// One answer, in request order; `generation` is echoed from the request.
@@ -304,6 +316,11 @@ async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, Intro
             }
             r => CatalogData::SchemaObjects(r?),
         },
+        CatalogQuery::Keys { .. } => {
+            return Err(IntrospectError::Unsupported {
+                what: "key listings",
+            });
+        }
         // `load` sends definitions down their own arm, never here.
         CatalogQuery::Definition { .. } => {
             return Err(IntrospectError::Unexpected {
