@@ -45,6 +45,7 @@ pub(crate) fn surreal_classification(text: &str) -> Classification {
             writes: Writes::Unknown,
             unguarded: Vec::new(),
             transaction_control: false,
+            categories: Vec::new(),
         },
         None => scan(&toks),
     };
@@ -85,6 +86,7 @@ fn scan(toks: &[Tok]) -> Classification {
         writes: Writes::No,
         unguarded: Vec::new(),
         transaction_control: false,
+        categories: Vec::new(),
     };
     let mut depth = 0usize;
     let mut define = None;

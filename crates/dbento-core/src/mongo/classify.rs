@@ -72,6 +72,7 @@ fn classification(writes: Writes, unguarded: Vec<Unguarded>) -> Classification {
         writes,
         unguarded,
         transaction_control: false,
+        categories: Vec::new(),
     }
 }
 

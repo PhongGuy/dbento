@@ -268,3 +268,22 @@ async fn a_listed_surql_query_can_be_read() {
         json!({"path": "queries/lite/find.surql", "connection": "lite", "sql": surql, "truncated": false})
     );
 }
+
+#[tokio::test]
+async fn a_listed_redis_query_can_be_read() {
+    let server = TestServer::start(TWO).await;
+    let redis = "HGETALL user:1\n";
+    put(server.root(), "queries/lite/user.redis", redis);
+    let listed = server.ok("list_saved_queries", json!({})).await;
+    assert_eq!(
+        listed["queries"],
+        json!([{"path": "queries/lite/user.redis", "connection": "lite"}])
+    );
+    let r = server
+        .ok("read_saved_query", read("queries/lite/user.redis"))
+        .await;
+    assert_eq!(
+        r,
+        json!({"path": "queries/lite/user.redis", "connection": "lite", "sql": redis, "truncated": false})
+    );
+}

@@ -199,3 +199,70 @@ fn surql_files_under_queries_are_saved_queries_in_surrealql() {
         ]
     );
 }
+
+#[test]
+fn flushing_every_key_is_an_unguarded_kind() {
+    assert_eq!(Unguarded::FlushKeys.label(), "FLUSHDB or FLUSHALL");
+}
+
+#[test]
+fn redis_commands_is_a_query_language_and_redis_and_valkey_are_flavors() {
+    let q = QueryLanguage::RedisCommands;
+    assert_eq!((q.name(), q.file_extension()), ("Redis commands", "redis"));
+    assert_ne!(Flavor::Redis, Flavor::Valkey);
+}
+
+#[test]
+fn no_existing_engine_has_the_key_browser() {
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Duckdb,
+        Engine::Mongodb,
+        Engine::Surrealdb,
+    ] {
+        assert!(!e.capabilities().key_browser, "{e:?}");
+    }
+}
+
+#[test]
+fn redis_files_under_queries_are_saved_queries_in_redis_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n",
+    )
+    .unwrap();
+    let q = dir.path().join("queries");
+    std::fs::create_dir_all(q.join("lite")).unwrap();
+    for f in [
+        "lite/a.redis",
+        "b.REDIS",
+        "lite/c.sql",
+        "lite/d.surql",
+        "e.rds",
+    ] {
+        std::fs::write(q.join(f), "x").unwrap();
+    }
+    let ws = Workspace::open(dir.path()).unwrap();
+    let listed: Vec<(String, QueryLanguage)> = ws
+        .saved_queries()
+        .unwrap()
+        .iter()
+        .map(|s| (s.path().to_string_lossy().replace('\\', "/"), s.language()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("queries/b.REDIS".to_owned(), QueryLanguage::RedisCommands),
+            (
+                "queries/lite/a.redis".to_owned(),
+                QueryLanguage::RedisCommands
+            ),
+            ("queries/lite/c.sql".to_owned(), QueryLanguage::Sql),
+            ("queries/lite/d.surql".to_owned(), QueryLanguage::SurrealQl),
+        ]
+    );
+}

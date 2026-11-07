@@ -561,6 +561,7 @@ enum RawUnguarded {
     Truncate,
     UpdateAllDocuments,
     DeleteAllDocuments,
+    FlushKeys,
     /// A kind written by a newer version; skipped on read so the file still loads.
     #[serde(other)]
     Unknown,
@@ -590,6 +591,7 @@ impl From<&ApprovalRequest> for RawRequest {
                     Unguarded::Truncate => RawUnguarded::Truncate,
                     Unguarded::UpdateAllDocuments => RawUnguarded::UpdateAllDocuments,
                     Unguarded::DeleteAllDocuments => RawUnguarded::DeleteAllDocuments,
+                    Unguarded::FlushKeys => RawUnguarded::FlushKeys,
                 })
                 .collect(),
         }
@@ -626,6 +628,7 @@ fn read_request(path: &Path, id: &str) -> Option<ApprovalRequest> {
                 RawUnguarded::Truncate => Some(Unguarded::Truncate),
                 RawUnguarded::UpdateAllDocuments => Some(Unguarded::UpdateAllDocuments),
                 RawUnguarded::DeleteAllDocuments => Some(Unguarded::DeleteAllDocuments),
+                RawUnguarded::FlushKeys => Some(Unguarded::FlushKeys),
                 RawUnguarded::Unknown => None,
             })
             .collect(),

@@ -18,6 +18,7 @@ pub(crate) fn mssql_classification(batch: &str) -> Classification {
         writes: Writes::Unknown,
         unguarded: Vec::new(),
         transaction_control: transaction_control(batch),
+        categories: Vec::new(),
     };
     // A batch the parser rejects keeps `Unknown`, and its findings come from a keyword scan.
     match Parser::parse_sql(&MsSqlDialect {}, batch) {

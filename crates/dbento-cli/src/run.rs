@@ -33,6 +33,7 @@ pub(crate) fn language_mismatch(file: &Path, engine: Engine) -> Option<String> {
         QueryLanguage::Sql,
         QueryLanguage::MongoShell,
         QueryLanguage::SurrealQl,
+        QueryLanguage::RedisCommands,
     ]
     .into_iter()
     .find(|l| l.file_extension() == ext)?;
@@ -65,5 +66,6 @@ mod tests {
         let e = language_mismatch(Path::new("q.js"), Engine::Sqlite).unwrap();
         assert!(e.contains("SQL") && e.contains(".sql"), "{e}");
         assert!(language_mismatch(Path::new("q.surql"), Engine::Postgres).is_some());
+        assert!(language_mismatch(Path::new("q.redis"), Engine::Postgres).is_some());
     }
 }

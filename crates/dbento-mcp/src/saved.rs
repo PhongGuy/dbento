@@ -1,10 +1,10 @@
-//! The saved-query tools: list and read the `.sql`, `.js` or `.surql` files under the
-//! workspace's `queries/`.
+//! The saved-query tools: list and read the `.sql`, `.js`, `.surql` or `.redis` files under
+//! the workspace's `queries/`.
 //!
 //! Core's confinement refuses any path that leaves `queries/`, lexically or through a
 //! symlink. This module adds what an AI client must not reach on top: a `queries/` folder
-//! that is itself a link out of the workspace, files other than `.sql`, `.js` or `.surql`,
-//! and queries of connections the server does not expose.
+//! that is itself a link out of the workspace, files other than `.sql`, `.js`, `.surql` or
+//! `.redis`, and queries of connections the server does not expose.
 
 use std::io::ErrorKind;
 use std::path::{Component, Path};
@@ -58,7 +58,7 @@ pub(crate) struct SavedText {
     truncated: bool,
 }
 
-/// Every exposed `.sql`, `.js` or `.surql` file under `queries/`, sorted by path.
+/// Every exposed `.sql`, `.js`, `.surql` or `.redis` file under `queries/`, sorted by path.
 pub(crate) async fn list(server: &DbentoServer) -> Result<SavedList, ToolError> {
     let ws = server.workspace().await?;
     let found = blocking(move || {
@@ -96,7 +96,7 @@ pub(crate) async fn read(server: &DbentoServer, args: ReadArgs) -> Result<SavedT
     let ws = server.workspace().await?;
     let rel = Path::new(&args.path).to_path_buf();
     let is_query = rel.extension().is_some_and(|e| {
-        ["sql", "js", "surql"]
+        ["sql", "js", "surql", "redis"]
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
     });
@@ -192,7 +192,9 @@ async fn blocking<T: Send + 'static>(
 fn outside(path: &str) -> ToolError {
     ToolError::new(
         "outside_queries",
-        format!("{path:?} is not a .sql, .js or .surql file under the workspace's queries/ folder"),
+        format!(
+            "{path:?} is not a .sql, .js, .surql or .redis file under the workspace's queries/ folder"
+        ),
     )
 }
 

@@ -59,6 +59,7 @@ impl Engine {
             explain: false,
             table_definition: false,
             language: QueryLanguage::Sql,
+            key_browser: false,
         };
         match self {
             Engine::Postgres => Capabilities {
@@ -343,13 +344,17 @@ impl SavedQuery {
     }
 
     /// The language its extension implies: `.js` (any case) is the shell, `.surql` is
-    /// SurrealQL, anything else SQL.
+    /// SurrealQL, `.redis` is Redis commands, anything else SQL.
     pub fn language(&self) -> QueryLanguage {
         let ext = self.path.extension();
-        [QueryLanguage::MongoShell, QueryLanguage::SurrealQl]
-            .into_iter()
-            .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
-            .unwrap_or(QueryLanguage::Sql)
+        [
+            QueryLanguage::MongoShell,
+            QueryLanguage::SurrealQl,
+            QueryLanguage::RedisCommands,
+        ]
+        .into_iter()
+        .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
+        .unwrap_or(QueryLanguage::Sql)
     }
 }
 
@@ -982,8 +987,8 @@ impl Workspace {
     }
 }
 
-/// Recursively gathers `.sql`, `.js` and `.surql` files below `dir`, skipping any whose real path
-/// leaves `root` (the canonical `queries/`) and dangling links.
+/// Recursively gathers `.sql`, `.js`, `.surql` and `.redis` files below `dir`, skipping any whose
+/// real path leaves `root` (the canonical `queries/`) and dangling links.
 fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -995,6 +1000,7 @@ fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::
                 QueryLanguage::Sql,
                 QueryLanguage::MongoShell,
                 QueryLanguage::SurrealQl,
+                QueryLanguage::RedisCommands,
             ]
             .iter()
             .any(|l| e.eq_ignore_ascii_case(l.file_extension()))
