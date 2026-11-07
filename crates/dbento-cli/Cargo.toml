@@ -13,9 +13,9 @@ path = "src/main.rs"
 [features]
 default = ["duckdb", "mongodb", "surrealdb"]
 # Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
-duckdb = ["dbento-core/duckdb", "dbento-mcp/duckdb", "dbento-testkit/duckdb"]
+duckdb = ["dbento-core/duckdb", "dbento-mcp/duckdb"]
 # Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
-mongodb = ["dbento-core/mongodb", "dbento-mcp/mongodb", "dbento-testkit/mongodb"]
+mongodb = ["dbento-core/mongodb", "dbento-mcp/mongodb"]
 # Forwarded so a default edge to core cannot switch SurrealDB on through feature unification.
 surrealdb = ["dbento-core/surrealdb", "dbento-mcp/surrealdb"]
 
@@ -38,4 +38,5 @@ rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 rusqlite.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "process"] }
-dbento-testkit = { path = "../dbento-testkit" }
+# Not forwarded from [features]: `cargo install` drops dev-dependencies, so a feature naming one fails.
+dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb"] }
