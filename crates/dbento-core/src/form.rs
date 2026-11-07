@@ -265,8 +265,8 @@ fn surrealdb_form() -> ConnectionForm {
 const REDIS_READ_ONLY_HELP: &str = "Redis has no read-only session. At connect Dbento checks that \
      the user's ACL refuses every write, and otherwise refuses writes itself from the server's \
      command table. For a server-enforced reader: ACL SETUSER dbento_ro on >… ~* &* -@all +@read \
-     +ping +echo +time +hello +select +command +multi +discard +client|setname +client|setinfo \
-     +client|id +client|info";
+     +ping +echo +time +hello +select +command +multi +exec +discard +client|setname \
+     +client|setinfo +client|id +client|info";
 
 /// Redis's layout: the server shape with nothing required, since the host defaults to the
 /// local machine, a blank user is the `default` user and the database is a numbered index.

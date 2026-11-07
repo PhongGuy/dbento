@@ -297,7 +297,7 @@ fn the_redis_descriptor_pins_its_fields_sections_and_help() {
     let titles: Vec<&str> = form.sections.iter().map(|s| s.title).collect();
     assert_eq!(titles, ["Connection", "Authentication", "Options"]);
     let help = form.read_only_help.unwrap();
-    let pinned = help.contains("ACL SETUSER dbento_ro") && help.contains("+multi +discard");
+    let pinned = help.contains("ACL SETUSER dbento_ro") && help.contains("+multi +exec +discard");
     assert!(pinned && !help.contains("@connection"), "{help}");
     let host = rd.iter().find(|f| f.key == "host").unwrap();
     assert_eq!(host.placeholder, "127.0.0.1");
