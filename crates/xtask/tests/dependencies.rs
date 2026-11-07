@@ -10,6 +10,9 @@ fn packages() -> BTreeSet<String> {
     let out = Command::new(env!("CARGO"))
         .args([
             "tree",
+            // Plain text whatever CARGO_TERM_COLOR says, so the duplicate marker parses.
+            "--color",
+            "never",
             "--workspace",
             "--locked",
             "--target",
