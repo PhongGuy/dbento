@@ -517,19 +517,19 @@ pub fn forced() -> SessionOptions {
 }
 
 /// One statement that must succeed.
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "mongodb", feature = "redis"))]
 pub async fn one(s: &mut Session, text: &str, limits: Limits) -> Ran {
     run(s, text, limits).await.remove(0).unwrap()
 }
 
 /// `one` with no limits.
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "mongodb", feature = "redis"))]
 pub async fn read(s: &mut Session, text: &str) -> Ran {
     one(s, text, Limits::default()).await
 }
 
 /// One statement that must fail.
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "mongodb", feature = "redis"))]
 pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
     match run(s, text, Limits::default()).await.remove(0) {
         Ok(ran) => panic!("{text}: {:?}", ran.outcome),
@@ -538,7 +538,7 @@ pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
 }
 
 /// A `Database` error's code.
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "mongodb", feature = "redis"))]
 pub fn code_of(e: ExecuteError) -> String {
     match e {
         ExecuteError::Database { code, .. } => code,
@@ -559,6 +559,86 @@ pub async fn cursors_back_to(db: &MgDb, baseline: i64) {
         "{} cursors open, wanted {baseline}",
         db.open_cursors().await
     );
+}
+
+#[cfg(feature = "redis")]
+pub struct RdFixture {
+    pub db: dbento_testkit::RedisDb,
+    pub dir: tempfile::TempDir,
+    pub ws: Workspace,
+}
+
+#[cfg(feature = "redis")]
+fn rd_name(user: dbento_testkit::RdUser) -> &'static str {
+    match user {
+        dbento_testkit::RdUser::Admin => "admin",
+        dbento_testkit::RdUser::Reader => "ro",
+        dbento_testkit::RdUser::Writer => "writer",
+    }
+}
+
+/// Connections `admin`, `ro` and `writer` on a fresh `redis_db()`.
+#[cfg(feature = "redis")]
+pub async fn rd(extra_toml: &str) -> RdFixture {
+    use dbento_testkit::RdUser::{Admin, Reader, Writer};
+    let db = dbento_testkit::redis_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut toml = "dbento = 1\n".to_owned();
+    for user in [Admin, Reader, Writer] {
+        toml.push_str(&db.connection_toml(rd_name(user), user, extra_toml));
+    }
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    RdFixture { db, dir, ws }
+}
+
+#[cfg(feature = "redis")]
+impl RdFixture {
+    pub fn conn(&self, user: dbento_testkit::RdUser) -> &ConnectionConfig {
+        self.ws.connection(rd_name(user)).unwrap()
+    }
+    pub async fn session(&self, user: dbento_testkit::RdUser, opts: SessionOptions) -> Session {
+        let secret = self.db.password(user).map(Secret::new);
+        connect(&self.ws, self.conn(user), secret, opts)
+            .await
+            .unwrap()
+    }
+    /// A session as an ad-hoc `login`, in a workspace of its own.
+    pub async fn session_for(
+        &self,
+        login: &str,
+        password: &str,
+        opts: SessionOptions,
+    ) -> Result<Session, ConnectError> {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "dbento = 1\n{}",
+            self.db.connection_toml_as("adhoc", login, "")
+        );
+        std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        connect(
+            &ws,
+            ws.connection("adhoc").unwrap(),
+            Some(Secret::new(password)),
+            opts,
+        )
+        .await
+    }
+}
+
+/// One `field=value` of the session's own `CLIENT INFO` line.
+#[cfg(feature = "redis")]
+pub async fn client_field(s: &mut Session, field: &str) -> String {
+    let got = read(s, "CLIENT INFO").await;
+    let Cell::Text(line) = &got.rows[0][0] else {
+        panic!("{:?}", got.rows)
+    };
+    let prefix = format!("{field}=");
+    line.split_whitespace()
+        .find_map(|f| f.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("no {field} in {line}"))
+        .to_owned()
 }
 
 /// The session's server process id as text.

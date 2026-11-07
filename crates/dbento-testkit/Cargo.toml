@@ -21,8 +21,9 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 duckdb = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
 
 [features]
 duckdb = ["dep:duckdb"]
 mongodb = ["dep:mongodb", "dep:bson"]
-redis = []
+redis = ["dep:redis"]
