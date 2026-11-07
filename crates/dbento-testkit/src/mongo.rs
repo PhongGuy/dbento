@@ -485,6 +485,9 @@ async fn container() -> MgDb {
 fn capped(args: Vec<String>) -> ContainerRequest<Mongo> {
     Mongo::default()
         .with_tag(MONGO_TAG)
+        // The image turns glibc's rseq off so TCMalloc takes it for per-CPU caches, which MongoDB
+        // 8.0 refuses on Linux 6.19+ (SERVER-121912); letting glibc keep rseq selects per-thread caches.
+        .with_env_var("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
         .with_cmd(args)
         // Sized, because an unsized tmpfs reports 0 bytes free and index builds then refuse.
         .with_mount(
