@@ -9,7 +9,7 @@ use dbento_testkit::{
     RdUser::{Reader, Writer},
     RedisDb,
 };
-use support::{client_field, failure, rd, read};
+use support::{client_field, code_of, failure, rd, read};
 
 /// Waits until the server holds `n` blocked clients.
 async fn blocked_clients(db: &RedisDb, n: u64) {
@@ -82,4 +82,27 @@ async fn a_select_queued_in_multi_counts_at_exec() {
     read(&mut s, "EXEC").await;
     assert!(s.settings_changed());
     assert_eq!(client_field(&mut s, "db").await, fx.other_db().to_string());
+}
+
+/// How often the server has run `CLIENT INFO`, from its command stats.
+async fn client_info_calls(db: &RedisDb) -> u64 {
+    let stats = db.text(&["INFO", "commandstats"]).await.unwrap();
+    stats
+        .lines()
+        .find_map(|l| l.strip_prefix("cmdstat_client|info:calls="))
+        .map_or(0, |rest| rest.split(',').next().unwrap().parse().unwrap())
+}
+
+#[tokio::test]
+async fn an_exec_without_multi_asks_the_server_nothing_more() {
+    let fx = rd("").await;
+    // Command stats are server-wide, so only a container of our own reads them cleanly.
+    if !fx.db.exclusive() {
+        return;
+    }
+    let mut s = fx.session(Writer, SessionOptions::default()).await;
+    let before = client_info_calls(&fx.db).await;
+    let e = failure(&mut s, "EXEC").await;
+    assert_eq!(code_of(e), "ERR");
+    assert_eq!(client_info_calls(&fx.db).await, before);
 }

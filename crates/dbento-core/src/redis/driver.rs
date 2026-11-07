@@ -140,7 +140,8 @@ impl Shared {
     }
 
     /// Follows `SELECT`, `MULTI`, `EXEC` and `DISCARD` from their replies. A `SELECT` queued in
-    /// a transaction moves the DB only at `EXEC`, so after one the server is asked where it is.
+    /// a transaction answers `QUEUED` and moves the DB only at `EXEC`, so after an `EXEC` that
+    /// ended a `MULTI` the server is asked where it is.
     async fn track(&self, args: &[Vec<u8>], reply: &Value) -> Result<(), Failure> {
         let Some(name) = args.first() else {
             return Ok(());
@@ -154,18 +155,18 @@ impl Shared {
                     .get(1)
                     .and_then(|a| std::str::from_utf8(a).ok())
                     .and_then(|a| a.parse::<u32>().ok());
-                let mut state = self.state();
-                if let Some(index) = index
-                    && !state.in_multi
-                {
-                    state.db = index;
+                if let Some(index) = index {
+                    self.state().db = index;
                     self.settings_changed.store(true, Ordering::Relaxed);
                 }
             }
             b"MULTI" if ok => self.state().in_multi = true,
             b"DISCARD" => self.state().in_multi = false,
             b"EXEC" => {
-                self.state().in_multi = false;
+                let ended_multi = std::mem::replace(&mut self.state().in_multi, false);
+                if !ended_multi {
+                    return Ok(());
+                }
                 let info = self.one(::redis::cmd("CLIENT").arg("INFO")).await?;
                 let db = text_of(&info).and_then(|line| {
                     line.split_whitespace()
