@@ -1692,7 +1692,7 @@ fn ssl_opts(conn: &ConnectionConfig, passphrase: Option<&Secret>) -> Result<SslO
 }
 
 /// The key as PEM under its own label; a key kind rustls adds later is an error naming it.
-fn key_pem(key: &PrivateKeyDer<'_>) -> Result<String, String> {
+pub(crate) fn key_pem(key: &PrivateKeyDer<'_>) -> Result<String, String> {
     let label = match key {
         PrivateKeyDer::Pkcs8(_) => "PRIVATE KEY",
         PrivateKeyDer::Pkcs1(_) => "RSA PRIVATE KEY",

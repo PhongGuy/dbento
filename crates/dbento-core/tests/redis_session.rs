@@ -2,7 +2,7 @@
 #![cfg(feature = "redis")]
 mod support;
 
-use dbento_core::{ConnectError, ExecuteError, Flavor, SessionOptions};
+use dbento_core::{ConnectError, ExecuteError, Flavor, SessionOptions, Workspace, connect};
 use dbento_testkit::{
     BINARY_VALUE,
     RdUser::{Reader, Writer},
@@ -88,4 +88,38 @@ async fn server_errors_carry_their_code_and_refusals_end_only_their_script() {
         read(&mut s, "GET str").await.rows,
         vec![vec![text("hello")]]
     );
+}
+
+#[tokio::test]
+async fn a_user_without_command_cannot_connect() {
+    let fx = rd("").await;
+    let (name, pw) = fx
+        .db
+        .create_user("nocmd", "~* &* -@all +@read +hello +client|setinfo")
+        .await;
+    match fx.session_for(&name, &pw, SessionOptions::default()).await {
+        Err(ConnectError::Open { message }) => assert!(message.contains("+command"), "{message}"),
+        other => panic!("{:?}", other.err()),
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_server_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = "dbento = 1\n[connections.c]\nengine = \"redis\"\nhost = \"127.0.0.1\"\nport = 1\nsecret = \"none\"\n";
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    match connect(
+        &ws,
+        ws.connection("c").unwrap(),
+        None,
+        SessionOptions::default(),
+    )
+    .await
+    {
+        Err(ConnectError::Open { message }) => {
+            assert!(message.contains("127.0.0.1:1"), "{message}")
+        }
+        other => panic!("{:?}", other.err()),
+    }
 }

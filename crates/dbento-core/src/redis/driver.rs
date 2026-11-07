@@ -9,9 +9,12 @@ use std::time::Duration;
 
 use ::redis::aio::MultiplexedConnection;
 use ::redis::{
-    AsyncConnectionConfig, Client, Cmd, ConnectionAddr, ErrorKind, IntoConnectionInfo,
-    ProtocolVersion, RedisConnectionInfo, RedisError, Value,
+    AsyncConnectionConfig, Client, ClientTlsConfig, Cmd, ConnectionAddr, ErrorKind,
+    IntoConnectionInfo, ProtocolVersion, RedisConnectionInfo, RedisError, TlsCertificates, Value,
 };
+use pkcs8::der::pem::{self, LineEnding};
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject as _;
 use tokio::sync::watch;
 
 use super::classify::redis_classification;
@@ -22,9 +25,11 @@ use super::stream::RedisStream;
 use super::table::CommandTable;
 use crate::Secret;
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
+use crate::mysql::key_pem;
+use crate::postgres::{TLS_WAYS_OUT, client_auth, tls_error};
 use crate::session::{
     CancelHandle, Classification, ConnectError, ConnectParams, Driver, ExecuteError, ExtendError,
-    Flavor, Limits, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem, Writes,
+    Flavor, Limits, OnTruncate, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem, Writes,
 };
 use crate::value::ColumnInfo;
 use crate::workspace::{ConnectionConfig, TlsMode};
@@ -178,14 +183,26 @@ impl Driver for RedisSession {
             client.get_multiplexed_async_connection_with_config(&config),
         )
         .await?
-        .map_err(|e| open_error(&target, e))?;
+        .map_err(|e| dial_error(conn, &target, e))?;
 
         // redis-rs discards its own HELLO's reply, so the server is asked again.
-        let hello = handshake(&target, &mut connection, ::redis::cmd("HELLO").arg(3)).await?;
+        let hello = handshake(
+            &target,
+            &mut connection,
+            ::redis::cmd("HELLO").arg(3),
+            "hello",
+        )
+        .await?;
         let server = server_info(&hello).map_err(|reason| ConnectError::Unsupported {
             reason: format!("{target}: {reason}"),
         })?;
-        let reply = handshake(&target, &mut connection, &::redis::cmd("COMMAND")).await?;
+        let reply = handshake(
+            &target,
+            &mut connection,
+            &::redis::cmd("COMMAND"),
+            "command",
+        )
+        .await?;
         let table = CommandTable::from_value(&reply).map_err(|e| ConnectError::Open {
             message: format!("{target}: {e}"),
         })?;
@@ -262,7 +279,7 @@ impl Driver for RedisSession {
 
     async fn execute(
         script: &mut RedisScript,
-        _limits: Limits,
+        limits: Limits,
     ) -> Result<(Vec<ColumnInfo>, RedisStream), ExecuteError> {
         let (statement, classification) =
             script.current.take().ok_or(ExecuteError::SessionClosed)?;
@@ -293,8 +310,17 @@ impl Driver for RedisSession {
             Value::Int(n) if writes => u64::try_from(n).ok(),
             _ => None,
         };
-        let shaped = reply_to_rows(reply, None).map_err(shape_failure)?;
-        Ok(RedisStream::new(shaped, affected))
+        // A parked reply keeps every row for `extend`; otherwise rows past the cap are not shaped.
+        let cap = match limits.on_truncate {
+            OnTruncate::Park => None,
+            OnTruncate::Drain | OnTruncate::Close => limits.max_rows,
+        };
+        let shaped = reply_to_rows(reply, cap).map_err(shape_failure)?;
+        let (columns, stream) = RedisStream::new(shaped, limits, affected);
+        if limits.on_truncate == OnTruncate::Close && stream.truncated() {
+            shared.end("the result was cut short and on_truncate is Close".to_owned());
+        }
+        Ok((columns, stream))
     }
 
     async fn next_event(stream: &mut RedisStream) -> Result<StreamItem, ExecuteError> {
@@ -408,7 +434,7 @@ fn version_of(text: &str) -> Option<(u16, u16, u16)> {
 pub(crate) fn client(
     conn: &ConnectionConfig,
     secret: Option<&Secret>,
-    _passphrase: Option<&Secret>,
+    passphrase: Option<&Secret>,
 ) -> Result<Client, ConnectError> {
     let host = conn.host().unwrap_or("127.0.0.1").to_owned();
     let port = conn.port().unwrap_or(6379);
@@ -442,7 +468,69 @@ pub(crate) fn client(
         .into_connection_info()
         .map_err(invalid)?
         .set_redis_settings(settings);
-    Client::open(info).map_err(invalid)
+    match tls_certificates(conn, passphrase)? {
+        Some(certs) => {
+            Client::build_with_tls(info, certs).map_err(|e| tls_error(conn, e.to_string()))
+        }
+        None => Client::open(info).map_err(invalid),
+    }
+}
+
+/// The CA and client pair under `tls = "verify"`, PEM-encoded as redis-rs takes them; `None`
+/// when neither is set. A `tls_ca` replaces the OS roots, as redis-rs builds an empty store.
+fn tls_certificates(
+    conn: &ConnectionConfig,
+    passphrase: Option<&Secret>,
+) -> Result<Option<TlsCertificates>, ConnectError> {
+    if conn.tls() != Some(TlsMode::Verify) {
+        return Ok(None);
+    }
+    let root_cert = match conn.tls_ca() {
+        Some(path) => {
+            let fail = |e: String| tls_error(conn, format!("{}: {e}", path.display()));
+            let bytes = std::fs::read(path).map_err(|e| fail(e.to_string()))?;
+            let certs = CertificateDer::pem_slice_iter(&bytes)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| fail(e.to_string()))?;
+            if certs.is_empty() {
+                return Err(fail("no certificates".to_owned()));
+            }
+            Some(bytes)
+        }
+        None => None,
+    };
+    // client_auth answers Some only when both paths are set.
+    let client_tls = match (
+        client_auth(conn, passphrase)?,
+        conn.tls_cert(),
+        conn.tls_key(),
+    ) {
+        (Some((chain, key)), Some(cert_path), Some(key_path)) => {
+            let fail = |path: &std::path::Path, e: String| {
+                tls_error(conn, format!("{}: {e}", path.display()))
+            };
+            let mut client_cert = String::new();
+            for cert in &chain {
+                client_cert.push_str(
+                    &pem::encode_string("CERTIFICATE", LineEnding::LF, cert.as_ref())
+                        .map_err(|e| fail(cert_path, e.to_string()))?,
+                );
+            }
+            let client_key = key_pem(&key).map_err(|e| fail(key_path, e))?;
+            Some(ClientTlsConfig {
+                client_cert: client_cert.into_bytes(),
+                client_key: client_key.into_bytes(),
+            })
+        }
+        _ => None,
+    };
+    if root_cert.is_none() && client_tls.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(TlsCertificates {
+        client_tls,
+        root_cert,
+    }))
 }
 
 /// `f`, or a failed connect when it has not finished within `CONNECT_TIMEOUT`.
@@ -457,13 +545,21 @@ async fn within<T>(target: &str, f: impl Future<Output = T>) -> Result<T, Connec
         })
 }
 
-/// One connect-time call; an error reply fails the connect like a transport error.
+/// One connect-time call; an error reply fails the connect like a transport error, and an ACL
+/// refusal names the `+grant` the user lacks.
 async fn handshake(
     target: &str,
     conn: &mut MultiplexedConnection,
     cmd: &Cmd,
+    grant: &str,
 ) -> Result<Value, ConnectError> {
     match within(target, conn.send_packed_command(cmd)).await? {
+        Ok(Value::ServerError(e)) if e.code() == "NOPERM" => Err(ConnectError::Open {
+            message: format!(
+                "{target}: the user may not run {}, which Dbento needs: grant it with +{grant}",
+                grant.to_uppercase()
+            ),
+        }),
         Ok(Value::ServerError(e)) => Err(ConnectError::Open {
             message: format!("{target}: {} {}", e.code(), e.details().unwrap_or_default()),
         }),
@@ -490,6 +586,31 @@ fn open_error(target: &str, e: RedisError) -> ConnectError {
     ConnectError::Open {
         message: format!("{target}: {e}"),
     }
+}
+
+/// A failed dial: a rustls failure under `tls = "verify"` is `Tls` naming both ways out; anything
+/// else is `Open` naming the target.
+fn dial_error(conn: &ConnectionConfig, target: &str, e: RedisError) -> ConnectError {
+    match rustls_cause(&e) {
+        Some(cause) if conn.tls() == Some(TlsMode::Verify) => {
+            tls_error(conn, format!("{target}: {cause}; {TLS_WAYS_OUT}"))
+        }
+        _ => open_error(target, e),
+    }
+}
+
+/// The rustls error behind `e`, stored directly (a config failure) or inside an `io::Error`
+/// (a handshake failure). `source()` alone hides both: it yields the `Arc` that holds them.
+pub(super) fn rustls_cause(e: &RedisError) -> Option<&rustls::Error> {
+    type Stored = std::sync::Arc<dyn std::error::Error + Send + Sync>;
+    let inner: &(dyn std::error::Error + 'static) =
+        &**std::error::Error::source(e)?.downcast_ref::<Stored>()?;
+    inner.downcast_ref::<rustls::Error>().or_else(|| {
+        inner
+            .downcast_ref::<std::io::Error>()?
+            .get_ref()?
+            .downcast_ref::<rustls::Error>()
+    })
 }
 
 #[cfg(test)]

@@ -193,8 +193,8 @@ fn statement_ranges_are_the_redis_lines() {
 
 #[tokio::test]
 async fn a_read_only_redis_connection_dials_its_host() {
-    // `.internal` never resolves publicly, so the connect fails at the network and names its target.
-    let (_d, ws) = open(RD);
+    // RFC 6761 reserves `.invalid` to never resolve, so the connect fails at the network.
+    let (_d, ws) = open(&RD.replace("cache.internal", "cache.invalid"));
     match connect(
         &ws,
         ws.connection("cache").unwrap(),
@@ -204,7 +204,7 @@ async fn a_read_only_redis_connection_dials_its_host() {
     .await
     {
         Err(ConnectError::Open { message, .. }) => {
-            assert!(message.contains("cache.internal:6379"), "{message}")
+            assert!(message.contains("cache.invalid:6379"), "{message}")
         }
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("a Redis session opened"),

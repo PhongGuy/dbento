@@ -1,8 +1,8 @@
 use ::redis::{ConnectionAddr, ProtocolVersion, Value, parse_redis_value};
 
-use super::{client, server_info};
+use super::{client, rustls_cause, server_info};
 use crate::Secret;
-use crate::session::Flavor;
+use crate::session::{ConnectError, Flavor};
 use crate::workspace::Workspace;
 
 fn hello(server: &str, version: &str) -> Value {
@@ -59,4 +59,30 @@ fn defaults_are_localhost_6379_db0_and_the_default_user() {
         (info.redis_settings().db(), info.redis_settings().username()),
         (0, None)
     );
+}
+
+#[test]
+fn a_missing_ca_file_is_a_tls_error() {
+    let (_d, ws) = workspace("tls = \"verify\"\ntls_ca = \"nope.pem\"\nsecret = \"none\"");
+    assert!(matches!(
+        client(ws.connection("c").unwrap(), None, None),
+        Err(ConnectError::Tls { .. })
+    ));
+}
+
+#[test]
+fn a_rustls_error_is_found_stored_directly_or_inside_an_io_error() {
+    let config = ::redis::RedisError::from(rustls::Error::General("config".into()));
+    assert!(matches!(rustls_cause(&config), Some(rustls::Error::General(m)) if m == "config"));
+    let io = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        rustls::Error::General("handshake".into()),
+    );
+    let handshake = ::redis::RedisError::from(io);
+    assert!(
+        matches!(rustls_cause(&handshake), Some(rustls::Error::General(m)) if m == "handshake")
+    );
+    // A host that is no TLS server name is neither shape: it is `Open`, not `Tls`.
+    let name = rustls::pki_types::ServerName::try_from("bad name").unwrap_err();
+    assert!(rustls_cause(&::redis::RedisError::from(name)).is_none());
 }
