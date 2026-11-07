@@ -19,12 +19,13 @@ use crate::browse::{self, BrowseEvent, BrowseState, EditBlock};
 use crate::catalog::catalog_options;
 use crate::grid::{ColumnView, fit_width_at};
 use crate::history::{HistoryLog, history_outcome};
+use crate::key_view::KeyView;
 use crate::link::LinkState;
 use crate::parks;
 use crate::results::ResultStore;
 use crate::runner::{
-    self, AppLimits, Command, Event, Runner, RunnerSpec, RunnerTuning, SourceColumns, StatementEnd,
-    StopReason,
+    self, AppLimits, Command, Event, KeyValueAnswer, Runner, RunnerSpec, RunnerTuning,
+    SourceColumns, StatementEnd, StopReason,
 };
 use crate::settings;
 use crate::staged::{self, EditHistory, GridRow, StagedEdits};
@@ -388,6 +389,10 @@ pub struct TabModel {
     stale: bool,
     /// The next run is the fresh load a column change asked for, so it says so.
     announce_fresh: bool,
+    /// The Redis key this tab shows the value of, read page by page into result 0.
+    key_view: Option<KeyView>,
+    /// The value page in flight; dropping it drops its answer.
+    key_task: Option<Task<()>>,
 }
 
 /// The conflicting rows as a reload read them, and which fresh row each loaded row is now.
@@ -526,6 +531,8 @@ impl TabModel {
             column_views: HashMap::new(),
             stale: false,
             announce_fresh: false,
+            key_view: None,
+            key_task: None,
         }
     }
 
@@ -1209,6 +1216,95 @@ impl TabModel {
             });
         }
         Ok(answer)
+    }
+
+    /// Shows the value of Redis key `key` in DB `db` as result 0, reading its first page now
+    /// and later pages on `load_more_value`.
+    pub fn open_key(&mut self, db: u32, key: Vec<u8>, cx: &mut Context<Self>) {
+        if self.closed {
+            return;
+        }
+        self.key_task = None;
+        self.results.clear();
+        self.key_view = Some(KeyView::new(db, key));
+        self.read_value(cx);
+        cx.notify();
+    }
+
+    /// Asks for the value's next page; false when the value is read to its end, a page is
+    /// already in flight, or a run holds the session.
+    pub fn load_more_value(&mut self, cx: &mut Context<Self>) -> bool {
+        let more = self.key_view.as_ref().is_some_and(KeyView::has_more);
+        more && self.read_value(cx)
+    }
+
+    /// The key whose value this tab shows, if any.
+    pub fn key_view(&self) -> Option<&KeyView> {
+        self.key_view.as_ref()
+    }
+
+    // Sends the key view's next read to the runner and lands its answer in result 0.
+    fn read_value(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.closed || self.running {
+            return false;
+        }
+        let Some(read) = self.key_view.as_ref().and_then(KeyView::read) else {
+            return false;
+        };
+        if self.runner.is_none() {
+            self.start_runner(cx);
+        }
+        let Some(r) = &self.runner else {
+            return false;
+        };
+        let (reply, answer) = async_channel::bounded(1);
+        r.send(Command::ReadKey { read, reply });
+        if let Some(view) = &mut self.key_view {
+            view.begin();
+        }
+        self.key_task = Some(cx.spawn(async move |this, cx| {
+            // The runner drops a read that meets a run, and a retired runner drops it too.
+            let answer =
+                (answer.recv().await).unwrap_or_else(|_| Err("the session stopped".into()));
+            let _ = this.update(cx, |m, cx| {
+                m.key_task = None;
+                m.value_landed(answer);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+        true
+    }
+
+    // A first page, or one whose kind differs from the last because the read restarted on the
+    // key's new kind, starts result 0 afresh; any other page appends to it.
+    fn value_landed(&mut self, answer: KeyValueAnswer) {
+        let Some(view) = &mut self.key_view else {
+            return;
+        };
+        let page = match answer {
+            Ok(page) => page,
+            Err(e) => return view.fail(e),
+        };
+        let restart = view.kind() != Some(&page.kind);
+        let (columns, batch) = view.apply(page);
+        let sql = view.title();
+        if restart {
+            self.results.clear();
+        }
+        if self.results.is_empty() {
+            self.results.push(StatementResult {
+                stmt: 0,
+                sql,
+                engine: Some(Engine::Redis),
+                epoch: self.epoch,
+                store: ResultStore::new(columns.into()),
+                elapsed: None,
+                source: None,
+                plan: None,
+            });
+        }
+        self.results[0].store.push(batch);
     }
 
     /// Starts the runner if needed and asks it for `rel`'s target; the tab browses once it lands.

@@ -7,14 +7,14 @@ use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use dbento_core::{
-    CellRef, ColumnMeta, Definition, DefinitionError, ExecuteError, IntrospectError, ObjectRef,
-    RelationList, RelationObjects, RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions,
-    quote_ident,
+    CellRef, ColumnMeta, Definition, DefinitionError, ExecuteError, IntrospectError,
+    KeyBrowseError, KeyCursor, KeyPage, KeyScan, KeyTtl, ObjectRef, RelationList, RelationObjects,
+    RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions, quote_ident,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
-use crate::keys::{KeyBatch, KeyFilter, KeyToken};
+use crate::keys::{KEY_PAGE, KeyBatch, KeyFilter, KeyItem, KeyToken, kind_of};
 use crate::runner::{self, RunnerSpec};
 
 /// The longest a catalog query may run; a shorter connection timeout wins.
@@ -219,11 +219,12 @@ async fn serve(
     }
 }
 
-// Listings fail as IntrospectError and definitions as DefinitionError; each says when the
-// session behind it is gone.
+// Listings fail as IntrospectError, definitions as DefinitionError and key pages as
+// KeyBrowseError; each says when the session behind it is gone.
 enum Asked {
     Listing(Result<CatalogData, IntrospectError>),
     Definition(Result<Definition, DefinitionError>),
+    Keys(Result<KeyPage, KeyBrowseError>),
 }
 
 // Connects on demand, so a failed connect is retried by the next load. A closed session,
@@ -248,6 +249,9 @@ async fn load(
     let work = async {
         match query {
             CatalogQuery::Definition { object } => Asked::Definition(s.definition(object).await),
+            CatalogQuery::Keys { db, filter, after } => {
+                Asked::Keys(s.scan_keys(&key_scan(*db, filter, after.as_ref())).await)
+            }
             q => Asked::Listing(ask(s, q).await),
         }
     };
@@ -269,6 +273,10 @@ async fn load(
             | Ok(Asked::Definition(Err(DefinitionError::Execute(
                 ExecuteError::SessionClosed | ExecuteError::SessionEnded { .. }
             ))))
+            // A Redis browse that timed out has already ended its session.
+            | Ok(Asked::Keys(Err(
+                KeyBrowseError::SessionEnded { .. } | KeyBrowseError::Timeout
+            )))
     );
     if lost && let Some((s, _)) = session.take() {
         let _ = s.close().await;
@@ -276,8 +284,33 @@ async fn load(
     match answer {
         Ok(Asked::Listing(r)) => r.map_err(|e| e.to_string()),
         Ok(Asked::Definition(r)) => r.map(CatalogData::Definition).map_err(definition_message),
+        Ok(Asked::Keys(r)) => r.map(key_batch).map_err(|e| e.to_string()),
         Err(_) => Err("the catalog session stopped".into()),
     }
+}
+
+// One page of `filter`'s keys in `db`, resuming after `after` or from the start.
+fn key_scan(db: u32, filter: &KeyFilter, after: Option<&KeyToken>) -> KeyScan {
+    let mut scan = KeyScan::new(db);
+    scan.pattern = filter.pattern.clone();
+    scan.kind = filter.kind.as_deref().map(kind_of);
+    scan.cursor = after.map_or_else(KeyCursor::start, |t| t.cursor().clone());
+    scan.want = KEY_PAGE;
+    scan
+}
+
+// A key that vanished between the scan and its TYPE read is left out of the tree.
+fn key_batch(page: KeyPage) -> CatalogData {
+    let items = (page.keys.into_iter())
+        .filter(|k| k.ttl != KeyTtl::Gone)
+        .map(|k| KeyItem {
+            name: k.name,
+            kind: k.kind,
+            ttl: k.ttl,
+        })
+        .collect();
+    let next = page.next.map(KeyToken::new);
+    CatalogData::Keys(KeyBatch { items, next })
 }
 
 // A missing object points at the explorer's refresh; any other error reads as itself.
@@ -316,15 +349,10 @@ async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, Intro
             }
             r => CatalogData::SchemaObjects(r?),
         },
-        CatalogQuery::Keys { .. } => {
-            return Err(IntrospectError::Unsupported {
-                what: "key listings",
-            });
-        }
-        // `load` sends definitions down their own arm, never here.
-        CatalogQuery::Definition { .. } => {
+        // `load` sends definitions and key pages down their own arms, never here.
+        CatalogQuery::Definition { .. } | CatalogQuery::Keys { .. } => {
             return Err(IntrospectError::Unexpected {
-                message: "a definition is no catalog listing".into(),
+                message: "not a catalog listing".into(),
             });
         }
     })

@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use async_channel::{Receiver, Sender, TryRecvError};
 use dbento_core::{
     CancelHandle, ColumnInfo, ConnectionConfig, EditTarget, Engine, ExecuteError, ExplainMode,
-    ExplainOutput, ExplainRequest, ForeignKey, Limits, OnTruncate, Outcome, ReadOnlyEnforcement,
-    RelationRef, ResultBatch, ResultStream, Secret, SecretError, SecretStore, Session,
-    SessionOptions, TruncatedBy, Unguarded, Workspace, Writes, connect, resolve_key_passphrase,
-    resolve_secret, secret_hint,
+    ExplainOutput, ExplainRequest, ForeignKey, KeyBrowseError, KeyRead, KeyValuePage, Limits,
+    OnTruncate, Outcome, ReadOnlyEnforcement, RelationRef, ResultBatch, ResultStream, Secret,
+    SecretError, SecretStore, Session, SessionOptions, TruncatedBy, Unguarded, ValueCursor,
+    Workspace, Writes, connect, resolve_key_passphrase, resolve_secret, secret_hint,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
@@ -23,6 +23,9 @@ use crate::parks::{self, Parked};
 
 /// The answer to `Command::SourceColumns`: per column, the relation's column it reads.
 pub type SourceColumns = Result<Vec<Option<String>>, String>;
+
+/// The answer to `Command::ReadKey`: one page of the key's value, or why there is none.
+pub type KeyValueAnswer = Result<KeyValuePage, String>;
 
 /// What the view asks of its runner.
 #[derive(Debug)]
@@ -63,6 +66,12 @@ pub enum Command {
         rel: RelationRef,
         columns: Arc<[ColumnInfo]>,
         reply: Sender<SourceColumns>,
+    },
+    /// Read one page of a Redis key's value and send it on `reply`, connecting first. Sent
+    /// only while no run is active; a run in progress drops it.
+    ReadKey {
+        read: KeyRead,
+        reply: Sender<KeyValueAnswer>,
     },
 }
 
@@ -404,6 +413,16 @@ async fn run(
             next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
+        if let Command::ReadKey { read, reply } = command {
+            ensure_open(&spec, &mut session, &events).await;
+            let result = match session.as_mut() {
+                Some(s) => read_value(s, read).await.map_err(|e| e.to_string()),
+                None => Err("not connected".to_owned()),
+            };
+            let _ = reply.try_send(result);
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
+            continue;
+        }
         let (run_id, work) = match command {
             Command::Run {
                 run_id,
@@ -479,6 +498,19 @@ async fn run(
         && let Err(e) = s.close().await
     {
         log::warn!("closing the session: {e}");
+    }
+}
+
+/// One page of `read`; a key whose kind changed since the read began answers WRONGTYPE, and
+/// the read starts once more from the top on the key's new kind before the error stands.
+async fn read_value(s: &mut Session, read: KeyRead) -> Result<KeyValuePage, KeyBrowseError> {
+    match s.read_key(&read).await {
+        Err(KeyBrowseError::Database { code, .. }) if code == "WRONGTYPE" => {
+            let mut again = read;
+            again.from = ValueCursor::start();
+            s.read_key(&again).await
+        }
+        r => r,
     }
 }
 

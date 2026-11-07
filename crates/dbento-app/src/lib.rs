@@ -28,6 +28,7 @@ pub mod history;
 pub mod history_panel;
 pub mod identity;
 pub mod inspector;
+pub mod key_view;
 pub mod keymap;
 pub mod keys;
 pub mod labels;
