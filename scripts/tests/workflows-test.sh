@@ -64,8 +64,15 @@ test_ci_installs_the_cross_and_notices_tools() {
 }
 
 test_ci_gate_timeout_and_pins() {
-  [[ $(job_timeouts "$CI") == "gate=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
+  [[ $(job_timeouts "$CI") == "gate=60 macos-clippy=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
   pinned_uses_only "$CI"
+}
+
+# Tests need containers, so macOS runs clippy alone.
+test_ci_macos_runs_locked_clippy() {
+  grep -qxF '    runs-on: macos-latest' "$CI" || fail "no macos-latest job"
+  grep -qxF '        run: cargo clippy --workspace --all-targets --all-features --locked -- -Dwarnings' "$CI" \
+    || fail "macOS clippy line"
 }
 
 test_release_jobs_have_their_timeouts() {
