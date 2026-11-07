@@ -1,7 +1,7 @@
 //! The connection form descriptor agrees with the dbento.toml parser for every engine.
 use dbento_core::{Engine, FieldKind, FormField, Workspace, connection_form};
 
-const ENGINES: [Engine; 7] = [
+const ENGINES: [Engine; 8] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -9,6 +9,7 @@ const ENGINES: [Engine; 7] = [
     Engine::Duckdb,
     Engine::Mongodb,
     Engine::Surrealdb,
+    Engine::Redis,
 ];
 /// Engine-specific keys the parser knows; the TLS kind's file keys and `settings` are not
 /// form fields of their own.
@@ -42,6 +43,7 @@ fn line(key: &str, kind: Option<FieldKind>) -> String {
         ("tls", _) => "\"off\"".to_owned(),
         ("uri", _) => "\"mongodb://localhost/x\"".to_owned(),
         ("auth_level", _) => "\"root\"".to_owned(),
+        ("database", _) => "\"0\"".to_owned(),
         _ => "\"x.db\"".to_owned(),
     };
     format!("{key} = {value}")
@@ -115,6 +117,7 @@ fn a_port_left_out_is_the_descriptor_default() {
         (Engine::Mysql, 3306),
         (Engine::Mssql, 1433),
         (Engine::Surrealdb, 8000),
+        (Engine::Redis, 6379),
     ] {
         let fields = fields(engine);
         let default = fields.iter().find_map(|f| match f.kind {
@@ -270,4 +273,32 @@ fn the_surrealdb_descriptor_pins_its_fields_sections_and_help() {
     let help = |key: &str| sr.iter().find(|f| f.key == key).and_then(|f| f.help);
     assert!(help("auth_level").is_some_and(|h| h.contains("root, namespace or database")));
     assert!(help("user").is_some_and(|h| h.contains("anonymous")));
+}
+
+#[test]
+fn the_redis_descriptor_pins_its_fields_sections_and_help() {
+    let rd = fields(Engine::Redis);
+    let keys: Vec<(&str, &str, bool, FieldKind)> = rd
+        .iter()
+        .map(|f| (f.key, f.label, f.required, f.kind))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("host", "Host", false, FieldKind::Text),
+            ("port", "Port", false, FieldKind::Port { default: 6379 }),
+            ("database", "DB index", false, FieldKind::Text),
+            ("user", "User", false, FieldKind::Text),
+            ("secret", "Password", false, FieldKind::Secret),
+            ("tls", "TLS", false, FieldKind::Tls),
+        ]
+    );
+    let form = connection_form(Engine::Redis);
+    let titles: Vec<&str> = form.sections.iter().map(|s| s.title).collect();
+    assert_eq!(titles, ["Connection", "Authentication", "Options"]);
+    let help = form.read_only_help.unwrap();
+    let pinned = help.contains("ACL SETUSER dbento_ro") && help.contains("+multi +discard");
+    assert!(pinned && !help.contains("@connection"), "{help}");
+    let host = rd.iter().find(|f| f.key == "host").unwrap();
+    assert_eq!(host.placeholder, "127.0.0.1");
 }

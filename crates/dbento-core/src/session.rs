@@ -725,6 +725,11 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
              functions and write files; a root OWNER or anonymous login can also run ALTER \
              SYSTEM. The query text cannot reveal these.",
         ),
+        Engine::Redis => Some(
+            "Redis has no read-only session: the ACL check runs once at connect, so a later ACL \
+             SETUSER, from this session or another, can widen the user mid-session. Dbento's own \
+             refusals follow the command table it read at connect.",
+        ),
         _ => None,
     }
 }

@@ -1,7 +1,10 @@
 //! The Redis engine as the workspace, form and dialect layers see it, before any server.
 use dbento_core::{
-    ConnectError, ConnectionSpec, Edit, Engine, OpenError, SecretSource, SessionOptions, TlsMode,
-    Workspace, connect, default_schema, plan_edit, statement_count, statement_ranges,
+    ConnectError, ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions,
+    OpenError, QueryLanguage, SecretSource, SessionOptions, TlsMode, Workspace, connect,
+    default_schema, explain_request, explain_text, format_sql, line_comment_starts, plan_edit,
+    quote_ident, quote_literal, read_only_residual, single_source, statement_count,
+    statement_ranges,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -205,4 +208,35 @@ async fn a_redis_connection_parses_but_does_not_connect_yet() {
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("a Redis session opened"),
     }
+}
+
+#[test]
+fn capabilities_and_the_sql_helpers_fit_a_command_language() {
+    let r = Engine::Redis.capabilities();
+    assert!(r.schemas && r.password && r.tls && r.key_browser);
+    assert!(!r.server_cancel && !r.file && !r.edit_rows && !r.explain && !r.table_definition);
+    assert_eq!(r.language, QueryLanguage::RedisCommands);
+    let q = "HSET \"a b\" f 'it''s'";
+    assert_eq!(
+        (
+            quote_ident(Engine::Redis, "a b"),
+            quote_literal(Engine::Redis, "it's")
+        ),
+        ("a b".to_owned(), "it's".to_owned())
+    );
+    assert_eq!(format_sql(Engine::Redis, q, &FormatOptions::default()), q);
+    assert_eq!(line_comment_starts(Engine::Redis, q), None);
+    assert_eq!(single_source(Engine::Redis, q, Some("db0")), None);
+    let unsupported = Some(ExplainError::UnsupportedEngine);
+    assert_eq!(
+        explain_request(Engine::Redis, q, ExplainMode::Plan).err(),
+        unsupported
+    );
+    assert_eq!(explain_text(Engine::Redis, q).err(), unsupported);
+}
+
+#[test]
+fn the_residual_names_the_acl_at_connect() {
+    let r = read_only_residual(Engine::Redis).unwrap();
+    assert!(r.contains("ACL SETUSER") && r.contains("connect"), "{r}");
 }

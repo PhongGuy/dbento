@@ -291,7 +291,7 @@ const DUCKDB_EXTRA_KEYWORDS: &[&str] = &[
 /// so it reads the same whatever `standard_conforming_strings` says. On MySQL a backslash
 /// switches to a hex literal, which reads the same whatever `NO_BACKSLASH_ESCAPES` says.
 /// SQL Server takes `N'..'`, so non-ASCII text survives, and a backslash is plain text.
-/// MongoDB has no SQL, so its text comes back unchanged. SurrealDB takes `'..'` with
+/// MongoDB and Redis have no SQL, so their text comes back unchanged. SurrealDB takes `'..'` with
 /// backslash escapes.
 pub fn quote_literal(engine: Engine, text: &str) -> String {
     if engine == Engine::Mssql {
@@ -301,7 +301,7 @@ pub fn quote_literal(engine: Engine, text: &str) -> String {
         let hex: String = text.bytes().map(|b| format!("{b:02x}")).collect();
         return format!("CONVERT(X'{hex}' USING utf8mb4)");
     }
-    if engine == Engine::Mongodb {
+    if matches!(engine, Engine::Mongodb | Engine::Redis) {
         return text.to_owned();
     }
     if engine == Engine::Surrealdb {
