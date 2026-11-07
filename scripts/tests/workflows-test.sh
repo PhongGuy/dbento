@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CI=$ROOT/.github/workflows/ci.yml
 RELEASE=$ROOT/.github/workflows/release.yml
+ZIZMOR=$ROOT/.github/workflows/zizmor.yml
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 
@@ -139,6 +140,18 @@ test_release_sums_wait_for_signing() {
   grep -qxF '    needs: [guard, build, sign]' <<<"$checksums" || fail "checksums does not wait for sign"
   grep -qF "needs.sign.result == 'success' || needs.sign.result == 'skipped'" <<<"$checksums" \
     || fail "checksums does not run after a skipped sign or stop after a failed one"
+}
+
+# zizmor audits every workflow, at a pinned version, with a read-only token and no credentials kept.
+test_zizmor_audits_the_workflows() {
+  [[ -f $ZIZMOR ]] || { fail "no zizmor.yml"; return 0; }
+  pinned_uses_only "$ZIZMOR"
+  grep -qxF '  contents: read' "$ZIZMOR" || fail "zizmor.yml is not contents: read"
+  grep -qxF '          persist-credentials: false' "$ZIZMOR" || fail "zizmor.yml keeps checkout credentials"
+  grep -qE '^        run: uvx zizmor@[0-9]+\.[0-9]+\.[0-9]+ ' "$ZIZMOR" || fail "zizmor version not pinned"
+  grep -qE 'run: uvx zizmor@.* \.github/workflows$' "$ZIZMOR" || fail "zizmor does not audit .github/workflows"
+  grep -qxF '          enable-cache: false' "$ZIZMOR" || fail "setup-uv caches"
+  [[ $(job_timeouts "$ZIZMOR") == "zizmor=10 " ]] || fail "zizmor timeouts: $(job_timeouts "$ZIZMOR")"
 }
 
 # The stable copies must exist before the sums run, so SHA256SUMS covers them too.
