@@ -29,6 +29,7 @@ These builds are not code-signed yet.
 
 - **macOS:** drag Dbento to Applications, then run `xattr -dr com.apple.quarantine /Applications/Dbento.app` once before the first launch.
 - **Windows:** SmartScreen warns about an unknown publisher. Choose "More info", then "Run anyway".
+- **Any platform:** check that a download was built by this repository's release workflow with `gh attestation verify <file> --repo PhongGuy/dbento`.
 
 ## Updates
 
