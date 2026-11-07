@@ -7,6 +7,8 @@ pub(crate) mod classify;
 pub(crate) mod driver;
 pub(crate) mod lex;
 #[cfg(feature = "redis")]
+pub(crate) mod probe;
+#[cfg(feature = "redis")]
 pub(crate) mod shape;
 #[cfg(feature = "redis")]
 pub(crate) mod stream;

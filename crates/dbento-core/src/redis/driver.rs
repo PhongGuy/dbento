@@ -2,7 +2,7 @@
 //! the moment the transport fails, ending it. Every statement is one raw command whose reply,
 //! errors included, comes back as a value.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,6 +16,7 @@ use tokio::sync::watch;
 
 use super::classify::redis_classification;
 use super::lex::{RedisStatement, SyntaxError, parse_script};
+use super::probe::{gate, probe};
 use super::shape::{ShapeError, reply_to_rows};
 use super::stream::RedisStream;
 use super::table::CommandTable;
@@ -23,7 +24,7 @@ use crate::Secret;
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::session::{
     CancelHandle, Classification, ConnectError, ConnectParams, Driver, ExecuteError, ExtendError,
-    Flavor, Limits, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem,
+    Flavor, Limits, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem, Writes,
 };
 use crate::value::ColumnInfo;
 use crate::workspace::{ConnectionConfig, TlsMode};
@@ -42,6 +43,8 @@ pub(crate) struct Shared {
     conn: Mutex<Option<MultiplexedConnection>>,
     pub(super) table: CommandTable,
     pub(super) enforcement: Option<ReadOnlyEnforcement>,
+    /// Entry names the read-only probe could not reach; see `Probe::unprobeable`.
+    pub(super) unprobeable: BTreeSet<String>,
     /// Why the session ended, once it has.
     ended: watch::Sender<Option<String>>,
     pub(super) settings_changed: AtomicBool,
@@ -162,11 +165,6 @@ impl Driver for RedisSession {
     type Stream = RedisStream;
 
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
-        if params.read_only {
-            return Err(ConnectError::Unsupported {
-                reason: "read-only Redis sessions are not available in this version yet".to_owned(),
-            });
-        }
         let conn = params.conn;
         let target = conn.display_target();
         let client = client(conn, params.secret, params.key_passphrase)?;
@@ -191,11 +189,26 @@ impl Driver for RedisSession {
         let table = CommandTable::from_value(&reply).map_err(|e| ConnectError::Open {
             message: format!("{target}: {e}"),
         })?;
+        // Every read-only connect asks the server's ACL afresh; a writable session never probes.
+        let (enforcement, unprobeable) = if params.read_only {
+            let found = within(&target, probe(&mut connection, &table))
+                .await?
+                .map_err(|e| match e {
+                    ConnectError::Open { message } => ConnectError::Open {
+                        message: format!("{target}: {message}"),
+                    },
+                    other => other,
+                })?;
+            (Some(found.level), found.unprobeable)
+        } else {
+            (None, BTreeSet::new())
+        };
         Ok(RedisSession {
             shared: Arc::new(Shared {
                 conn: Mutex::new(Some(connection)),
                 table,
-                enforcement: None,
+                enforcement,
+                unprobeable,
                 ended: watch::Sender::new(None),
                 settings_changed: AtomicBool::new(false),
             }),
@@ -251,18 +264,31 @@ impl Driver for RedisSession {
         script: &mut RedisScript,
         _limits: Limits,
     ) -> Result<(Vec<ColumnInfo>, RedisStream), ExecuteError> {
-        let (statement, _) = script.current.take().ok_or(ExecuteError::SessionClosed)?;
+        let (statement, classification) =
+            script.current.take().ok_or(ExecuteError::SessionClosed)?;
         let shared = &script.shared;
+        let entry = shared.table.entry(&statement.args);
+        let unprobeable = entry.is_some_and(|e| shared.unprobeable.contains(&e.name));
+        if let Some(refusal) = gate(&classification, unprobeable, shared.enforcement) {
+            return Err(refusal);
+        }
         let mut cmd = Cmd::new();
         for word in &statement.args {
             cmd.arg(word.as_slice());
         }
         let reply = shared.one(&cmd).await?;
+        // The ACL fencing a command that may write is the read-only session working as meant.
+        if let Value::ServerError(e) = &reply
+            && e.code() == "NOPERM"
+            && shared.enforcement.is_some()
+            && matches!(classification.writes, Writes::Yes | Writes::Unknown)
+        {
+            return Err(ExecuteError::ReadOnlyViolation {
+                message: e.details().unwrap_or(e.code()).to_owned(),
+            });
+        }
         // A write's integer is also its count, so `DEL` reads as rows affected beside its row.
-        let writes = shared
-            .table
-            .entry(&statement.args)
-            .is_some_and(|e| e.has_flag("write"));
+        let writes = entry.is_some_and(|e| e.has_flag("write"));
         let affected = match reply {
             Value::Int(n) if writes => u64::try_from(n).ok(),
             _ => None,

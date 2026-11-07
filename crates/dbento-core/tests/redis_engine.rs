@@ -192,7 +192,8 @@ fn statement_ranges_are_the_redis_lines() {
 }
 
 #[tokio::test]
-async fn a_redis_connection_parses_but_does_not_connect_yet() {
+async fn a_read_only_redis_connection_dials_its_host() {
+    // `.internal` never resolves publicly, so the connect fails at the network and names its target.
     let (_d, ws) = open(RD);
     match connect(
         &ws,
@@ -202,8 +203,8 @@ async fn a_redis_connection_parses_but_does_not_connect_yet() {
     )
     .await
     {
-        Err(ConnectError::Unsupported { reason, .. }) => {
-            assert!(reason.contains("Redis"), "{reason}")
+        Err(ConnectError::Open { message, .. }) => {
+            assert!(message.contains("cache.internal:6379"), "{message}")
         }
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("a Redis session opened"),

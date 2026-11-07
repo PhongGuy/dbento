@@ -509,7 +509,7 @@ impl MgFixture {
 }
 
 /// Options that force a read-only session.
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "mongodb", feature = "redis"))]
 pub fn forced() -> SessionOptions {
     let mut o = SessionOptions::default();
     o.force_read_only = true;
