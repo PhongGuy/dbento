@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CI=$ROOT/.github/workflows/ci.yml
 RELEASE=$ROOT/.github/workflows/release.yml
+WEEKLY=$ROOT/.github/workflows/weekly.yml
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 
@@ -73,6 +74,20 @@ test_ci_macos_runs_locked_clippy() {
   grep -qxF '    runs-on: macos-latest' "$CI" || fail "no macos-latest job"
   grep -qxF '        run: cargo clippy --workspace --all-targets --all-features --locked -- -Dwarnings' "$CI" \
     || fail "macOS clippy line"
+}
+
+# Beta clippy plus a check after cargo update, unlocked on purpose, read-only and pinned.
+test_weekly_checks_beta_and_updated_deps() {
+  [[ -f $WEEKLY ]] || { fail "no weekly.yml"; return 0; }
+  [[ $(job_timeouts "$WEEKLY") == "beta-clippy=60 updated-deps=60 " ]] || fail "weekly timeouts: $(job_timeouts "$WEEKLY")"
+  pinned_uses_only "$WEEKLY"
+  grep -qxE '  schedule:' "$WEEKLY" && grep -qxE '  workflow_dispatch:' "$WEEKLY" || fail "weekly triggers"
+  grep -qxF '  contents: read' "$WEEKLY" || fail "weekly is not contents: read"
+  grep -qxF '          toolchain: beta' "$WEEKLY" || fail "no beta toolchain"
+  grep -qxF '        run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings' "$WEEKLY" || fail "beta clippy line"
+  grep -qxF '        run: cargo update' "$WEEKLY" || fail "no cargo update"
+  grep -qxF '        run: cargo check --workspace --all-targets --all-features' "$WEEKLY" || fail "updated check line"
+  grep -q 'libclang-dev' "$WEEKLY" || fail "weekly LINUX_BUILD_DEPS lacks libclang-dev"
 }
 
 test_release_jobs_have_their_timeouts() {
