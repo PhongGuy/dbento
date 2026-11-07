@@ -4,12 +4,12 @@ mod support;
 
 use std::time::Duration;
 
-use dbento_core::{ExecuteError, SessionOptions};
+use dbento_core::{ExecuteError, IntrospectError, KeyBrowseError, KeyScan, SessionOptions};
 use dbento_testkit::{
     RdUser::{Reader, Writer},
     RedisDb,
 };
-use support::{client_field, code_of, failure, rd, read};
+use support::{Cell, client_field, code_of, failure, rd, read};
 
 /// Waits until the server holds `n` blocked clients.
 async fn blocked_clients(db: &RedisDb, n: u64) {
@@ -105,4 +105,38 @@ async fn an_exec_without_multi_asks_the_server_nothing_more() {
     let e = failure(&mut s, "EXEC").await;
     assert_eq!(code_of(e), "ERR");
     assert_eq!(client_info_calls(&fx.db).await, before);
+}
+
+#[tokio::test]
+async fn an_unreadable_exec_leaves_the_db_unknown_until_a_select() {
+    let fx = rd("").await;
+    let (login, pw) = fx
+        .db
+        .create_user("noinfo", "~* &* +@all -client|info")
+        .await;
+    let mut s = fx
+        .session_for(&login, &pw, SessionOptions::default())
+        .await
+        .unwrap();
+    let other = format!("SELECT {}", fx.other_db());
+    for line in ["MULTI", other.as_str(), "EXEC"] {
+        read(&mut s, line).await;
+    }
+    // The bracket would restore a DB the session may have left, so both refuse instead.
+    let e = s.scan_keys(&KeyScan::new(fx.db.index())).await.unwrap_err();
+    assert!(
+        matches!(e, KeyBrowseError::Unsupported { ref reason } if reason.contains("SELECT")),
+        "{e:?}"
+    );
+    let e = s.schemas().await.unwrap_err();
+    assert!(
+        matches!(e, IntrospectError::Execute(ExecuteError::Unsupported { ref reason }) if reason.contains("SELECT")),
+        "{e:?}"
+    );
+    read(&mut s, &other).await;
+    s.scan_keys(&KeyScan::new(fx.db.index())).await.unwrap();
+    assert!(!s.schemas().await.unwrap().is_empty());
+    // Still on the other DB, which holds none of the seed.
+    let size = read(&mut s, "DBSIZE").await;
+    assert_eq!(size.rows, vec![vec![Cell::Text("0".to_owned())]]);
 }

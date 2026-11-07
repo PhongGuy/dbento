@@ -46,7 +46,8 @@ mod server {
     use super::{ArgDoc, CommandDoc};
     use crate::introspect::{IntrospectError, SchemaInfo};
     use crate::redis::browse::{KeyBrowseError, server_error};
-    use crate::redis::driver::{RedisSession, Shared, text_of};
+    use crate::redis::driver::{IN_MULTI, RedisSession, Shared, Unbracketable, text_of};
+    use crate::session::ExecuteError;
 
     impl RedisSession {
         /// The server's `COMMAND DOCS`, sorted by name; refused inside `MULTI`.
@@ -62,9 +63,19 @@ mod server {
         /// Every DB index with its key count: the count of DBs alone, then one pipeline of
         /// `SELECT i`, `DBSIZE` for each and a `SELECT` back to the session's DB.
         pub(in crate::redis) async fn schemas(&self) -> Result<Vec<SchemaInfo>, IntrospectError> {
-            let back = self.outside_multi().ok_or(IntrospectError::Unsupported {
-                what: "the DB list inside MULTI",
-            })?;
+            let back = match self.bracket_db() {
+                Ok(db) => db,
+                Err(Unbracketable::InMulti) => {
+                    return Err(IntrospectError::Unsupported {
+                        what: "the DB list inside MULTI",
+                    });
+                }
+                Err(unknown) => {
+                    return Err(IntrospectError::Execute(ExecuteError::Unsupported {
+                        reason: unknown.reason().to_owned(),
+                    }));
+                }
+            };
             let reply = self
                 .one(::redis::cmd("CONFIG").arg("GET").arg("databases"))
                 .await?;
@@ -75,6 +86,25 @@ mod server {
             }
             pipe.cmd("SELECT").arg(back);
             let replies = self.many(&pipe).await?;
+            // A failed SELECT back leaves the session on another DB, so later brackets refuse.
+            match replies.last() {
+                Some(Value::ServerError(e)) => {
+                    self.forget_db();
+                    let code = e.code().to_owned();
+                    let message = e.details().unwrap_or(&code).to_owned();
+                    return Err(IntrospectError::Execute(ExecuteError::database(
+                        code, message,
+                    )));
+                }
+                None => {
+                    self.forget_db();
+                    return Err(IntrospectError::Execute(ExecuteError::database(
+                        "ERR",
+                        "no reply to the SELECT back",
+                    )));
+                }
+                Some(_) => {}
+            }
             let counts = fold_counts(
                 replies
                     .get(..replies.len().saturating_sub(1))
@@ -90,9 +120,9 @@ mod server {
         pub(in crate::redis) async fn command_docs(
             &self,
         ) -> Result<Vec<CommandDoc>, KeyBrowseError> {
-            if self.outside_multi().is_none() {
+            if self.in_multi() {
                 return Err(KeyBrowseError::Unsupported {
-                    reason: "the session is inside MULTI; send EXEC or DISCARD first".to_owned(),
+                    reason: IN_MULTI.to_owned(),
                 });
             }
             let reply = server_error(self.one(::redis::cmd("COMMAND").arg("DOCS")).await?)?;

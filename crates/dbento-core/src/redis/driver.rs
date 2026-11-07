@@ -64,11 +64,33 @@ pub(crate) struct Shared {
 /// What the server's connection state is, as far as the session has seen it.
 #[derive(Debug)]
 struct State {
-    /// The selected DB index.
-    db: u32,
+    /// The selected DB index; `None` once a transaction may have moved it and the server
+    /// would not say where, until a tracked `SELECT` names it again.
+    db: Option<u32>,
     /// A `MULTI` was answered `OK` and no `EXEC` or `DISCARD` has answered since.
     in_multi: bool,
 }
+
+/// Why a call that selects other DBs and comes back cannot run now.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Unbracketable {
+    InMulti,
+    DbUnknown,
+}
+
+impl Unbracketable {
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Unbracketable::InMulti => IN_MULTI,
+            Unbracketable::DbUnknown => {
+                "the session's DB is unknown after a transaction; send SELECT n first"
+            }
+        }
+    }
+}
+
+/// Why the key browser and the catalog refuse inside a transaction.
+pub(crate) const IN_MULTI: &str = "the session is inside MULTI; send EXEC or DISCARD first";
 
 /// Why a round trip did not answer.
 #[derive(Debug)]
@@ -123,9 +145,9 @@ impl Shared {
         pipe: Pipeline,
     ) -> Result<Vec<Value>, KeyBrowseError> {
         let back = self
-            .outside_multi()
-            .ok_or_else(|| KeyBrowseError::Unsupported {
-                reason: "the session is inside MULTI; send EXEC or DISCARD first".to_owned(),
+            .bracket_db()
+            .map_err(|refusal| KeyBrowseError::Unsupported {
+                reason: refusal.reason().to_owned(),
             })?;
         let mut whole = Pipeline::with_capacity(pipe.len() + 2);
         whole.cmd("SELECT").arg(db);
@@ -140,8 +162,14 @@ impl Shared {
                 message: format!("{} replies to {} commands", replies.len(), whole.len()),
             });
         }
-        replies.pop();
+        let restored = replies.pop().map(server_error);
+        if !matches!(restored, Some(Ok(_))) {
+            self.forget_db();
+        }
         server_error(replies.remove(0))?;
+        if let Some(Err(e)) = restored {
+            return Err(e);
+        }
         Ok(replies)
     }
 
@@ -195,7 +223,7 @@ impl Shared {
                     .and_then(|a| std::str::from_utf8(a).ok())
                     .and_then(|a| a.parse::<u32>().ok());
                 if let Some(index) = index {
-                    self.state().db = index;
+                    self.state().db = Some(index);
                     self.settings_changed.store(true, Ordering::Relaxed);
                 }
             }
@@ -213,9 +241,7 @@ impl Shared {
                         .and_then(|d| d.parse::<u32>().ok())
                 });
                 let mut state = self.state();
-                if let Some(db) = db
-                    && db != state.db
-                {
+                if db != state.db {
                     state.db = db;
                     self.settings_changed.store(true, Ordering::Relaxed);
                 }
@@ -225,11 +251,24 @@ impl Shared {
         Ok(())
     }
 
-    /// The session's DB, for a call that selects others and comes back; `None` inside `MULTI`,
-    /// where a `SELECT` would only be queued.
-    pub(super) fn outside_multi(&self) -> Option<u32> {
+    /// The session's DB, for a call that selects others and comes back. Refused inside `MULTI`,
+    /// where a `SELECT` would only be queued, and while the session's DB is unknown.
+    pub(super) fn bracket_db(&self) -> Result<u32, Unbracketable> {
         let state = self.state();
-        (!state.in_multi).then_some(state.db)
+        if state.in_multi {
+            return Err(Unbracketable::InMulti);
+        }
+        state.db.ok_or(Unbracketable::DbUnknown)
+    }
+
+    pub(super) fn in_multi(&self) -> bool {
+        self.state().in_multi
+    }
+
+    /// Marks the session's DB unknown after a restoring `SELECT` that did not answer `OK`.
+    pub(super) fn forget_db(&self) {
+        self.state().db = None;
+        self.settings_changed.store(true, Ordering::Relaxed);
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -400,7 +439,7 @@ impl Driver for RedisSession {
                 timeout: params.timeout,
                 cancel: Arc::clone(&cancel),
                 state: Mutex::new(State {
-                    db: db_index(conn)?,
+                    db: Some(db_index(conn)?),
                     in_multi: false,
                 }),
             }),
