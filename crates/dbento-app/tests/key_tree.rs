@@ -360,3 +360,34 @@ fn an_open_db_asks_for_no_schema_objects() {
     let (mut t, _) = opened();
     assert_eq!(t.objects_to_load(), Vec::new());
 }
+
+#[test]
+fn a_failed_later_page_keeps_the_keys_and_retry_asks_that_page_again() {
+    let (mut t, req) = opened();
+    let token = KeyToken::new(KeyCursor::start());
+    answer(&mut t, req, batch(vec![s("a")], Some(token.clone())));
+    let more = t.load_more_keys("rd", 0).expect("a next page");
+    t.apply(
+        "rd",
+        CatalogReply {
+            generation: more.generation,
+            query: more.query,
+            result: Err("timed out".into()),
+        },
+    );
+    assert_eq!(
+        arias(&t, ""),
+        ["rd.db0", "rd.db0.a", "rd.db0:error", "rd.db1"]
+    );
+    let again = t.retry(&db0()).expect("the failed page is asked again");
+    assert_eq!(
+        again.query,
+        CatalogQuery::Keys {
+            db: 0,
+            filter: KeyFilter::default(),
+            after: Some(token)
+        }
+    );
+    answer(&mut t, again, batch(vec![s("b")], None));
+    assert_eq!(arias(&t, ""), ["rd.db0", "rd.db0.a", "rd.db0.b", "rd.db1"]);
+}

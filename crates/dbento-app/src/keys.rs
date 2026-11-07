@@ -92,8 +92,9 @@ pub fn parse_key_filter(text: &str) -> Result<KeyFilter, String> {
     Ok(filter)
 }
 
-/// A key name as text: itself when it is UTF-8 with no control characters, otherwise every
-/// byte outside printable ASCII as `\xHH`, with `\` doubled so the escape stays unambiguous.
+/// A key name as text: itself when it is UTF-8 with no control characters, so Copy name gives
+/// a plain key verbatim; otherwise every byte outside printable ASCII as `\xHH`, with `\`
+/// doubled. A plain name spelling `\xHH` can read like an escaped one; rows keep the raw bytes.
 pub fn display_key(name: &[u8]) -> String {
     if let Ok(text) = std::str::from_utf8(name)
         && !text.chars().any(char::is_control)
