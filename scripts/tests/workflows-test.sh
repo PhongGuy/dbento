@@ -197,7 +197,8 @@ test_attribution_check_is_pinned_and_reads_the_base() {
   local file=$ROOT/.github/workflows/attribution.yml
   [[ -f $file ]] || { fail "no attribution.yml"; return 0; }
   pinned_uses_only "$file"
-  grep -qF 'git show "$BASE:.github/scripts/attribution-lib.sh"' "$file" || fail "attribution.yml does not load the lib from the base"
+  grep -qF 'lib=.github/scripts/attribution-lib.sh' "$file" && grep -qF 'git show "$BASE:$lib"' "$file" \
+    || fail "attribution.yml does not load the lib from the base"
   [[ -f $ROOT/.github/scripts/attribution-lib.sh ]] || fail "no .github/scripts/attribution-lib.sh"
 }
 

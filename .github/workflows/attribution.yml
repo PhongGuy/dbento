@@ -24,7 +24,13 @@ jobs:
       - name: Load the check from the base branch
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-        run: git show "$BASE:.github/scripts/attribution-lib.sh" > "$RUNNER_TEMP/attribution-lib.sh"
+        # Only the PR that installs the check finds no library on its base; it is judged by its own copy.
+        run: |
+          lib=.github/scripts/attribution-lib.sh
+          if ! git show "$BASE:$lib" > "$RUNNER_TEMP/attribution-lib.sh" 2> /dev/null; then
+            echo "::warning::$lib is not on the base branch yet; using this PR's copy."
+            cp "$lib" "$RUNNER_TEMP/attribution-lib.sh"
+          fi
 
       - name: PR title and body
         env:
