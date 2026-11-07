@@ -93,6 +93,13 @@ pub const READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort:
 /// The MongoDB badge before the session has reported its level.
 pub const READ_ONLY_MONGO_UNCONNECTED_TOOLTIP: &str =
     "Read-only: the level follows the privileges of the user in the URI and shows once connected.";
+/// The Redis badge's head when the user's ACL refused every probed write.
+pub const READ_ONLY_REDIS_ACL_TOOLTIP: &str = "Read-only: this user's ACL refused every write Dbento probed at connect, so Redis refuses writes.";
+/// The Redis badge's head when the ACL allows writes and only Dbento's own refusal holds.
+pub const READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: this user's ACL allows writes, so Dbento refuses every command it reads as a write or cannot classify before sending it. Use a reader ACL user like dbento_ro for enforcement.";
+/// The Redis badge's head before the session has reported its level.
+pub const READ_ONLY_REDIS_UNCONNECTED_TOOLTIP: &str =
+    "Read-only: the level follows the user's ACL and shows once connected.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -154,8 +161,9 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
     }
 }
 
-/// The badge text for `c` with the session's `level`: on SurrealDB the level's head, a space and
-/// the residual; on MongoDB the level's text alone; on every other engine `read_only_tooltip_of(c)`.
+/// The badge text for `c` with the session's `level`: on SurrealDB and Redis the level's head, a
+/// space and the residual; on MongoDB the level's text alone; on every other engine
+/// `read_only_tooltip_of(c)`.
 pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
     match c.engine() {
         // MongoDB's level follows the URI user's privileges, which only the session knows.
@@ -167,16 +175,22 @@ pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcem
             }
             .to_owned();
         }
-        Engine::Surrealdb => {}
+        Engine::Surrealdb | Engine::Redis => {}
         _ => return read_only_tooltip_of(c).to_owned(),
     }
-    // SurrealDB's level comes from the login's role, which only the session knows.
-    let head = match level {
-        Some(ReadOnlyEnforcement::Database) => READ_ONLY_SURREAL_VIEWER_TOOLTIP,
-        Some(ReadOnlyEnforcement::BestEffort) => READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+    // SurrealDB's level comes from the login's role and Redis's from the user's ACL, which only
+    // the session knows.
+    let head = match (c.engine(), level) {
+        (Engine::Redis, Some(ReadOnlyEnforcement::Database)) => READ_ONLY_REDIS_ACL_TOOLTIP,
+        (Engine::Redis, Some(ReadOnlyEnforcement::BestEffort)) => {
+            READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP
+        }
+        (Engine::Redis, _) => READ_ONLY_REDIS_UNCONNECTED_TOOLTIP,
+        (_, Some(ReadOnlyEnforcement::Database)) => READ_ONLY_SURREAL_VIEWER_TOOLTIP,
+        (_, Some(ReadOnlyEnforcement::BestEffort)) => READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
         _ => READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
     };
-    match read_only_residual(Engine::Surrealdb) {
+    match read_only_residual(c.engine()) {
         Some(residual) => format!("{head} {residual}"),
         None => head.to_owned(),
     }
@@ -199,6 +213,9 @@ pub fn confirm_explanation(kind: Option<Unguarded>) -> &'static str {
         }
         Some(Unguarded::DeleteAllDocuments) => {
             "Its filter is empty, so it deletes every document in the collection."
+        }
+        Some(Unguarded::FlushKeys) => {
+            "It deletes every key in the database, or with FLUSHALL in every database."
         }
         _ => "It may change rows.",
     }

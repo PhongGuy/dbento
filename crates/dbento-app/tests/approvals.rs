@@ -549,3 +549,13 @@ fn comments_inside_a_mongosh_chain_never_name_the_method() {
         "shop \u{B7} deleteMany"
     );
 }
+
+#[test]
+fn a_redis_headline_names_the_command() {
+    assert_eq!(headline("cache", "flushall"), "cache \u{B7} FLUSHALL");
+    assert_eq!(headline("cache", "  DEL user:1 user:2"), "cache \u{B7} DEL");
+    assert_eq!(
+        headline("cache", "config set maxmemory 1mb"),
+        "cache \u{B7} CONFIG"
+    );
+}

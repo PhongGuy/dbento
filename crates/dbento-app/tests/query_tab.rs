@@ -4,9 +4,11 @@ use dbento_app::query_tab::{
     READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP, READ_ONLY_MONGO_READER_TOOLTIP,
     READ_ONLY_MONGO_UNCONNECTED_TOOLTIP, READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
     READ_ONLY_MSSQL_READER_TOOLTIP, READ_ONLY_MYSQL_TOOLTIP, READ_ONLY_PG_TOOLTIP,
-    READ_ONLY_SQLITE_TOOLTIP, READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
-    READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP, READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_explanation,
-    confirm_title, editor_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
+    READ_ONLY_REDIS_ACL_TOOLTIP, READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP,
+    READ_ONLY_REDIS_UNCONNECTED_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP,
+    READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP, READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
+    READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_explanation, confirm_title, editor_language,
+    read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
 };
 use dbento_app::result_body::{ErrorView, code_label};
 use dbento_core::{Engine, Unguarded};
@@ -462,4 +464,44 @@ fn a_mongodb_badge_names_the_level_its_users_privileges_give() {
         READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP
     );
     assert_eq!(text(None), READ_ONLY_MONGO_UNCONNECTED_TOOLTIP);
+}
+
+#[test]
+fn a_redis_badge_names_the_level_its_acl_gives_and_the_residual() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.rd]\nengine = \"redis\"\nhost = \"h\"\n\
+         secret = { env = \"X\" }\nread_only = true\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    let c = ws.connection("rd").unwrap();
+    let residual = read_only_residual(Engine::Redis).expect("Redis states a residual");
+    let text = |level| read_only_badge_text(c, level);
+    assert_eq!(
+        text(Some(ReadOnlyEnforcement::Database)),
+        format!("{READ_ONLY_REDIS_ACL_TOOLTIP} {residual}")
+    );
+    assert_eq!(
+        text(Some(ReadOnlyEnforcement::BestEffort)),
+        format!("{READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP} {residual}")
+    );
+    assert_eq!(
+        text(None),
+        format!("{READ_ONLY_REDIS_UNCONNECTED_TOOLTIP} {residual}")
+    );
+    assert!(READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP.contains("dbento_ro"));
+}
+
+#[test]
+fn a_flush_explains_that_every_key_goes() {
+    assert_eq!(
+        confirm_explanation(Some(Unguarded::FlushKeys)),
+        "It deletes every key in the database, or with FLUSHALL in every database."
+    );
+    assert_eq!(
+        confirm_title(Unguarded::FlushKeys, "cache"),
+        "FLUSHDB or FLUSHALL on 'cache'"
+    );
 }
