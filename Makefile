@@ -5,6 +5,9 @@ CARGO ?= cargo
 JOBS ?= 4
 # Install root for cargo, taken only from `make PREFIX=...`, never from the environment.
 PREFIX :=
+# Extra cargo flags for the lint and test targets; CI passes `LOCKED=--locked` so a stale
+# Cargo.lock fails the gate, while a local `make check` may still refresh the lock.
+LOCKED :=
 
 .DEFAULT_GOAL := install
 .PHONY: install uninstall demo check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test package clean workflows-lint screenshots
@@ -27,10 +30,10 @@ fmt-check:
 	$(CARGO) fmt --check
 
 lint:
-	$(CARGO) clippy --all-targets --all-features -- -Dwarnings
+	$(CARGO) clippy $(LOCKED) --all-targets --all-features -- -Dwarnings
 
 test:
-	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test --workspace
+	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(LOCKED) --workspace
 
 # The pilot package sits outside the workspace because its host crate is private, so CI never builds it.
 PILOT := --manifest-path tools/dbento-pilot/Cargo.toml

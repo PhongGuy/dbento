@@ -1,9 +1,12 @@
-# The gate, Linux only and started by hand to save Actions minutes; `make check` and the
-# targets below run the same checks locally. Beyond `make check` it cross-checks Windows and
-# checks icons, notices and the release scripts.
+# The gate on every push to master and every pull request. The Linux job runs what
+# `make check` runs locally, with a locked Cargo.lock, and also cross-checks Windows and checks
+# icons, notices and the release scripts. macOS runs clippy only, since tests need containers.
 name: CI
 
 on:
+  push:
+    branches: [master]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -24,6 +27,9 @@ jobs:
   gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # The repository owner accepted the SQL Server Developer licence for this CI job.
+      DBENTO_MSSQL_ACCEPT_EULA: "Y"
     steps:
       - name: Free disk space
         # The hosted runner leaves about 14 GB free; these preinstalled toolchains are unused.
@@ -46,4 +52,5 @@ jobs:
       - name: Install cargo-about
         run: cargo install --locked cargo-about --version 0.9.2 --features cli
       - name: Gate
-        run: make check icons-check windows-check notices-check script-test workflows-lint
+        run: make LOCKED=--locked check icons-check windows-check notices-check script-test workflows-lint
+

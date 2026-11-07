@@ -38,8 +38,22 @@ test_rust_toolchain_pinned_to_master() {
 }
 
 test_ci_gate_runs_every_check() {
-  grep -qxE '[[:space:]]+run: make check icons-check windows-check notices-check script-test workflows-lint' "$CI" \
+  grep -qxE '[[:space:]]+run: make LOCKED=--locked check icons-check windows-check notices-check script-test workflows-lint' "$CI" \
     || fail "ci gate line: $(grep -n 'run: make' "$CI")"
+}
+
+test_ci_runs_on_push_and_pull_request() {
+  grep -qxE '  push:' "$CI" && grep -qxF '    branches: [master]' "$CI" || fail "ci does not run on push to master"
+  grep -qxE '  pull_request:' "$CI" || fail "ci does not run on pull requests"
+  grep -qxE '  workflow_dispatch:' "$CI" || fail "ci lost workflow_dispatch"
+  grep -qxF '  cancel-in-progress: true' "$CI" || fail "ci lost cancel-in-progress"
+}
+
+# The SQL Server licence is accepted for the Linux gate only, never workflow-wide.
+test_ci_accepts_the_mssql_licence_in_the_gate_only() {
+  [[ $(grep -c 'DBENTO_MSSQL_ACCEPT_EULA' "$CI") == 1 ]] || fail "DBENTO_MSSQL_ACCEPT_EULA set more than once"
+  awk '/^  gate:$/ { on = 1; next } on && /^  [a-z]/ { on = 0 } on && /^      DBENTO_MSSQL_ACCEPT_EULA: "Y"$/ { ok = 1 } END { exit !ok }' "$CI" \
+    || fail "the gate job does not set DBENTO_MSSQL_ACCEPT_EULA=Y"
 }
 
 test_ci_installs_the_cross_and_notices_tools() {
