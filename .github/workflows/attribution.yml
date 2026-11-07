@@ -27,7 +27,10 @@ jobs:
         # Only the PR that installs the check finds no library on its base; it is judged by its own copy.
         run: |
           lib=.github/scripts/attribution-lib.sh
-          if ! git show "$BASE:$lib" > "$RUNNER_TEMP/attribution-lib.sh" 2> /dev/null; then
+          git cat-file -e "$BASE^{commit}"
+          if git cat-file -e "$BASE:$lib" 2> /dev/null; then
+            git show "$BASE:$lib" > "$RUNNER_TEMP/attribution-lib.sh"
+          else
             echo "::warning::$lib is not on the base branch yet; using this PR's copy."
             cp "$lib" "$RUNNER_TEMP/attribution-lib.sh"
           fi
