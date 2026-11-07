@@ -15,15 +15,26 @@ permissions:
 jobs:
   attribution:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Load the check from the base branch
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
-        run: git show "$BASE:.github/scripts/attribution-lib.sh" > "$RUNNER_TEMP/attribution-lib.sh"
+        # Only the PR that installs the check finds no library on its base; it is judged by its own copy.
+        run: |
+          lib=.github/scripts/attribution-lib.sh
+          git cat-file -e "$BASE^{commit}"
+          if git cat-file -e "$BASE:$lib" 2> /dev/null; then
+            git show "$BASE:$lib" > "$RUNNER_TEMP/attribution-lib.sh"
+          else
+            echo "::warning::$lib is not on the base branch yet; using this PR's copy."
+            cp "$lib" "$RUNNER_TEMP/attribution-lib.sh"
+          fi
 
       - name: PR title and body
         env:

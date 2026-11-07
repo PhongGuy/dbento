@@ -5,6 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 CI=$ROOT/.github/workflows/ci.yml
 RELEASE=$ROOT/.github/workflows/release.yml
 WEEKLY=$ROOT/.github/workflows/weekly.yml
+ZIZMOR=$ROOT/.github/workflows/zizmor.yml
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 
@@ -13,6 +14,13 @@ job_timeouts() {
   awk '/^jobs:/ { in_jobs = 1; next }
        in_jobs && /^  [a-z][a-z0-9_-]*:$/ { job = $1; sub(":", "", job) }
        in_jobs && /^    timeout-minutes:/ { print job "=" $2 }' "$1" | LC_ALL=C sort | tr '\n' ' '
+}
+
+# Print the lines of job JOB in FILE, from its key to the next job.
+job_body() {
+  awk -v job="  $2:" '/^jobs:/ { in_jobs = 1; next }
+       in_jobs && /^  [a-z][a-z0-9_-]*:$/ { on = ($0 == job) }
+       in_jobs && on' "$1"
 }
 
 # Every uses: must name a 40-hex commit, never a tag or a branch.
@@ -92,7 +100,7 @@ test_weekly_checks_beta_and_updated_deps() {
 
 test_release_jobs_have_their_timeouts() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  [[ $(job_timeouts "$RELEASE") == "build=90 checksums=45 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
+  [[ $(job_timeouts "$RELEASE") == "attest=15 build=90 checksums=45 draft=30 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
   pinned_uses_only "$RELEASE"
 }
 
@@ -118,28 +126,69 @@ test_release_builds_with_the_packaging_tools() {
   grep -qF 'run: cargo install --locked cargo-about --version 0.9.2 --features cli' "$RELEASE" || fail "no cargo-about 0.9.2"
   grep -qE '^        run: make package$' "$RELEASE" || fail "no Linux make package"
   grep -qE '^        run: bash scripts/release.sh package$' "$RELEASE" || fail "no macOS and Windows package step"
-  grep -qF "WINDOWS_CERTIFICATE: \${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE || '' }}" "$RELEASE" || fail "certificate secret not passed"
-  grep -qF "WINDOWS_CERTIFICATE_PASSWORD: \${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}" "$RELEASE" || fail "password secret not passed"
-  [[ $(grep -c 'secrets\.' "$RELEASE") == 2 ]] || fail "secrets referenced outside the package step: $(grep -n 'secrets\.' "$RELEASE")"
-  grep -qF 'TMPDIR: ${{ runner.temp }}' "$RELEASE" || fail "the signing key dir is not under runner.temp"
   grep -qF 'run: rm -f target/dist/*/SHA256SUMS target/dist/*/THIRD-PARTY-NOTICES.html' "$RELEASE" || fail "loose files not dropped"
   grep -qE '^  LINUX_BUILD_DEPS: .*libclang-dev' "$RELEASE" || fail "LINUX_BUILD_DEPS lacks libclang-dev"
 }
 
-# Build scripts must never see the signing secrets: the macOS and Windows build is its own step,
-# with no env, before the one package step that takes them.
-test_release_builds_before_the_secrets_arrive() {
-  [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  local build package
-  build=$(grep -nE '^        run: bash scripts/release.sh build$' "$RELEASE" | cut -d: -f1) || true
-  package=$(grep -nE '^        run: bash scripts/release.sh package$' "$RELEASE" | cut -d: -f1) || true
-  [[ -n $build ]] || { fail "release.yml has no separate macOS and Windows build step"; return 0; }
-  [[ -n $package && $build -lt $package ]] || fail "the build step (line $build) does not come before the package step (line $package)"
-  # The build step runs from its name to its run: line; none of it may carry an env.
-  local start
-  start=$(awk -v run="$build" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
-  [[ -n $start ]] || { fail "the build step has no name"; return 0; }
-  if grep -qE '^        env:|secrets\.' <<<"$(sed -n "${start},${build}p" "$RELEASE")"; then fail "the build step has an env or a secret"; fi
+# The build and package steps hold no secrets and no env carrying one.
+test_release_build_job_has_no_secrets() {
+  [[ -f $RELEASE ]] || return 0
+  local build
+  build=$(job_body "$RELEASE" build)
+  if grep -nE 'secrets\.|environment:' <<<"$build"; then fail "the build job holds a secret"; fi
+  grep -qE '^        run: bash scripts/release.sh build$' <<<"$build" || fail "no separate macOS and Windows build step"
+}
+
+# A cache written by another run could poison a signed artifact, so release jobs restore none.
+test_release_restores_no_cache() {
+  [[ -f $RELEASE ]] || return 0
+  if grep -nE 'rust-cache|actions/cache|^[[:space:]]+cache:|enable-cache|cache-' "$RELEASE"; then fail "release.yml restores a cache"; fi
+}
+
+# zizmor audits every workflow, at a pinned version, with a read-only token and no credentials kept.
+test_zizmor_audits_the_workflows() {
+  [[ -f $ZIZMOR ]] || { fail "no zizmor.yml"; return 0; }
+  pinned_uses_only "$ZIZMOR"
+  grep -qxF '  contents: read' "$ZIZMOR" || fail "zizmor.yml is not contents: read"
+  grep -qxF '          persist-credentials: false' "$ZIZMOR" || fail "zizmor.yml keeps checkout credentials"
+  grep -qE '^        run: uvx zizmor@[0-9]+\.[0-9]+\.[0-9]+ ' "$ZIZMOR" || fail "zizmor version not pinned"
+  grep -qE 'run: uvx zizmor@.* \.github/workflows$' "$ZIZMOR" || fail "zizmor does not audit .github/workflows"
+  grep -qxF '          enable-cache: false' "$ZIZMOR" || fail "setup-uv caches"
+  [[ $(job_timeouts "$ZIZMOR") == "zizmor=10 " ]] || fail "zizmor timeouts: $(job_timeouts "$ZIZMOR")"
+}
+
+# No release job holds a secret: there is no certificate, and provenance comes from attestation.
+test_release_holds_no_signing_secret() {
+  [[ -f $RELEASE ]] || return 0
+  if grep -nE 'secrets\.|WINDOWS_CERTIFICATE|signtool' "$RELEASE"; then fail "release.yml still handles a signing secret"; fi
+}
+
+# The attest job compiles nothing and attests exactly the files the draft uploads, SHA256SUMS
+# included; it alone holds the release environment, so nothing is drafted without approval.
+test_release_attests_every_drafted_file() {
+  [[ -f $RELEASE ]] || return 0
+  local attest draft checksums
+  attest=$(job_body "$RELEASE" attest)
+  draft=$(job_body "$RELEASE" draft)
+  checksums=$(job_body "$RELEASE" checksums)
+  [[ -n $attest ]] || { fail "release.yml has no attest job"; return 0; }
+  grep -qxF '      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2' <<<"$attest" || fail "attest action pin"
+  grep -qxF '          subject-path: dist/*' <<<"$attest" || fail "attest does not cover every file in dist"
+  [[ $(grep -cE '^    environment:' "$RELEASE") == 1 ]] || fail "environment: outside one job: $(grep -n 'environment:' "$RELEASE")"
+  grep -qxF '    environment: release' <<<"$attest" || fail "the attest job is not bound to environment: release"
+  grep -qxF "    if: github.ref_type == 'tag'" <<<"$attest" || fail "the attest job does not run only on a tag"
+  local perms
+  perms=$(awk '/^    permissions:$/ { on = 1; next } on && /^      [a-z-]+: [a-z]+( #.*)?$/ { sub(/ #.*/, ""); print $0; next } { on = 0 }' <<<"$attest" | LC_ALL=C sort | tr -s ' ' | tr '\n' '|')
+  [[ $perms == " artifact-metadata: write| attestations: write| contents: read| id-token: write|" ]] || fail "attest permissions: $perms"
+  [[ $(grep -c 'id-token: write' "$RELEASE") == 1 ]] || fail "id-token: write outside the attest job"
+  if grep -nE '^        run:|cargo|make ' <<<"$attest"; then fail "the attest job runs commands"; fi
+  # One artifact carries the files from the sums to the attestation to the draft.
+  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$checksums" || fail "checksums does not upload the release files"
+  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$attest" || fail "attest does not download the release files"
+  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$draft" || fail "draft does not download the release files"
+  grep -qxF '    needs: [guard, checksums]' <<<"$attest" || fail "attest does not follow checksums"
+  grep -qxF '    needs: [guard, checksums, attest]' <<<"$draft" || fail "draft does not wait for attest"
+  grep -qxF "    if: github.ref_type == 'tag' && !inputs.dry_run" <<<"$draft" || fail "draft does not run only on a tag release"
 }
 
 # The stable copies must exist before the sums run, so SHA256SUMS covers them too.
@@ -161,13 +210,12 @@ test_release_drafts_only_on_a_tag() {
   # gh puts a notes file before generated notes, so the two never mix.
   if grep -qF -- '--generate-notes' "$RELEASE"; then fail "release.yml still asks gh to generate notes"; fi
   grep -qF 'run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"' "$RELEASE" || fail "no step writes the notes"
-  # The draft step's if: sits at most six lines above its gh release line (if, env and two values, run).
-  awk '/if: github.ref_type == .tag. && !inputs.dry_run/ { armed = NR } /gh release create/ { if (armed && NR - armed <= 6) ok = 1 } END { exit !ok }' "$RELEASE" \
-    || fail "the draft step is not guarded by a tag and not-dry-run if"
-  [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] || fail "contents: write outside the checksums job"
+  grep -q 'gh release create' <<<"$(job_body "$RELEASE" draft)" || fail "the draft command is not in the draft job"
+  [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] && grep -q 'contents: write' <<<"$(job_body "$RELEASE" draft)" \
+    || fail "contents: write outside the draft job"
 }
 
-# The notes come from GitHub's generate-notes API, which needs the job token (the checksums job holds contents: write).
+# The notes come from GitHub's generate-notes API, which needs the job token (the draft job holds contents: write).
 test_release_notes_step_has_the_token() {
   [[ -f $RELEASE ]] || return 0
   local run start
@@ -176,8 +224,7 @@ test_release_notes_step_has_the_token() {
   start=$(awk -v run="$run" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
   grep -qF 'GH_TOKEN: ${{ github.token }}' <<<"$(sed -n "${start},${run}p" "$RELEASE")" \
     || fail "the notes step has no GH_TOKEN"
-  awk '/^  checksums:$/ { on = 1 } on && /scripts\/release-notes\.sh/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
-    || fail "the notes step is not in the checksums job"
+  grep -q 'scripts/release-notes\.sh' <<<"$(job_body "$RELEASE" draft)" || fail "the notes step is not in the draft job"
 }
 
 # The attribution check is a shared template; it still pins every action to a commit.
@@ -185,15 +232,15 @@ test_attribution_check_is_pinned_and_reads_the_base() {
   local file=$ROOT/.github/workflows/attribution.yml
   [[ -f $file ]] || { fail "no attribution.yml"; return 0; }
   pinned_uses_only "$file"
-  grep -qF 'git show "$BASE:.github/scripts/attribution-lib.sh"' "$file" || fail "attribution.yml does not load the lib from the base"
+  grep -qF 'lib=.github/scripts/attribution-lib.sh' "$file" && grep -qF 'git show "$BASE:$lib"' "$file" \
+    || fail "attribution.yml does not load the lib from the base"
   [[ -f $ROOT/.github/scripts/attribution-lib.sh ]] || fail "no .github/scripts/attribution-lib.sh"
 }
 
 # What's Changed walks back to the previous tag, which a shallow checkout does not have.
 test_release_notes_checkout_has_full_history() {
   [[ -f $RELEASE ]] || return 0
-  awk '/^  checksums:$/ { on = 1 } on && /fetch-depth: 0/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
-    || fail "the checksums job checks out without fetch-depth: 0"
+  grep -q 'fetch-depth: 0' <<<"$(job_body "$RELEASE" draft)" || fail "the draft job checks out without fetch-depth: 0"
 }
 
 test_release_has_no_updater_pieces() {

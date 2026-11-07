@@ -1,4 +1,5 @@
 # Builds release artifacts on a v* tag and drafts a GitHub release that a human publishes.
+# Build jobs hold no secrets and restore no cache; a tag run attests every file before drafting.
 # A manual run builds a chosen set of platforms; with dry_run it drafts nothing.
 name: Release
 
@@ -59,9 +60,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: release-${{ matrix.target }}
       - name: Free disk space
         if: runner.os == 'Linux'
         run: |
@@ -79,17 +77,11 @@ jobs:
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: make package
-      # Build scripts run here, so the build is its own step and holds no signing secret.
       - name: Build (macOS, Windows)
         if: runner.os != 'Linux'
         run: bash scripts/release.sh build
-      # Only this step on Windows sees the signing secrets; the decoded key lands under runner.temp.
       - name: Package (macOS, Windows)
         if: runner.os != 'Linux'
-        env:
-          WINDOWS_CERTIFICATE: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE || '' }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
-          TMPDIR: ${{ runner.temp }}
         run: bash scripts/release.sh package
       # The notices ship inside every package; the checksums job writes the one SHA256SUMS.
       - name: Drop per-runner loose files
@@ -101,18 +93,15 @@ jobs:
           path: target/dist/${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}/
           if-no-files-found: error
 
+  # Adds the stable-named copies and SHA256SUMS, and hands the finished file set on as one artifact.
   checksums:
     needs: [guard, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    permissions:
-      contents: write
     steps:
-      # Full history and tags, so the notes can find the previous tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
@@ -131,15 +120,54 @@ jobs:
           name: release-${{ needs.guard.outputs.version }}
           path: dist/*
           if-no-files-found: error
+
+  # Attests every release file, SHA256SUMS included, so a download verifies with gh attestation verify.
+  # It compiles and runs nothing. The release environment makes a tag run wait here for the owner's approval.
+  attest:
+    needs: [guard, checksums]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # the OIDC token Sigstore signs the attestation with
+      attestations: write # store the attestation on the repository
+      artifact-metadata: write # link the attestation to the release files
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.guard.outputs.version }}
+          path: dist
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+
+  # Drafts the release from the same artifact the attest job attested.
+  draft:
+    needs: [guard, checksums, attest]
+    if: github.ref_type == 'tag' && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the draft release and upload its files
+    steps:
+      # Full history and tags, so the notes can find the previous tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.guard.outputs.version }}
+          path: dist
       # The script splices GitHub's label-grouped notes into the shared layout, so gh is not asked to generate them again.
       - name: Write the release notes
-        if: github.ref_type == 'tag' && !inputs.dry_run
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"
       - name: Draft the release
-        if: github.ref_type == 'tag' && !inputs.dry_run
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.guard.outputs.version }}

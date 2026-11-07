@@ -72,6 +72,17 @@ test_sections_come_in_the_shared_order() {
   if grep -q '^# ' <<<"$out"; then fail "the notes carry a title heading"; fi
 }
 
+# Before you install tells users how to check a download against the build attestation.
+test_before_you_install_shows_the_attestation_check() {
+  local d=$WORK/attest out section
+  new_repo "$d" 'feat: first'
+  tag "$d" v0.1.0
+  out=$(notes "$d" v0.1.0 "$GENERATED") || { fail "script failed"; return 0; }
+  section=$(awk '/^## Before you install$/ { on = 1; next } /^## / { on = 0 } on' <<<"$out")
+  grep -qF '`gh attestation verify <file> --repo PhongGuy/dbento`' <<<"$section" \
+    || fail "Before you install lacks the gh attestation verify line"
+}
+
 test_whats_changed_is_the_generated_content() {
   local d=$WORK/generated out want
   new_repo "$d" 'feat: one'
