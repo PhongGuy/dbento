@@ -1,0 +1,83 @@
+name: Bug report
+description: Something is broken, crashes or gives a wrong result.
+labels: [bug]
+assignees: [PhongGuy]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Never paste a password, token or full connection URL here: issues are public.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps, SQL or commands that shows it.
+      placeholder: |
+        1. Connect to ...
+        2. Run `SELECT ...`
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Database engine
+      multiple: true
+      options:
+        - Not engine specific
+        - PostgreSQL
+        - SQLite
+        - MySQL
+        - MariaDB
+        - SQL Server
+        - DuckDB
+        - SurrealDB
+        - MongoDB
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Desktop app
+        - CLI (dbento query / run)
+        - MCP server
+        - Import (DataGrip)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Dbento version
+      description: From `dbento --version` or the About dialog.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Arch Linux (Wayland), macOS 15.4, Windows 11
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Database server version
+      placeholder: PostgreSQL 17.2
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Remove anything secret before pasting.
+      render: text

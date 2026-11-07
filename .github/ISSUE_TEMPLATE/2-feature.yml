@@ -1,0 +1,35 @@
+name: Feature request
+description: A new ability, engine or workflow.
+labels: [feature]
+assignees: [PhongGuy]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How you picture it working. Rough is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds and alternatives
+      description: What you do now, or how other clients handle it.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Desktop app
+        - CLI
+        - MCP server
+        - Import
+        - Not sure
