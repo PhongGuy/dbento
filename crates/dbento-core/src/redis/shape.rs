@@ -234,7 +234,7 @@ fn cell(value: &Value) -> Result<Cell<'_>, ShapeError> {
 
 /// A nested value as JSON: bytes and errors as tagged objects, and every number JSON cannot
 /// hold exactly (a non-finite double, a big number) as a string.
-fn json(value: &Value) -> Result<Json, ShapeError> {
+pub(crate) fn json(value: &Value) -> Result<Json, ShapeError> {
     Ok(match value {
         Value::Nil => Json::Null,
         Value::Int(n) => (*n).into(),
@@ -261,11 +261,7 @@ fn json(value: &Value) -> Result<Json, ShapeError> {
         Value::Map(pairs) => {
             let mut object = Map::new();
             for (k, v) in pairs {
-                let key = match json(k)? {
-                    Json::String(s) => s,
-                    other => other.to_string(),
-                };
-                object.insert(key, json(v)?);
+                object.insert(json_key(k)?, json(v)?);
             }
             Json::Object(object)
         }
@@ -275,7 +271,15 @@ fn json(value: &Value) -> Result<Json, ShapeError> {
     })
 }
 
-fn double_text(f: f64) -> String {
+/// A map key as a JSON object key: a string as itself, anything else as its compact JSON.
+pub(crate) fn json_key(key: &Value) -> Result<String, ShapeError> {
+    Ok(match json(key)? {
+        Json::String(s) => s,
+        other => other.to_string(),
+    })
+}
+
+pub(crate) fn double_text(f: f64) -> String {
     let mut s = String::new();
     float_text(
         &mut s,
