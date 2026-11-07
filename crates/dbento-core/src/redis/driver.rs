@@ -122,15 +122,11 @@ impl Shared {
         db: u32,
         pipe: Pipeline,
     ) -> Result<Vec<Value>, KeyBrowseError> {
-        let back = {
-            let state = self.state();
-            if state.in_multi {
-                return Err(KeyBrowseError::Unsupported {
-                    reason: "the session is inside MULTI; send EXEC or DISCARD first".to_owned(),
-                });
-            }
-            state.db
-        };
+        let back = self
+            .outside_multi()
+            .ok_or_else(|| KeyBrowseError::Unsupported {
+                reason: "the session is inside MULTI; send EXEC or DISCARD first".to_owned(),
+            })?;
         let mut whole = Pipeline::with_capacity(pipe.len() + 2);
         whole.cmd("SELECT").arg(db);
         for cmd in pipe.cmd_iter() {
@@ -227,6 +223,13 @@ impl Shared {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The session's DB, for a call that selects others and comes back; `None` inside `MULTI`,
+    /// where a `SELECT` would only be queued.
+    pub(super) fn outside_multi(&self) -> Option<u32> {
+        let state = self.state();
+        (!state.in_multi).then_some(state.db)
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -522,9 +525,7 @@ impl Driver for RedisSession {
     }
 
     async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, IntrospectError> {
-        Err(IntrospectError::Unsupported {
-            what: "the DB list",
-        })
+        self.shared.schemas().await
     }
 
     async fn relations(&mut self, _schema: &str) -> Result<RelationList, IntrospectError> {
@@ -588,7 +589,7 @@ fn too_old(what: &str) -> String {
     format!("the server runs {what}, and Dbento needs Redis 7.0 or later")
 }
 
-fn text_of(value: &Value) -> Option<String> {
+pub(super) fn text_of(value: &Value) -> Option<String> {
     match value {
         Value::BulkString(bytes) => String::from_utf8(bytes.clone()).ok(),
         Value::SimpleString(text) => Some(text.clone()),

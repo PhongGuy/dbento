@@ -16,3 +16,13 @@ async fn sqlite_has_no_keys_to_scan_or_read() {
         .unwrap_err();
     assert!(matches!(e, KeyBrowseError::Unsupported { .. }), "{e:?}");
 }
+
+#[tokio::test]
+async fn sqlite_has_no_command_docs() {
+    let lite = sqlite_fixture("CREATE TABLE t (a)", "");
+    let mut l = lite.session(SessionOptions::default()).await;
+    assert!(matches!(
+        l.command_docs().await,
+        Err(KeyBrowseError::Unsupported { .. })
+    ));
+}

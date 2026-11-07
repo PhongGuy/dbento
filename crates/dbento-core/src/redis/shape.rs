@@ -19,7 +19,8 @@ const MAX_NUMBERED: usize = 16;
 pub(crate) struct Shaped {
     pub(crate) columns: Vec<ColumnInfo>,
     pub(crate) batches: Vec<ResultBatch>,
-    /// Rows delivered.
+    /// Rows delivered. The stream counts rows itself; only the tests read this.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) rows: u64,
     /// More elements existed than `max_rows` let through.
     pub(crate) truncated: bool,

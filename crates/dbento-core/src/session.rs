@@ -24,6 +24,7 @@ use crate::objects::{
 };
 use crate::postgres::{PgCancel, PgDriver};
 use crate::redis::browse::{KeyBrowseError, KeyPage, KeyRead, KeyScan, KeyValuePage};
+use crate::redis::catalog::CommandDoc;
 #[cfg(feature = "redis")]
 use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
 use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
@@ -1152,6 +1153,18 @@ impl Session {
             SessionInner::Redis(d) => d.scan_keys(req).await,
             _ => Err(KeyBrowseError::Unsupported {
                 reason: "only a Redis session has keys to browse".to_owned(),
+            }),
+        }
+    }
+
+    /// The server's `COMMAND DOCS` for completion, sorted by name. Redis only; refused inside
+    /// `MULTI`, and every other engine is `Unsupported`.
+    pub async fn command_docs(&mut self) -> Result<Vec<CommandDoc>, KeyBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.command_docs().await,
+            _ => Err(KeyBrowseError::Unsupported {
+                reason: "only a Redis session has command docs".to_owned(),
             }),
         }
     }
