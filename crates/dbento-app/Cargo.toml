@@ -19,7 +19,7 @@ mongodb = ["dbento-core/mongodb"]
 # Forwarded so a default edge to core cannot switch SurrealDB on through feature unification.
 surrealdb = ["dbento-core/surrealdb"]
 # Forwarded so a default edge to core cannot switch Redis on through feature unification.
-redis = ["dbento-core/redis", "dbento-testkit/redis"]
+redis = ["dbento-core/redis"]
 # A self-driving bench window run by `cargo xtask app-bench`; off in a normal build.
 bench = ["dep:dbento-bench"]
 
@@ -54,7 +54,7 @@ tempfile.workspace = true
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "io-util"] }
 # Not forwarded from [features]: `cargo install` drops dev-dependencies, so a feature naming one fails.
-dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb"] }
+dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb", "redis"] }
 
 [package.metadata.packager]
 productName = "Dbento"
