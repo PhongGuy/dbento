@@ -10,17 +10,34 @@ use crate::workspace::{ConnectionConfig, Engine};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SchemaInfo {
     name: String,
+    key_count: Option<u64>,
 }
 
 impl SchemaInfo {
     /// A schema called `name`.
     pub fn new(name: impl Into<String>) -> Self {
-        SchemaInfo { name: name.into() }
+        SchemaInfo {
+            name: name.into(),
+            key_count: None,
+        }
     }
 
     /// The schema's name, unquoted.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// How many keys a Redis DB holds; `None` on every other engine.
+    pub fn key_count(&self) -> Option<u64> {
+        self.key_count
+    }
+
+    #[cfg_attr(not(feature = "redis"), allow(dead_code))] // only the Redis catalog counts keys
+    pub(crate) fn with_key_count(self, n: u64) -> Self {
+        SchemaInfo {
+            key_count: Some(n),
+            ..self
+        }
     }
 }
 

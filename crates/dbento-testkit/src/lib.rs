@@ -25,7 +25,11 @@ mod duck;
 mod mongo;
 mod mssql;
 mod mysql;
+#[cfg(feature = "redis")]
+mod redis;
 mod surreal;
+#[cfg(feature = "redis")]
+pub use self::redis::*;
 #[cfg(feature = "duckdb")]
 pub use duck::duckdb_file;
 #[cfg(feature = "mongodb")]

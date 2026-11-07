@@ -2338,6 +2338,7 @@ dependencies = [
  "mongodb",
  "mysql_async",
  "rcgen",
+ "redis",
  "serde_json",
  "testcontainers-modules",
  "tiberius",

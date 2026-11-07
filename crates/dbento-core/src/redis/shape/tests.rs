@@ -248,3 +248,11 @@ fn the_valkey_docs_reply_is_a_map_of_maps() {
     assert_eq!((s.rows, s.truncated), (254, false));
     assert!(matches!(&rows(&s)[0][1], C::T(json) if json.starts_with('{')));
 }
+
+#[test]
+fn a_bare_error_code_displays_as_the_code_alone() {
+    let e = reply_to_rows(parse_redis_value(b"-NOSCRIPT\r\n").unwrap(), None).unwrap_err();
+    assert_eq!(e.to_string(), "NOSCRIPT");
+    let full = reply_to_rows(parse_redis_value(b"-ERR bad\r\n").unwrap(), None).unwrap_err();
+    assert_eq!(full.to_string(), "ERR bad");
+}

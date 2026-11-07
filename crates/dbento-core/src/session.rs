@@ -23,6 +23,10 @@ use crate::objects::{
     pg_relation_objects, pg_schema_objects, sqlite_definition, sqlite_relation_objects,
 };
 use crate::postgres::{PgCancel, PgDriver};
+use crate::redis::browse::{KeyBrowseError, KeyPage, KeyRead, KeyScan, KeyValuePage};
+use crate::redis::catalog::CommandDoc;
+#[cfg(feature = "redis")]
+use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
 use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
 use crate::sqlite::{SqliteCancel, SqliteDriver};
 #[cfg(feature = "surrealdb")]
@@ -115,7 +119,8 @@ pub struct Outcome {
     pub rows: u64,
     /// Whether more rows existed than were delivered.
     pub truncated: bool,
-    /// Rows changed, for a statement that returned no columns; `None` otherwise.
+    /// Rows changed, for a statement that returned no columns; `None` otherwise. Redis: also set
+    /// beside the `value` row of a write's integer reply.
     pub rows_affected: Option<u64>,
     /// Which bound cut the result; `Some` exactly when `truncated`.
     pub truncated_by: Option<TruncatedBy>,
@@ -463,6 +468,11 @@ impl ExecuteError {
                  it ends or hits the time limit"
                     .to_owned()
             }
+            // The server may still be running the command, so only closing the socket stops it.
+            (ExecuteError::Cancelled | ExecuteError::Timeout, Engine::Redis) => format!(
+                "{self}; the connection was closed, since the server may still be running the \
+                 command, and the session ended"
+            ),
             // Attention ends the batch; what it already ran stays unless a transaction undoes it.
             (ExecuteError::Cancelled | ExecuteError::Timeout, Engine::Mssql) => format!(
                 "{self}; statements of the batch that already finished may have kept what \
@@ -569,6 +579,8 @@ enum SessionInner {
     Surreal(SurrealDriver),
     #[cfg(feature = "mongodb")]
     Mongodb(MongoDriver),
+    #[cfg(feature = "redis")]
+    Redis(RedisSession),
 }
 
 enum ScriptInner {
@@ -583,6 +595,8 @@ enum ScriptInner {
     // Boxed, like its stream, so every engine's `Script` does not carry the parsed statements.
     #[cfg(feature = "mongodb")]
     Mongodb(Box<<MongoDriver as Driver>::Script>),
+    #[cfg(feature = "redis")]
+    Redis(Box<<RedisSession as Driver>::Script>),
 }
 
 enum StreamInner {
@@ -597,6 +611,8 @@ enum StreamInner {
     // Boxed so the driver's large cursor does not set the size of every engine's stream.
     #[cfg(feature = "mongodb")]
     Mongodb(Box<<MongoDriver as Driver>::Stream>),
+    #[cfg(feature = "redis")]
+    Redis(Box<<RedisSession as Driver>::Stream>),
 }
 
 /// Opens a session on `conn`. `secret` is the resolved password, if the engine needs one.
@@ -694,8 +710,18 @@ pub async fn connect(
         Engine::Surrealdb => Err(ConnectError::Unsupported {
             reason: "SurrealDB is not available in this build".to_owned(),
         }),
+        #[cfg(feature = "redis")]
+        Engine::Redis => {
+            let d = RedisSession::connect(params).await?;
+            let level = d.read_only_level(read_only);
+            Ok(Session {
+                inner: SessionInner::Redis(d),
+                read_only: level,
+            })
+        }
+        #[cfg(not(feature = "redis"))]
         Engine::Redis => Err(ConnectError::Unsupported {
-            reason: "Redis sessions are not available in this version yet".to_owned(),
+            reason: "Redis is not available in this build".to_owned(),
         }),
     }
 }
@@ -754,10 +780,12 @@ impl Session {
             SessionInner::Surreal(_) => Engine::Surrealdb,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Engine::Mongodb,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Engine::Redis,
         }
     }
 
-    /// The server this session talks to (MySQL, MariaDB, SQL Server, MongoDB and SurrealDB);
+    /// The server this session talks to (MySQL, MariaDB, SQL Server, MongoDB, SurrealDB and Redis);
     /// `None` on SQLite and DuckDB and, for now, on Postgres.
     pub fn server(&self) -> Option<ServerInfo> {
         match &self.inner {
@@ -770,6 +798,8 @@ impl Session {
             SessionInner::Surreal(d) => Some(d.server()),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => Some(d.server()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => Some(d.server()),
         }
     }
 
@@ -808,6 +838,8 @@ impl Session {
             SessionInner::Surreal(d) => d.settings_changed(),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.settings_changed(),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.settings_changed(),
         }
     }
 
@@ -830,6 +862,8 @@ impl Session {
             SessionInner::Surreal(d) => d.moved_database().await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.moved_database(),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => None,
         }
     }
 
@@ -851,6 +885,8 @@ impl Session {
             SessionInner::Surreal(d) => ScriptInner::Surreal(d.start_script(sql)),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => ScriptInner::Mongodb(Box::new(d.start_script(sql))),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => ScriptInner::Redis(Box::new(d.start_script(sql))),
         };
         Script {
             inner,
@@ -871,6 +907,8 @@ impl Session {
             SessionInner::Surreal(d) => d.cancel_handle(),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.cancel_handle(),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.cancel_handle(),
         }
     }
 
@@ -893,13 +931,15 @@ impl Session {
             SessionInner::Surreal(d) => d.settle().await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.settle().await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.settle().await,
         }
     }
 
     /// Resolves once the session's connection has ended (the server closed it or the network
     /// dropped); never resolves on SQLite or DuckDB, whose sessions cannot end on their own,
     /// nor on MySQL, SQL Server or MongoDB, whose dropped connection surfaces at the next call.
-    /// Cancel-safe.
+    /// Redis resolves once a call has ended the session. Cancel-safe.
     pub async fn closed(&self) {
         match &self.inner {
             SessionInner::Sqlite(_) | SessionInner::Mysql(_) | SessionInner::Mssql(_) => {
@@ -912,6 +952,8 @@ impl Session {
             SessionInner::Surreal(_) => std::future::pending().await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => std::future::pending().await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.closed().await,
         }
     }
 
@@ -928,6 +970,8 @@ impl Session {
             SessionInner::Surreal(d) => d.schemas().await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.schemas().await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.schemas().await,
         }
     }
 
@@ -944,6 +988,8 @@ impl Session {
             SessionInner::Surreal(d) => d.relations(schema).await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.relations(schema).await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.relations(schema).await,
         }
     }
 
@@ -960,6 +1006,8 @@ impl Session {
             SessionInner::Surreal(d) => d.columns(rel).await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.columns(rel).await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.columns(rel).await,
         }
     }
 
@@ -982,6 +1030,10 @@ impl Session {
             }),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Err(IntrospectError::Unsupported {
+                what: "edit targets",
+            }),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
         }
@@ -1012,6 +1064,12 @@ impl Session {
             }
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Vec::new(),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => {
+                return Err(IntrospectError::Unsupported {
+                    what: "foreign keys",
+                });
+            }
         };
         sort_keys(&mut keys);
         Ok(keys)
@@ -1034,6 +1092,8 @@ impl Session {
             SessionInner::Surreal(d) => d.relation_objects(rel).await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => crate::mongo::catalog::relation_objects(d, rel).await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Err(IntrospectError::Unsupported { what: NO_TABLES }),
         }
     }
 
@@ -1053,6 +1113,8 @@ impl Session {
             }),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
         }
     }
 
@@ -1074,6 +1136,49 @@ impl Session {
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Err(DefinitionError::Unsupported {
                 what: object.label(),
+            }),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Err(DefinitionError::Unsupported {
+                what: object.label(),
+            }),
+        }
+    }
+
+    /// One page of the key browser over `req.db`, leaving the session's own DB where it was.
+    /// Redis only; refused inside `MULTI`, and every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn scan_keys(&mut self, req: &KeyScan) -> Result<KeyPage, KeyBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.scan_keys(req).await,
+            _ => Err(KeyBrowseError::Unsupported {
+                reason: "only a Redis session has keys to browse".to_owned(),
+            }),
+        }
+    }
+
+    /// The server's `COMMAND DOCS` for completion, sorted by name. Redis only; refused inside
+    /// `MULTI`, and every other engine is `Unsupported`.
+    pub async fn command_docs(&mut self) -> Result<Vec<CommandDoc>, KeyBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.command_docs().await,
+            _ => Err(KeyBrowseError::Unsupported {
+                reason: "only a Redis session has command docs".to_owned(),
+            }),
+        }
+    }
+
+    /// One page of `req.key`'s value in the columns its kind reads as, leaving the session's
+    /// own DB where it was. Redis only; refused inside `MULTI`, and every other engine is
+    /// `Unsupported`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn read_key(&mut self, req: &KeyRead) -> Result<KeyValuePage, KeyBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.read_key(req).await,
+            _ => Err(KeyBrowseError::Unsupported {
+                reason: "only a Redis session has keys to browse".to_owned(),
             }),
         }
     }
@@ -1102,6 +1207,8 @@ impl Session {
             SessionInner::Surreal(_) => Ok(vec![None; columns.len()]),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Ok(vec![None; columns.len()]),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Ok(vec![None; columns.len()]),
         }
     }
 
@@ -1156,6 +1263,8 @@ impl Session {
             SessionInner::Surreal(_) => Err(bound_unsupported()),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Err(bound_unsupported()),
         }
     }
 
@@ -1185,6 +1294,8 @@ impl Session {
             SessionInner::Surreal(_) => Err(bound_unsupported()),
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Err(bound_unsupported()),
         }
     }
 
@@ -1206,6 +1317,8 @@ impl Session {
             SessionInner::Surreal(d) => d.close().await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(d) => d.close().await,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.close().await,
         }
     }
 }
@@ -1231,6 +1344,8 @@ impl Script<'_> {
             ScriptInner::Surreal(s) => SurrealDriver::prepare_next(s).await?,
             #[cfg(feature = "mongodb")]
             ScriptInner::Mongodb(s) => MongoDriver::prepare_next(s).await?,
+            #[cfg(feature = "redis")]
+            ScriptInner::Redis(s) => RedisSession::prepare_next(s).await?,
         };
         Some(prepared.map(|prepared| Pending {
             script: &mut self.inner,
@@ -1270,6 +1385,8 @@ impl<'a> Pending<'a> {
             ScriptInner::Surreal(s) => SurrealDriver::is_last(s).await,
             #[cfg(feature = "mongodb")]
             ScriptInner::Mongodb(s) => MongoDriver::is_last(s).await,
+            #[cfg(feature = "redis")]
+            ScriptInner::Redis(s) => RedisSession::is_last(s).await,
         }
     }
 
@@ -1309,6 +1426,11 @@ impl<'a> Pending<'a> {
             ScriptInner::Mongodb(s) => {
                 let (columns, stream) = Box::pin(MongoDriver::execute(s, limits)).await?;
                 (columns, StreamInner::Mongodb(Box::new(stream)))
+            }
+            #[cfg(feature = "redis")]
+            ScriptInner::Redis(s) => {
+                let (columns, stream) = Box::pin(RedisSession::execute(s, limits)).await?;
+                (columns, StreamInner::Redis(Box::new(stream)))
             }
         };
         Ok(ResultStream {
@@ -1356,6 +1478,8 @@ impl ResultStream<'_> {
             StreamInner::Surreal(s) => SurrealDriver::next_event(s).await,
             #[cfg(feature = "mongodb")]
             StreamInner::Mongodb(s) => MongoDriver::next_event(s).await,
+            #[cfg(feature = "redis")]
+            StreamInner::Redis(s) => RedisSession::next_event(s).await,
         };
         let item = match item {
             Ok(i) => i,
@@ -1401,6 +1525,8 @@ impl ResultStream<'_> {
             StreamInner::Surreal(s) => SurrealDriver::extend(s, more)?,
             #[cfg(feature = "mongodb")]
             StreamInner::Mongodb(s) => MongoDriver::extend(s, more)?,
+            #[cfg(feature = "redis")]
+            StreamInner::Redis(s) => RedisSession::extend(s, more)?,
         }
         self.outcome = None;
         Ok(())
@@ -1428,6 +1554,8 @@ enum CancelInner {
     Surreal(Arc<SurrealCancel>),
     #[cfg(feature = "mongodb")]
     Mongodb(Arc<MongoCancel>),
+    #[cfg(feature = "redis")]
+    Redis(Arc<RedisCancel>),
 }
 
 impl CancelHandle {
@@ -1476,6 +1604,13 @@ impl CancelHandle {
         }
     }
 
+    #[cfg(feature = "redis")]
+    pub(crate) fn redis(cancel: Arc<RedisCancel>) -> Self {
+        CancelHandle {
+            inner: CancelInner::Redis(cancel),
+        }
+    }
+
     /// Best effort; never blocks. A Postgres cancel runs on the runtime that opened the
     /// session, so once that runtime has shut down this does nothing.
     pub fn cancel(&self) {
@@ -1490,6 +1625,8 @@ impl CancelHandle {
             CancelInner::Surreal(c) => c.cancel(),
             #[cfg(feature = "mongodb")]
             CancelInner::Mongodb(c) => c.cancel(),
+            #[cfg(feature = "redis")]
+            CancelInner::Redis(c) => c.cancel(),
         }
     }
 }
@@ -1548,5 +1685,14 @@ mod tests {
         let text = ExecuteError::StoppedAtDrainCap.message_for(Engine::Surrealdb);
         assert!(text.contains("earlier statements"), "{text}");
         assert!(text.contains("socket was closed"), "{text}");
+    }
+
+    #[test]
+    fn redis_says_a_timeout_or_cancel_closed_the_connection() {
+        for e in [ExecuteError::Timeout, ExecuteError::Cancelled] {
+            let text = e.message_for(Engine::Redis);
+            assert!(text.contains("connection was closed"), "{text}");
+            assert_ne!(text, e.message_for(Engine::Postgres));
+        }
     }
 }

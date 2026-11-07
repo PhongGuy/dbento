@@ -1,10 +1,9 @@
 //! The Redis engine as the workspace, form and dialect layers see it, before any server.
 use dbento_core::{
-    ConnectError, ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions,
-    OpenError, QueryLanguage, SecretSource, SessionOptions, TlsMode, Workspace, connect,
-    default_schema, explain_request, explain_text, format_sql, line_comment_starts, plan_edit,
-    quote_ident, quote_literal, read_only_residual, single_source, statement_count,
-    statement_ranges,
+    ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions, OpenError,
+    QueryLanguage, SecretSource, TlsMode, Workspace, default_schema, explain_request, explain_text,
+    format_sql, line_comment_starts, plan_edit, quote_ident, quote_literal, read_only_residual,
+    single_source, statement_count, statement_ranges,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -191,9 +190,13 @@ fn statement_ranges_are_the_redis_lines() {
     assert_eq!(statement_count(Engine::Redis, text), 2);
 }
 
+#[cfg(feature = "redis")]
 #[tokio::test]
-async fn a_redis_connection_parses_but_does_not_connect_yet() {
-    let (_d, ws) = open(RD);
+async fn a_read_only_redis_connection_dials_its_host() {
+    use dbento_core::{ConnectError, SessionOptions, connect};
+
+    // RFC 6761 reserves `.invalid` to never resolve, so the connect fails at the network.
+    let (_d, ws) = open(&RD.replace("cache.internal", "cache.invalid"));
     match connect(
         &ws,
         ws.connection("cache").unwrap(),
@@ -202,8 +205,8 @@ async fn a_redis_connection_parses_but_does_not_connect_yet() {
     )
     .await
     {
-        Err(ConnectError::Unsupported { reason, .. }) => {
-            assert!(reason.contains("Redis"), "{reason}")
+        Err(ConnectError::Open { message, .. }) => {
+            assert!(message.contains("cache.invalid:6379"), "{message}")
         }
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("a Redis session opened"),
