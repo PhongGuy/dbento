@@ -1466,6 +1466,21 @@ impl Shell {
         })
     }
 
+    /// Opens Redis key `key` of DB `db` on connection `connection` in a new value tab, which
+    /// reads the value's first page at once.
+    pub fn open_key(
+        &mut self,
+        connection: usize,
+        db: u32,
+        key: Vec<u8>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.open_unnumbered(connection, window, cx) {
+            tab.update(cx, |t, cx| t.open_key(db, key, cx));
+        }
+    }
+
     // Opens a new tab on `connection` holding `rel`'s select and loads it (`load_relation`);
     // None when the tab cannot open.
     fn open_relation_tab(
@@ -2237,6 +2252,11 @@ impl Shell {
                         SidebarEvent::ViewDefinition { connection, object } => {
                             this.view_definition(connection, object.clone(), window, cx)
                         }
+                        SidebarEvent::OpenKey {
+                            connection,
+                            db,
+                            key,
+                        } => this.open_key(*connection, *db, key.clone(), window, cx),
                         SidebarEvent::Definition {
                             connection,
                             object,

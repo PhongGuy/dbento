@@ -32,6 +32,7 @@ use crate::drafts::{DRAFT_DEBOUNCE, Draft, DraftSlot};
 use crate::editor_completion::SqlCompletionProvider;
 use crate::format::format_edit;
 use crate::grid_menu::MenuEntry;
+use crate::key_view::KeyView;
 use crate::keymap::{
     CancelQuery, Explain, ExplainAnalyze, FormatSql, RunAll, RunStatement, SaveEdits, SaveQuery,
     all_keys_for, chip_keys, keys_for, plus_keys,
@@ -320,8 +321,9 @@ fn preview_language(engine: Engine) -> &'static str {
     }
 }
 
-// Format SQL applies only to SQL engines; the formatter knows no other language.
-fn formats(engine: Engine) -> bool {
+/// Whether Format SQL applies to `engine`: only SQL engines, since the formatter knows no
+/// other language.
+pub fn formats(engine: Engine) -> bool {
     engine.capabilities().language == QueryLanguage::Sql
 }
 
@@ -449,6 +451,8 @@ pub struct QueryTab {
     origin: Option<RelationRef>,
     // The user's name for the tab, which replaces "Query N" or "schema.name".
     label: Option<String>,
+    // A Redis value tab's title, `<key> · db N`; set, the tab shows the value, not the editor.
+    key_title: Option<String>,
     // The tab a reference was followed from while this tab is its preview.
     preview_of: Option<EntityId>,
     // The reference hops this tab walked, for Back and Forward.
@@ -570,6 +574,7 @@ impl QueryTab {
             number: None,
             origin: None,
             label: None,
+            key_title: None,
             preview_of: None,
             format_undo: None,
             nav: NavHistory::default(),
@@ -758,12 +763,25 @@ impl QueryTab {
         if let Some(label) = &self.label {
             return label.clone();
         }
+        if let Some(key) = &self.key_title {
+            return key.clone();
+        }
         match (&self.origin, self.number) {
             (Some(rel), _) => format!("{}.{}", rel.schema(), rel.name()),
             (None, Some(n)) => format!("Query {n}"),
             // Only between `push_tab` and its caller numbering the tab; no frame paints it.
             (None, None) => "Query".to_owned(),
         }
+    }
+
+    /// Turns this tab into Redis key `key`'s value view in DB `db`: the editor gives way to
+    /// the key's header and paged grid, and the tab keeps no draft, having no text to keep.
+    pub fn open_key(&mut self, db: u32, key: Vec<u8>, cx: &mut Context<Self>) {
+        self.key_title = Some(KeyView::new(db, key.clone()).title());
+        self.draft = None;
+        self.draft_task = None;
+        self.model.update(cx, |m, cx| m.open_key(db, key, cx));
+        cx.notify();
     }
 
     /// The user's name for the tab, if any.
@@ -1425,6 +1443,15 @@ impl Render for QueryTab {
         let explain = self.session_conn.engine().capabilities().explain;
         let format = formats(self.session_conn.engine());
         let staged = m.edits().len();
+        // A key tab shows its value's header, last error and whether pages remain.
+        let key = self.key_title.is_some().then(|| {
+            let view = m.key_view();
+            (
+                view.and_then(KeyView::header).map(str::to_owned),
+                view.and_then(KeyView::error).map(str::to_owned),
+                view.is_some_and(KeyView::has_more),
+            )
+        });
         // The summary appears once a statement has ended; its timing lives in the result footer.
         let summary = run_elapsed(m.results()).map(|_| {
             let n = m.results().len();
@@ -1706,19 +1733,85 @@ impl Render for QueryTab {
             // A production tab carries a 2 px danger rule along its top edge.
             .when(production, |d| d.border_t_2().border_color(danger))
             .child(toolbar)
-            .child(
-                div().flex_1().min_h_0().child(
-                    v_resizable("query-split")
-                        .with_state(&self.split)
-                        .child(
-                            resizable_panel()
-                                .when_some(start_height, |p, h| p.size(h))
-                                .child(editor),
-                        )
-                        .child(resizable_panel().child(self.results.clone())),
-                ),
-            )
+            .when_some(key, |d, (header, error, more)| {
+                d.child(key_pane(header, error, more, self.results.clone(), cx))
+            })
+            .when(self.key_title.is_none(), |d| {
+                d.child(
+                    div().flex_1().min_h_0().child(
+                        v_resizable("query-split")
+                            .with_state(&self.split)
+                            .child(
+                                resizable_panel()
+                                    .when_some(start_height, |p, h| p.size(h))
+                                    .child(editor),
+                            )
+                            .child(resizable_panel().child(self.results.clone())),
+                    ),
+                )
+            })
     }
+}
+
+// A key tab's body: the header line, the last read's error, the value grid, and Load more
+// while pages remain. Each line carries its text as its accessible name.
+fn key_pane(
+    header: Option<String>,
+    error: Option<String>,
+    more: bool,
+    results: Entity<ResultsPane>,
+    cx: &mut Context<QueryTab>,
+) -> impl IntoElement {
+    let dim = theme::dim(cx);
+    let theme = cx.theme();
+    let (danger, border) = (theme.danger, theme.border);
+    let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+    let line = |id: &'static str, text: String| {
+        div()
+            .id(id)
+            .aria_label(text.clone())
+            .test_support()
+            .flex_none()
+            .px_2()
+            .py_1()
+            .child(text)
+    };
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .children(header.map(|h| {
+            line("key-header", h)
+                .font_family(mono)
+                .text_size(mono_size)
+                .text_color(dim)
+                .border_b_1()
+                .border_color(border)
+        }))
+        .children(error.map(|e| line("key-error", e).text_color(danger)))
+        .child(div().flex_1().min_h_0().child(results))
+        .when(more, |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .p_1()
+                    .border_t_1()
+                    .border_color(border)
+                    .child(
+                        Button::new("key-load-more")
+                            .outline()
+                            .xsmall()
+                            .label("Load more")
+                            .accessibility_label("Load more")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.update(cx, |m, cx| {
+                                    m.load_more_value(cx);
+                                });
+                            })),
+                    ),
+            )
+        })
 }
 
 // Builds the editor menu; each item acts on the tab, the clipboard ones through the editor's

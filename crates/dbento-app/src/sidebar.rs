@@ -29,6 +29,7 @@ use crate::app::Services;
 use crate::catalog::{
     CatalogClosing, CatalogData, CatalogQuery, CatalogReply, CatalogRunner, spawn_catalog,
 };
+use crate::confirm::{TextAsk, ask_text};
 use crate::explorer::{
     DraggedItem, DropBar, ExplorerRow, connection_a11y_id, connection_id, drop_allowed, drop_bar,
     explorer_rows, folder_id, part_id, shown_depth,
@@ -37,11 +38,12 @@ use crate::keymap::{
     NewConnection, OpenSelected, ReloadWorkspace, TreeCollapse, TreeExpand, TreeSelectFirst,
     TreeSelectLast, TreeSelectNext, TreeSelectPrev, keys_for,
 };
+use crate::keys::{KeyFilter, display_key, parse_key_filter, ttl_text, type_name};
 use crate::link::{LinkState, shows_read_only};
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, LoadRequest, NodeKey, ObjectGroup, RevealStep, RowKind,
-    catalog_entries, count_text, group_title, insert_sql, lone_schema, node_connection,
+    catalog_entries, count_text, db_index, group_title, insert_sql, lone_schema, node_connection,
     object_group_title, qualified_name, select_text, short_type,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
@@ -113,6 +115,15 @@ pub enum SidebarEvent {
         /// The object to show.
         object: ObjectRef,
     },
+    /// Open Redis key `key` of DB `db` in its own value tab.
+    OpenKey {
+        /// The connection's index into `Workspace::connections`.
+        connection: usize,
+        /// The DB index.
+        db: u32,
+        /// The key's name, which may not be UTF-8.
+        key: Vec<u8>,
+    },
     /// A definition load's answer, or its error message.
     Definition {
         /// The connection's name.
@@ -159,6 +170,7 @@ enum Selection {
     Connection(String),
     Node(NodeKey),
     Object { conn: String, object: ObjectRef },
+    Key { conn: String, db: u32, key: Vec<u8> },
 }
 
 /// What opens or closes a row: a folder's collapse flag or a node of the catalog tree.
@@ -181,11 +193,39 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
                 conn: owner.name.clone(),
                 object: object.clone(),
             }),
-            RowKind::Schema | RowKind::Kind(_) | RowKind::Relation(_) | RowKind::Group(_) => {
-                Some(Selection::Node(r.key.clone()))
-            }
+            RowKind::Schema
+            | RowKind::Kind(_)
+            | RowKind::Relation(_)
+            | RowKind::Group(_)
+            | RowKind::KeyFolder { .. } => Some(Selection::Node(r.key.clone())),
+            // A key shares its parent's node, so it selects by its DB and name instead.
+            RowKind::Key(item) => Some(Selection::Key {
+                conn: owner.name.clone(),
+                db: node_db(&r.key)?,
+                key: item.name.clone(),
+            }),
             _ => None,
         },
+    }
+}
+
+// The Redis DB a key-tree node sits in: a DB row's index or a folder's.
+fn node_db(key: &NodeKey) -> Option<u32> {
+    match key {
+        NodeKey::Schema { schema, .. } => db_index(schema),
+        NodeKey::KeyFolder { db, .. } => Some(*db),
+        _ => None,
+    }
+}
+
+// Marks every connection whose engine browses keys, dropping marks the workspace no longer
+// earns, so a renamed or re-engined connection does not keep its old tree.
+fn mark_key_browsers(tree: &mut CatalogTree, ws: &Workspace) {
+    tree.clear_key_browsers();
+    for c in ws.connections() {
+        if c.engine().capabilities().key_browser {
+            tree.set_key_browser(c.name());
+        }
     }
 }
 
@@ -263,12 +303,14 @@ impl Sidebar {
                 cx.notify();
             }
         });
+        let mut tree = CatalogTree::new();
+        mark_key_browsers(&mut tree, &workspace);
         Sidebar {
             workspace,
             services,
             selection: None,
             collapsed: HashSet::new(),
-            tree: CatalogTree::new(),
+            tree,
             catalogs: HashMap::new(),
             closed: false,
             catalogs_started: 0,
@@ -296,7 +338,7 @@ impl Sidebar {
         let name = match self.selection.as_ref()? {
             Selection::Connection(name) => name,
             Selection::Node(key) => node_connection(key),
-            Selection::Object { conn, .. } => conn,
+            Selection::Object { conn, .. } | Selection::Key { conn, .. } => conn,
             Selection::Folder(_) => return None,
         };
         self.workspace
@@ -684,6 +726,7 @@ impl Sidebar {
     ) -> Vec<CatalogClosing> {
         // Swap first, so every runner `send` starts from here on opens on the new settings.
         let old = std::mem::replace(&mut self.workspace, ws);
+        mark_key_browsers(&mut self.tree, &self.workspace);
         let stale: Vec<String> = self
             .catalogs
             .keys()
@@ -962,11 +1005,71 @@ impl Sidebar {
         cx.notify();
     }
 
+    fn open_key(&mut self, conn: &str, db: u32, key: Vec<u8>, cx: &mut Context<Self>) {
+        let Some(connection) = self
+            .workspace
+            .connections()
+            .iter()
+            .position(|c| c.name() == conn)
+        else {
+            return;
+        };
+        cx.emit(SidebarEvent::OpenKey {
+            connection,
+            db,
+            key,
+        });
+    }
+
+    /// Sets DB `db`'s key filter on `conn` and rescans it when open.
+    pub fn filter_keys(&mut self, conn: &str, db: u32, filter: KeyFilter, cx: &mut Context<Self>) {
+        if let Some(request) = self.tree.filter_keys(conn, db, filter) {
+            self.send(request, cx);
+        }
+        cx.notify();
+    }
+
+    // Asks for DB `db`'s key filter as `<pattern> [type:<kind>]`, starting from the current one.
+    fn ask_key_filter(
+        &mut self,
+        conn: String,
+        db: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let now = self.tree.key_filter(&conn, db);
+        let initial = [now.pattern.unwrap_or_else(|| "*".into())]
+            .into_iter()
+            .chain(now.kind.map(|k| format!("type:{k}")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let spec = TextAsk {
+            title: "Filter keys".into(),
+            hint: format!("A pattern such as user:*, and optionally type:hash, in db{db}").into(),
+            ok: "Filter".into(),
+            initial,
+            check: Rc::new(|text| parse_key_filter(text).err().map(SharedString::from)),
+        };
+        let reply = ask_text(spec, window, cx);
+        cx.spawn(async move |this, cx| {
+            let Ok(text) = reply.recv().await else { return };
+            let Ok(filter) = parse_key_filter(&text) else {
+                return;
+            };
+            let _ = this.update(cx, |s, cx| s.filter_keys(&conn, db, filter, cx));
+        })
+        .detach();
+    }
+
     // Enter opens a selected relation as its double click does and asks for a selected
     // object's definition; any other selection lets the key go on to whatever binds it above.
     fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
         if let Some((connection, object)) = self.selected_object() {
             cx.emit(SidebarEvent::ViewDefinition { connection, object });
+            return;
+        }
+        if let Some(Selection::Key { conn, db, key }) = self.selection.clone() {
+            self.open_key(&conn, db, key, cx);
             return;
         }
         let Some(Selection::Node(NodeKey::Relation { conn, rel })) = self.selection.clone() else {
@@ -1090,7 +1193,11 @@ impl Sidebar {
                 _ => None,
             },
             // An object row is a leaf, though it carries its group's key.
-            SidebarRow::Catalog(r, ..) if matches!(r.kind, RowKind::Object { .. }) => None,
+            SidebarRow::Catalog(r, ..)
+                if matches!(r.kind, RowKind::Object { .. } | RowKind::Key(_)) =>
+            {
+                None
+            }
             SidebarRow::Catalog(r, ..) => {
                 row_selection(&self.rows[ix]).map(|_| (r.expanded, RowToggle::Node(r.key.clone())))
             }
@@ -1532,7 +1639,11 @@ impl Sidebar {
         };
         let expandable = matches!(
             row.kind,
-            RowKind::Schema | RowKind::Kind(_) | RowKind::Relation(_) | RowKind::Group(_)
+            RowKind::Schema
+                | RowKind::Kind(_)
+                | RowKind::Relation(_)
+                | RowKind::Group(_)
+                | RowKind::KeyFolder { .. }
         );
         let lead = div().w(px(LEAD)).flex_none().flex().justify_center();
         // The chevron keeps its click to itself, so a double click on it toggles once.
@@ -1572,6 +1683,9 @@ impl Sidebar {
                         object: object.clone(),
                     })
             }
+            RowKind::Key(item) => matches!(&self.selection,
+                Some(Selection::Key { conn, db, key })
+                    if *conn == owner.name && Some(*db) == node_db(&row.key) && *key == item.name),
             _ => expandable && self.selection.as_ref() == Some(&Selection::Node(row.key.clone())),
         };
         let bg = if selected { active } else { chrome };
@@ -1628,11 +1742,54 @@ impl Sidebar {
                         });
                     }
                 }))
+        } else if let (RowKind::Key(item), Some(db)) = (&row.kind, node_db(&row.key)) {
+            // A key selects on a click and opens its value on the double click's second.
+            let (conn, key) = (owner.name.clone(), item.name.clone());
+            base.cursor_pointer()
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    window.focus(&this.focus, cx);
+                    let selection = Selection::Key {
+                        conn: conn.clone(),
+                        db,
+                        key: key.clone(),
+                    };
+                    this.set_selection(selection, cx);
+                    if e.click_count() == 2 {
+                        this.open_key(&conn, db, key.clone(), cx);
+                    }
+                }))
+        } else if let (RowKind::LoadMore, Some(db)) = (&row.kind, node_db(&row.key)) {
+            let conn = owner.name.clone();
+            base.cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(request) = this.tree.load_more_keys(&conn, db) {
+                        this.send(request, cx);
+                    }
+                    cx.notify();
+                }))
         } else {
             base
         };
         match &row.kind {
             RowKind::Schema => base.child(name(row.label.clone())),
+            RowKind::Key(item) => {
+                let detail = format!("{} {}", type_name(&item.kind), ttl_text(&item.ttl))
+                    .trim()
+                    .to_owned();
+                base.child(name(row.label.clone()))
+                    .child(div().flex_1())
+                    .child(
+                        mono_dim(detail.clone())
+                            .id(("tree-detail", visible))
+                            .aria_label(detail)
+                            .test_support(),
+                    )
+            }
+            RowKind::KeyFolder { keys, .. } => base
+                .child(name(row.label.clone()))
+                .child(div().flex_1())
+                .child(mono_dim(keys.to_string())),
+            RowKind::LoadMore => base.text_color(accent).child(name(row.label.clone())),
             RowKind::Relation(_) => {
                 let tip: Option<SharedString> = match &row.key {
                     NodeKey::Relation { rel, .. } if self.tip_allowed(&row.key, false) => {
@@ -2005,6 +2162,8 @@ pub fn menu_icon(id: &str) -> Option<IconName> {
         "tree-menu-copy-name" | "tree-menu-copy-qualified" | "tree-menu-copy-error" => Icons::Copy,
         "tree-menu-refresh" | "tree-menu-retry" => Icons::RotateCw,
         "tree-menu-view-definition" => Icons::FileText,
+        "tree-menu-open-key" => Icons::FileText,
+        "tree-menu-filter-keys" => Icons::Search,
         _ => return None,
     })
 }
@@ -2213,7 +2372,31 @@ fn catalog_menu(
                     })
                 }))
             }
-            "tree-menu-copy-name" => item.on_click(copy(t.label.clone())),
+            // A key copies its full name, a folder its prefix as a pattern.
+            "tree-menu-copy-name" => item.on_click(copy(match &t.kind {
+                RowKind::Key(k) => display_key(&k.name),
+                RowKind::KeyFolder { prefix, .. } => format!("{}*", display_key(prefix)),
+                _ => t.label.clone(),
+            })),
+            "tree-menu-open-key" => match (&t.kind, node_db(&t.node)) {
+                (RowKind::Key(k), Some(db)) => {
+                    let key = k.name.clone();
+                    item.on_click(on_sidebar(weak, move |s, cx| {
+                        s.open_key(&conn, db, key.clone(), cx)
+                    }))
+                }
+                _ => continue,
+            },
+            "tree-menu-filter-keys" => match node_db(&t.node) {
+                Some(db) => {
+                    let weak = weak.clone();
+                    item.on_click(move |_, window, cx| {
+                        let conn = conn.clone();
+                        let _ = weak.update(cx, |s, cx| s.ask_key_filter(conn, db, window, cx));
+                    })
+                }
+                None => continue,
+            },
             "tree-menu-copy-qualified" => match &qualified {
                 Some(q) => item.on_click(copy(q.clone())),
                 None => continue,

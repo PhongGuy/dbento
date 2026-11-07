@@ -730,6 +730,11 @@ impl CatalogTree {
         self.key_browsers.insert(conn.to_owned());
     }
 
+    /// Unmarks every key browser, so a workspace install can mark its own afresh.
+    pub fn clear_key_browsers(&mut self) {
+        self.key_browsers.clear();
+    }
+
     /// The DB index of `schema` when `conn` browses keys and the name is a DB row's.
     fn key_db(&self, conn: &str, schema: &str) -> Option<u32> {
         self.key_browsers.contains(conn).then(|| db_index(schema))?
@@ -1773,6 +1778,13 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         )
         .chain([refresh])
         .collect(),
+        // A Redis DB lists keys, so its filter is a key pattern rather than the name filter.
+        RowKind::Schema if engine.capabilities().key_browser => vec![
+            new_query("New query"),
+            copy_name,
+            entry("tree-menu-filter-keys", "Filter keys…"),
+            refresh,
+        ],
         RowKind::Schema => vec![new_query("New query"), copy_name, refresh],
         RowKind::Kind(_) => vec![new_query("New query"), refresh],
         RowKind::Column { .. } => [copy_name].into_iter().chain(copy_qualified).collect(),
@@ -1789,7 +1801,15 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             copy_name,
         ],
         RowKind::Loading | RowKind::Empty | RowKind::Truncated => Vec::new(),
-        RowKind::KeyFolder { .. } | RowKind::Key(_) | RowKind::LoadMore => Vec::new(),
+        RowKind::Key(_) => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..entry("tree-menu-open-key", "Open value")
+            },
+            copy_name,
+        ],
+        RowKind::KeyFolder { .. } => vec![copy_name],
+        RowKind::LoadMore => Vec::new(),
     }
 }
 
