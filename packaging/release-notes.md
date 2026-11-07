@@ -16,8 +16,8 @@
 | macOS Apple silicon, command line | `dbento-{version}-aarch64-apple-darwin.tar.gz` |
 | macOS Intel, app | `Dbento_{version}_x86_64.dmg` |
 | macOS Intel, command line | `dbento-{version}-x86_64-apple-darwin.tar.gz` |
-| Windows x64, app | `dbento-app_{version}_x64-setup-unsigned.exe` |
-| Windows x64, command line | `dbento-{version}-x86_64-pc-windows-msvc-unsigned.zip` |
+| Windows x64, app | `dbento-app_{version}_x64-setup.exe` |
+| Windows x64, command line | `dbento-{version}-x86_64-pc-windows-msvc.zip` |
 
 Each file also has a copy with no version in its name, for links that always point at the latest release. Third-party licences are in `THIRD-PARTY-NOTICES.html` inside every package.
 
@@ -28,7 +28,7 @@ Check a download with `sha256sum -c SHA256SUMS`.
 These builds are not code-signed yet.
 
 - **macOS:** drag Dbento to Applications, then run `xattr -dr com.apple.quarantine /Applications/Dbento.app` once before the first launch.
-- **Windows:** SmartScreen warns about an unknown publisher. Choose "More info", then "Run anyway". The copies with no version in their name (`dbento-app_x64-setup.exe`, `dbento-x86_64-pc-windows-msvc.zip`) are the same unsigned files.
+- **Windows:** SmartScreen warns about an unknown publisher. Choose "More info", then "Run anyway".
 
 ## Updates
 

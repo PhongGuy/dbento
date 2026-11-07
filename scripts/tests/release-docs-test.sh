@@ -44,7 +44,6 @@ test_readme_covers_first_launch_on_each_platform() {
   need "$README" 'sha256sum -c --ignore-missing SHA256SUMS'
   need "$README" '/Applications'
   need "$README" 'xattr -dr com.apple.quarantine /Applications/Dbento.app'
-  need "$README" '-unsigned'
   need "$README" 'THIRD-PARTY-NOTICES.html'
   need "$README" 'The macOS and Windows packages have not yet been tested on those systems.'
   grep -qiE 'AppImage.*CLI archive|CLI archive.*AppImage' "$README" || fail "README does not send AppImage users to the CLI archive"
@@ -55,10 +54,9 @@ test_readme_covers_first_launch_on_each_platform() {
 test_releasing_doc_covers_the_release_steps() {
   [[ -f $DOC ]] || { fail "no RELEASING.md"; return 0; }
   local s
-  for s in 'gh secret set WINDOWS_CERTIFICATE' 'gh secret set WINDOWS_CERTIFICATE_PASSWORD' \
-    'gh workflow run release.yml --ref master -f dry_run=true -f platforms=linux,windows,macos-arm64' \
+  for s in 'gh workflow run release.yml --ref master -f dry_run=true -f platforms=linux,windows,macos-arm64' \
     'gh run watch <id> --exit-status' 'git tag v<version>' 'git push origin v<version>' 'sha256sum -c SHA256SUMS' \
-    'codesign -v' 'xattr -dr com.apple.quarantine /Applications/Dbento.app' 'macos-intel' '-unsigned' \
+    'codesign -v' 'xattr -dr com.apple.quarantine /Applications/Dbento.app' 'macos-intel' \
     'THIRD-PARTY-NOTICES.html' 'CLI archive'; do
     need "$DOC" "$s"
   done
@@ -80,6 +78,14 @@ test_releasing_doc_checks_the_intro_placeholder_is_gone() {
 test_releasing_doc_warns_that_a_tag_dispatch_drafts() {
   [[ -f $DOC ]] || return 0
   need "$DOC" 'A run dispatched on a tag ref with `dry_run=false` drafts a release too, exactly as pushing the tag does.'
+}
+
+# Windows ships unsigned under its plain names, so no doc names a certificate or the old marker.
+test_docs_name_no_certificate_or_unsigned_marker() {
+  local f
+  for f in "$README" "$DOC" "$ROOT/packaging/release-notes.md"; do
+    if grep -nE 'WINDOWS_CERTIFICATE|-unsigned|signtool' "$f"; then fail "$(basename "$f") still names Windows certificate signing"; fi
+  done
 }
 
 test_docs_carry_no_updater_or_apinata_text() {

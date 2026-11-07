@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release helpers for the release workflow: the tag guard, the build matrix, the secret-free
-# build and package, the macOS dmg, Windows signing of the built files, stable-named copies and SHA256SUMS.
+# build and package, the macOS dmg, stable-named copies and SHA256SUMS.
 # Must stay bash 3.2 safe, since macOS runners run /bin/bash 3.2.
 # Sourcing this file only defines functions; running it dispatches a subcommand.
 source "$(dirname "${BASH_SOURCE[0]}")/package-linux.sh"
@@ -75,108 +75,6 @@ select_targets() {
   echo "{\"include\":[${rows[*]}]}"
 }
 
-# Windows signing is driven by these two secrets; a missing GitHub secret
-# expands to an empty string, so blank (empty or whitespace) counts as unset.
-WINDOWS_SIGNING_VARS="WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD"
-
-# Print the name of each named variable that is unset, empty or whitespace only.
-blank_vars() {
-  local v val
-  for v in "$@"; do
-    val=${!v:-}
-    if [[ -z ${val//[[:space:]]/} ]]; then echo "$v"; fi
-  done
-}
-
-# Print signed when both signing secrets are present and unsigned when both are
-# blank; with only one present, fail and name the blank one (never a value).
-windows_signing_mode() {
-  local blank total
-  blank=$(blank_vars $WINDOWS_SIGNING_VARS)
-  set -- $WINDOWS_SIGNING_VARS
-  total=$#
-  set -- $blank
-  if (($# == 0)); then
-    echo signed
-  elif (($# == total)); then
-    echo unsigned
-  else
-    echo "release: set both Windows signing secrets or neither; blank: $*" >&2
-    return 1
-  fi
-}
-
-# The shell cargo-packager starts for signCommand: Git Bash's own bash.exe as
-# an 8.3 path, so a bare bash never resolves to WSL's System32\bash.exe.
-sign_shell() {
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -m -s "$(command -v bash)"
-  else
-    echo bash
-  fi
-}
-
-# Write KEYDIR/sign.sh, which signtool-signs one file with KEYDIR/dbento.pfx.
-# The heredoc is quoted so the password is read only when sign.sh runs.
-write_sign_script() {
-  cat >"$1/sign.sh" <<'SIGN'
-#!/usr/bin/env bash
-# Signs one file with the release certificate; cargo-packager runs it per file.
-set -euo pipefail
-export MSYS2_ARG_CONV_EXCL='*'
-pfx=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dbento.pfx
-if command -v cygpath >/dev/null; then pfx=$(cygpath -w "$pfx"); fi
-tool=${SIGNTOOL:-$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64/signtool.exe | sort -V | tail -n 1)}
-exec "$tool" sign /fd SHA256 /f "$pfx" /p "$WINDOWS_CERTIFICATE_PASSWORD" /d Dbento "$1"
-SIGN
-  chmod 700 "$1/sign.sh"
-}
-
-# Set up Windows signing in the caller's shell. Unsigned clears the secrets;
-# signed decodes the certificate into a private KEYDIR and exports the
-# signCommand. Every step returns explicitly, since callers may run it where
-# set -e is suspended.
-prepare_windows_signing() {
-  local mode=$1 keydir=$2 shell
-  case $mode in
-    unsigned)
-      unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD DBENTO_WINDOWS_SIGN_COMMAND
-      return 0
-      ;;
-    signed) ;;
-    *) echo "release: unknown Windows signing mode '$mode'" >&2; return 1 ;;
-  esac
-
-  # cargo-packager splits signCommand on spaces, so neither part may hold one.
-  shell=${SIGN_SHELL:-$(sign_shell)} || return 1
-  if [[ $shell == *' '* || $keydir == *' '* ]]; then
-    echo "release: the sign shell ($shell) and key directory ($keydir) must not contain a space" >&2
-    return 1
-  fi
-
-  (umask 077 && mkdir -p "$keydir") || return 1
-  chmod 700 "$keydir" || return 1
-  if ! (umask 077 && printf '%s' "$WINDOWS_CERTIFICATE" | base64 -d >"$keydir/dbento.pfx") 2>/dev/null; then
-    rm -f "$keydir/dbento.pfx"
-    echo "release: WINDOWS_CERTIFICATE is not valid base64" >&2
-    return 1
-  fi
-  write_sign_script "$keydir" || return 1
-  export DBENTO_WINDOWS_SIGN_COMMAND="$shell $keydir/sign.sh %1"
-  unset WINDOWS_CERTIFICATE
-}
-
-# Rename the Windows installer and CLI zip directly in DIR to carry -unsigned.
-mark_unsigned() {
-  local f ext
-  for f in "$1"/*-setup.exe "$1"/*.zip; do
-    [[ -e $f ]] || continue
-    case $f in *-unsigned.*) continue ;; esac
-    ext=${f##*.}
-    mv "$f" "${f%.*}-unsigned.$ext" || return 1
-  done
-}
-
 # Ad-hoc sign PATH (no Apple identity) and check the signature holds.
 adhoc_sign() {
   "${CODESIGN:-codesign}" --force --deep --sign - "$1" || return 1
@@ -213,34 +111,19 @@ cli_zip() {
   fi
   mkdir -p "$out" || return 1
   zip=$(cd "$out" && pwd)/$name.zip
+  rm -f -- "$zip"
   stage=$(mktemp -d) || return 1
   install -d -m 0755 "$stage/$name"
   install -m 0755 "$binary" "$stage/$name/dbento.exe"
   for f in "$@"; do
     install -m 0644 "$f" "$stage/$name/$(basename "$f")"
   done
-  zip_tree "$stage" "$name" "$zip" || { rm -rf -- "$stage"; return 1; }
+  if command -v 7z >/dev/null 2>&1; then
+    (cd "$stage" && 7z a -tzip "$zip" "$name" >/dev/null) || { rm -rf -- "$stage"; return 1; }
+  else
+    (cd "$stage" && zip -q -r -X "$zip" "$name") || { rm -rf -- "$stage"; return 1; }
+  fi
   rm -rf -- "$stage"
-}
-
-# Write ZIP (absolute) from directory NAME under STAGE, replacing any earlier ZIP; 7z first, else zip.
-zip_tree() {
-  local stage=$1 name=$2 zip=$3
-  rm -f -- "$zip"
-  if command -v 7z >/dev/null 2>&1; then
-    (cd "$stage" && 7z a -tzip "$zip" "$name" >/dev/null)
-  else
-    (cd "$stage" && zip -q -r -X "$zip" "$name")
-  fi
-}
-
-# Extract ZIP into the directory DEST; 7z first, else unzip.
-unzip_to() {
-  if command -v 7z >/dev/null 2>&1; then
-    7z x -y "-o$2" "$1" >/dev/null
-  else
-    unzip -q "$1" -d "$2"
-  fi
 }
 
 # The packaging host, macos or windows; Linux and anything else is sent to make package.
@@ -260,22 +143,9 @@ package_dirs() {
   OUT=${OUT_DIR:-$ROOT/target/dist/$1}
 }
 
-# Fail, naming the variable but never its value, when a signing secret reaches STEP.
-refuse_signing_secrets() {
-  local v
-  for v in $WINDOWS_SIGNING_VARS; do
-    if [[ -z $(blank_vars "$v") ]]; then
-      echo "release: $v is set; the $1 step must not see the signing secrets" >&2
-      return 1
-    fi
-  done
-}
-
-# Build the release binaries and the notices on macOS or Windows into OUT_DIR. Build scripts
-# run here, so this step refuses to start while a Windows signing secret is in the environment.
+# Build the release binaries and the notices on macOS or Windows into OUT_DIR.
 build_main() {
   local os
-  refuse_signing_secrets build || return 1
   os=$(package_os) || return 1
   package_dirs "$os"
   prepare_out_dir "$ROOT" "$OUT" || return 1
@@ -291,10 +161,9 @@ build_main() {
 }
 
 # Package what build_main left into the CLI archive and the app installer. macOS is ad-hoc
-# signed; Windows comes out marked -unsigned, for the signing job to sign without compiling.
+# signed; Windows ships unsigned, since there is no CA-issued certificate.
 package_main() {
   local os
-  refuse_signing_secrets package || return 1
   os=$(package_os) || return 1
   package_dirs "$os"
   local out version target bin_dir
@@ -319,68 +188,11 @@ package_main() {
     cli_zip "$bin_dir/dbento.exe" "$version" "$target" "$out" "${files[@]}"
   fi
   rm -rf -- "$out/.cargo-packager"
-  if [[ $os == windows ]]; then mark_unsigned "$out"; fi
   echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
 }
 
-# PATH as signtool wants it: a Windows path under Git Bash, unchanged elsewhere.
-native_path() {
-  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi
-}
-
-# Sign the -unsigned Windows installer and CLI zip in DIR, renaming each without the marker. The
-# zip is unpacked so the dbento.exe inside is signed, then packed again with the same layout.
-sign_windows_files() {
-  local dir=$1 tool=$2 f signed=0 stage exes top
-  for f in "$dir"/*-setup-unsigned.exe "$dir"/*-unsigned.zip; do
-    [[ -e $f ]] || continue
-    case $f in
-      *.exe)
-        bash "$tool" "$(native_path "$f")" || return 1
-        ;;
-      *.zip)
-        stage=$(mktemp -d) || return 1
-        unzip_to "$f" "$stage" || return 1
-        exes=$(find "$stage" -name dbento.exe)
-        if [[ $(grep -c . <<<"$exes") != 1 ]]; then
-          echo "release: want one dbento.exe in $(basename "$f")" >&2
-          return 1
-        fi
-        bash "$tool" "$(native_path "$exes")" || return 1
-        top=$(basename "$(dirname "$exes")")
-        zip_tree "$stage" "$top" "$(cd "$dir" && pwd)/$(basename "$f")" || return 1
-        rm -rf -- "$stage"
-        ;;
-    esac
-    mv -- "$f" "${f%-unsigned.*}.${f##*.}" || return 1
-    signed=$((signed + 1))
-  done
-  if ((signed == 0)); then
-    echo "release: no unsigned Windows installer or zip in $dir" >&2
-    return 1
-  fi
-}
-
-# Sign the Windows files the build job left in DIR. With neither secret set they stay unsigned,
-# keeping their -unsigned names; with one set, windows_signing_mode fails.
-sign_main() {
-  local dir=$1 mode
-  mode=$(windows_signing_mode) || return 1
-  if [[ $mode == unsigned ]]; then
-    echo "release: no Windows signing secrets; $dir stays unsigned"
-    return 0
-  fi
-  KEYDIR=$(mktemp -d)
-  trap 'rm -rf -- "$KEYDIR"' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  prepare_windows_signing signed "$KEYDIR/keys" || return 1
-  sign_windows_files "$dir" "$KEYDIR/keys/sign.sh"
-  echo "release: signed the Windows files in $dir"
-}
-
 # The stable name of release file NAME at VERSION, for /releases/latest/download links: the
-# version and any -unsigned marker dropped. Prints nothing for a file that is not an artifact.
+# version dropped. Prints nothing for a file that is not an artifact.
 stable_name() {
   local name=$1 version=$2 out
   case $name in
@@ -392,7 +204,7 @@ stable_name() {
     *"-${version}-"*) out=${name/"-${version}-"/-} ;;
     *) return 0 ;;
   esac
-  echo "${out/-unsigned./.}"
+  echo "$out"
 }
 
 # Copy every versioned artifact under DIR to its stable name at DIR's top level, beside the
@@ -417,7 +229,7 @@ stable_copies() {
 }
 
 usage() {
-  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | sign DIR | stable DIR VERSION | sums DIR" >&2
+  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR" >&2
   exit 2
 }
 
@@ -441,10 +253,6 @@ main() {
     package)
       (($# == 1)) || usage
       package_main
-      ;;
-    sign)
-      (($# == 2)) || usage
-      sign_main "$2"
       ;;
     stable)
       (($# == 3)) || usage

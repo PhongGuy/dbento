@@ -64,7 +64,7 @@ test_ci_gate_timeout_and_pins() {
 
 test_release_jobs_have_their_timeouts() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  [[ $(job_timeouts "$RELEASE") == "build=90 checksums=45 guard=5 sign=15 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
+  [[ $(job_timeouts "$RELEASE") == "build=90 checksums=45 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
   pinned_uses_only "$RELEASE"
 }
 
@@ -94,29 +94,6 @@ test_release_builds_with_the_packaging_tools() {
   grep -qE '^  LINUX_BUILD_DEPS: .*libclang-dev' "$RELEASE" || fail "LINUX_BUILD_DEPS lacks libclang-dev"
 }
 
-# Build scripts and packaging tools must never see the signing secrets: only the sign job
-# names them, and it alone is bound to the release environment.
-test_release_secrets_reach_only_the_sign_job() {
-  [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  local sign
-  sign=$(job_body "$RELEASE" sign)
-  [[ -n $sign ]] || { fail "release.yml has no sign job"; return 0; }
-  [[ $(grep -c 'secrets\.' "$RELEASE") == 2 && $(grep -c 'secrets\.' <<<"$sign") == 2 ]] \
-    || fail "secrets referenced outside the sign job: $(grep -n 'secrets\.' "$RELEASE")"
-  grep -qF 'WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}' <<<"$sign" || fail "certificate secret not passed to sign"
-  grep -qF 'WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}' <<<"$sign" || fail "password secret not passed to sign"
-  grep -qF 'TMPDIR: ${{ runner.temp }}' <<<"$sign" || fail "the signing key dir is not under runner.temp"
-  [[ $(grep -cE '^    environment:' "$RELEASE") == 1 ]] || fail "environment: outside one job: $(grep -n 'environment:' "$RELEASE")"
-  grep -qxF '    environment: release' <<<"$sign" || fail "the sign job is not bound to environment: release"
-  grep -qxF '    if: github.ref_type == '"'"'tag'"'"' && contains(needs.guard.outputs.matrix, '"'"'windows'"'"')' <<<"$sign" \
-    || fail "the sign job does not run only on a tag with a Windows build"
-  grep -qxF '        run: bash scripts/release.sh sign dist' <<<"$sign" || fail "the sign job does not run release.sh sign"
-  # The signing job downloads, signs and uploads; anything that compiles or installs a crate is refused.
-  if grep -nE 'cargo|make |rustup|rust-toolchain|apt-get|pip |npm ' <<<"$sign"; then fail "the sign job compiles or installs"; fi
-  if grep -qE 'contents: write' <<<"$sign"; then fail "the sign job can write the repository"; fi
-  grep -qF 'overwrite: true' <<<"$sign" || fail "the sign job does not replace the unsigned artifact"
-}
-
 # The build and package steps hold no secrets and no env carrying one.
 test_release_build_job_has_no_secrets() {
   [[ -f $RELEASE ]] || return 0
@@ -132,16 +109,6 @@ test_release_restores_no_cache() {
   if grep -nE 'rust-cache|actions/cache|^[[:space:]]+cache:|enable-cache|cache-' "$RELEASE"; then fail "release.yml restores a cache"; fi
 }
 
-# Signing finishes before the sums, so SHA256SUMS covers the signed files.
-test_release_sums_wait_for_signing() {
-  [[ -f $RELEASE ]] || return 0
-  local checksums
-  checksums=$(job_body "$RELEASE" checksums)
-  grep -qxF '    needs: [guard, build, sign]' <<<"$checksums" || fail "checksums does not wait for sign"
-  grep -qF "needs.sign.result == 'success' || needs.sign.result == 'skipped'" <<<"$checksums" \
-    || fail "checksums does not run after a skipped sign or stop after a failed one"
-}
-
 # zizmor audits every workflow, at a pinned version, with a read-only token and no credentials kept.
 test_zizmor_audits_the_workflows() {
   [[ -f $ZIZMOR ]] || { fail "no zizmor.yml"; return 0; }
@@ -152,6 +119,12 @@ test_zizmor_audits_the_workflows() {
   grep -qE 'run: uvx zizmor@.* \.github/workflows$' "$ZIZMOR" || fail "zizmor does not audit .github/workflows"
   grep -qxF '          enable-cache: false' "$ZIZMOR" || fail "setup-uv caches"
   [[ $(job_timeouts "$ZIZMOR") == "zizmor=10 " ]] || fail "zizmor timeouts: $(job_timeouts "$ZIZMOR")"
+}
+
+# No release job holds a secret: there is no certificate, and provenance comes from attestation.
+test_release_holds_no_signing_secret() {
+  [[ -f $RELEASE ]] || return 0
+  if grep -nE 'secrets\.|WINDOWS_CERTIFICATE|signtool' "$RELEASE"; then fail "release.yml still handles a signing secret"; fi
 }
 
 # The stable copies must exist before the sums run, so SHA256SUMS covers them too.
