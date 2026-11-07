@@ -25,7 +25,8 @@ env:
 
 jobs:
   gate:
-    runs-on: ubuntu-24.04
+    # A cold run of the full suite outlasts an hour; the cache saves only after a green run.
+    timeout-minutes: 120
     timeout-minutes: 60
     env:
       # The repository owner accepted the SQL Server Developer licence for this CI job.
