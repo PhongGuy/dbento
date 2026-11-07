@@ -131,6 +131,28 @@ test_release_drafts_only_on_a_tag() {
   [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] || fail "contents: write outside the checksums job"
 }
 
+# The notes come from GitHub's generate-notes API, which needs the job token (the checksums job holds contents: write).
+test_release_notes_step_has_the_token() {
+  [[ -f $RELEASE ]] || return 0
+  local run start
+  run=$(grep -nF 'run: scripts/release-notes.sh' "$RELEASE" | cut -d: -f1) || true
+  [[ -n $run ]] || { fail "no step writes the notes"; return 0; }
+  start=$(awk -v run="$run" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
+  grep -qF 'GH_TOKEN: ${{ github.token }}' <<<"$(sed -n "${start},${run}p" "$RELEASE")" \
+    || fail "the notes step has no GH_TOKEN"
+  awk '/^  checksums:$/ { on = 1 } on && /scripts\/release-notes\.sh/ { ok = 1 } on && /^  [a-z]/ && !/checksums/ { on = 0 } END { exit !ok }' "$RELEASE" \
+    || fail "the notes step is not in the checksums job"
+}
+
+# The attribution check is a shared template; it still pins every action to a commit.
+test_attribution_check_is_pinned_and_reads_the_base() {
+  local file=$ROOT/.github/workflows/attribution.yml
+  [[ -f $file ]] || { fail "no attribution.yml"; return 0; }
+  pinned_uses_only "$file"
+  grep -qF 'git show "$BASE:.github/scripts/attribution-lib.sh"' "$file" || fail "attribution.yml does not load the lib from the base"
+  [[ -f $ROOT/.github/scripts/attribution-lib.sh ]] || fail "no .github/scripts/attribution-lib.sh"
+}
+
 # What's Changed walks back to the previous tag, which a shallow checkout does not have.
 test_release_notes_checkout_has_full_history() {
   [[ -f $RELEASE ]] || return 0

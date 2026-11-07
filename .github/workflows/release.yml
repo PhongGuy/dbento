@@ -108,7 +108,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Full history and tags, so the notes can list the commits since the previous tag.
+      # Full history and tags, so the notes can find the previous tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -131,9 +131,12 @@ jobs:
           name: release-${{ needs.guard.outputs.version }}
           path: dist/*
           if-no-files-found: error
-      # A notes file only; gh would put generated notes after it, and they list nothing for commits straight to master.
+      # The script splices GitHub's label-grouped notes into the shared layout, so gh is not asked to generate them again.
       - name: Write the release notes
         if: github.ref_type == 'tag' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"
       - name: Draft the release
         if: github.ref_type == 'tag' && !inputs.dry_run
