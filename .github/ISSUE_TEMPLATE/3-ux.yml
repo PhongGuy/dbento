@@ -1,0 +1,26 @@
+name: Looks wrong or feels clunky
+description: Layout, styling, keyboard or interaction that works but is awkward.
+labels: [ux]
+assignees: [PhongGuy]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What feels wrong
+      description: Where in the app, and what bothers you about it.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot or recording
+      description: Drag an image or video in here. Blur any data you would not share.
+  - type: textarea
+    id: better
+    attributes:
+      label: What would feel right
+  - type: input
+    id: setup
+    attributes:
+      label: Version, OS and display
+      placeholder: v0.1.0, Fedora 41 Wayland, 2x scale
