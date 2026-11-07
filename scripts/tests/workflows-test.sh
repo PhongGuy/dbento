@@ -14,6 +14,13 @@ job_timeouts() {
        in_jobs && /^    timeout-minutes:/ { print job "=" $2 }' "$1" | LC_ALL=C sort | tr '\n' ' '
 }
 
+# Print the lines of job JOB in FILE, from its key to the next job.
+job_body() {
+  awk -v job="  $2:" '/^jobs:/ { in_jobs = 1; next }
+       in_jobs && /^  [a-z][a-z0-9_-]*:$/ { on = ($0 == job) }
+       in_jobs && on' "$1"
+}
+
 # Every uses: must name a 40-hex commit, never a tag or a branch.
 pinned_uses_only() {
   local file=$1 bad
@@ -56,7 +63,7 @@ test_ci_gate_timeout_and_pins() {
 
 test_release_jobs_have_their_timeouts() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  [[ $(job_timeouts "$RELEASE") == "build=90 checksums=45 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
+  [[ $(job_timeouts "$RELEASE") == "build=90 checksums=45 guard=5 sign=15 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
   pinned_uses_only "$RELEASE"
 }
 
@@ -82,28 +89,56 @@ test_release_builds_with_the_packaging_tools() {
   grep -qF 'run: cargo install --locked cargo-about --version 0.9.2 --features cli' "$RELEASE" || fail "no cargo-about 0.9.2"
   grep -qE '^        run: make package$' "$RELEASE" || fail "no Linux make package"
   grep -qE '^        run: bash scripts/release.sh package$' "$RELEASE" || fail "no macOS and Windows package step"
-  grep -qF "WINDOWS_CERTIFICATE: \${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE || '' }}" "$RELEASE" || fail "certificate secret not passed"
-  grep -qF "WINDOWS_CERTIFICATE_PASSWORD: \${{ runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}" "$RELEASE" || fail "password secret not passed"
-  [[ $(grep -c 'secrets\.' "$RELEASE") == 2 ]] || fail "secrets referenced outside the package step: $(grep -n 'secrets\.' "$RELEASE")"
-  grep -qF 'TMPDIR: ${{ runner.temp }}' "$RELEASE" || fail "the signing key dir is not under runner.temp"
   grep -qF 'run: rm -f target/dist/*/SHA256SUMS target/dist/*/THIRD-PARTY-NOTICES.html' "$RELEASE" || fail "loose files not dropped"
   grep -qE '^  LINUX_BUILD_DEPS: .*libclang-dev' "$RELEASE" || fail "LINUX_BUILD_DEPS lacks libclang-dev"
 }
 
-# Build scripts must never see the signing secrets: the macOS and Windows build is its own step,
-# with no env, before the one package step that takes them.
-test_release_builds_before_the_secrets_arrive() {
+# Build scripts and packaging tools must never see the signing secrets: only the sign job
+# names them, and it alone is bound to the release environment.
+test_release_secrets_reach_only_the_sign_job() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  local build package
-  build=$(grep -nE '^        run: bash scripts/release.sh build$' "$RELEASE" | cut -d: -f1) || true
-  package=$(grep -nE '^        run: bash scripts/release.sh package$' "$RELEASE" | cut -d: -f1) || true
-  [[ -n $build ]] || { fail "release.yml has no separate macOS and Windows build step"; return 0; }
-  [[ -n $package && $build -lt $package ]] || fail "the build step (line $build) does not come before the package step (line $package)"
-  # The build step runs from its name to its run: line; none of it may carry an env.
-  local start
-  start=$(awk -v run="$build" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
-  [[ -n $start ]] || { fail "the build step has no name"; return 0; }
-  if grep -qE '^        env:|secrets\.' <<<"$(sed -n "${start},${build}p" "$RELEASE")"; then fail "the build step has an env or a secret"; fi
+  local sign
+  sign=$(job_body "$RELEASE" sign)
+  [[ -n $sign ]] || { fail "release.yml has no sign job"; return 0; }
+  [[ $(grep -c 'secrets\.' "$RELEASE") == 2 && $(grep -c 'secrets\.' <<<"$sign") == 2 ]] \
+    || fail "secrets referenced outside the sign job: $(grep -n 'secrets\.' "$RELEASE")"
+  grep -qF 'WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}' <<<"$sign" || fail "certificate secret not passed to sign"
+  grep -qF 'WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}' <<<"$sign" || fail "password secret not passed to sign"
+  grep -qF 'TMPDIR: ${{ runner.temp }}' <<<"$sign" || fail "the signing key dir is not under runner.temp"
+  [[ $(grep -cE '^    environment:' "$RELEASE") == 1 ]] || fail "environment: outside one job: $(grep -n 'environment:' "$RELEASE")"
+  grep -qxF '    environment: release' <<<"$sign" || fail "the sign job is not bound to environment: release"
+  grep -qxF '    if: github.ref_type == '"'"'tag'"'"' && contains(needs.guard.outputs.matrix, '"'"'windows'"'"')' <<<"$sign" \
+    || fail "the sign job does not run only on a tag with a Windows build"
+  grep -qxF '        run: bash scripts/release.sh sign dist' <<<"$sign" || fail "the sign job does not run release.sh sign"
+  # The signing job downloads, signs and uploads; anything that compiles or installs a crate is refused.
+  if grep -nE 'cargo|make |rustup|rust-toolchain|apt-get|pip |npm ' <<<"$sign"; then fail "the sign job compiles or installs"; fi
+  if grep -qE 'contents: write' <<<"$sign"; then fail "the sign job can write the repository"; fi
+  grep -qF 'overwrite: true' <<<"$sign" || fail "the sign job does not replace the unsigned artifact"
+}
+
+# The build and package steps hold no secrets and no env carrying one.
+test_release_build_job_has_no_secrets() {
+  [[ -f $RELEASE ]] || return 0
+  local build
+  build=$(job_body "$RELEASE" build)
+  if grep -nE 'secrets\.|environment:' <<<"$build"; then fail "the build job holds a secret"; fi
+  grep -qE '^        run: bash scripts/release.sh build$' <<<"$build" || fail "no separate macOS and Windows build step"
+}
+
+# A cache written by another run could poison a signed artifact, so release jobs restore none.
+test_release_restores_no_cache() {
+  [[ -f $RELEASE ]] || return 0
+  if grep -nE 'rust-cache|actions/cache|^[[:space:]]+cache:|enable-cache|cache-' "$RELEASE"; then fail "release.yml restores a cache"; fi
+}
+
+# Signing finishes before the sums, so SHA256SUMS covers the signed files.
+test_release_sums_wait_for_signing() {
+  [[ -f $RELEASE ]] || return 0
+  local checksums
+  checksums=$(job_body "$RELEASE" checksums)
+  grep -qxF '    needs: [guard, build, sign]' <<<"$checksums" || fail "checksums does not wait for sign"
+  grep -qF "needs.sign.result == 'success' || needs.sign.result == 'skipped'" <<<"$checksums" \
+    || fail "checksums does not run after a skipped sign or stop after a failed one"
 }
 
 # The stable copies must exist before the sums run, so SHA256SUMS covers them too.

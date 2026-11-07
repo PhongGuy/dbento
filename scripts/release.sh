@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release helpers for the release workflow: the tag guard, the build matrix, the secret-free
-# build, Windows signing, the macOS dmg, the per-OS package entry, stable-named copies and SHA256SUMS.
+# build and package, the macOS dmg, Windows signing of the built files, stable-named copies and SHA256SUMS.
 # Must stay bash 3.2 safe, since macOS runners run /bin/bash 3.2.
 # Sourcing this file only defines functions; running it dispatches a subcommand.
 source "$(dirname "${BASH_SOURCE[0]}")/package-linux.sh"
@@ -213,19 +213,34 @@ cli_zip() {
   fi
   mkdir -p "$out" || return 1
   zip=$(cd "$out" && pwd)/$name.zip
-  rm -f -- "$zip"
   stage=$(mktemp -d) || return 1
   install -d -m 0755 "$stage/$name"
   install -m 0755 "$binary" "$stage/$name/dbento.exe"
   for f in "$@"; do
     install -m 0644 "$f" "$stage/$name/$(basename "$f")"
   done
-  if command -v 7z >/dev/null 2>&1; then
-    (cd "$stage" && 7z a -tzip "$zip" "$name" >/dev/null) || { rm -rf -- "$stage"; return 1; }
-  else
-    (cd "$stage" && zip -q -r -X "$zip" "$name") || { rm -rf -- "$stage"; return 1; }
-  fi
+  zip_tree "$stage" "$name" "$zip" || { rm -rf -- "$stage"; return 1; }
   rm -rf -- "$stage"
+}
+
+# Write ZIP (absolute) from directory NAME under STAGE, replacing any earlier ZIP; 7z first, else zip.
+zip_tree() {
+  local stage=$1 name=$2 zip=$3
+  rm -f -- "$zip"
+  if command -v 7z >/dev/null 2>&1; then
+    (cd "$stage" && 7z a -tzip "$zip" "$name" >/dev/null)
+  else
+    (cd "$stage" && zip -q -r -X "$zip" "$name")
+  fi
+}
+
+# Extract ZIP into the directory DEST; 7z first, else unzip.
+unzip_to() {
+  if command -v 7z >/dev/null 2>&1; then
+    7z x -y "-o$2" "$1" >/dev/null
+  else
+    unzip -q "$1" -d "$2"
+  fi
 }
 
 # The packaging host, macos or windows; Linux and anything else is sent to make package.
@@ -245,17 +260,23 @@ package_dirs() {
   OUT=${OUT_DIR:-$ROOT/target/dist/$1}
 }
 
-# Build the release binaries and the notices on macOS or Windows into OUT_DIR. Build scripts
-# run here, so this step refuses to start while a Windows signing secret is in the environment.
-build_main() {
-  local os v
-  os=$(package_os) || return 1
+# Fail, naming the variable but never its value, when a signing secret reaches STEP.
+refuse_signing_secrets() {
+  local v
   for v in $WINDOWS_SIGNING_VARS; do
     if [[ -z $(blank_vars "$v") ]]; then
-      echo "release: $v is set; the build step must not see the signing secrets" >&2
+      echo "release: $v is set; the $1 step must not see the signing secrets" >&2
       return 1
     fi
   done
+}
+
+# Build the release binaries and the notices on macOS or Windows into OUT_DIR. Build scripts
+# run here, so this step refuses to start while a Windows signing secret is in the environment.
+build_main() {
+  local os
+  refuse_signing_secrets build || return 1
+  os=$(package_os) || return 1
   package_dirs "$os"
   prepare_out_dir "$ROOT" "$OUT" || return 1
   OUT=$(realpath -m -- "$OUT")
@@ -269,25 +290,20 @@ build_main() {
   echo "release: $os build in $OUT"
 }
 
-# Package what build_main left into the CLI archive and the app installer. macOS is always
-# ad-hoc signed; Windows is signed only with both secrets, which only this step sees.
+# Package what build_main left into the CLI archive and the app installer. macOS is ad-hoc
+# signed; Windows comes out marked -unsigned, for the signing job to sign without compiling.
 package_main() {
   local os
+  refuse_signing_secrets package || return 1
   os=$(package_os) || return 1
   package_dirs "$os"
-  local out mode=unsigned version target bin_dir
+  local out version target bin_dir
   out=$(realpath -m -- "$OUT")
   if [[ ! -f $out/THIRD-PARTY-NOTICES.html ]]; then
     echo "release: no build in $out; run release.sh build first" >&2
     return 1
   fi
-  if [[ $os == windows ]]; then mode=$(windows_signing_mode) || return 1; fi
-  KEYDIR=$(mktemp -d)
-  trap 'rm -rf -- "$KEYDIR"' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  prepare_windows_signing "$mode" "$KEYDIR/keys" || return 1
-  unset DBENTO_MACOS_SIGNING_IDENTITY
+  unset DBENTO_MACOS_SIGNING_IDENTITY DBENTO_WINDOWS_SIGN_COMMAND
   cd "$ROOT"
   version=$(workspace_version)
   target=$(rustc -vV | sed -n 's/^host: //p')
@@ -300,12 +316,67 @@ package_main() {
     TAR=gtar cli_archive "$bin_dir/dbento" "$version" "$target" "$out" "${files[@]}"
   else
     package_app "$out" nsis
-    if [[ $mode == signed ]]; then bash "$KEYDIR/keys/sign.sh" "$(cygpath -w "$bin_dir/dbento.exe")"; fi
     cli_zip "$bin_dir/dbento.exe" "$version" "$target" "$out" "${files[@]}"
   fi
   rm -rf -- "$out/.cargo-packager"
-  if [[ $mode == unsigned && $os == windows ]]; then mark_unsigned "$out"; fi
-  echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo "$mode"))"
+  if [[ $os == windows ]]; then mark_unsigned "$out"; fi
+  echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
+}
+
+# PATH as signtool wants it: a Windows path under Git Bash, unchanged elsewhere.
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi
+}
+
+# Sign the -unsigned Windows installer and CLI zip in DIR, renaming each without the marker. The
+# zip is unpacked so the dbento.exe inside is signed, then packed again with the same layout.
+sign_windows_files() {
+  local dir=$1 tool=$2 f signed=0 stage exes top
+  for f in "$dir"/*-setup-unsigned.exe "$dir"/*-unsigned.zip; do
+    [[ -e $f ]] || continue
+    case $f in
+      *.exe)
+        bash "$tool" "$(native_path "$f")" || return 1
+        ;;
+      *.zip)
+        stage=$(mktemp -d) || return 1
+        unzip_to "$f" "$stage" || return 1
+        exes=$(find "$stage" -name dbento.exe)
+        if [[ $(grep -c . <<<"$exes") != 1 ]]; then
+          echo "release: want one dbento.exe in $(basename "$f")" >&2
+          return 1
+        fi
+        bash "$tool" "$(native_path "$exes")" || return 1
+        top=$(basename "$(dirname "$exes")")
+        zip_tree "$stage" "$top" "$(cd "$dir" && pwd)/$(basename "$f")" || return 1
+        rm -rf -- "$stage"
+        ;;
+    esac
+    mv -- "$f" "${f%-unsigned.*}.${f##*.}" || return 1
+    signed=$((signed + 1))
+  done
+  if ((signed == 0)); then
+    echo "release: no unsigned Windows installer or zip in $dir" >&2
+    return 1
+  fi
+}
+
+# Sign the Windows files the build job left in DIR. With neither secret set they stay unsigned,
+# keeping their -unsigned names; with one set, windows_signing_mode fails.
+sign_main() {
+  local dir=$1 mode
+  mode=$(windows_signing_mode) || return 1
+  if [[ $mode == unsigned ]]; then
+    echo "release: no Windows signing secrets; $dir stays unsigned"
+    return 0
+  fi
+  KEYDIR=$(mktemp -d)
+  trap 'rm -rf -- "$KEYDIR"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  prepare_windows_signing signed "$KEYDIR/keys" || return 1
+  sign_windows_files "$dir" "$KEYDIR/keys/sign.sh"
+  echo "release: signed the Windows files in $dir"
 }
 
 # The stable name of release file NAME at VERSION, for /releases/latest/download links: the
@@ -346,7 +417,7 @@ stable_copies() {
 }
 
 usage() {
-  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR" >&2
+  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | sign DIR | stable DIR VERSION | sums DIR" >&2
   exit 2
 }
 
@@ -370,6 +441,10 @@ main() {
     package)
       (($# == 1)) || usage
       package_main
+      ;;
+    sign)
+      (($# == 2)) || usage
+      sign_main "$2"
       ;;
     stable)
       (($# == 3)) || usage

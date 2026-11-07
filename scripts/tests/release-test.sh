@@ -420,6 +420,71 @@ test_package_needs_the_build_output_and_never_builds() {
   if grep -qE '^cargo (build|fetch)|^cargo xtask notices' "$WORK/pkg.log"; then fail "package built: $(tr '\n' '|' <"$WORK/pkg.log")"; fi
 }
 
+# The package step runs third-party packaging code, so like the build it must not see the secrets.
+test_package_refuses_the_windows_signing_secrets() {
+  local fake=$WORK/pkg-secret-bin v msg
+  fake_macos_host "$fake" "$WORK/pkg-secret.log"
+  for v in WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD; do
+    if msg=$(env "$v=s3cret-value" PATH=$fake:$PATH OUT_DIR=$WORK/pkg-secret-out bash "$RELEASE_SH" package 2>&1); then
+      fail "package ran with $v set"
+    fi
+    [[ $msg == *"$v"* && $msg != *s3cret-value* ]] || fail "package secret refusal message: $msg"
+  done
+  [[ ! -e $WORK/pkg-secret.log ]] || fail "package ran a step with a secret set: $(tr '\n' '|' <"$WORK/pkg-secret.log")"
+}
+
+# An unsigned Windows build as the build job uploads it: the installer and the CLI zip.
+unsigned_windows_dist() {
+  local d=$1 p=dbento-1.2.3-x86_64-pc-windows-msvc
+  mkdir -p "$d" "$WORK/zsrc/$p"
+  printf 'installer' >"$d/dbento-app_1.2.3_x64-setup-unsigned.exe"
+  printf 'MZ' >"$WORK/zsrc/$p/dbento.exe"; printf 'mit\n' >"$WORK/zsrc/$p/LICENSE-MIT"
+  (cd "$WORK/zsrc" && zip -q -r -X "$d/$p-unsigned.zip" "$p")
+  rm -rf -- "$WORK/zsrc"
+}
+
+test_sign_leaves_the_files_unsigned_without_the_secrets() {
+  local d=$WORK/sign-none
+  unsigned_windows_dist "$d"
+  env -u WINDOWS_CERTIFICATE -u WINDOWS_CERTIFICATE_PASSWORD bash "$RELEASE_SH" sign "$d" >/dev/null 2>&1 \
+    || fail "sign failed without secrets"
+  [[ $(ls "$d" | LC_ALL=C sort | tr '\n' ' ') == "dbento-1.2.3-x86_64-pc-windows-msvc-unsigned.zip dbento-app_1.2.3_x64-setup-unsigned.exe " ]] \
+    || fail "unsigned files renamed: $(ls "$d" | tr '\n' ' ')"
+}
+
+# signtool signs the installer and the exe inside the CLI zip; both lose the -unsigned marker.
+test_sign_signs_the_installer_and_the_zipped_exe() {
+  local d=$WORK/sign-both out p=dbento-1.2.3-x86_64-pc-windows-msvc
+  unsigned_windows_dist "$d"
+  mkdir -p "$WORK/sign-tmp"
+  printf '#!/usr/bin/env bash\necho "${@: -1}" >>"%s/sign.log"\nprintf " signed" >>"${@: -1}"\n' "$WORK" >"$WORK/fake-signtool"
+  chmod +x "$WORK/fake-signtool"
+  if ! out=$(WINDOWS_CERTIFICATE=$(printf 'pfx' | base64) WINDOWS_CERTIFICATE_PASSWORD=s3cret-value \
+    SIGNTOOL=$WORK/fake-signtool SIGN_SHELL=bash TMPDIR=$WORK/sign-tmp bash "$RELEASE_SH" sign "$d" 2>&1); then
+    fail "sign failed: $out"
+    return 0
+  fi
+  [[ $out != *s3cret-value* ]] || fail "sign printed the password"
+  [[ $(ls "$d" | LC_ALL=C sort | tr '\n' ' ') == "$p.zip dbento-app_1.2.3_x64-setup.exe " ]] \
+    || fail "signed names: $(ls "$d" | tr '\n' ' ')"
+  [[ $(cat "$d/dbento-app_1.2.3_x64-setup.exe") == "installer signed" ]] || fail "installer not signed"
+  [[ $(unzip -p "$d/$p.zip" "$p/dbento.exe") == "MZ signed" ]] || fail "zipped exe not signed"
+  [[ $(unzip -Z1 "$d/$p.zip" | LC_ALL=C sort | tr '\n' ' ') == "$p/ $p/LICENSE-MIT $p/dbento.exe " ]] \
+    || fail "re-zipped listing: $(unzip -Z1 "$d/$p.zip" | tr '\n' ' ')"
+  [[ $(wc -l <"$WORK/sign.log") == 2 ]] || fail "signtool calls: $(tr '\n' '|' <"$WORK/sign.log")"
+  [[ -z $(ls -A "$WORK/sign-tmp") ]] || fail "sign left files behind: $(ls -A "$WORK/sign-tmp" | tr '\n' ' ')"
+}
+
+test_sign_fails_without_unsigned_windows_files() {
+  local d=$WORK/sign-empty msg
+  mkdir -p "$d"
+  if msg=$(WINDOWS_CERTIFICATE=$(printf 'pfx' | base64) WINDOWS_CERTIFICATE_PASSWORD=pw SIGN_SHELL=bash \
+    bash "$RELEASE_SH" sign "$d" 2>&1); then
+    fail "sign passed with nothing to sign"
+  fi
+  [[ $msg == *"no unsigned Windows"* ]] || fail "empty sign message: $msg"
+}
+
 test_macos_code_paths_avoid_bash4_only_syntax() {
   local bash4='mapfile|readarray|declare -A|local -A|\|&|;;&|\$\{[A-Za-z_]+(,,|\^\^|@[A-Za-z])'
   if grep -nE "$bash4" "$RELEASE_SH" | grep -vE '^[0-9]+:[[:space:]]*#'; then fail "release.sh uses bash 4 syntax"; fi
