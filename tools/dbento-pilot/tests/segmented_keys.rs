@@ -68,6 +68,13 @@ fn mongo_form(tree: &Value) -> bool {
     find_node(tree, "conn-uri").is_some() && find_node(tree, "conn-host").is_none()
 }
 
+fn redis_form(tree: &Value) -> bool {
+    server_form(tree)
+        && find_node(tree, "conn-read-only-help")
+            .and_then(|n| n["name"].as_str())
+            .is_some_and(|n| n.contains("dbento_ro"))
+}
+
 fn server_form(tree: &Value) -> bool {
     find_node(tree, "conn-host").is_some() && find_node(tree, "conn-path").is_none()
 }
@@ -101,19 +108,21 @@ async fn the_engine_row_is_reached_by_tab_and_driven_by_arrows() {
     key(&pilot, "home").await;
     until(&pilot, "Home picked Postgres", postgres_form).await;
     key(&pilot, "end").await;
-    until(&pilot, "End picked MongoDB", mongo_form).await;
+    until(&pilot, "End picked Redis", redis_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left picked SurrealDB", surreal_form).await;
+    until(&pilot, "Left picked MongoDB", mongo_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left again picked SQL Server", mssql_form).await;
+    until(&pilot, "Left again picked SurrealDB", surreal_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a third time picked DuckDB", duckdb_form).await;
+    until(&pilot, "Left a third time picked SQL Server", mssql_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a fourth time picked MySQL", mysql_form).await;
+    until(&pilot, "Left a fourth time picked DuckDB", duckdb_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a fifth time picked SQLite", sqlite_form).await;
+    until(&pilot, "Left a fifth time picked MySQL", mysql_form).await;
     key(&pilot, "left").await;
-    until(&pilot, "Left a sixth time picked Postgres", postgres_form).await;
+    until(&pilot, "Left a sixth time picked SQLite", sqlite_form).await;
+    key(&pilot, "left").await;
+    until(&pilot, "Left a seventh time picked Postgres", postgres_form).await;
 
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();

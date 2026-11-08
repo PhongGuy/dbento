@@ -1239,10 +1239,11 @@ impl Shell {
         else {
             return;
         };
-        let newest = self
-            .tabs
-            .iter()
-            .rposition(|tab| tab.read(cx).model().read(cx).spec().connection == name);
+        // A key tab hides its editor, so opening the connection skips it for one that has one.
+        let newest = self.tabs.iter().rposition(|tab| {
+            let model = tab.read(cx).model().read(cx);
+            model.spec().connection == name && model.key_view().is_none()
+        });
         match newest {
             Some(tab) => self.activate(tab, window, cx),
             None => self.open_connection(ix, window, cx),
