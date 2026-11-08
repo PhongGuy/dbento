@@ -55,7 +55,7 @@ jobs:
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2
       - name: Gate
-        run: make LOCKED=--locked check icons-check windows-check notices-check script-test workflows-lint
+        run: make LOCKED=--locked workflows-lint script-test check icons-check windows-check notices-check
 
   macos-clippy:
     runs-on: macos-latest
