@@ -158,3 +158,24 @@ fn the_surrealdb_client_crates_resolve_at_their_pins_and_no_bsl_crate_does() {
 fn the_redis_crate_resolves_once_at_its_pin() {
     assert_eq!(named(&packages(), "redis"), ["redis v1.8.1"]);
 }
+
+// The pilot is a separate workspace that the root patch does not reach, so it must
+// repeat every vendored crate's patch or it silently builds the unpatched release.
+#[test]
+fn the_pilot_workspace_patches_every_crate_the_root_does() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let patches = |manifest: &str| -> BTreeSet<String> {
+        let text = std::fs::read_to_string(root.join(manifest)).expect("read manifest");
+        let doc: toml::Table = text.parse().expect("parse manifest");
+        doc["patch"]["crates-io"]
+            .as_table()
+            .expect("a crates-io patch table")
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let root_patches = patches("Cargo.toml");
+    let pilot_patches = patches("tools/dbento-pilot/Cargo.toml");
+    let missing: Vec<_> = root_patches.difference(&pilot_patches).collect();
+    assert!(missing.is_empty(), "the pilot does not patch {missing:?}");
+}
