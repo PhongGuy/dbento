@@ -6,6 +6,7 @@ CI=$ROOT/.github/workflows/ci.yml
 RELEASE=$ROOT/.github/workflows/release.yml
 WEEKLY=$ROOT/.github/workflows/weekly.yml
 ZIZMOR=$ROOT/.github/workflows/zizmor.yml
+ADVISORIES=$ROOT/.github/workflows/advisories.yml
 FAILS=0
 fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 
@@ -96,6 +97,25 @@ test_weekly_checks_beta_and_updated_deps() {
   grep -qxF '        run: cargo update' "$WEEKLY" || fail "no cargo update"
   grep -qxF '        run: cargo check --workspace --all-targets --all-features' "$WEEKLY" || fail "updated check line"
   grep -q 'libclang-dev' "$WEEKLY" || fail "weekly LINUX_BUILD_DEPS lacks libclang-dev"
+}
+
+# A new RustSec advisory lands without a change on our side, so both lockfiles are scanned
+# daily, read-only, with the same cargo-deny the gate installs.
+test_advisories_scans_daily_with_the_gate_pin() {
+  [[ -f $ADVISORIES ]] || { fail "no advisories.yml"; return 0; }
+  [[ $(job_timeouts "$ADVISORIES") == "advisories=15 " ]] || fail "advisories timeouts: $(job_timeouts "$ADVISORIES")"
+  pinned_uses_only "$ADVISORIES"
+  grep -qxE '    - cron: "[0-9]+ [0-9]+ \* \* \*"' "$ADVISORIES" || fail "advisories is not a daily cron"
+  if grep -qE '    - cron: "0 ' "$ADVISORIES"; then fail "advisories cron runs on the hour"; fi
+  grep -qxE '  workflow_dispatch:' "$ADVISORIES" || fail "advisories lost workflow_dispatch"
+  grep -qxF '  contents: read' "$ADVISORIES" || fail "advisories is not contents: read"
+  if grep -qE ': write' "$ADVISORIES"; then fail "advisories asks for a write permission"; fi
+  grep -qxF '          persist-credentials: false' "$ADVISORIES" || fail "advisories keeps checkout credentials"
+  grep -qxF '        run: make advisories' "$ADVISORIES" || fail "advisories does not run make advisories"
+  local want got
+  want=$(grep -oE 'cargo install --locked cargo-deny --version [0-9.]+$' "$CI")
+  got=$(grep -oE 'cargo install --locked cargo-deny --version [0-9.]+$' "$ADVISORIES" || true)
+  [[ -n $want && $got == "$want" ]] || fail "advisories cargo-deny pin '$got' differs from ci's '$want'"
 }
 
 test_release_jobs_have_their_timeouts() {

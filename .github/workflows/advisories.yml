@@ -1,0 +1,31 @@
+# Daily RustSec scan of both lockfiles: a new advisory against a crate we already lock is
+# published without any change on our side, so the push and PR gate alone would miss it.
+name: Advisories
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      # cargo-deny only reads metadata, so no system libraries and no build are needed.
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+      - name: Scan both lockfiles
+        run: make advisories
