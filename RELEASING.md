@@ -2,15 +2,25 @@
 
 ## Overview
 
-A release is a `v<version>` tag. Pushing it runs `.github/workflows/release.yml`, which checks that the tag matches the workspace version, builds the five targets (Linux x86_64 and arm64, Windows x64, macOS Apple silicon and Intel), adds a copy of every package and archive under a name without the version or the `-unsigned` marker (such as `Dbento_aarch64.dmg`, which the README links through `/releases/latest/download/`), writes one `SHA256SUMS` over every file and drafts a GitHub release. The draft's notes come from `packaging/release-notes.md`, with the version filled in and a What's Changed list of the `feat` and `fix` commits since the previous tag; `scripts/release-notes.sh v<version>` prints the same notes locally. A human reviews the draft and publishes it. Nothing is published automatically.
+A release is a `v<version>` tag. Pushing it runs `.github/workflows/release.yml`, which checks that the tag matches the workspace version, builds the five targets (Linux x86_64 and arm64, Windows x64, macOS Apple silicon and Intel), adds a copy of every package and archive under a name without the version (such as `Dbento_aarch64.dmg`, which the README links through `/releases/latest/download/`), writes one `SHA256SUMS` over every file, attests every file and drafts a GitHub release. The draft's notes come from `packaging/release-notes.md`, with the version filled in and a What's Changed section taken from GitHub's generated notes since the previous tag, which group the merged pull requests by label through `.github/release.yml`; `scripts/release-notes.sh v<version>` prints the same notes locally with an authenticated `gh`. A human reviews the draft and publishes it. Nothing is published automatically.
 
-The macOS and Windows legs of the workflow have not yet run on real runners. Their artifact names, signing steps and runner tools are taken from the scripts and are unconfirmed until the first rehearsal below has passed.
+The macOS and Windows legs of the workflow have not yet run on real runners. Their artifact names, ad-hoc signing and runner tools are taken from the scripts and are unconfirmed until the first rehearsal below has passed.
 
 ## Who acts
 
 Pushing a tag, publishing the draft, uploading anything and dispatching any workflow run are the maintainer's own actions, each taken only with their explicit approval.
 
 ## Signing
+
+The build jobs compile, which runs every dependency's build script, so they get no secret and restore no cache. No release job holds a signing secret.
+
+Provenance comes from a GitHub build attestation instead. `checksums` adds the stable copies and `SHA256SUMS` and uploads the finished set as the `release-<version>` artifact. The `attest` job is the only job bound to the `release` environment, which accepts only `v*` tags and waits for the maintainer's approval, so a tag run pauses there. It downloads that artifact and attests every file in it, `SHA256SUMS` included, with `actions/attest`; it compiles and runs nothing, and only it holds `id-token: write`. `draft` then uploads the same artifact's files, so every file in the release is attested. Attesting `SHA256SUMS` too means a user who verifies only the sums file can trust every checksum in it.
+
+Anyone can check a download:
+
+```sh
+gh attestation verify <file> --repo PhongGuy/dbento
+```
 
 ### macOS
 
@@ -26,18 +36,7 @@ For the CLI, run `xattr -d com.apple.quarantine dbento`.
 
 ### Windows
 
-Windows artifacts are signed with a self-signed code-signing certificate, created once on the maintainer's machine. With OpenSSL:
-
-```sh
-openssl req -x509 -newkey rsa:3072 -sha256 -days 1825 -noenc -subj "/CN=Dbento" -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=codeSigning" -keyout dbento-code.key -out dbento-code.crt
-openssl pkcs12 -export -inkey dbento-code.key -in dbento-code.crt -name Dbento -out dbento-code.pfx
-base64 -w0 dbento-code.pfx | gh secret set WINDOWS_CERTIFICATE
-gh secret set WINDOWS_CERTIFICATE_PASSWORD
-```
-
-The last command prompts for the export password. On Windows, `New-SelfSignedCertificate -Type CodeSigningCert` plus `Export-PfxCertificate` does the same. Keep the key and the `.pfx` offline.
-
-Set both secrets or neither. With both, the installer and `dbento.exe` are signed. With neither, the installer and the CLI `.zip` carry `-unsigned` in their names, such as `dbento-app_<version>_x64-setup-unsigned.exe`. With only one of them set, the job fails. SmartScreen warns either way, because the certificate chains to no trusted root.
+Windows files are not Authenticode-signed: that needs a CA-issued certificate, and a self-signed one only moves the SmartScreen warning. SmartScreen warns about an unknown publisher on the installer.
 
 ### Linux
 
@@ -66,13 +65,13 @@ The platform tokens are `linux`, `windows`, `macos-arm64` and `macos-intel`. The
 2. `git tag v<version>`
 3. `git push origin v<version>`
 
-The guard fails on a tag that does not match the workspace version, before any build starts. A branch can only start a dry run. A run dispatched on a tag ref with `dry_run=false` drafts a release too, exactly as pushing the tag does.
+The guard fails on a tag that does not match the workspace version, before any build starts. A branch can only start a dry run. A run dispatched on a tag ref with `dry_run=false` drafts a release too, exactly as pushing the tag does. One dispatched on a tag ref with `dry_run=true` attests (after approval) but drafts nothing.
 
 ## Draft review
 
-1. Download the draft's files and run `sha256sum -c SHA256SUMS`.
+1. Download the draft's files, run `sha256sum -c SHA256SUMS`, and run `gh attestation verify` on one of them.
 2. Mount the `.dmg` and run `codesign -v` on the `.app`.
-3. Check the Windows installer's signature, or its `-unsigned` name.
+3. Check that the Windows installer and CLI zip carry their plain versioned names.
 4. Install the `.deb` on stock Ubuntu 24.04; it installs `/usr/bin/dbento` and `/usr/bin/dbento-app`.
 5. Check that each package and CLI archive holds `THIRD-PARTY-NOTICES.html`, and that the release carries no loose copy.
 6. Edit the notes: replace the intro placeholder with one to three sentences on this release's headline changes, and reword What's Changed where it helps.
@@ -98,4 +97,4 @@ Each job is billed in whole minutes; Windows bills 2x and macOS 10x. No release 
 - ASSUMED: a full release is about 560: Linux about 60, Windows 30 x 2, macOS 2 x 22 x 10.
 - ASSUMED: the default `linux,windows,macos-arm64` rehearsal is about 340.
 
-Every job's `timeout-minutes` caps what a hung run can cost: `guard` 5, `build` 90, `checksums` 45, and the CI `gate` 60.
+Every job's `timeout-minutes` caps what a hung run can cost: `guard` 5, `build` 90, `checksums` 45, `attest` 15, `draft` 30, and the CI `gate` 60. Release jobs restore no cache, so every build compiles from scratch.

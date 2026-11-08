@@ -14,3 +14,12 @@ updates:
           - "*"
     ignore:
       - dependency-name: "gpui*"
+  # The SHA-pinned workflow actions, monthly, as one grouped PR.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release helpers for the release workflow: the tag guard, the build matrix, the secret-free
-# build, Windows signing, the macOS dmg, the per-OS package entry, stable-named copies and SHA256SUMS.
+# build and package, the macOS dmg, stable-named copies and SHA256SUMS.
 # Must stay bash 3.2 safe, since macOS runners run /bin/bash 3.2.
 # Sourcing this file only defines functions; running it dispatches a subcommand.
 source "$(dirname "${BASH_SOURCE[0]}")/package-linux.sh"
@@ -75,108 +75,6 @@ select_targets() {
   echo "{\"include\":[${rows[*]}]}"
 }
 
-# Windows signing is driven by these two secrets; a missing GitHub secret
-# expands to an empty string, so blank (empty or whitespace) counts as unset.
-WINDOWS_SIGNING_VARS="WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD"
-
-# Print the name of each named variable that is unset, empty or whitespace only.
-blank_vars() {
-  local v val
-  for v in "$@"; do
-    val=${!v:-}
-    if [[ -z ${val//[[:space:]]/} ]]; then echo "$v"; fi
-  done
-}
-
-# Print signed when both signing secrets are present and unsigned when both are
-# blank; with only one present, fail and name the blank one (never a value).
-windows_signing_mode() {
-  local blank total
-  blank=$(blank_vars $WINDOWS_SIGNING_VARS)
-  set -- $WINDOWS_SIGNING_VARS
-  total=$#
-  set -- $blank
-  if (($# == 0)); then
-    echo signed
-  elif (($# == total)); then
-    echo unsigned
-  else
-    echo "release: set both Windows signing secrets or neither; blank: $*" >&2
-    return 1
-  fi
-}
-
-# The shell cargo-packager starts for signCommand: Git Bash's own bash.exe as
-# an 8.3 path, so a bare bash never resolves to WSL's System32\bash.exe.
-sign_shell() {
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -m -s "$(command -v bash)"
-  else
-    echo bash
-  fi
-}
-
-# Write KEYDIR/sign.sh, which signtool-signs one file with KEYDIR/dbento.pfx.
-# The heredoc is quoted so the password is read only when sign.sh runs.
-write_sign_script() {
-  cat >"$1/sign.sh" <<'SIGN'
-#!/usr/bin/env bash
-# Signs one file with the release certificate; cargo-packager runs it per file.
-set -euo pipefail
-export MSYS2_ARG_CONV_EXCL='*'
-pfx=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dbento.pfx
-if command -v cygpath >/dev/null; then pfx=$(cygpath -w "$pfx"); fi
-tool=${SIGNTOOL:-$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64/signtool.exe | sort -V | tail -n 1)}
-exec "$tool" sign /fd SHA256 /f "$pfx" /p "$WINDOWS_CERTIFICATE_PASSWORD" /d Dbento "$1"
-SIGN
-  chmod 700 "$1/sign.sh"
-}
-
-# Set up Windows signing in the caller's shell. Unsigned clears the secrets;
-# signed decodes the certificate into a private KEYDIR and exports the
-# signCommand. Every step returns explicitly, since callers may run it where
-# set -e is suspended.
-prepare_windows_signing() {
-  local mode=$1 keydir=$2 shell
-  case $mode in
-    unsigned)
-      unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD DBENTO_WINDOWS_SIGN_COMMAND
-      return 0
-      ;;
-    signed) ;;
-    *) echo "release: unknown Windows signing mode '$mode'" >&2; return 1 ;;
-  esac
-
-  # cargo-packager splits signCommand on spaces, so neither part may hold one.
-  shell=${SIGN_SHELL:-$(sign_shell)} || return 1
-  if [[ $shell == *' '* || $keydir == *' '* ]]; then
-    echo "release: the sign shell ($shell) and key directory ($keydir) must not contain a space" >&2
-    return 1
-  fi
-
-  (umask 077 && mkdir -p "$keydir") || return 1
-  chmod 700 "$keydir" || return 1
-  if ! (umask 077 && printf '%s' "$WINDOWS_CERTIFICATE" | base64 -d >"$keydir/dbento.pfx") 2>/dev/null; then
-    rm -f "$keydir/dbento.pfx"
-    echo "release: WINDOWS_CERTIFICATE is not valid base64" >&2
-    return 1
-  fi
-  write_sign_script "$keydir" || return 1
-  export DBENTO_WINDOWS_SIGN_COMMAND="$shell $keydir/sign.sh %1"
-  unset WINDOWS_CERTIFICATE
-}
-
-# Rename the Windows installer and CLI zip directly in DIR to carry -unsigned.
-mark_unsigned() {
-  local f ext
-  for f in "$1"/*-setup.exe "$1"/*.zip; do
-    [[ -e $f ]] || continue
-    case $f in *-unsigned.*) continue ;; esac
-    ext=${f##*.}
-    mv "$f" "${f%.*}-unsigned.$ext" || return 1
-  done
-}
-
 # Ad-hoc sign PATH (no Apple identity) and check the signature holds.
 adhoc_sign() {
   "${CODESIGN:-codesign}" --force --deep --sign - "$1" || return 1
@@ -245,17 +143,10 @@ package_dirs() {
   OUT=${OUT_DIR:-$ROOT/target/dist/$1}
 }
 
-# Build the release binaries and the notices on macOS or Windows into OUT_DIR. Build scripts
-# run here, so this step refuses to start while a Windows signing secret is in the environment.
+# Build the release binaries and the notices on macOS or Windows into OUT_DIR.
 build_main() {
-  local os v
+  local os
   os=$(package_os) || return 1
-  for v in $WINDOWS_SIGNING_VARS; do
-    if [[ -z $(blank_vars "$v") ]]; then
-      echo "release: $v is set; the build step must not see the signing secrets" >&2
-      return 1
-    fi
-  done
   package_dirs "$os"
   prepare_out_dir "$ROOT" "$OUT" || return 1
   OUT=$(realpath -m -- "$OUT")
@@ -269,25 +160,19 @@ build_main() {
   echo "release: $os build in $OUT"
 }
 
-# Package what build_main left into the CLI archive and the app installer. macOS is always
-# ad-hoc signed; Windows is signed only with both secrets, which only this step sees.
+# Package what build_main left into the CLI archive and the app installer. macOS is ad-hoc
+# signed; Windows ships unsigned, since there is no CA-issued certificate.
 package_main() {
   local os
   os=$(package_os) || return 1
   package_dirs "$os"
-  local out mode=unsigned version target bin_dir
+  local out version target bin_dir
   out=$(realpath -m -- "$OUT")
   if [[ ! -f $out/THIRD-PARTY-NOTICES.html ]]; then
     echo "release: no build in $out; run release.sh build first" >&2
     return 1
   fi
-  if [[ $os == windows ]]; then mode=$(windows_signing_mode) || return 1; fi
-  KEYDIR=$(mktemp -d)
-  trap 'rm -rf -- "$KEYDIR"' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  prepare_windows_signing "$mode" "$KEYDIR/keys" || return 1
-  unset DBENTO_MACOS_SIGNING_IDENTITY
+  unset DBENTO_MACOS_SIGNING_IDENTITY DBENTO_WINDOWS_SIGN_COMMAND
   cd "$ROOT"
   version=$(workspace_version)
   target=$(rustc -vV | sed -n 's/^host: //p')
@@ -300,16 +185,14 @@ package_main() {
     TAR=gtar cli_archive "$bin_dir/dbento" "$version" "$target" "$out" "${files[@]}"
   else
     package_app "$out" nsis
-    if [[ $mode == signed ]]; then bash "$KEYDIR/keys/sign.sh" "$(cygpath -w "$bin_dir/dbento.exe")"; fi
     cli_zip "$bin_dir/dbento.exe" "$version" "$target" "$out" "${files[@]}"
   fi
   rm -rf -- "$out/.cargo-packager"
-  if [[ $mode == unsigned && $os == windows ]]; then mark_unsigned "$out"; fi
-  echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo "$mode"))"
+  echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
 }
 
 # The stable name of release file NAME at VERSION, for /releases/latest/download links: the
-# version and any -unsigned marker dropped. Prints nothing for a file that is not an artifact.
+# version dropped. Prints nothing for a file that is not an artifact.
 stable_name() {
   local name=$1 version=$2 out
   case $name in
@@ -321,7 +204,7 @@ stable_name() {
     *"-${version}-"*) out=${name/"-${version}-"/-} ;;
     *) return 0 ;;
   esac
-  echo "${out/-unsigned./.}"
+  echo "$out"
 }
 
 # Copy every versioned artifact under DIR to its stable name at DIR's top level, beside the

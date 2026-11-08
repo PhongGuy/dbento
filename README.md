@@ -152,7 +152,7 @@ A release holds these files, where `<v>` is the version. Each one also has a cop
 xattr -dr com.apple.quarantine /Applications/Dbento.app
 ```
 
-**Windows:** SmartScreen warns before the installer runs. Files built without the project's signing certificate carry `-unsigned` in their versioned names, such as `dbento-app_<v>_x64-setup-unsigned.exe`; the unversioned copy drops the marker, so the download link works either way.
+**Windows:** the installer and `dbento.exe` are not code-signed, so SmartScreen warns about an unknown publisher; choose "More info", then "Run anyway".
 
 **Checksums:** every package and archive carries `THIRD-PARTY-NOTICES.html`, the licenses of the crates it is built from. One `SHA256SUMS` file covers every file, the unversioned copies included; check your downloads with:
 
