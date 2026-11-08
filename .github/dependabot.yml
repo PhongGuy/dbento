@@ -1,7 +1,8 @@
 version: 2
 updates:
   # Cargo monthly, as one grouped PR. The gpui crates move together with a
-  # matching gpui-pilot release, so they are bumped by hand.
+  # matching gpui-pilot release, and the vendored crates carry our patches,
+  # so both are bumped by hand.
   - package-ecosystem: "cargo"
     directories:
       - "/"
@@ -14,6 +15,8 @@ updates:
           - "*"
     ignore:
       - dependency-name: "gpui*"
+      - dependency-name: "mongodb"
+      - dependency-name: "tiberius"
   # The SHA-pinned workflow actions, monthly, as one grouped PR.
   - package-ecosystem: "github-actions"
     directory: "/"
