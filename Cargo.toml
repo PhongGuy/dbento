@@ -22,7 +22,7 @@ tokio-postgres = "0.7.18"
 pg_query = "18.1.0"
 tiberius = { version = "=0.13.0", default-features = false, features = ["rustls", "tds80", "exact-money"] }
 duckdb = { version = "=1.20000.1", default-features = false, features = ["bundled"] }
-mongodb = { version = "=3.9.1", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0", "dns-resolver"] }
+mongodb = { version = "=3.10.0", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0", "dns-resolver"] }
 bson = { version = "=3.1.0", features = ["serde", "serde_json-1"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["__rustls-tls"] }
 cbor4ii = { version = "=1.2.4", features = ["use_alloc", "half-f16"] }
@@ -40,7 +40,7 @@ thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
 toml = "1.1.8"
-toml_edit = "=0.25.17"
+toml_edit = "=0.25.18"
 humantime = "2.4.0"
 tempfile = "3.27.0"
 libc = "0.2.190"
