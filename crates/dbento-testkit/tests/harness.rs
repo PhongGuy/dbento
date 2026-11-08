@@ -1,6 +1,6 @@
-use dbento_testkit::{
-    chinook_pg_sql, matrix_urls, pg_container, pg_db, pg_db_at, start_hint, sweep_stale,
-};
+#[cfg(target_os = "linux")]
+use dbento_testkit::sweep_stale;
+use dbento_testkit::{chinook_pg_sql, matrix_urls, pg_container, pg_db, pg_db_at, start_hint};
 use std::time::Duration;
 
 #[tokio::test]
@@ -171,6 +171,7 @@ async fn a_panicking_test_still_drops_its_database() {
 }
 
 /// A connection to database `name` on the server at `url`.
+#[cfg(target_os = "linux")]
 async fn connect_db(url: &str, name: &str) -> tokio_postgres::Client {
     let mut config: tokio_postgres::Config = url.parse().expect("server URL");
     let (client, connection) = config
@@ -185,6 +186,7 @@ async fn connect_db(url: &str, name: &str) -> tokio_postgres::Client {
 /// Creates a database named for a run whose pid cannot be alive; `tag` keeps it unique to
 /// this process and test, so concurrent sweeps can only drop it, never mistake it. `options`
 /// are appended to the CREATE DATABASE statement.
+#[cfg(target_os = "linux")]
 async fn dead_runs_database(url: &str, tag: &str, options: &str) -> String {
     let pid_max: u64 = std::fs::read_to_string("/proc/sys/kernel/pid_max")
         .expect("pid_max")

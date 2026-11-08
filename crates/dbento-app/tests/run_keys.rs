@@ -1,7 +1,7 @@
 mod support;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, opened};
+use support::{Opened, opened};
 
 const TWO: &str = "SELECT 1 AS a;\nSELECT 2 AS b;";
 
@@ -80,6 +80,7 @@ fn the_run_button_runs_at_the_caret_and_run_all_runs_everything(cx: &mut TestApp
 #[cfg(not(target_os = "macos"))]
 #[gpui_kit::test]
 fn the_run_chip_spells_its_binding(cx: &mut TestAppContext) {
+    use support::label_of;
     let o = opened(cx, "", "", 0);
     assert_eq!(
         label_of(cx, o.win, "run-keys").as_deref(),
