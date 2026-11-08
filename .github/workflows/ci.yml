@@ -52,6 +52,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends $LINUX_BUILD_DEPS gcc-mingw-w64-x86-64
       - name: Install cargo-about
         run: cargo install --locked cargo-about --version 0.9.2 --features cli
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
       - name: Gate
         run: make LOCKED=--locked check icons-check windows-check notices-check script-test workflows-lint
 

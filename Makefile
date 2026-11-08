@@ -10,7 +10,7 @@ PREFIX :=
 LOCKED :=
 
 .DEFAULT_GOAL := install
-.PHONY: install uninstall demo check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test package clean workflows-lint screenshots
+.PHONY: install uninstall demo advisories check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test package clean workflows-lint screenshots
 
 install:
 	CARGO="$(CARGO)" JOBS="$(JOBS)" DBENTO_PREFIX="$(PREFIX)" scripts/install.sh install
@@ -21,7 +21,13 @@ uninstall:
 demo:
 	CARGO="$(CARGO)" CARGO_BUILD_JOBS="$(JOBS)" scripts/demo.sh
 
-check: fmt-check lint test
+check: advisories fmt-check lint test
+
+# RustSec advisories and yanked crates in both lockfiles, policy in deny.toml. It fetches the
+# advisory database each run, so it needs the network and fails loudly when the fetch fails.
+advisories:
+	$(CARGO) deny check advisories
+	$(CARGO) deny $(PILOT) check advisories
 
 fmt:
 	$(CARGO) fmt

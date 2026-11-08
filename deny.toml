@@ -1,0 +1,18 @@
+# RustSec gate for Cargo.lock and the pilot's lock: vulnerabilities, unsound and yanked crates
+# fail. The advisory database is fetched on every run, and a failed fetch fails the run rather
+# than checking a stale copy, so never pass --disable-fetch.
+[advisories]
+yanked = "deny"
+# Unmaintained crates with no maintained replacement reachable from our pins. Each names what
+# pulls it in; drop an entry once that parent moves off the crate.
+ignore = [
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar: testcontainers 0.27 (via testcontainers-modules 0.15, test harness only) unpacks image layers with it" },
+    { id = "RUSTSEC-2024-0384", reason = "instant: gpui-base and gpui-component 0.7 depend on it directly" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: proc-macro used by gpui-component 0.7, metal 0.33 (GPUI on macOS) and pulp (image's exr decoder)" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: gpui-pre-reqwest 0.12, GPUI's HTTP client fork, still parses PEM with it" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz: usvg and resvg, which GPUI (gpui-pre 0.3) uses to render SVG icons" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: GPUI (gpui-pre 0.3) reads fonts with it directly and through fontdb, cosmic-text and usvg" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: zbus 5, used by the Linux keychain (secret-service, zbus-secret-service-keyring-store) and GPUI's portals and accessibility (ashpd, oo7, atspi)" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: zbus 5, used by the Linux keychain (secret-service, zbus-secret-service-keyring-store) and GPUI's portals and accessibility (ashpd, oo7, atspi)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: zbus 5, used by the Linux keychain (secret-service, zbus-secret-service-keyring-store) and GPUI's portals and accessibility (ashpd, oo7, atspi)" },
+]
