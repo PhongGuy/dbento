@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::EditorState;
 use gpui_kit::{
-    App, Entity, HitboxBehavior, IntoElement, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+    App, Entity, HitboxBehavior, IntoElement, Pixels, ScrollDelta, ScrollEvent, ScrollHandle,
     Styled as _, Window, canvas, px,
 };
 
@@ -202,7 +202,7 @@ pub fn layer(scroller: impl Scroller, animator: Rc<RefCell<Animator>>) -> impl I
             // the same distance as before and nothing under a dialog or popover moves.
             let line_height = scroller.line_height(window, cx);
             let view = window.current_view();
-            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if !phase.capture() || !hitbox.should_handle_scroll(window) {
                     return;
                 }

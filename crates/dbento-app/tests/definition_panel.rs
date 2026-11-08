@@ -14,7 +14,7 @@ use dbento_core::{
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Focusable as _, InputEvent as _, MouseMoveEvent,
-    Pixels, ScrollDelta, ScrollWheelEvent, TestAppContext, WindowHandle, point, px,
+    Pixels, ScrollDelta, ScrollEvent, TestAppContext, WindowHandle, point, px,
 };
 use support::{click_id, label_of, present};
 
@@ -328,7 +328,7 @@ fn a_wheel_notch_over_the_editor_eases_like_the_grid(cx: &mut TestAppContext) {
             cx,
         );
         w.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position: at,
                 delta: ScrollDelta::Lines(point(0., -3.)),
                 ..Default::default()

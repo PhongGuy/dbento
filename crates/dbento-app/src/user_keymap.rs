@@ -86,8 +86,8 @@ pub struct Parsed {
 fn parse_keys(keys: &str) -> Result<Vec<Keystroke>, String> {
     let mut strokes = Vec::new();
     for stroke in keys.split_whitespace() {
-        let parsed =
-            Keystroke::parse(stroke).map_err(|_| format!("\"{stroke}\" does not parse"))?;
+        let parsed = Keystroke::parse_with_os(stroke, crate::keymap::HOST_OS)
+            .map_err(|_| format!("\"{stroke}\" does not parse"))?;
         if parsed.key.is_empty() {
             return Err(format!("\"{stroke}\" has no key"));
         }

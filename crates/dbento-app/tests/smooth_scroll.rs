@@ -14,7 +14,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Context, Entity, InputEvent as _, InteractiveElement as _,
-    IntoElement, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollDelta, ScrollWheelEvent,
+    IntoElement, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollDelta, ScrollEvent,
     Styled as _, TestAppContext, Window, div, point, px,
 };
 use support::MANY;
@@ -35,7 +35,7 @@ impl Render for Probe {
             .id("probe")
             .size_full()
             .relative()
-            .on_scroll_wheel(move |_, _, _| root.set(root.get() + 1))
+            .on_scroll(move |_, _, _| root.set(root.get() + 1))
             .child(self.pane.clone())
             .when(self.covered, |d| {
                 d.child(
@@ -46,7 +46,7 @@ impl Render for Probe {
                         .left_0()
                         .size_full()
                         .occlude()
-                        .on_scroll_wheel(move |_, _, _| cover.set(cover.get() + 1)),
+                        .on_scroll(move |_, _, _| cover.set(cover.get() + 1)),
                 )
             })
     }
@@ -133,7 +133,7 @@ fn wheel(cx: &mut TestAppContext, g: &Grid, delta: ScrollDelta) {
             cx,
         );
         w.dispatch_event(
-            ScrollWheelEvent {
+            ScrollEvent {
                 position: at,
                 delta,
                 ..Default::default()
