@@ -25,29 +25,27 @@ async fn until(pilot: &Pilot, what: &str, done: impl Fn(&Value) -> bool) -> Valu
 fn name<'a>(tree: &'a Value, id: &str) -> Option<&'a str> {
     find_node(tree, id).and_then(|n| n["name"].as_str())
 }
-/// The index of the rendered row labelled `aria`. Row ids carry the absolute row index, which
+/// Each rendered tree row as its index and label. Row ids carry the absolute row index, which
 /// passes 500 once a folder of 1,200 keys is open, so every node is scanned rather than a range.
-fn row_named(tree: &Value, aria: &str) -> Option<usize> {
-    tree["nodes"].as_array()?.iter().find_map(|n| {
-        let id = n["id"]
-            .as_str()
-            .or_else(|| n["path"].as_array()?.last()?.as_str())?;
-        let ix = id.strip_prefix("tree-row-")?.parse().ok()?;
-        (n["name"].as_str() == Some(aria)).then_some(ix)
-    })
-}
-/// The lowest row index the explorer renders, which moves only while a scroll moves the list.
-fn first_row(tree: &Value) -> Option<usize> {
+fn rows(tree: &Value) -> impl Iterator<Item = (usize, Option<&str>)> {
     tree["nodes"]
-        .as_array()?
-        .iter()
+        .as_array()
+        .into_iter()
+        .flatten()
         .filter_map(|n| {
             let id = n["id"]
                 .as_str()
                 .or_else(|| n["path"].as_array()?.last()?.as_str())?;
-            id.strip_prefix("tree-row-")?.parse().ok()
+            let ix = id.strip_prefix("tree-row-")?.parse().ok()?;
+            Some((ix, n["name"].as_str()))
         })
-        .min()
+}
+fn row_named(tree: &Value, aria: &str) -> Option<usize> {
+    rows(tree).find_map(|(ix, label)| (label == Some(aria)).then_some(ix))
+}
+/// The lowest row index the explorer renders, which moves only while a scroll moves the list.
+fn first_row(tree: &Value) -> Option<usize> {
+    rows(tree).map(|(ix, _)| ix).min()
 }
 /// Scrolls the explorer until the row labelled `aria` lies wholly inside the list. An unseen
 /// row is sought downward first, then upward once a scroll stops moving the list.

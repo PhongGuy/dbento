@@ -1228,8 +1228,8 @@ impl Shell {
         Some(tab)
     }
 
-    /// A click on connection `ix` in the explorer: activates the newest tab on it, else opens
-    /// one.
+    /// A click on connection `ix` in the explorer: activates the newest query tab on it, else
+    /// opens one.
     pub fn click_connection(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(name) = self
             .workspace

@@ -324,6 +324,24 @@ fn open_key_tab(cx: &mut TestAppContext, win: AnyWindowHandle, shell: &Entity<Sh
 }
 
 #[gpui_kit::test]
+fn a_click_on_the_connection_returns_to_its_query_tab_past_a_newer_key_tab(
+    cx: &mut TestAppContext,
+) {
+    let o = opened(cx, "", "", 0);
+    let query = o.shell.read_with(cx, |s, _| s.active());
+    open_key_tab(cx, o.win, &o.shell);
+    assert_ne!(o.shell.read_with(cx, |s, _| s.active()), query);
+
+    // The key tab hides its editor, so the connection's query tab is the one to return to.
+    cx.update_window(o.win, |_, w, cx| {
+        o.shell.update(cx, |s, cx| s.click_connection(0, w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(o.shell.read_with(cx, |s, _| s.active()), query);
+}
+
+#[gpui_kit::test]
 fn a_key_tab_is_left_out_of_the_session_and_the_active_tab_still_maps(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     click(cx, o.win, "tab-new");
