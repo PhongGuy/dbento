@@ -67,5 +67,8 @@ mod tests {
         assert!(e.contains("SQL") && e.contains(".sql"), "{e}");
         assert!(language_mismatch(Path::new("q.surql"), Engine::Postgres).is_some());
         assert!(language_mismatch(Path::new("q.redis"), Engine::Postgres).is_some());
+        assert!(language_mismatch(Path::new("q.REDIS"), Engine::Redis).is_none());
+        let e = language_mismatch(Path::new("q.sql"), Engine::Redis).unwrap();
+        assert!(e.contains("Redis commands") && e.contains(".redis"), "{e}");
     }
 }
