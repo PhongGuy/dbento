@@ -47,9 +47,16 @@ test_rust_toolchain_pinned_to_master() {
   done
 }
 
+# The quick, network-bound checks run before the hour-long suite, so a download outage
+# fails the gate in minutes instead of after every test has passed.
 test_ci_gate_runs_every_check() {
-  grep -qxE '[[:space:]]+run: make LOCKED=--locked check icons-check windows-check notices-check script-test workflows-lint' "$CI" \
+  grep -qxE '[[:space:]]+run: make LOCKED=--locked workflows-lint script-test check icons-check windows-check notices-check' "$CI" \
     || fail "ci gate line: $(grep -n 'run: make' "$CI")"
+}
+
+test_actionlint_download_retries_a_blip() {
+  grep -qE '^  curl .*--retry [0-9]+ .*--retry-delay [0-9]+' "$ROOT/scripts/actionlint.sh" \
+    || fail "scripts/actionlint.sh downloads without --retry and --retry-delay"
 }
 
 test_ci_runs_on_push_and_pull_request() {

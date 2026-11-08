@@ -28,7 +28,8 @@ if [[ ! -x $bin ]]; then
   mkdir -p "$dir"
   archive=$dir/actionlint_${VERSION}_$asset.tar.gz
   base=${ACTIONLINT_BASE_URL:-https://github.com/rhysd/actionlint/releases/download}
-  curl -sSLf -A dbento-actionlint -o "$archive" "$base/v$VERSION/actionlint_${VERSION}_$asset.tar.gz"
+  # Retry a short blip; a longer outage still fails, early in the gate.
+  curl -sSLf --retry 4 --retry-delay 15 -A dbento-actionlint -o "$archive" "$base/v$VERSION/actionlint_${VERSION}_$asset.tar.gz"
   if [[ $(sha256sum "$archive" | cut -d' ' -f1) != "$sha" ]]; then
     rm -f "$archive"
     echo "actionlint.sh: sha256 mismatch for actionlint_${VERSION}_$asset.tar.gz" >&2
