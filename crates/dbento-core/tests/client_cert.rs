@@ -23,14 +23,10 @@ fn cert_and_key_resolve_against_the_workspace() {
     ));
     let ws = ws.unwrap();
     let conn = ws.connection("p").unwrap();
-    assert_eq!(
-        conn.tls_cert(),
-        Some(dir.path().join("certs/me.crt").as_path())
-    );
-    assert_eq!(
-        conn.tls_key(),
-        Some(dir.path().join("certs/me.key").as_path())
-    );
+    // The workspace root is canonical, and a temp dir may sit behind a symlink (macOS /var).
+    let root = fs::canonicalize(dir.path()).unwrap();
+    assert_eq!(conn.tls_cert(), Some(root.join("certs/me.crt").as_path()));
+    assert_eq!(conn.tls_key(), Some(root.join("certs/me.key").as_path()));
     let spec = ws.connection_spec("p").unwrap();
     assert_eq!(spec.tls_cert.as_deref(), Some("certs/me.crt"));
     assert_eq!(spec.tls_key.as_deref(), Some("certs/me.key"));

@@ -1,7 +1,6 @@
 mod support;
-use dbento_app::keymap::{HISTORY_KEYS, RUN_STATEMENT_KEYS, chip_keys};
 use dbento_app::sidebar::menu_icon;
-use dbento_app::theme::{APPEARANCE_KEYS, Appearance};
+use dbento_app::theme::Appearance;
 use dbento_app::ui::{self, APP_ICON, AppAssets, Icons};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
@@ -95,12 +94,18 @@ fn a_key_chip_boxes_each_key(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+// macOS spells chords with its own modifier glyphs, so these Ctrl spellings hold elsewhere.
 #[cfg(not(target_os = "macos"))]
-#[test]
-fn chip_keys_spell_every_stroke_of_a_chord() {
-    assert_eq!(chip_keys(HISTORY_KEYS), "Ctrl Shift H");
-    assert_eq!(chip_keys(APPEARANCE_KEYS), "Ctrl K Ctrl T");
-    assert_eq!(chip_keys(RUN_STATEMENT_KEYS), "Ctrl \u{23CE}");
+mod chord_spelling {
+    use dbento_app::keymap::{HISTORY_KEYS, RUN_STATEMENT_KEYS, chip_keys};
+    use dbento_app::theme::APPEARANCE_KEYS;
+
+    #[test]
+    fn chip_keys_spell_every_stroke_of_a_chord() {
+        assert_eq!(chip_keys(HISTORY_KEYS), "Ctrl Shift H");
+        assert_eq!(chip_keys(APPEARANCE_KEYS), "Ctrl K Ctrl T");
+        assert_eq!(chip_keys(RUN_STATEMENT_KEYS), "Ctrl \u{23CE}");
+    }
 }
 #[test]
 fn appearance_names_read_as_words() {
