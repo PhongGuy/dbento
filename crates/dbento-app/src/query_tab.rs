@@ -32,6 +32,7 @@ use crate::drafts::{DRAFT_DEBOUNCE, Draft, DraftSlot};
 use crate::editor_completion::SqlCompletionProvider;
 use crate::format::format_edit;
 use crate::grid_menu::MenuEntry;
+use crate::key_view::KeyView;
 use crate::keymap::{
     CancelQuery, Explain, ExplainAnalyze, FormatSql, RunAll, RunStatement, SaveEdits, SaveQuery,
     all_keys_for, chip_keys, keys_for, plus_keys,
@@ -93,6 +94,13 @@ pub const READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort:
 /// The MongoDB badge before the session has reported its level.
 pub const READ_ONLY_MONGO_UNCONNECTED_TOOLTIP: &str =
     "Read-only: the level follows the privileges of the user in the URI and shows once connected.";
+/// The Redis badge's head when the user's ACL refused every probed write.
+pub const READ_ONLY_REDIS_ACL_TOOLTIP: &str = "Read-only: this user's ACL refused every write Dbento probed at connect, so Redis refuses writes.";
+/// The Redis badge's head when the ACL allows writes and only Dbento's own refusal holds.
+pub const READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort: this user's ACL allows writes, so Dbento refuses every command it reads as a write or cannot classify before sending it. Use a reader ACL user like dbento_ro for enforcement.";
+/// The Redis badge's head before the session has reported its level.
+pub const READ_ONLY_REDIS_UNCONNECTED_TOOLTIP: &str =
+    "Read-only: the level follows the user's ACL and shows once connected.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -154,8 +162,9 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
     }
 }
 
-/// The badge text for `c` with the session's `level`: on SurrealDB the level's head, a space and
-/// the residual; on MongoDB the level's text alone; on every other engine `read_only_tooltip_of(c)`.
+/// The badge text for `c` with the session's `level`: on SurrealDB and Redis the level's head, a
+/// space and the residual; on MongoDB the level's text alone; on every other engine
+/// `read_only_tooltip_of(c)`.
 pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
     match c.engine() {
         // MongoDB's level follows the URI user's privileges, which only the session knows.
@@ -167,16 +176,22 @@ pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcem
             }
             .to_owned();
         }
-        Engine::Surrealdb => {}
+        Engine::Surrealdb | Engine::Redis => {}
         _ => return read_only_tooltip_of(c).to_owned(),
     }
-    // SurrealDB's level comes from the login's role, which only the session knows.
-    let head = match level {
-        Some(ReadOnlyEnforcement::Database) => READ_ONLY_SURREAL_VIEWER_TOOLTIP,
-        Some(ReadOnlyEnforcement::BestEffort) => READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
+    // SurrealDB's level comes from the login's role and Redis's from the user's ACL, which only
+    // the session knows.
+    let head = match (c.engine(), level) {
+        (Engine::Redis, Some(ReadOnlyEnforcement::Database)) => READ_ONLY_REDIS_ACL_TOOLTIP,
+        (Engine::Redis, Some(ReadOnlyEnforcement::BestEffort)) => {
+            READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP
+        }
+        (Engine::Redis, _) => READ_ONLY_REDIS_UNCONNECTED_TOOLTIP,
+        (_, Some(ReadOnlyEnforcement::Database)) => READ_ONLY_SURREAL_VIEWER_TOOLTIP,
+        (_, Some(ReadOnlyEnforcement::BestEffort)) => READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP,
         _ => READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
     };
-    match read_only_residual(Engine::Surrealdb) {
+    match read_only_residual(c.engine()) {
         Some(residual) => format!("{head} {residual}"),
         None => head.to_owned(),
     }
@@ -199,6 +214,9 @@ pub fn confirm_explanation(kind: Option<Unguarded>) -> &'static str {
         }
         Some(Unguarded::DeleteAllDocuments) => {
             "Its filter is empty, so it deletes every document in the collection."
+        }
+        Some(Unguarded::FlushKeys) => {
+            "It deletes every key in the database, or with FLUSHALL in every database."
         }
         _ => "It may change rows.",
     }
@@ -299,21 +317,25 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
 fn preview_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::MongoShell => "javascript",
+        QueryLanguage::RedisCommands => "bash",
         _ => "sql",
     }
 }
 
-// Format SQL applies only to SQL engines; the formatter knows no other language.
-fn formats(engine: Engine) -> bool {
+/// Whether Format SQL applies to `engine`: only SQL engines, since the formatter knows no
+/// other language.
+pub fn formats(engine: Engine) -> bool {
     engine.capabilities().language == QueryLanguage::Sql
 }
 
 /// The highlighter language for `engine`'s query editor: "sql" for an SQL engine,
-/// "javascript" for the MongoDB shell, "text" (plain, no highlighting) for SurrealQL.
+/// "javascript" for the MongoDB shell, "bash" for Redis command lines (close enough to colour
+/// words and quotes), "text" (plain, no highlighting) for SurrealQL.
 pub fn editor_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::Sql => "sql",
         QueryLanguage::MongoShell => "javascript",
+        QueryLanguage::RedisCommands => "bash",
         _ => "text",
     }
 }
@@ -432,6 +454,8 @@ pub struct QueryTab {
     origin: Option<RelationRef>,
     // The user's name for the tab, which replaces "Query N" or "schema.name".
     label: Option<String>,
+    // A Redis value tab's title, `<key> · db N`; set, the tab shows the value, not the editor.
+    key_title: Option<String>,
     // The tab a reference was followed from while this tab is its preview.
     preview_of: Option<EntityId>,
     // The reference hops this tab walked, for Back and Forward.
@@ -553,6 +577,7 @@ impl QueryTab {
             number: None,
             origin: None,
             label: None,
+            key_title: None,
             preview_of: None,
             format_undo: None,
             nav: NavHistory::default(),
@@ -741,12 +766,25 @@ impl QueryTab {
         if let Some(label) = &self.label {
             return label.clone();
         }
+        if let Some(key) = &self.key_title {
+            return key.clone();
+        }
         match (&self.origin, self.number) {
             (Some(rel), _) => format!("{}.{}", rel.schema(), rel.name()),
             (None, Some(n)) => format!("Query {n}"),
             // Only between `push_tab` and its caller numbering the tab; no frame paints it.
             (None, None) => "Query".to_owned(),
         }
+    }
+
+    /// Turns this tab into Redis key `key`'s value view in DB `db`: the editor gives way to
+    /// the key's header and paged grid, and the tab keeps no draft, having no text to keep.
+    pub fn open_key(&mut self, db: u32, key: Vec<u8>, cx: &mut Context<Self>) {
+        self.key_title = Some(KeyView::new(db, key.clone()).title());
+        self.draft = None;
+        self.draft_task = None;
+        self.model.update(cx, |m, cx| m.open_key(db, key, cx));
+        cx.notify();
     }
 
     /// The user's name for the tab, if any.
@@ -1408,6 +1446,16 @@ impl Render for QueryTab {
         let explain = self.session_conn.engine().capabilities().explain;
         let format = formats(self.session_conn.engine());
         let staged = m.edits().len();
+        let key_mode = self.key_title.is_some();
+        // A key tab shows its value's header, last error and whether pages remain.
+        let key = self.key_title.is_some().then(|| {
+            let view = m.key_view();
+            (
+                view.and_then(KeyView::header).map(str::to_owned),
+                view.and_then(KeyView::error).map(str::to_owned),
+                view.is_some_and(KeyView::has_more),
+            )
+        });
         // The summary appears once a statement has ended; its timing lives in the result footer.
         let summary = run_elapsed(m.results()).map(|_| {
             let n = m.results().len();
@@ -1479,54 +1527,57 @@ impl Render for QueryTab {
             .children(badge)
             .children(prod_chip)
             // Run and Run all form one split button: square inner corners and a faint
-            // divider between them, so the pair reads as two halves of one control.
-            .child(
-                div()
-                    .id("run-split")
-                    .test_support()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .child(
-                        Button::new("run")
-                            .primary()
-                            .small()
-                            .h(px(28.))
-                            .px_2()
-                            .rounded_tr(px(0.))
-                            .rounded_br(px(0.))
-                            .icon(ui::Icons::Play)
-                            .label("Run")
-                            .children(run_keys)
-                            .disabled(closed)
-                            .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
-                    )
-                    .child(
-                        div()
-                            .w(px(1.))
-                            .h(px(28.))
-                            .bg(primary)
-                            // A closed tab's disabled halves draw primary at 15 %, so the
-                            // divider fades with them.
-                            .when(closed, |d| d.opacity(0.15))
-                            .child(div().size_full().bg(primary_fg.opacity(0.4))),
-                    )
-                    .child(
-                        ui::accessibility_id(Button::new("run-all"), "run-all")
-                            .primary()
-                            .small()
-                            .h(px(28.))
-                            .px_2()
-                            .rounded_tl(px(0.))
-                            .rounded_bl(px(0.))
-                            .icon(ui::Icons::FastForward)
-                            .label("All")
-                            .accessibility_label("Run all")
-                            .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
-                            .disabled(closed)
-                            .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
-                    ),
-            )
+            // divider between them, so the pair reads as two halves of one control. A key tab
+            // has no text to run or save, so it shows neither.
+            .when(!key_mode, |d| {
+                d.child(
+                    div()
+                        .id("run-split")
+                        .test_support()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .child(
+                            Button::new("run")
+                                .primary()
+                                .small()
+                                .h(px(28.))
+                                .px_2()
+                                .rounded_tr(px(0.))
+                                .rounded_br(px(0.))
+                                .icon(ui::Icons::Play)
+                                .label("Run")
+                                .children(run_keys)
+                                .disabled(closed)
+                                .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
+                        )
+                        .child(
+                            div()
+                                .w(px(1.))
+                                .h(px(28.))
+                                .bg(primary)
+                                // A closed tab's disabled halves draw primary at 15 %, so the
+                                // divider fades with them.
+                                .when(closed, |d| d.opacity(0.15))
+                                .child(div().size_full().bg(primary_fg.opacity(0.4))),
+                        )
+                        .child(
+                            ui::accessibility_id(Button::new("run-all"), "run-all")
+                                .primary()
+                                .small()
+                                .h(px(28.))
+                                .px_2()
+                                .rounded_tl(px(0.))
+                                .rounded_bl(px(0.))
+                                .icon(ui::Icons::FastForward)
+                                .label("All")
+                                .accessibility_label("Run all")
+                                .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
+                                .disabled(closed)
+                                .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
+                        ),
+                )
+            })
             .when(format, |d| {
                 // The kit button takes only a text tooltip, so the keyed one sits on a wrapper.
                 d.child(
@@ -1585,25 +1636,27 @@ impl Render for QueryTab {
             })
             // Like Ctrl+S, open editors are staged first and staged edits saved; otherwise the
             // shell owns saving the query, and focusing the editor first routes the action there.
-            .child(
-                div()
-                    .id("query-save-tip")
-                    .test_support()
-                    .tooltip(move |window, cx| {
-                        let keys = save_button_keys(cx);
-                        theme::tooltip_keys(save_tooltip(staged, cx), keys, window, cx)
-                    })
-                    .child(
-                        tool_button("query-save", ui::Icons::Save, "Save", muted).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                if !this.save_edits(window, cx) {
-                                    this.editor.update(cx, |e, cx| e.focus(window, cx));
-                                    window.dispatch_action(Box::new(SaveQuery), cx);
-                                }
-                            }),
+            .when(!key_mode, |d| {
+                d.child(
+                    div()
+                        .id("query-save-tip")
+                        .test_support()
+                        .tooltip(move |window, cx| {
+                            let keys = save_button_keys(cx);
+                            theme::tooltip_keys(save_tooltip(staged, cx), keys, window, cx)
+                        })
+                        .child(
+                            tool_button("query-save", ui::Icons::Save, "Save", muted).on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    if !this.save_edits(window, cx) {
+                                        this.editor.update(cx, |e, cx| e.focus(window, cx));
+                                        window.dispatch_action(Box::new(SaveQuery), cx);
+                                    }
+                                }),
+                            ),
                         ),
-                    ),
-            )
+                )
+            })
             .child(
                 ui::accessibility_id(Button::new("row-limit"), "row-limit")
                     .ghost()
@@ -1689,19 +1742,85 @@ impl Render for QueryTab {
             // A production tab carries a 2 px danger rule along its top edge.
             .when(production, |d| d.border_t_2().border_color(danger))
             .child(toolbar)
-            .child(
-                div().flex_1().min_h_0().child(
-                    v_resizable("query-split")
-                        .with_state(&self.split)
-                        .child(
-                            resizable_panel()
-                                .when_some(start_height, |p, h| p.size(h))
-                                .child(editor),
-                        )
-                        .child(resizable_panel().child(self.results.clone())),
-                ),
-            )
+            .when_some(key, |d, (header, error, more)| {
+                d.child(key_pane(header, error, more, self.results.clone(), cx))
+            })
+            .when(self.key_title.is_none(), |d| {
+                d.child(
+                    div().flex_1().min_h_0().child(
+                        v_resizable("query-split")
+                            .with_state(&self.split)
+                            .child(
+                                resizable_panel()
+                                    .when_some(start_height, |p, h| p.size(h))
+                                    .child(editor),
+                            )
+                            .child(resizable_panel().child(self.results.clone())),
+                    ),
+                )
+            })
     }
+}
+
+// A key tab's body: the header line, the last read's error, the value grid, and Load more
+// while pages remain. Each line carries its text as its accessible name.
+fn key_pane(
+    header: Option<String>,
+    error: Option<String>,
+    more: bool,
+    results: Entity<ResultsPane>,
+    cx: &mut Context<QueryTab>,
+) -> impl IntoElement {
+    let dim = theme::dim(cx);
+    let theme = cx.theme();
+    let (danger, border) = (theme.danger, theme.border);
+    let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+    let line = |id: &'static str, text: String| {
+        div()
+            .id(id)
+            .aria_label(text.clone())
+            .test_support()
+            .flex_none()
+            .px_2()
+            .py_1()
+            .child(text)
+    };
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .children(header.map(|h| {
+            line("key-header", h)
+                .font_family(mono)
+                .text_size(mono_size)
+                .text_color(dim)
+                .border_b_1()
+                .border_color(border)
+        }))
+        .children(error.map(|e| line("key-error", e).text_color(danger)))
+        .child(div().flex_1().min_h_0().child(results))
+        .when(more, |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .p_1()
+                    .border_t_1()
+                    .border_color(border)
+                    .child(
+                        Button::new("key-load-more")
+                            .outline()
+                            .xsmall()
+                            .label("Load more")
+                            .accessibility_label("Load more")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.update(cx, |m, cx| {
+                                    m.load_more_value(cx);
+                                });
+                            })),
+                    ),
+            )
+        })
 }
 
 // Builds the editor menu; each item acts on the tab, the clipboard ones through the editor's

@@ -2,10 +2,11 @@
 mod support;
 use dbento_app::explorer::part_id;
 use dbento_app::keymap::{EXPLORER_OPEN_KEYS, chip_keys};
+use dbento_app::keys::KeyItem;
 use dbento_app::schema_tree::{ObjectGroup, RowKind, catalog_entries, count_text, insert_sql};
 use dbento_app::sidebar::{SidebarEvent, menu_icon, relation_tooltip};
 use dbento_app::ui::Icons;
-use dbento_core::{Engine, ObjectRef, RelationKind, RelationRef};
+use dbento_core::{Engine, KeyKind, KeyTtl, ObjectRef, RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, TestAppContext};
 use support::{Opened, click_id, label_of, launched, present, wait_real};
@@ -567,5 +568,54 @@ fn mongodb_menus_generate_find_and_no_sql(cx: &mut TestAppContext) {
             .unwrap()
             .label;
         assert_eq!(label.to_string(), "Generate SELECT");
+    });
+}
+
+#[gpui_kit::test]
+fn redis_rows_offer_key_actions_and_no_sql(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let ids = |k: RowKind, e: Engine| -> Vec<&'static str> {
+            catalog_entries(&k, e, cx).iter().map(|m| m.id).collect()
+        };
+        assert_eq!(
+            ids(RowKind::Schema, Engine::Redis),
+            [
+                "tree-menu-new-query",
+                "tree-menu-copy-name",
+                "tree-menu-filter-keys",
+                "tree-menu-refresh"
+            ]
+        );
+        assert!(!ids(RowKind::Schema, Engine::Postgres).contains(&"tree-menu-filter-keys"));
+        let key = KeyItem {
+            name: b"user:1".to_vec(),
+            kind: KeyKind::Hash,
+            ttl: KeyTtl::Persistent,
+        };
+        let entries = catalog_entries(&RowKind::Key(key.clone()), Engine::Redis, cx);
+        assert_eq!(entries[0].label.to_string(), "Open value");
+        assert_eq!(
+            ids(RowKind::Key(key), Engine::Redis),
+            ["tree-menu-open-key", "tree-menu-copy-name"]
+        );
+        assert_eq!(
+            ids(
+                RowKind::KeyFolder {
+                    prefix: b"user:".to_vec(),
+                    keys: 2
+                },
+                Engine::Redis
+            ),
+            ["tree-menu-copy-name"]
+        );
+        assert!(ids(RowKind::LoadMore, Engine::Redis).is_empty());
+        let table = ids(RowKind::Relation(RelationKind::Table), Engine::Redis);
+        for id in [
+            "tree-menu-count",
+            "tree-menu-generate-insert",
+            "tree-menu-copy-qualified",
+        ] {
+            assert!(!table.contains(&id), "{id}");
+        }
     });
 }

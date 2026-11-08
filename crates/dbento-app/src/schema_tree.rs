@@ -2,6 +2,7 @@
 //! flat rows the sidebar draws. Pure data with no GPUI types, so it is tested directly.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use dbento_core::{
     ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Engine, FormatOptions, IndexInfo,
@@ -13,8 +14,10 @@ use gpui_kit::App;
 
 use crate::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use crate::keymap::{OpenSelected, keys_for};
+use crate::keys::{KeyFilter, KeyItem, KeyToken, display_key, key_levels};
 use crate::labels::{MenuEntry, group_digits};
 use crate::link::LinkState;
+use crate::redis_completion::RedisDoc;
 
 /// A group of schema objects under a relation (the first four) or a schema (the last two).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,6 +84,15 @@ pub enum NodeKey {
     },
     /// The objects level of a `Relation` or `Schema` key: its error and truncated rows.
     Objects(Box<NodeKey>),
+    /// A `:` folder of Redis keys; opens locally and starts collapsed.
+    KeyFolder {
+        /// The connection name.
+        conn: String,
+        /// The DB index.
+        db: u32,
+        /// The folder's full prefix, ending in `:`.
+        prefix: Vec<u8>,
+    },
 }
 
 /// What a row shows.
@@ -121,6 +133,17 @@ pub enum RowKind {
     Truncated,
     /// A level that loaded with nothing in it.
     Empty,
+    /// A `:` folder of Redis keys.
+    KeyFolder {
+        /// The folder's full prefix, ending in `:`.
+        prefix: Vec<u8>,
+        /// How many loaded keys sit below it.
+        keys: usize,
+    },
+    /// One Redis key.
+    Key(KeyItem),
+    /// Asks for the next page of a key listing.
+    LoadMore,
 }
 
 /// One visible row of the tree.
@@ -170,6 +193,29 @@ enum Load<T> {
     Failed(String),
 }
 
+/// One Redis DB's key listing: the pages loaded so far and the state of the next one.
+struct KeyListing {
+    items: Vec<KeyItem>,
+    next: Option<KeyToken>,
+    more: More,
+}
+
+/// The next page of a key listing.
+enum More {
+    Idle,
+    Loading,
+    Failed(String),
+}
+
+/// The DB index a key-browser schema row names, `db3` giving 3; None for any other name.
+pub fn db_index(schema: &str) -> Option<u32> {
+    let digits = schema.strip_prefix("db")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// The name of the connection `key` belongs to.
 pub(crate) fn node_connection(key: &NodeKey) -> &str {
     match key {
@@ -178,7 +224,8 @@ pub(crate) fn node_connection(key: &NodeKey) -> &str {
         | NodeKey::Kind { conn, .. }
         | NodeKey::Relation { conn, .. }
         | NodeKey::RelationGroup { conn, .. }
-        | NodeKey::SchemaGroup { conn, .. } => conn,
+        | NodeKey::SchemaGroup { conn, .. }
+        | NodeKey::KeyFolder { conn, .. } => conn,
         NodeKey::Objects(inner) => node_connection(inner),
     }
 }
@@ -193,6 +240,12 @@ pub struct CatalogTree {
     columns: HashMap<(String, RelationRef), Load<Vec<ColumnMeta>>>,
     relation_objects: HashMap<(String, RelationRef), Load<RelationObjects>>,
     schema_objects: HashMap<(String, String), Load<SchemaObjects>>,
+    // Connections whose DB rows list keys rather than relations, with each DB's filter and
+    // listing; a refresh drops listings but keeps filters.
+    key_browsers: HashSet<String>,
+    key_filters: HashMap<(String, u32), KeyFilter>,
+    keys: HashMap<(String, u32), Load<KeyListing>>,
+    command_docs: HashMap<String, Load<Arc<[RedisDoc]>>>,
     generation: u64,
     // The oldest generation still current, for all connections and per refreshed one.
     floor: u64,
@@ -209,6 +262,16 @@ const KINDS: [RelationKind; 5] = [
 
 /// One listed object: its label, its dim detail and what a definition load asks for.
 type Entry = (String, String, ObjectRef);
+
+/// One DB's loaded keys as [`CatalogTree::key_level`] walks them.
+struct KeyWalk<'a> {
+    w: &'a Walk<'a>,
+    db: u32,
+    items: &'a [KeyItem],
+    names: &'a [&'a [u8]],
+    /// The DB row's aria path, `conn.db0`.
+    path: &'a str,
+}
 
 /// How a row fits the walk in [`CatalogTree::rows`].
 struct Walk<'a> {
@@ -259,7 +322,9 @@ impl CatalogTree {
         // A group opens locally, its objects already loaded with its parent; an objects key
         // only carries status rows, so it never opens.
         match key {
-            NodeKey::RelationGroup { .. } | NodeKey::SchemaGroup { .. } => {
+            NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::KeyFolder { .. } => {
                 if !self.expanded.remove(key) {
                     self.expanded.insert(key.clone());
                 }
@@ -277,10 +342,16 @@ impl CatalogTree {
             NodeKey::Connection(c) => {
                 !matches!(self.schemas.get(c), Some(Load::Loading | Load::Ready(_)))
             }
-            NodeKey::Schema { conn, schema } => !matches!(
-                self.relations.get(&(conn.clone(), schema.clone())),
-                Some(Load::Loading | Load::Ready(_))
-            ),
+            NodeKey::Schema { conn, schema } => match self.key_db(conn, schema) {
+                Some(db) => !matches!(
+                    self.keys.get(&(conn.clone(), db)),
+                    Some(Load::Loading | Load::Ready(_))
+                ),
+                None => !matches!(
+                    self.relations.get(&(conn.clone(), schema.clone())),
+                    Some(Load::Loading | Load::Ready(_))
+                ),
+            },
             NodeKey::Relation { conn, rel } => !matches!(
                 self.columns.get(&(conn.clone(), rel.clone())),
                 Some(Load::Loading | Load::Ready(_))
@@ -345,6 +416,19 @@ impl CatalogTree {
 
     /// Reloads a failed level under `key`; None unless it failed.
     pub fn retry(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        // A key listing fails either its first page, which starts over, or a later one,
+        // which is asked again from the cursor it kept.
+        if let NodeKey::Schema { conn, schema } = key
+            && let Some(db) = self.key_db(conn, schema)
+        {
+            return match self.keys.get(&(conn.clone(), db)) {
+                Some(Load::Failed(_)) => self.start(key),
+                Some(Load::Ready(l)) if matches!(l.more, More::Failed(_)) => {
+                    self.load_more_keys(conn, db)
+                }
+                _ => None,
+            };
+        }
         let failed = match key {
             NodeKey::Connection(c) => matches!(self.schemas.get(c), Some(Load::Failed(_))),
             NodeKey::Schema { conn, schema } => matches!(
@@ -411,7 +495,8 @@ impl CatalogTree {
                 NodeKey::Relation { conn, rel } => {
                     Some((conn.clone(), relation_objects_query(rel)))
                 }
-                NodeKey::Schema { conn, schema } => {
+                // A Redis DB holds keys, never types or routines.
+                NodeKey::Schema { conn, schema } if self.key_db(conn, schema).is_none() => {
                     Some((conn.clone(), schema_objects_query(schema)))
                 }
                 _ => None,
@@ -465,12 +550,22 @@ impl CatalogTree {
     fn start(&mut self, key: &NodeKey) -> Option<LoadRequest> {
         let (conn, query) = match key {
             NodeKey::Connection(c) => (c, CatalogQuery::Schemas),
-            NodeKey::Schema { conn, schema } => (
-                conn,
-                CatalogQuery::Relations {
-                    schema: schema.clone(),
-                },
-            ),
+            NodeKey::Schema { conn, schema } => match self.key_db(conn, schema) {
+                Some(db) => (
+                    conn,
+                    CatalogQuery::Keys {
+                        db,
+                        filter: self.key_filter(conn, db),
+                        after: None,
+                    },
+                ),
+                None => (
+                    conn,
+                    CatalogQuery::Relations {
+                        schema: schema.clone(),
+                    },
+                ),
+            },
             NodeKey::Relation { conn, rel } => (conn, CatalogQuery::Columns { rel: rel.clone() }),
             _ => return None,
         };
@@ -498,8 +593,19 @@ impl CatalogTree {
                 self.schema_objects
                     .insert((c, schema.clone()), Load::Loading);
             }
-            // Counts and definitions are no tree level.
-            CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => {}
+            CatalogQuery::Keys {
+                db, after: None, ..
+            } => {
+                self.keys.insert((c, *db), Load::Loading);
+            }
+            CatalogQuery::CommandDocs => {
+                self.command_docs.insert(c, Load::Loading);
+            }
+            // Counts and definitions are no tree level, and a later key page is tracked by
+            // its listing.
+            CatalogQuery::Count { .. }
+            | CatalogQuery::Definition { .. }
+            | CatalogQuery::Keys { .. } => {}
         }
         LoadRequest {
             conn: conn.to_owned(),
@@ -514,6 +620,7 @@ impl CatalogTree {
         let c = conn.to_owned();
         let present = match query {
             CatalogQuery::Schemas => self.schemas.contains_key(&c),
+            CatalogQuery::CommandDocs => self.command_docs.contains_key(&c),
             CatalogQuery::Relations { schema } => self.relations.contains_key(&(c, schema.clone())),
             CatalogQuery::Columns { rel } => self.columns.contains_key(&(c, rel.clone())),
             CatalogQuery::RelationObjects { rel } => {
@@ -522,8 +629,11 @@ impl CatalogTree {
             CatalogQuery::SchemaObjects { schema } => {
                 self.schema_objects.contains_key(&(c, schema.clone()))
             }
-            // A count or definition is no level of the tree, so there is nothing to ensure.
-            CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => true,
+            // A count or definition is no level of the tree, and keys load only from their
+            // DB row, so there is nothing to ensure.
+            CatalogQuery::Count { .. }
+            | CatalogQuery::Definition { .. }
+            | CatalogQuery::Keys { .. } => true,
         };
         (!present).then(|| self.begin(conn, query.clone()))
     }
@@ -572,9 +682,125 @@ impl CatalogTree {
                 });
                 self.schema_objects.insert((conn, schema), load);
             }
+            CatalogQuery::Keys { db, filter, after } => {
+                self.apply_keys((conn, db), &filter, after, result);
+            }
+            CatalogQuery::CommandDocs => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::CommandDocs(d) => Some(d),
+                    _ => None,
+                });
+                self.command_docs.insert(conn, load);
+            }
             // Counts and definitions are no tree level.
             CatalogQuery::Count { .. } | CatalogQuery::Definition { .. } => {}
         }
+    }
+
+    /// Stores a key page: a first page replaces the listing, a later one appends only while
+    /// the listing still waits on that very cursor. A page for another filter than the DB's
+    /// current one is stale and dropped.
+    fn apply_keys(
+        &mut self,
+        k: (String, u32),
+        filter: &KeyFilter,
+        after: Option<KeyToken>,
+        result: Result<CatalogData, String>,
+    ) {
+        if *filter != self.key_filter(&k.0, k.1) {
+            return;
+        }
+        let Some(after) = after else {
+            let load = load_of(result, |d| match d {
+                CatalogData::Keys(b) => Some(KeyListing {
+                    items: b.items,
+                    next: b.next,
+                    more: More::Idle,
+                }),
+                _ => None,
+            });
+            self.keys.insert(k, load);
+            return;
+        };
+        let Some(Load::Ready(l)) = self.keys.get_mut(&k) else {
+            return;
+        };
+        if !matches!(l.more, More::Loading) || l.next.as_ref() != Some(&after) {
+            return;
+        }
+        match result {
+            Ok(CatalogData::Keys(b)) => {
+                l.items.extend(b.items);
+                l.next = b.next;
+                l.more = More::Idle;
+            }
+            Ok(_) => l.more = More::Failed("unexpected catalog reply".into()),
+            Err(m) => l.more = More::Failed(m),
+        }
+    }
+
+    /// Marks `conn` as a key browser: its DB rows list keys instead of relations.
+    pub fn set_key_browser(&mut self, conn: &str) {
+        self.key_browsers.insert(conn.to_owned());
+    }
+
+    /// Unmarks every key browser, so a workspace install can mark its own afresh.
+    pub fn clear_key_browsers(&mut self) {
+        self.key_browsers.clear();
+    }
+
+    /// The DB index of `schema` when `conn` browses keys and the name is a DB row's.
+    fn key_db(&self, conn: &str, schema: &str) -> Option<u32> {
+        self.key_browsers.contains(conn).then(|| db_index(schema))?
+    }
+
+    /// The key filter of DB `db` of `conn`; the default lists every key.
+    pub fn key_filter(&self, conn: &str, db: u32) -> KeyFilter {
+        self.key_filters
+            .get(&(conn.to_owned(), db))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Sets DB `db`'s key filter and drops its listing; an open DB scans again from the
+    /// first page and returns that load, a closed one keeps the filter for its next opening.
+    pub fn filter_keys(&mut self, conn: &str, db: u32, filter: KeyFilter) -> Option<LoadRequest> {
+        let k = (conn.to_owned(), db);
+        self.key_filters.insert(k.clone(), filter);
+        self.keys.remove(&k);
+        let skey = NodeKey::Schema {
+            conn: conn.to_owned(),
+            schema: format!("db{db}"),
+        };
+        if self.key_browsers.contains(conn) && self.expanded.contains(&skey) {
+            self.start(&skey)
+        } else {
+            None
+        }
+    }
+
+    /// Asks for DB `db`'s next key page; None unless the listing is ready, has a next page
+    /// and has none in flight, so a double click cannot scan one cursor twice.
+    pub fn load_more_keys(&mut self, conn: &str, db: u32) -> Option<LoadRequest> {
+        let filter = self.key_filter(conn, db);
+        let generation = self.generation;
+        let Some(Load::Ready(l)) = self.keys.get_mut(&(conn.to_owned(), db)) else {
+            return None;
+        };
+        if matches!(l.more, More::Loading) {
+            return None;
+        }
+        let after = l.next.clone()?;
+        l.more = More::Loading;
+        Some(LoadRequest {
+            conn: conn.to_owned(),
+            generation,
+            query: CatalogQuery::Keys {
+                db,
+                filter,
+                after: Some(after),
+            },
+        })
     }
 
     /// Drops every cache, bumps the generation and returns a load for each expanded level.
@@ -585,6 +811,8 @@ impl CatalogTree {
         self.schemas.clear();
         self.relations.clear();
         self.columns.clear();
+        self.keys.clear();
+        self.command_docs.clear();
         let rels = std::mem::take(&mut self.relation_objects)
             .into_keys()
             .collect();
@@ -605,6 +833,8 @@ impl CatalogTree {
         self.schemas.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
+        self.keys.retain(|(c, _), _| c != conn);
+        self.command_docs.remove(conn);
         let rels = self
             .relation_objects
             .extract_if(|(c, _), _| c == conn)
@@ -664,6 +894,9 @@ impl CatalogTree {
         self.columns.retain(|(c, _), _| c != conn);
         self.relation_objects.retain(|(c, _), _| c != conn);
         self.schema_objects.retain(|(c, _), _| c != conn);
+        self.keys.retain(|(c, _), _| c != conn);
+        self.key_filters.retain(|(c, _), _| c != conn);
+        self.command_docs.remove(conn);
     }
 
     /// The schema level of `conn` as a link: absent Idle, loading Connecting, loaded
@@ -674,6 +907,14 @@ impl CatalogTree {
             Some(Load::Loading) => LinkState::Connecting,
             Some(Load::Ready(_)) => LinkState::Connected,
             Some(Load::Failed(m)) => LinkState::Failed(m.clone()),
+        }
+    }
+
+    /// Loaded COMMAND DOCS of Redis connection `conn`, for completion.
+    pub fn command_docs(&self, conn: &str) -> Option<&[RedisDoc]> {
+        match self.command_docs.get(conn) {
+            Some(Load::Ready(d)) => Some(d),
+            _ => None,
         }
     }
 
@@ -777,10 +1018,10 @@ impl CatalogTree {
             };
             let matched = w.matches(s.name());
             let expanded = self.expanded.contains(&skey);
-            let children = if expanded {
-                self.schema_children(&w, s.name(), depth + 1, matched)
-            } else {
-                Vec::new()
+            let children = match self.key_db(conn, s.name()) {
+                _ if !expanded => Vec::new(),
+                Some(db) => self.key_rows(&w, db, s.name(), depth + 1, matched),
+                None => self.schema_children(&w, s.name(), depth + 1, matched),
             };
             if matched || !children.is_empty() {
                 let aria = format!("{conn}.{}", s.name());
@@ -794,6 +1035,133 @@ impl CatalogTree {
                 ));
                 out.extend(children);
             }
+        }
+        out
+    }
+
+    /// Status rows, the `:` levels and the Load more row under one expanded Redis DB.
+    fn key_rows(
+        &self,
+        w: &Walk,
+        db: u32,
+        schema: &str,
+        depth: usize,
+        all: bool,
+    ) -> Vec<CatalogRow> {
+        let skey = NodeKey::Schema {
+            conn: w.conn.to_owned(),
+            schema: schema.to_owned(),
+        };
+        let path = format!("{}.{schema}", w.conn);
+        // As under a schema, only an error row shows whatever the filter, since Retry acts.
+        let show_status = all || w.filter.is_empty();
+        let status = |kind, label: String, tag: &str| {
+            row(
+                kind,
+                skey.clone(),
+                depth,
+                false,
+                label,
+                format!("{path}:{tag}"),
+            )
+        };
+        let failed =
+            |m: &String| status(RowKind::Failed { message: m.clone() }, m.clone(), "error");
+        let listing = match self.keys.get(&(w.conn.to_owned(), db)) {
+            None | Some(Load::Loading) if show_status => {
+                return vec![status(RowKind::Loading, "loading…".into(), "loading")];
+            }
+            None | Some(Load::Loading) => return Vec::new(),
+            Some(Load::Failed(m)) => return vec![failed(m)],
+            Some(Load::Ready(l)) => l,
+        };
+        let mut out = Vec::new();
+        if listing.items.is_empty() && listing.next.is_none() && show_status {
+            out.push(status(RowKind::Empty, "no keys".into(), "empty"));
+        }
+        let names: Vec<&[u8]> = listing.items.iter().map(|i| i.name.as_slice()).collect();
+        let level = KeyWalk {
+            w,
+            db,
+            items: &listing.items,
+            names: &names,
+            path: &path,
+        };
+        out.extend(self.key_level(&level, &skey, b"", depth, all));
+        match &listing.more {
+            More::Loading if show_status => {
+                out.push(status(RowKind::Loading, "loading…".into(), "loading"));
+            }
+            More::Failed(m) => out.push(failed(m)),
+            More::Idle if listing.next.is_some() && show_status => {
+                out.push(status(RowKind::LoadMore, "Load more".into(), "more"));
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// The folders, then the keys, directly under `prefix`, each open folder followed by its
+    /// own level. A folder or key shows when it matches the filter or holds a match.
+    fn key_level(
+        &self,
+        k: &KeyWalk,
+        parent: &NodeKey,
+        prefix: &[u8],
+        depth: usize,
+        all: bool,
+    ) -> Vec<CatalogRow> {
+        let level = key_levels(k.names, prefix);
+        let mut out = Vec::new();
+        for (folder, keys) in level.folders {
+            let fkey = NodeKey::KeyFolder {
+                conn: k.w.conn.to_owned(),
+                db: k.db,
+                prefix: folder.clone(),
+            };
+            let shown = display_key(&folder);
+            let matched = all || k.w.matches(&shown);
+            let expanded = self.expanded.contains(&fkey);
+            let kids = if expanded {
+                self.key_level(k, &fkey, &folder, depth + 1, matched)
+            } else {
+                Vec::new()
+            };
+            if matched || !kids.is_empty() {
+                // "user:1:" under "user:" reads "1"; a bare ":" segment keeps its colon.
+                let segment = &folder[prefix.len()..];
+                let trimmed = &segment[..segment.len() - 1];
+                let label = display_key(if trimmed.is_empty() { segment } else { trimmed });
+                let kind = RowKind::KeyFolder {
+                    prefix: folder,
+                    keys,
+                };
+                let aria = format!("{}/{shown}", k.path);
+                out.push(row(kind, fkey, depth, expanded, label, aria));
+                out.extend(kids);
+            }
+        }
+        for i in level.leaves {
+            let item = &k.items[i];
+            let full = display_key(&item.name);
+            if !(all || k.w.matches(&full)) {
+                continue;
+            }
+            let rest = &item.name[prefix.len()..];
+            let label = if rest.is_empty() {
+                full.clone()
+            } else {
+                display_key(rest)
+            };
+            let aria = format!("{}.{full}", k.path);
+            out.push(row(
+                RowKind::Key(item.clone()),
+                parent.clone(),
+                depth,
+                false,
+                label,
+                aria,
+            ));
         }
         out
     }
@@ -1435,6 +1803,13 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         )
         .chain([refresh])
         .collect(),
+        // A Redis DB lists keys, so its filter is a key pattern rather than the name filter.
+        RowKind::Schema if engine.capabilities().key_browser => vec![
+            new_query("New query"),
+            copy_name,
+            entry("tree-menu-filter-keys", "Filter keys…"),
+            refresh,
+        ],
         RowKind::Schema => vec![new_query("New query"), copy_name, refresh],
         RowKind::Kind(_) => vec![new_query("New query"), refresh],
         RowKind::Column { .. } => [copy_name].into_iter().chain(copy_qualified).collect(),
@@ -1451,6 +1826,15 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             copy_name,
         ],
         RowKind::Loading | RowKind::Empty | RowKind::Truncated => Vec::new(),
+        RowKind::Key(_) => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..entry("tree-menu-open-key", "Open value")
+            },
+            copy_name,
+        ],
+        RowKind::KeyFolder { .. } => vec![copy_name],
+        RowKind::LoadMore => Vec::new(),
     }
 }
 

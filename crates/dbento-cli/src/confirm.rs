@@ -1,5 +1,6 @@
 //! The yes-or-no prompt asked before an unguarded statement runs: an `UPDATE` or `DELETE`
-//! without `WHERE`, a `DROP`, a `TRUNCATE`, or a MongoDB update or delete with an empty filter.
+//! without `WHERE`, a `DROP`, a `TRUNCATE`, a MongoDB update or delete with an empty filter, or a
+//! Redis `FLUSHDB` or `FLUSHALL`.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
@@ -16,6 +17,7 @@ pub(crate) fn unguarded_words(kind: Unguarded) -> (&'static str, &'static str) {
         Unguarded::Truncate => "truncate",
         Unguarded::UpdateAllDocuments => "update_all_documents",
         Unguarded::DeleteAllDocuments => "delete_all_documents",
+        Unguarded::FlushKeys => "flush_keys",
         _ => "unguarded_write",
     };
     (kind.label(), reason)

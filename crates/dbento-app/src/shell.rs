@@ -751,11 +751,19 @@ impl Shell {
         if self.restoring {
             return;
         }
-        let tabs = self
-            .tabs
+        // A tab without a draft slot (a key's value tab) has nothing to restore, so it is left
+        // out, and the active index moves to the kept tab at or before it.
+        let kept: Vec<usize> = (0..self.tabs.len())
+            .filter(|&i| self.tabs[i].read(cx).draft_id().is_some())
+            .collect();
+        let active = self.active.and_then(|a| {
+            let before = kept.iter().filter(|&&i| i <= a).count();
+            (!kept.is_empty()).then(|| before.saturating_sub(1))
+        });
+        let tabs = kept
             .iter()
-            .map(|tab| {
-                let tab = tab.read(cx);
+            .map(|&i| {
+                let tab = self.tabs[i].read(cx);
                 let model = tab.model().read(cx);
                 TabState {
                     connection: model.spec().connection.clone(),
@@ -768,7 +776,7 @@ impl Shell {
         let session = WorkspaceSession {
             workspace: ws.dir().to_path_buf(),
             tabs,
-            active: self.active,
+            active,
             collapsed: self
                 .sidebar
                 .as_ref()
@@ -1220,8 +1228,8 @@ impl Shell {
         Some(tab)
     }
 
-    /// A click on connection `ix` in the explorer: activates the newest tab on it, else opens
-    /// one.
+    /// A click on connection `ix` in the explorer: activates the newest query tab on it, else
+    /// opens one.
     pub fn click_connection(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(name) = self
             .workspace
@@ -1231,10 +1239,11 @@ impl Shell {
         else {
             return;
         };
-        let newest = self
-            .tabs
-            .iter()
-            .rposition(|tab| tab.read(cx).model().read(cx).spec().connection == name);
+        // A key tab hides its editor, so opening the connection skips it for one that has one.
+        let newest = self.tabs.iter().rposition(|tab| {
+            let model = tab.read(cx).model().read(cx);
+            model.spec().connection == name && model.key_view().is_none()
+        });
         match newest {
             Some(tab) => self.activate(tab, window, cx),
             None => self.open_connection(ix, window, cx),
@@ -1464,6 +1473,23 @@ impl Shell {
                 || m.target_pending().is_some_and(same)
                 || m.deferred_target().is_some_and(same)
         })
+    }
+
+    /// Opens Redis key `key` of DB `db` on connection `connection` in a new value tab, which
+    /// reads the value's first page at once.
+    pub fn open_key(
+        &mut self,
+        connection: usize,
+        db: u32,
+        key: Vec<u8>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.open_unnumbered(connection, window, cx) {
+            tab.update(cx, |t, cx| t.open_key(db, key, cx));
+            // Opening recorded the tab while it still had a draft; it now has none to keep.
+            self.save_session(cx);
+        }
     }
 
     // Opens a new tab on `connection` holding `rel`'s select and loads it (`load_relation`);
@@ -2237,6 +2263,11 @@ impl Shell {
                         SidebarEvent::ViewDefinition { connection, object } => {
                             this.view_definition(connection, object.clone(), window, cx)
                         }
+                        SidebarEvent::OpenKey {
+                            connection,
+                            db,
+                            key,
+                        } => this.open_key(*connection, *db, key.clone(), window, cx),
                         SidebarEvent::Definition {
                             connection,
                             object,

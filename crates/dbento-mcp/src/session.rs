@@ -76,6 +76,18 @@ const MONGODB: &str = "The level of a read-only session on this connection follo
     where Dbento refuses every statement it reads as a write or cannot classify before sending \
     it but the user itself can write. Each `query` result carries the level.";
 
+// As SurrealDB's, the level follows the login: here the ACL of the connection's user.
+static REDIS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "The level of a read-only session on this connection follows the ACL of its user and is \
+         known only after connecting: `database` for a user such as `dbento_ro` whose ACL \
+         allows only read commands, so the server refuses writes, and `best_effort` for any \
+         other, where Dbento refuses every command it reads as a write. Each `query` result \
+         carries the level. {}",
+        read_only_residual(Engine::Redis).unwrap_or_default()
+    )
+});
+
 const UNKNOWN: &str = "The enforcement of read-only sessions on this connection is unknown to \
     this server.";
 
@@ -101,7 +113,7 @@ fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static s
 }
 
 /// The level name and text `list_connections` shows for a connection configured at `level`.
-/// SurrealDB's and MongoDB's levels follow the login, which only a connection reveals.
+/// SurrealDB's, MongoDB's and Redis's levels follow the login, which only a connection reveals.
 pub(crate) fn listed_level(
     engine: Engine,
     level: ReadOnlyEnforcement,
@@ -111,6 +123,9 @@ pub(crate) fn listed_level(
     }
     if engine == Engine::Mongodb {
         return ("unknown", MONGODB);
+    }
+    if engine == Engine::Redis {
+        return ("unknown", REDIS.as_str());
     }
     (enforcement_name(level), session_description(engine, level))
 }

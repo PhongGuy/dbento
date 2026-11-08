@@ -132,6 +132,21 @@ pub struct Outcome {
     pub rolled_back: bool,
 }
 
+impl Outcome {
+    /// A result read to its end with `rows` rows, nothing cut and nothing changed, as a
+    /// shell that read its rows outside a statement stream reports it.
+    pub fn complete(rows: u64) -> Self {
+        Outcome {
+            rows,
+            truncated: false,
+            rows_affected: None,
+            truncated_by: None,
+            extra_results: 0,
+            rolled_back: false,
+        }
+    }
+}
+
 /// The bound that cut a result short.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

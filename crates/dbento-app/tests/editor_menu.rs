@@ -4,7 +4,8 @@ use dbento_app::keymap::{
     EXPLAIN_ANALYZE_KEYS, EXPLAIN_KEYS, FORMAT_SQL_KEYS, RUN_STATEMENT_KEYS,
     SAVE_QUERY_ALWAYS_KEYS, chip_keys,
 };
-use dbento_app::query_tab::editor_menu_entries;
+use dbento_app::query_tab::{editor_menu_entries, formats};
+use dbento_core::Engine;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use support::{label_of, opened, present, wait_real};
@@ -164,5 +165,22 @@ fn without_explain_the_menu_leaves_both_explain_items_out(cx: &mut TestAppContex
                 "editor-menu-select-all",
             ]
         );
+    });
+}
+
+#[gpui_kit::test]
+fn a_redis_editor_offers_neither_format_nor_explain(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let e = Engine::Redis;
+        let ids: Vec<_> = editor_menu_entries(true, e.capabilities().explain, formats(e), cx)
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(ids.contains(&"editor-menu-run"), "{ids:?}");
+        assert!(
+            !ids.contains(&"editor-menu-format") && !ids.contains(&"editor-menu-explain"),
+            "{ids:?}"
+        );
+        assert!(formats(Engine::Postgres));
     });
 }

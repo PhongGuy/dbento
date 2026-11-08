@@ -4,8 +4,8 @@
 
 use std::cell::RefCell;
 
-use dbento_core::Engine;
-use gpui_kit::component::input::{CompletionProvider, Rope};
+use dbento_core::{Engine, QueryLanguage};
+use gpui_kit::component::input::{CompletionProvider, Rope, RopeExt as _};
 use gpui_kit::{App, Task, WeakEntity, Window};
 use lsp_types::{CompletionContext, CompletionResponse};
 
@@ -61,7 +61,13 @@ impl CompletionProvider for SqlCompletionProvider {
         let (Some(sidebar), Some(popup)) = (self.sidebar.upgrade(), self.popup.upgrade()) else {
             return none;
         };
-        let base = self.statements.borrow_mut().around(text, offset);
+        // A Redis line is one command, trailing spaces included, so it is the base there.
+        let base = if self.engine.capabilities().language == QueryLanguage::RedisCommands {
+            let row = text.offset_to_point(offset).row;
+            text.line_start_offset(row)..text.line_end_offset(row)
+        } else {
+            self.statements.borrow_mut().around(text, offset)
+        };
         let stmt = text.slice(base.clone()).to_string();
         let tree = sidebar.read(cx).tree();
         let answer = complete_in(

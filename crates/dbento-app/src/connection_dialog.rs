@@ -1177,6 +1177,7 @@ impl Render for ConnectionForm {
                 "SQL Server",
                 "SurrealDB",
                 "MongoDB",
+                "Redis",
             ],
             // An engine the picker does not offer highlights no option.
             ENGINES
@@ -1444,7 +1445,7 @@ impl Shown {
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 7] = [
+const ENGINES: [Engine; 8] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -1452,6 +1453,7 @@ const ENGINES: [Engine; 7] = [
     Engine::Mssql,
     Engine::Surrealdb,
     Engine::Mongodb,
+    Engine::Redis,
 ];
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {

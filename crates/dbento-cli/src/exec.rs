@@ -360,6 +360,12 @@ fn best_effort_note(engine: Engine, connection: &str) -> String {
             "SurrealDB refuses writes in the database only for a VIEWER login; use one for \
              production"
         }
+        Engine::Redis => {
+            "Redis refuses writes in the database only for an ACL user without write commands; \
+             use one like dbento_ro (-@all +@read +ping +echo +time +hello +select +command \
+             +multi +exec +discard +client|setname +client|setinfo +client|id +client|info) \
+             for production"
+        }
         _ => {
             "SQL Server refuses writes in the database only with read_only_user; set \
              read_only_user or use a reader login for production"
@@ -428,5 +434,19 @@ mod tests {
             mssql.contains("best effort") && mssql.contains("read_only_user"),
             "{mssql}"
         );
+    }
+
+    #[test]
+    fn the_redis_best_effort_note_names_the_reader_acl() {
+        let note = best_effort_note(Engine::Redis, "cache");
+        assert!(
+            note.contains("'cache'") && note.contains("best effort"),
+            "{note}"
+        );
+        assert!(
+            note.contains("dbento_ro") && note.contains("-@all +@read") && note.contains("+exec"),
+            "{note}"
+        );
+        assert!(!note.contains("read_only_user"), "{note}");
     }
 }

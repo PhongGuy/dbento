@@ -3,8 +3,9 @@
 use std::time::{Instant, SystemTime};
 
 use dbento_core::{
-    CellRef, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome, HistorySource, Limits,
-    OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy, statement_count,
+    CellRef, Classification, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome, HistorySource,
+    Limits, OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy,
+    statement_count,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -171,6 +172,17 @@ pub(crate) async fn run_read(
     })
 }
 
+// Server categories `query` refuses even in a read-only session: they scan the whole keyspace,
+// read server state, run scripts or hold the connection open waiting.
+const REFUSED_CATEGORIES: [&str; 4] = ["@dangerous", "@blocking", "@scripting", "@pubsub"];
+
+/// The first of the refused categories the statement's command belongs to, if any.
+pub(crate) fn refused_category(c: &Classification) -> Option<&'static str> {
+    REFUSED_CATEGORIES
+        .into_iter()
+        .find(|refused| c.categories.iter().any(|have| have == refused))
+}
+
 /// Executes the script's only statement, walks every batch into JSON rows (and the rows'
 /// documents, when the first row carries one) and, unless a cut stopped it, reads the rest of
 /// the script to its end.
@@ -187,6 +199,22 @@ async fn collect(
         None => return Err(one_statement("query")),
         Some(p) => p.map_err(failed)?,
     };
+    if let Some(category) = refused_category(pending.classification()) {
+        let command = pending
+            .sql()
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_uppercase();
+        pending.skip();
+        return Err(ToolError::new(
+            "refused_category",
+            format!(
+                "`{command}` is in the server's {category} category, which `query` refuses; \
+                 walk keys with `SCAN 0 MATCH <pattern> COUNT 100` and `TYPE <key>`"
+            ),
+        ));
+    }
     let mut stream = pending.execute(limits).await.map_err(failed)?;
     let mut rows = Vec::new();
     let mut documents: Option<Vec<Value>> = None;

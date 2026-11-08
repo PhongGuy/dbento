@@ -3,17 +3,20 @@
 
 use std::panic::AssertUnwindSafe;
 use std::pin::pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use dbento_core::{
-    CellRef, ColumnMeta, Definition, DefinitionError, ExecuteError, IntrospectError, ObjectRef,
-    RelationList, RelationObjects, RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions,
-    quote_ident,
+    CellRef, ColumnMeta, CommandDoc, Definition, DefinitionError, ExecuteError, IntrospectError,
+    KeyBrowseError, KeyCursor, KeyPage, KeyScan, KeyTtl, ObjectRef, RelationList, RelationObjects,
+    RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions, quote_ident,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
+use crate::keys::{KEY_PAGE, KeyBatch, KeyFilter, KeyItem, KeyToken, kind_of};
+use crate::redis_completion::RedisDoc;
 use crate::runner::{self, RunnerSpec};
 
 /// The longest a catalog query may run; a shorter connection timeout wins.
@@ -61,6 +64,17 @@ pub enum CatalogQuery {
         /// The object to show.
         object: ObjectRef,
     },
+    /// One page of the keys of Redis DB `db`.
+    Keys {
+        /// The DB index.
+        db: u32,
+        /// Which keys the scan matches.
+        filter: KeyFilter,
+        /// Where the scan resumes; None for its first page.
+        after: Option<KeyToken>,
+    },
+    /// The Redis server's COMMAND DOCS, for completion; never a tree level.
+    CommandDocs,
 }
 
 /// A loaded catalog level, matching its [`CatalogQuery`].
@@ -80,6 +94,10 @@ pub enum CatalogData {
     SchemaObjects(SchemaObjects),
     /// The answer to [`CatalogQuery::Definition`].
     Definition(Definition),
+    /// The answer to [`CatalogQuery::Keys`].
+    Keys(KeyBatch),
+    /// The answer to [`CatalogQuery::CommandDocs`].
+    CommandDocs(Arc<[RedisDoc]>),
 }
 
 /// One answer, in request order; `generation` is echoed from the request.
@@ -207,11 +225,13 @@ async fn serve(
     }
 }
 
-// Listings fail as IntrospectError and definitions as DefinitionError; each says when the
-// session behind it is gone.
+// Listings fail as IntrospectError, definitions as DefinitionError and key pages and
+// command docs as KeyBrowseError; each says when the session behind it is gone.
 enum Asked {
     Listing(Result<CatalogData, IntrospectError>),
     Definition(Result<Definition, DefinitionError>),
+    Keys(Result<KeyPage, KeyBrowseError>),
+    Docs(Result<Vec<CommandDoc>, KeyBrowseError>),
 }
 
 // Connects on demand, so a failed connect is retried by the next load. A closed session,
@@ -236,6 +256,10 @@ async fn load(
     let work = async {
         match query {
             CatalogQuery::Definition { object } => Asked::Definition(s.definition(object).await),
+            CatalogQuery::Keys { db, filter, after } => {
+                Asked::Keys(s.scan_keys(&key_scan(*db, filter, after.as_ref())).await)
+            }
+            CatalogQuery::CommandDocs => Asked::Docs(s.command_docs().await),
             q => Asked::Listing(ask(s, q).await),
         }
     };
@@ -257,6 +281,13 @@ async fn load(
             | Ok(Asked::Definition(Err(DefinitionError::Execute(
                 ExecuteError::SessionClosed | ExecuteError::SessionEnded { .. }
             ))))
+            // A Redis browse that timed out has already ended its session.
+            | Ok(Asked::Keys(Err(
+                KeyBrowseError::SessionEnded { .. } | KeyBrowseError::Timeout
+            )))
+            | Ok(Asked::Docs(Err(
+                KeyBrowseError::SessionEnded { .. } | KeyBrowseError::Timeout
+            )))
     );
     if lost && let Some((s, _)) = session.take() {
         let _ = s.close().await;
@@ -264,8 +295,36 @@ async fn load(
     match answer {
         Ok(Asked::Listing(r)) => r.map_err(|e| e.to_string()),
         Ok(Asked::Definition(r)) => r.map(CatalogData::Definition).map_err(definition_message),
+        Ok(Asked::Keys(r)) => r.map(key_batch).map_err(|e| e.to_string()),
+        Ok(Asked::Docs(r)) => r
+            .map(|docs| CatalogData::CommandDocs(docs.iter().map(RedisDoc::from).collect()))
+            .map_err(|e| e.to_string()),
         Err(_) => Err("the catalog session stopped".into()),
     }
+}
+
+// One page of `filter`'s keys in `db`, resuming after `after` or from the start.
+fn key_scan(db: u32, filter: &KeyFilter, after: Option<&KeyToken>) -> KeyScan {
+    let mut scan = KeyScan::new(db);
+    scan.pattern = filter.pattern.clone();
+    scan.kind = filter.kind.as_deref().map(kind_of);
+    scan.cursor = after.map_or_else(KeyCursor::start, |t| t.cursor().clone());
+    scan.want = KEY_PAGE;
+    scan
+}
+
+// A key that vanished between the scan and its TYPE read is left out of the tree.
+fn key_batch(page: KeyPage) -> CatalogData {
+    let items = (page.keys.into_iter())
+        .filter(|k| k.ttl != KeyTtl::Gone)
+        .map(|k| KeyItem {
+            name: k.name,
+            kind: k.kind,
+            ttl: k.ttl,
+        })
+        .collect();
+    let next = page.next.map(KeyToken::new);
+    CatalogData::Keys(KeyBatch { items, next })
 }
 
 // A missing object points at the explorer's refresh; any other error reads as itself.
@@ -304,10 +363,10 @@ async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, Intro
             }
             r => CatalogData::SchemaObjects(r?),
         },
-        // `load` sends definitions down their own arm, never here.
-        CatalogQuery::Definition { .. } => {
+        // `load` sends definitions, key pages and command docs down their own arms.
+        CatalogQuery::Definition { .. } | CatalogQuery::Keys { .. } | CatalogQuery::CommandDocs => {
             return Err(IntrospectError::Unexpected {
-                message: "a definition is no catalog listing".into(),
+                message: "not a catalog listing".into(),
             });
         }
     })

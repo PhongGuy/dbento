@@ -1,5 +1,6 @@
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::completion::{CandidateKind, Completion, MAX_ITEMS, complete};
+use dbento_app::redis_completion::{RedisArg, RedisDoc, signature};
 use dbento_app::schema_tree::{CatalogTree, LoadRequest};
 use dbento_core::{
     ColumnMeta, Engine, Relation, RelationKind, RelationList, RelationRef, SchemaInfo,
@@ -941,4 +942,168 @@ fn strings_comments_and_regexes_complete_nothing() {
     ] {
         assert_eq!(mg(after), ["sort"], "{after}");
     }
+}
+
+fn arg(name: &str, token: Option<&str>, optional: bool, multiple: bool) -> RedisArg {
+    RedisArg {
+        name: name.into(),
+        token: token.map(Into::into),
+        optional,
+        multiple,
+    }
+}
+fn rdoc(name: &str, args: Vec<RedisArg>, subcommands: Vec<RedisDoc>) -> RedisDoc {
+    RedisDoc {
+        name: name.into(),
+        summary: format!("{name} summary"),
+        args,
+        subcommands,
+    }
+}
+/// `rd`'s COMMAND DOCS: get, hget, hgetall, del, set with four tokens, config get and set.
+fn rd_tree() -> CatalogTree {
+    let key = || arg("key", None, false, false);
+    let docs = vec![
+        rdoc("get", vec![key()], vec![]),
+        rdoc(
+            "hget",
+            vec![key(), arg("field", None, false, false)],
+            vec![],
+        ),
+        rdoc("hgetall", vec![key()], vec![]),
+        rdoc("del", vec![arg("key", None, false, true)], vec![]),
+        rdoc(
+            "set",
+            vec![
+                key(),
+                arg("value", None, false, false),
+                arg("nx", Some("NX"), true, false),
+                arg("xx", Some("XX"), true, false),
+                arg("seconds", Some("EX"), true, false),
+                arg("get", Some("GET"), true, false),
+            ],
+            vec![],
+        ),
+        rdoc(
+            "config",
+            vec![],
+            vec![
+                rdoc(
+                    "config|get",
+                    vec![arg("parameter", None, false, true)],
+                    vec![],
+                ),
+                rdoc(
+                    "config|set",
+                    vec![
+                        arg("parameter", None, false, false),
+                        arg("value", None, false, false),
+                    ],
+                    vec![],
+                ),
+            ],
+        ),
+    ];
+    let mut t = CatalogTree::new();
+    put(
+        &mut t,
+        "rd",
+        CatalogQuery::CommandDocs,
+        CatalogData::CommandDocs(docs.into()),
+    );
+    t
+}
+fn rd_at(text: &str, tree: &CatalogTree) -> Completion {
+    complete(Engine::Redis, text, text.len(), tree, "rd", None)
+}
+fn rd(text: &str) -> Vec<String> {
+    let mut got: Vec<String> = labels(&rd_at(text, &rd_tree()))
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    got.sort();
+    got
+}
+
+#[test]
+fn the_first_word_offers_commands_with_their_signature() {
+    assert_eq!(rd("hg"), ["HGET", "HGETALL"]);
+    assert_eq!(rd("HGETA"), ["HGETALL"]);
+    let c = rd_at("GET a\nhg", &rd_tree());
+    assert_eq!(c.replace, 6..8);
+    let hget = c.items.iter().find(|i| i.label == "HGET").unwrap();
+    assert_eq!(
+        (hget.insert.as_str(), hget.kind, hget.detail.as_str()),
+        ("HGET", CandidateKind::Keyword, "HGET key field")
+    );
+    assert!(offers(&rd("c"), "CONFIG"));
+    assert!(
+        !rd("c").iter().any(|l| l.contains('|')),
+        "subcommands are not commands"
+    );
+}
+
+#[test]
+fn signatures_bracket_options_and_repeat_multiples() {
+    let t = rd_tree();
+    let docs = t.command_docs("rd").unwrap();
+    let find = |n: &str| docs.iter().find(|d| d.name == n).unwrap();
+    assert_eq!(
+        signature(find("set")),
+        "SET key value [NX] [XX] [EX seconds] [GET]"
+    );
+    assert_eq!(signature(find("del")), "DEL key [key ...]");
+    assert_eq!(
+        signature(&find("config").subcommands[0]),
+        "CONFIG GET parameter [parameter ...]"
+    );
+}
+
+#[test]
+fn the_second_word_offers_subcommands_and_later_words_argument_tokens() {
+    assert_eq!(rd("CONFIG g"), ["GET"]);
+    assert_eq!(rd("config "), ["GET", "SET"]);
+    assert_eq!(rd("SET k v e"), ["EX"]);
+    assert_eq!(rd("SET k v "), ["EX", "GET", "NX", "XX"]);
+    let c = rd_at("set k v n", &rd_tree());
+    assert_eq!(
+        (c.replace.clone(), c.items[0].insert.as_str()),
+        (8..9, "NX")
+    );
+    assert!(rd("GET k ").is_empty(), "GET takes no tokens");
+}
+
+#[test]
+fn comments_quotes_and_unknown_commands_complete_nothing() {
+    assert!(rd("# hg").is_empty());
+    assert!(rd("GET \"hg").is_empty());
+    assert!(rd("GET 'a b").is_empty());
+    assert!(rd("NOPE x").is_empty());
+    assert!(rd("").is_empty());
+}
+
+#[test]
+fn completion_asks_for_command_docs_while_they_are_missing() {
+    let c = complete(Engine::Redis, "hg", 2, &CatalogTree::new(), "rd", None);
+    assert!(c.items.is_empty());
+    assert_eq!(c.wants, [CatalogQuery::CommandDocs]);
+    assert!(rd_at("hg", &rd_tree()).wants.is_empty());
+}
+
+#[test]
+fn a_connection_refresh_drops_only_its_command_docs() {
+    let mut t = rd_tree();
+    put(
+        &mut t,
+        "other",
+        CatalogQuery::CommandDocs,
+        CatalogData::CommandDocs(Vec::new().into()),
+    );
+    t.refresh_connection("rd");
+    assert!(t.command_docs("rd").is_none());
+    assert!(
+        t.command_docs("other").is_some(),
+        "other connections keep theirs"
+    );
+    assert_eq!(rd_at("hg", &t).wants, [CatalogQuery::CommandDocs]);
 }

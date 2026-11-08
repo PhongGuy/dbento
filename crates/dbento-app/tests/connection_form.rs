@@ -857,3 +857,70 @@ fn leaving_mongodb_drops_its_uri_and_coming_back_restores_it(cx: &mut TestAppCon
     radio(cx, win, "conn-engine", 6);
     assert_eq!(edit(cx, &f), Ok(("mg".into(), mg())));
 }
+
+fn rd() -> ConnectionSpec {
+    let mut s = ConnectionSpec::new(Engine::Redis);
+    (s.host, s.port, s.database, s.user) = (
+        Some("cache.internal".into()),
+        Some(6380),
+        Some("2".into()),
+        Some("dbento_ro".into()),
+    );
+    s
+}
+
+#[gpui_kit::test]
+fn the_eighth_engine_is_redis_with_host_port_db_index_and_user(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    assert_eq!(engine_option(cx, win, 7).0.as_deref(), Some("Redis"));
+    radio(cx, win, "conn-engine", 7);
+    for id in [
+        "conn-host",
+        "conn-port",
+        "conn-database",
+        "conn-user",
+        "conn-tls",
+        "conn-read-only-help",
+    ] {
+        assert!(present(cx, win, id), "{id}");
+    }
+    for id in [
+        "conn-path",
+        "conn-uri",
+        "conn-namespace",
+        "conn-read-only-user",
+        "conn-auth-level",
+    ] {
+        assert!(!present(cx, win, id), "{id}");
+    }
+    set(cx, win, &f, Field::Name, "cache");
+    set(cx, win, &f, Field::Host, "cache.internal");
+    set(cx, win, &f, Field::Port, "6380");
+    set(cx, win, &f, Field::Database, "2");
+    set(cx, win, &f, Field::User, "dbento_ro");
+    assert_eq!(edit(cx, &f), Ok(("cache".into(), rd())));
+}
+
+#[gpui_kit::test]
+fn a_loaded_redis_connection_selects_redis_and_returns_unchanged(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("cache", rd())));
+    assert_eq!(engine_option(cx, win, 7).1, Some(true));
+    for ix in 0..7 {
+        assert_eq!(engine_option(cx, win, ix).1, Some(false), "{ix}");
+    }
+    assert_eq!(edit(cx, &f), Ok(("cache".into(), rd())));
+}
+
+#[gpui_kit::test]
+fn leaving_redis_for_mongodb_drops_its_keys_and_coming_back_restores_them(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("cache", rd())));
+    radio(cx, win, "conn-engine", 6);
+    set(cx, win, &f, Field::Uri, MG_URI);
+    let (_, mg) = edit(cx, &f).unwrap();
+    assert_eq!(
+        (mg.engine, mg.host, mg.port, mg.user),
+        (Engine::Mongodb, None, None, None)
+    );
+    radio(cx, win, "conn-engine", 7);
+    assert_eq!(edit(cx, &f), Ok(("cache".into(), rd())));
+}
