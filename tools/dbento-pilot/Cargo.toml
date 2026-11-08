@@ -29,6 +29,7 @@ dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "
 [profile.dev.package."*"]
 opt-level = 3
 
-# The root workspace's patch does not reach this separate workspace, so it repeats it.
+# The root workspace's patch does not reach this separate workspace, so it repeats every entry.
 [patch.crates-io]
 tiberius = { path = "../../vendor/tiberius" }
+mongodb = { path = "../../vendor/mongodb" }
