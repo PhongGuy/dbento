@@ -8,12 +8,13 @@ fn exe() -> &'static Path {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_child_reports_the_memory_it_touched() {
-    for mib in [16u64, 64] {
+    // The slack covers only the kernel's per-CPU counter lag; code paged in mid-run must not count.
+    for mib in [0u64, 16, 64] {
         let s = run_child(exe(), &["probe".into(), mib.to_string()], &[]).unwrap();
         assert_eq!((s.case.as_str(), s.rows), ("probe", 0));
-        let low = mib as f64;
+        let mib = mib as f64;
         assert!(
-            (low..low + 2.0).contains(&s.value),
+            (mib - 0.5..mib + 0.5).contains(&s.value),
             "{mib} MiB probe reported {}",
             s.value
         );

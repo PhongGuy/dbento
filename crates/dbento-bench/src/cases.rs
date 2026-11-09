@@ -1,6 +1,6 @@
 //! The measured cases, run through the core API against live stress tables.
 
-use crate::measure::{Sample, vm_hwm_kib};
+use crate::measure::{MemReading, Sample};
 use anyhow::{Context, Result, bail};
 use dbento_core::{
     Engine, Limits, ResultBatch, Secret, Session, SessionOptions, Workspace, connect,
@@ -196,7 +196,7 @@ pub async fn measure(case: Case, targets: &Targets) -> Result<Sample> {
     drain(&mut session, "SELECT 1").await?;
     let mut script = session.script(case.sql());
     // The baseline is read first so the timer starts right before `next`, which prepares on Postgres.
-    let before = vm_hwm_kib()?;
+    let before = MemReading::now()?;
     let start = Instant::now();
     let pending = script
         .next()
@@ -227,7 +227,7 @@ pub async fn measure(case: Case, targets: &Targets) -> Result<Sample> {
             while let Some(b) = stream.next_batch().await? {
                 kept.push(b);
             }
-            let grown = vm_hwm_kib()?.saturating_sub(before) as f64 / 1024.0;
+            let grown = MemReading::now()?.grown_kib_since(&before) as f64 / 1024.0;
             let rows: u64 = kept.iter().map(|b| b.len() as u64).sum();
             std::hint::black_box(&kept);
             (per_million(grown, rows), rows)
