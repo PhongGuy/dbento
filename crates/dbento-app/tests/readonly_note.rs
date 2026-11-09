@@ -1,10 +1,9 @@
 //! An edit attempt on a free query result says why nothing opens and offers the table.
-mod support;
+use crate::support::{Opened, label_of, launched, opened, present, wait_real};
 use dbento_app::results_pane::ResultsPane;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'a'), (2, 'b'); \

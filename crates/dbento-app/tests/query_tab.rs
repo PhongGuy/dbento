@@ -1,4 +1,5 @@
-mod support;
+use crate::support;
+use crate::support::{LONG, label_of, opened, present, wait_real};
 use dbento_app::query_tab::connection_chip_text;
 use dbento_app::query_tab::{
     READ_ONLY_MONGO_BEST_EFFORT_TOOLTIP, READ_ONLY_MONGO_READER_TOOLTIP,
@@ -15,7 +16,6 @@ use dbento_core::{Engine, Unguarded};
 use dbento_core::{ReadOnlyEnforcement, read_only_residual};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{LONG, label_of, opened, present, wait_real};
 const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);";
 
 fn answer(cx: &mut TestAppContext, o: &support::Opened, id: &'static str) {

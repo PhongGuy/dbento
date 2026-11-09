@@ -1,8 +1,7 @@
 //! The runner's Explain: asks only where ANALYZE could write, and is read in every wait.
-mod support;
+use crate::support::{MANY, fixture, here, next_event, pg_spec, run_cmd, spec, until_event};
 use dbento_app::runner::{Command, Event, StatementEnd, spawn_on};
 use dbento_core::{Engine, ExecuteError, ExplainMode, Unguarded, explain_request};
-use support::{MANY, fixture, here, next_event, pg_spec, run_cmd, spec, until_event};
 
 fn explain(run_id: u64, engine: Engine, sql: &str, mode: ExplainMode) -> Command {
     Command::Explain {

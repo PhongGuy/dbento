@@ -1,11 +1,10 @@
 //! Menu rows with key chips, and the sidebar's new-query and notice events.
-mod support;
+use crate::support::{TREE, label_of, present, right_click_empty, started};
 use dbento_app::keymap::{NEW_CONNECTION_KEYS, chip_keys};
 use dbento_app::sidebar::SidebarEvent;
 use dbento_app::ui::{Notice, NoticeKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{TREE, label_of, present, right_click_empty, started};
 
 #[gpui_kit::test]
 fn a_menu_row_shows_its_keys_and_only_then(cx: &mut TestAppContext) {

@@ -1,11 +1,11 @@
 //! Redis through the app's runners on a real server: the catalog pages a key scan, and a
 //! tab's runner reads a key's value in pages.
 #![cfg(feature = "redis")]
-mod support;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::support::{here, init_tokio, wait_real};
 use dbento_app::catalog::{CatalogData, CatalogQuery, spawn_catalog};
 use dbento_app::key_view::{KeyView, VALUE_PAGE};
 use dbento_app::keys::{KEY_PAGE, KeyBatch, KeyFilter};
@@ -15,7 +15,6 @@ use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, KeyKind, KeyRead, KeyTtl, Workspace};
 use dbento_testkit::{RD_SECRET_VAR, RdUser, RedisDb, redis_db};
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{here, init_tokio, wait_real};
 
 /// A runner spec on connection `rd`: the reader, read-only.
 fn spec(db: &RedisDb) -> (tempfile::TempDir, RunnerSpec) {

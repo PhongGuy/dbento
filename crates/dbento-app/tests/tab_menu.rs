@@ -1,11 +1,10 @@
 //! The tab menu: close, close others, close all, rename, duplicate and save as query.
-mod support;
 use std::path::PathBuf;
 
+use crate::support::{Opened, click_id, label_of, launched, opened, present, wait_real};
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, opened, present, wait_real};
 
 fn tab_menu(cx: &mut TestAppContext, o: &Opened, ix: usize) {
     cx.update_window(o.win, |_, w, cx| w.right_click(("tab", ix), cx))

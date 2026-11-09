@@ -1,5 +1,6 @@
 //! Small affordances: icon contrast, theme glyphs, the folder dot slot, tree tooltips.
-mod support;
+use crate::support;
+use crate::support::{click_id, label_of, launched, present, started, wait_real};
 use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::schema_tree::NodeKey;
 use dbento_app::sidebar::TREE_TOOLTIP_DELAY;
@@ -10,7 +11,6 @@ use gpui_kit::component::{ActiveTheme as _, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Hsla, TestAppContext, px};
 use std::time::Duration;
-use support::{click_id, label_of, launched, present, started, wait_real};
 
 const FOLDERS: &str = "dbento = 1\n[folders.red]\ncolor = \"red\"\n\n[folders.plain]\n\n\
 [connections.one]\nengine = \"sqlite\"\npath = \"1.db\"\nfolder = \"red\"\n\n\

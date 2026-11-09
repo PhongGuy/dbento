@@ -1,6 +1,9 @@
 //! A tab opens its session before the first Run; a failed connect shows and is retried.
 //! Opening a workspace connects only the focused tab, within `PRECONNECT_CAP`.
-mod support;
+use crate::support::{
+    MANY, Opened, fixture, here, init, init_tokio, label_of, next_event, opened, pg_spec, present,
+    run_cmd, services, spec, until_event, wait_real,
+};
 use dbento_app::app::{AppPaths, SavedState, TabState, WorkspaceSession, start};
 use dbento_app::persist::save_json;
 use dbento_app::runner::{Command, Event, StatementEnd, StopReason, spawn_on};
@@ -11,10 +14,6 @@ use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use support::{
-    MANY, Opened, fixture, here, init, init_tokio, label_of, next_event, opened, pg_spec, present,
-    run_cmd, services, spec, until_event, wait_real,
-};
 
 const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1);";
 

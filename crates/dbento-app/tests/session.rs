@@ -1,5 +1,6 @@
 //! Tabs and edited SQL across a crash, a window close and a workspace switch.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, opened, present, wait_real};
 use dbento_app::app::{AppPaths, SavedState, start};
 use dbento_app::drafts::{DRAFT_DEBOUNCE, Draft, Drafts};
 use dbento_app::persist::load_json;
@@ -7,7 +8,6 @@ use dbento_app::shell::Shell;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
-use support::{Opened, label_of, opened, present, wait_real};
 
 fn settle(cx: &mut TestAppContext) {
     cx.executor().advance_clock(DRAFT_DEBOUNCE);

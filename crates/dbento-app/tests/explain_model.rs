@@ -1,12 +1,12 @@
 //! The tab model's plan results: one per explain, finished, kept out of history, at the user's text.
-mod support;
+use crate::support;
+use crate::support::{fixture, init_tokio, spec, wait_real};
 use dbento_app::history::HistoryLog;
 use dbento_app::runner::StatementEnd;
 use dbento_app::tab_model::TabModel;
 use dbento_core::{Engine, ExplainMode, History, HistoryEntry, HistoryFilter, explain_request};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use std::path::Path;
-use support::{fixture, init_tokio, spec, wait_real};
 
 fn entries(path: &Path) -> Vec<HistoryEntry> {
     History::open(path)

@@ -1,12 +1,13 @@
 //! Redis in the window: the key filter, Load more, and a key opened in its own value tab.
 #![cfg(feature = "redis")]
-mod support;
+use crate::support::{
+    Started, click_id, label_of, name, present, right_click, started_custom, wait_real,
+};
 use dbento_app::explorer::part_id;
 use dbento_app::schema_tree::{CatalogRow, RowKind};
 use dbento_testkit::{RD_SECRET_VAR, RdUser, redis_db};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Started, click_id, label_of, name, present, right_click, started_custom, wait_real};
 
 /// The explorer index of the rendered row labelled `aria`.
 fn row_ix(cx: &mut TestAppContext, s: &Started, aria: &str) -> Option<usize> {

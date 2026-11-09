@@ -5,6 +5,7 @@ description = "The Dbento desktop app: a GPUI shell over dbento-core"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [[bin]]
 name = "dbento-app"
@@ -78,3 +79,11 @@ depends = ["libxcb1", "libxkbcommon0", "libxkbcommon-x11-0", "libvulkan1", "libw
 section = "devel"
 # cargo-packager's default template plus StartupWMClass, so the shell matches the window to it.
 desktopTemplate = "packaging/dbento-app.desktop"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+[[test]]
+name = "export"
+path = "tests/export.rs"

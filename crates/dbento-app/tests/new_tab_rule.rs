@@ -1,10 +1,10 @@
 //! `+` and Ctrl+T follow a changed explorer selection; a hovered connection row offers `+`.
-mod support;
+use crate::support;
+use crate::support::{Opened, click_id, opened, present};
 use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::shell::new_tab_connection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, click_id, opened, present};
 
 fn active_connection(cx: &mut TestAppContext, o: &Opened) -> String {
     o.model(cx)

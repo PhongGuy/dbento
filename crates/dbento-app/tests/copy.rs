@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::copy::{
     CopyFormat, cell_copy, copy_as, copy_rows, copy_text, document_json, insert_maps_nothing,
     insert_unwritable, json_literal,

@@ -1,5 +1,6 @@
 //! A table tab across a restart: its title, its explorer selection and its browse state.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, present, wait_real};
 use dbento_app::app::{AppPaths, SavedState, start};
 use dbento_app::persist::{load_json, save_json};
 use dbento_app::schema_tree::NodeKey;
@@ -7,7 +8,6 @@ use dbento_app::shell::Shell;
 use dbento_core::{RelationKind, RelationRef, Sort};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
-use support::{Opened, label_of, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  INSERT INTO Album(Title) VALUES ('a'), ('b'), ('c');";

@@ -1,9 +1,8 @@
-mod support;
+use crate::support::{Opened, opened, present, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::drafts::{DRAFT_DEBOUNCE, Draft, Drafts};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, opened, present, wait_real};
 
 fn drafts(o: &Opened) -> Vec<Draft> {
     Drafts::new(AppPaths::in_dir(o.files.path()).drafts).load(o.fx.ws.dir())

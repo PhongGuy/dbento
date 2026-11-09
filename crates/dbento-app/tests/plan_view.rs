@@ -1,12 +1,11 @@
 //! The plan tree's keys, labels and highlight, and the view inside the results pane.
-mod support;
+use crate::support::{init, label_of, opened, present};
 use dbento_app::plan_view::{HOT_SHARE, PlanTree, PlanView, TreeKey, header_text};
 use dbento_app::tab_model::PlanResult;
 use dbento_core::{Engine, ExplainMode, ExplainOutput, Plan, explain_request};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use std::sync::Arc;
-use support::{init, label_of, opened, present};
 
 const ANALYZE: &str =
     include_str!("../../dbento-core/tests/fixtures/explain/pg17_analyze_buffers.json");

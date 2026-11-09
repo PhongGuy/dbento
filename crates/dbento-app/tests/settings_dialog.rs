@@ -1,4 +1,5 @@
-mod support;
+use crate::support;
+use crate::support::{click_id, label_of, present};
 use dbento_app::app::AppPaths;
 use dbento_app::settings::{Density, Settings};
 use dbento_app::settings_dialog::{
@@ -12,7 +13,6 @@ use gpui_kit::{
     WindowOptions, point, px, size,
 };
 use std::time::Duration;
-use support::{click_id, label_of, present};
 
 struct D {
     files: tempfile::TempDir,

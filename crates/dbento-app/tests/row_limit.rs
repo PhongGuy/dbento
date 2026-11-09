@@ -1,11 +1,10 @@
 //! The row limit cycles through capped values and the gutter grows with the cap.
-mod support;
+use crate::support::{label_of, opened};
 use dbento_app::grid::gutter_width;
 use dbento_app::query_tab::{next_row_limit, row_limit_label};
 use gpui_kit::component::table::TableDelegate as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{label_of, opened};
 
 #[test]
 fn labels_steps_and_widths() {

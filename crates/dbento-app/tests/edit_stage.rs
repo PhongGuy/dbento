@@ -1,9 +1,8 @@
 //! Which browse cells can be edited, and staging edits and deletes on the tab model.
-mod support;
+use crate::support::{browsing, fixture, init_tokio, pg_ready, ready, wait_real};
 use dbento_app::browse::EditBlock;
 use dbento_app::runner::{RunnerTuning, SETTINGS_LOST};
 use gpui_kit::TestAppContext;
-use support::{browsing, fixture, init_tokio, pg_ready, ready, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c');";

@@ -1,10 +1,9 @@
 //! The inspector's References: outgoing and incoming links open filtered browse tabs.
-mod support;
+use crate::support::{Opened, click_id, label_of, launched, present, wait_real};
 use dbento_app::results_pane::ResultsPane;
 use dbento_core::{EditValue, RelationKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \

@@ -1,11 +1,11 @@
 //! Copy as INSERT, UPDATE and DELETE from a browse tab's row.
-mod support;
+use crate::support;
+use crate::support::{Fx, browsing, edit_target, exec, fixture, ready, wait_real};
 use dbento_app::browse::EditBlock;
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_app::tab_model::CopyKind;
 use dbento_core::{Change, EditBatch, EditValue, RowKey, render_sql};
 use gpui_kit::TestAppContext;
-use support::{Fx, browsing, edit_target, exec, fixture, ready, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT, \
                  twice TEXT GENERATED ALWAYS AS (name || name) VIRTUAL); \

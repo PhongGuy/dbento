@@ -1,9 +1,8 @@
-mod support;
+use crate::support::{Opened, open_connection_row, opened, present, started};
 use dbento_app::format::format_edit;
 use dbento_core::Engine::{Postgres, Sqlite};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, open_connection_row, opened, present, started};
 
 const RAW: &str = "select 1 as a;\nselect b, c from t;";
 

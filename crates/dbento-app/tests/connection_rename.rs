@@ -1,13 +1,13 @@
-mod support;
+use crate::support;
 use dbento_app::explorer::connection_id;
 
+use crate::support::{click_id, label_of, present, wait_real};
 use dbento_app::app::start;
 use dbento_app::connection_dialog::Field;
 use dbento_core::{Secret, SecretError, SecretKey, SecretStore};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use std::sync::Arc;
-use support::{click_id, label_of, present, wait_real};
 
 /// The app on a fixture with no tab open.
 fn idle_app(

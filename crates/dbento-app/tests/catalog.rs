@@ -1,15 +1,14 @@
 //! The catalog runner: read-only loads in request order, connect retries, and closing.
-mod support;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::support::{fixture, here, pg_spec, spec};
 use async_channel::Receiver;
 use dbento_app::catalog::{
     CATALOG_TIMEOUT, CatalogData, CatalogQuery, CatalogReply, catalog_options, spawn_catalog,
 };
 use dbento_core::{ObjectRef, RelationKind, RelationRef};
-use support::{fixture, here, pg_spec, spec};
 
 const T: &str =
     "CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT NOT NULL); CREATE VIEW v AS SELECT a FROM t;";

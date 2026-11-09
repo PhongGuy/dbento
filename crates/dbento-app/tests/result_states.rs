@@ -1,10 +1,9 @@
 //! A write says what it changed; empty results say why they are empty.
-mod support;
+use crate::support::{click_id, label_of, launched, opened, present, wait_real};
 use dbento_app::keymap::{RUN_STATEMENT_KEYS, plus_keys};
 use dbento_app::result_body::dml_text;
 use dbento_core::RelationKind;
 use gpui_kit::TestAppContext;
-use support::{click_id, label_of, launched, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

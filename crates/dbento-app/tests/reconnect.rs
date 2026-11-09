@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
 
+use crate::support::{LONG, label_of, opened, present, reload, rewrite, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::query_tab::ConnState;
 use dbento_core::{History, HistoryFilter, HistoryOutcome};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{LONG, label_of, opened, present, reload, rewrite, wait_real};
 
 fn tab_state(cx: &mut TestAppContext, o: &support::Opened) -> ConnState {
     o.shell

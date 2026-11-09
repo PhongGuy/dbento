@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::sidebar::menu_icon;
 use dbento_app::theme::Appearance;
 use dbento_app::ui::{self, APP_ICON, AppAssets, Icons};

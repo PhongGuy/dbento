@@ -1,11 +1,10 @@
 //! The runner parks the last read at its row cap and continues it on `Fetch`.
-mod support;
+use crate::support::{MANY, fixture, here, next_event, pg_spec, quiet, run_cmd, spec, until_event};
 use dbento_app::runner::{
     AppLimits, Command, Event, RunnerTuning, StatementEnd, StopReason, spawn_tuned,
 };
 use dbento_core::ExecuteError;
 use std::time::Duration;
-use support::{MANY, fixture, here, next_event, pg_spec, quiet, run_cmd, spec, until_event};
 
 const ENDLESS: &str =
     "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r) SELECT x FROM r";

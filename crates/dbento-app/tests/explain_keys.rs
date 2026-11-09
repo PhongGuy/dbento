@@ -1,11 +1,10 @@
 //! Opening a plan: keys, toolbar, palette entries and the ANALYZE question's wording.
-mod support;
+use crate::support::{Opened, label_of, open_connection_row, opened, present, started, wait_real};
 use dbento_app::palette::PaletteCommand;
 use dbento_app::query_tab::analyze_ask;
 use dbento_core::Unguarded;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, open_connection_row, opened, present, started, wait_real};
 
 fn place(cx: &mut TestAppContext, o: &Opened, sql: &str) {
     let tab = o.shell.read_with(cx, |s, _| s.tab().unwrap().clone());

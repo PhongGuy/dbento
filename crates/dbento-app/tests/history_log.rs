@@ -1,4 +1,5 @@
-mod support;
+use crate::support;
+use crate::support::{LONG, fixture, init_tokio, opened, spec, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::history::{HistoryLog, history_outcome};
 use dbento_app::runner::{Event, StatementEnd, StopReason};
@@ -7,7 +8,6 @@ use dbento_core::{ExecuteError, History, HistoryEntry, HistoryFilter, HistoryOut
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use support::{LONG, fixture, init_tokio, opened, spec, wait_real};
 
 const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);";
 

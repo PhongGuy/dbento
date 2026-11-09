@@ -1,4 +1,5 @@
-mod support;
+use crate::support;
+use crate::support::{label_of, opened, present, wait_real};
 use dbento_app::app::{AppPaths, start};
 use dbento_app::history_panel::{
     TIME_REFRESH, one_line, outcome_label, outcome_mark, relative_time,
@@ -10,7 +11,6 @@ use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use gpui_kit::{hsla, px};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
-use support::{label_of, opened, present, wait_real};
 
 const OK: HistoryOutcome = HistoryOutcome::Ok {
     rows: 3,

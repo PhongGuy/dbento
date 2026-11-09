@@ -1,12 +1,11 @@
 //! The footer of an expired browse offers to continue in place, and a sorted continuation
 //! says rows may have moved.
-mod support;
+use crate::support::{Opened, label_of, launched, present, wait_real};
 use dbento_app::results_pane::{continue_label, skip_notice};
 use dbento_app::runner::Event;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, launched, present, wait_real};
 
 const BIG: &str = "CREATE TABLE big(id INTEGER PRIMARY KEY, v TEXT); \
     WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 5000) \

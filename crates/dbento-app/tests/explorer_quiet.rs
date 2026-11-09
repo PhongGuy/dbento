@@ -1,8 +1,8 @@
 //! The explorer shows less at rest: the gear on hover, Reload in the menu, run timing once.
-mod support;
+use crate::support;
+use crate::support::{TREE, click_id, label_of, opened, present, right_click_empty, started};
 use dbento_app::explorer::{connection_id, part_id};
 use gpui_kit::TestAppContext;
-use support::{TREE, click_id, label_of, opened, present, right_click_empty, started};
 
 #[gpui_kit::test]
 fn the_gear_shows_on_hover_or_selection(cx: &mut TestAppContext) {

@@ -1,11 +1,12 @@
 //! "Discard N pending changes?" before a run, a filter or sort change or typing drops a
 //! browse tab's staged edits; an abandoned save's prompt closes.
-mod support;
+use crate::support::{
+    Opened, fixture, label_of, launched, present, ready, wait_real, wait_unlocked,
+};
 use dbento_app::tab_model::Discard;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, fixture, label_of, launched, present, ready, wait_real, wait_unlocked};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

@@ -1,19 +1,18 @@
 //! A save beside a parked stream stops the stream first; a run, a cleared browse or a
 //! closed tab abandons a save in flight and rolls back; a run while a commit settles is
 //! refused, so a failed commit keeps its edits.
-mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::support::{
+    Fx, browsing, fixture, init_tokio, ready, value_of, wait_idle, wait_prompt, wait_real,
+    wait_unlocked,
+};
 use dbento_app::browse::BrowseEvent;
 use dbento_app::runner::{RunnerSpec, RunnerTuning, StatementEnd};
 use dbento_app::tab_model::{SaveState, TabModel};
 use dbento_core::{CellRef, RelationRef, Workspace};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{
-    Fx, browsing, fixture, init_tokio, ready, value_of, wait_idle, wait_prompt, wait_real,
-    wait_unlocked,
-};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c');";

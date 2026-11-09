@@ -1,11 +1,12 @@
 //! Wheel notches over the results grid ease into its scroll offset instead of jumping, and
 //! everything the kit handled before still reaches it.
-mod support;
+use crate::support;
 
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::support::MANY;
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::settings::Settings;
 use dbento_app::tab_model::TabModel;
@@ -17,7 +18,6 @@ use gpui_kit::{
     IntoElement, MouseMoveEvent, ParentElement as _, Pixels, Render, ScrollDelta, ScrollEvent,
     Styled as _, TestAppContext, Window, div, point, px,
 };
-use support::MANY;
 
 /// The results pane under a root, with an optional occluding cover on top (as a dialog or
 /// popover is) that counts the wheel events it receives.

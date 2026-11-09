@@ -1,9 +1,8 @@
-mod support;
+use crate::support::{label_of, opened, present};
 use dbento_app::explorer::connection_id;
 use dbento_app::sidebar::engine_label;
 use dbento_core::Engine;
 use gpui_kit::TestAppContext;
-use support::{label_of, opened, present};
 
 #[test]
 fn the_driver_hint_names_the_engine() {

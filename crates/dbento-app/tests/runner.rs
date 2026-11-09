@@ -1,4 +1,4 @@
-mod support;
+use crate::support::{LONG, MANY, fixture, my_spec, spec};
 use async_channel::Receiver;
 use dbento_app::runner::{
     AppLimits, Command, Event, RunnerSpec, RunnerTuning, StatementEnd, guarded, spawn_on,
@@ -7,7 +7,6 @@ use dbento_app::runner::{
 use dbento_core::{Engine, ExecuteError, MemoryStore, RelationRef, Unguarded, Workspace};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use support::{LONG, MANY, fixture, my_spec, spec};
 
 async fn next(rx: &Receiver<Event>) -> Event {
     tokio::time::timeout(Duration::from_secs(10), rx.recv())

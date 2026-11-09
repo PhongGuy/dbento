@@ -1,12 +1,12 @@
-mod support;
+use crate::support;
+use crate::support::{
+    TREE, click_id, label_of, name, present, right_click, right_click_empty, started,
+    started_custom, started_with, wait_real,
+};
 use dbento_app::explorer::{connection_id, part_id};
 use dbento_core::{Secret, SecretError, SecretKey, SecretStore};
 use gpui_kit::{AppContext as _, TestAppContext};
 use std::sync::Arc;
-use support::{
-    TREE, click_id, label_of, name, present, right_click, right_click_empty, started,
-    started_custom, started_with, wait_real,
-};
 
 const PG: &str = "\n[connections.pg]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = 9\ndatabase = \"x\"\nuser = \"x\"\n";
 

@@ -1,11 +1,11 @@
 //! The inspector's stacked fields: names on one edge with their boxes, sizes, box border.
-mod support;
+use crate::support;
+use crate::support::{click_id, launched};
 use dbento_app::record_form::{STACKED_NAME_SIZE, STACKED_TYPE_SIZE, box_border};
 use dbento_core::RelationKind;
 use gpui_kit::component::{ActiveTheme as _, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Focusable as _, TestAppContext, px};
-use support::{click_id, launched};
 
 const T: &str = "CREATE TABLE b(id INTEGER PRIMARY KEY, name TEXT, note TEXT); \
                  INSERT INTO b VALUES (1, 'n', 'm');";

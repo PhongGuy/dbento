@@ -1,9 +1,9 @@
 //! The no-tab start column and the welcome column.
-mod support;
+use crate::support;
+use crate::support::{Opened, click_id, label_of, opened, present, wait_real};
 use dbento_app::app::start;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Bounds, Pixels, TestAppContext, px, size};
-use support::{Opened, click_id, label_of, opened, present, wait_real};
 
 fn no_tab(cx: &mut TestAppContext) -> Opened {
     let o = opened(cx, "", "", 0);

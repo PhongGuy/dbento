@@ -1,10 +1,10 @@
-mod support;
+use crate::support;
+use crate::support::{Started, TREE, click_id, label_of, present, started, wait_real};
 use dbento_app::app::{AppPaths, SavedState, WorkspaceSession, start};
 use dbento_app::explorer::{connection_id, folder_id, part_id};
 use dbento_app::persist::{load_json, save_json};
 use dbento_core::{Edit, FolderPath, WorkspaceItem};
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Started, TREE, click_id, label_of, present, started, wait_real};
 
 fn path(p: &str) -> FolderPath {
     p.parse().unwrap()

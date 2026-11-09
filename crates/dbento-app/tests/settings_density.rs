@@ -1,11 +1,10 @@
 //! Density and the grid font size set the grid's row and header pitch and the tree's row height live.
-mod support;
+use crate::support::{TREE, opened, started};
 use dbento_app::explorer::{connection_id, folder_id};
 use dbento_app::settings::{Density, Settings};
 use dbento_app::settings_store;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext, px};
-use support::{TREE, opened, started};
 
 fn set(cx: &mut TestAppContext, f: impl FnOnce(&mut Settings)) {
     let store = cx.update(|cx| settings_store::store(cx)).unwrap();

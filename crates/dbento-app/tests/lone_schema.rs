@@ -1,11 +1,10 @@
 //! A connection with a single schema opens straight to its tables, once.
-mod support;
+use crate::support::{click_id, label_of, launched, reload, rewrite, wait_real};
 use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::schema_tree::lone_schema;
 use dbento_core::SchemaInfo;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-use support::{click_id, label_of, launched, reload, rewrite, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER);";
 const OPEN: [&str; 3] = ["lite.main", "lite.main/tables", "lite.main.t"];

@@ -1,10 +1,11 @@
 //! The approvals panel: pending requests, this session's decisions and their outcome, the MCP command.
-mod support;
+use crate::support;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
+use crate::support::{Started, click_id, label_of, present, started};
 use dbento_app::app::AppPaths;
 use dbento_app::approvals::{
     APPIMAGE_HINT, APPROVAL_POLL, CliPath, Quoting, cli_hint, connect_command, connect_command_with,
@@ -13,7 +14,6 @@ use dbento_app::approvals_panel::{ApprovalsPanel, Decided, Outcome};
 use dbento_core::{ApprovalRequest, ApprovalStore, Claim, Decision, GrantState, Writes};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Started, click_id, label_of, present, started};
 
 const TOML: &str = "dbento = 1\n[connections.calm]\nengine = \"sqlite\"\npath = \"c.db\"\n";
 const SQL: &str = "INSERT INTO t VALUES (1)";

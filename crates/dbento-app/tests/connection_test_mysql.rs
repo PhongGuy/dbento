@@ -1,5 +1,5 @@
 //! A MySQL connection made in the dialog tests, saves, and keeps its password in the keychain.
-mod support;
+use crate::support;
 
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::connection_dialog::Field;

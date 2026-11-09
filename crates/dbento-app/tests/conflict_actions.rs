@@ -1,16 +1,15 @@
 //! After a rejected save: drop the conflicting rows and save the rest, or reload them to see
 //! what the database holds now.
-mod support;
+use crate::support::{
+    Fx, Opened, click_id, exec, fixture, init_tokio, label_of, launched, pg_ready, present, ready,
+    value_of, wait_idle, wait_prompt, wait_real, wait_unlocked,
+};
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::staged::{Fresh, GridRow, fresh_text, was_fresh_text};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, EditValue, RelationKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
-use support::{
-    Fx, Opened, click_id, exec, fixture, init_tokio, label_of, launched, pg_ready, present, ready,
-    value_of, wait_idle, wait_prompt, wait_real, wait_unlocked,
-};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c');";

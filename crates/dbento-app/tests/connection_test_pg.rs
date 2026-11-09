@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::connection_dialog::Field;

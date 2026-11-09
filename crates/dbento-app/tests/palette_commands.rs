@@ -1,10 +1,10 @@
 //! Commands from the palette run what their keys run; `?` lists the keymap.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, opened, palette_rows, present, wait_real};
 use dbento_app::keymap::{CANCEL_QUERY_KEYS, chip_keys, shortcuts};
 use dbento_app::palette::{Mode, PaletteCommand};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, palette_rows, present, wait_real};
 
 fn open(cx: &mut TestAppContext, o: &Opened, mode: Mode) {
     let shell = o.shell.clone();

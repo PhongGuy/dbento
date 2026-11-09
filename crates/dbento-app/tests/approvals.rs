@@ -1,7 +1,7 @@
 //! The approvals dialog: what it shows, what its buttons write, and that no key answers it.
-mod support;
 use std::time::{Duration, SystemTime};
 
+use crate::support::{Started, click_id, label_of, present, started, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::approvals::{
     APPROVAL_POLL, answered_elsewhere_notice, approve_is_danger, approved_notice, class_label,
@@ -11,7 +11,6 @@ use dbento_app::confirm::DIALOG_TOP;
 use dbento_core::{ApprovalRequest, ApprovalStore, Claim, Decision, Unguarded, Verdict, Writes};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{Started, click_id, label_of, present, started, wait_real};
 
 // `lite` is production through its red tag; `calm` is untagged.
 const TOML: &str = "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"l.db\"\ncolor = \"red\"\n\n[connections.calm]\nengine = \"sqlite\"\npath = \"c.db\"\n";

@@ -1,11 +1,10 @@
 //! The pending bar, the apply prompt and the rejection banner of a browse tab.
-mod support;
+use crate::support::{Opened, edit_target, label_of, launched, present, wait_real, wait_unlocked};
 use dbento_app::results_pane::save_label;
 use dbento_app::tab_model::SaveState;
 use dbento_core::{Change, EditBatch, EditValue, RelationKind, RowKey, render_sql};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, edit_target, label_of, launched, present, wait_real, wait_unlocked};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

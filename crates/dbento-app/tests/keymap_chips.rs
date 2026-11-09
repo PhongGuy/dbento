@@ -1,10 +1,10 @@
 //! Chips, palette hints and the shortcut list show the user's keys, not the compiled ones.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, present};
 use dbento_app::keymap::{self, NEW_TAB_KEYS, NewTab, Shortcut};
 use dbento_app::palette::PaletteCommand;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, present};
 
 fn with_keymap(cx: &mut TestAppContext, text: &str) -> tempfile::TempDir {
     support::init(cx);

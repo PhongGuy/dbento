@@ -1,11 +1,11 @@
 //! Postgres through the explorer: Chinook opens album as a SELECT, and a schema shows its objects.
-mod support;
+use crate::support;
+use crate::support::{label_of, wait_real};
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::explorer::part_id;
 use dbento_app::schema_tree::RowKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-use support::{label_of, wait_real};
 
 fn tree(cx: &mut TestAppContext, win: AnyWindowHandle) -> Vec<String> {
     (0usize..)

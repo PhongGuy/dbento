@@ -1,15 +1,15 @@
 //! Ctrl+S, Ctrl+Shift+S and Ctrl+. from the editor and the grid, the save icon, and the
 //! toolbar hints.
-mod support;
+use crate::support;
+use crate::support::{
+    LONG, Opened, click_id, label_of, launched, opened, present, wait_prompt, wait_real,
+};
 use dbento_app::keymap::{CANCEL_QUERY_KEYS, SAVE_QUERY_ALWAYS_KEYS, plus_keys};
 use dbento_app::query_tab::{format_tooltip, save_button_keys, save_tooltip};
 use dbento_app::tab_model::SaveState;
 use dbento_core::{EditValue, RelationKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Focusable as _, TestAppContext};
-use support::{
-    LONG, Opened, click_id, label_of, launched, opened, present, wait_prompt, wait_real,
-};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'a');";

@@ -1,8 +1,7 @@
 //! The browse state: its SQL in step with filter and sort, and why a result is not editable.
-mod support;
+use crate::support::{edit_target, fixture};
 use dbento_app::browse::{BrowseState, EditBlock, edit_block, next_sort};
 use dbento_core::{Browse, BrowseError, Sort, browse_sql};
-use support::{edit_target, fixture};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c'); \

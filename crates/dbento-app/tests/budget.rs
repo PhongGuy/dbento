@@ -1,5 +1,6 @@
 //! A result stops at the memory budget, and the default budget fits a million wide rows.
-mod support;
+use crate::support;
+use crate::support::{MANY, fixture, here, label_of, opened, spec, until_event};
 use dbento_app::results::ResultStore;
 use dbento_app::results_pane::summary;
 use dbento_app::runner::{
@@ -9,7 +10,6 @@ use dbento_app::runner::{
 use dbento_app::tab_model::StatementResult;
 use gpui_kit::TestAppContext;
 use std::time::Duration;
-use support::{MANY, fixture, here, label_of, opened, spec, until_event};
 
 fn eager() -> RunnerTuning {
     RunnerTuning {

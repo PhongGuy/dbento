@@ -1,9 +1,8 @@
 //! What a result tab shows beside its number, and the toolbar's button size.
-mod support;
+use crate::support::{MANY, Opened, label_of, opened, present, wait_real};
 use dbento_app::results_pane::{ResultMark, result_mark};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{MANY, Opened, label_of, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);";
 

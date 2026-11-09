@@ -1,5 +1,6 @@
 //! Hidden and fitted columns: the view's index maps, and a grid that hides, shows and fits.
-mod support;
+use crate::support;
+use crate::support::{Opened, launched, opened, present};
 use dbento_app::grid::{ColumnView, fit_width};
 use dbento_app::results::ResultStore;
 use dbento_app::results_pane::ResultsPane;
@@ -7,7 +8,6 @@ use dbento_core::{EditValue, RelationKind};
 use gpui_kit::component::table::{TableDelegate as _, TableEvent, TableSelection};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, TestAppContext, px};
-use support::{Opened, launched, opened, present};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', NULL);";

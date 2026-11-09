@@ -1,10 +1,9 @@
 //! Follows open in one preview tab per origin; staging or a title double-click pins it; a
 //! follow that lands on one row selects it.
-mod support;
+use crate::support::{Opened, launched, present, wait_real};
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \

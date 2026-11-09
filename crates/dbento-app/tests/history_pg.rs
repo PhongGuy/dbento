@@ -1,5 +1,6 @@
 //! No secret reaches history, drafts or the state file, on Postgres with a distinctive password.
-mod support;
+use crate::support;
+use crate::support::{present, wait_real};
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::drafts::DRAFT_DEBOUNCE;
 use dbento_core::{History, HistoryFilter};
@@ -7,7 +8,6 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use support::{present, wait_real};
 
 fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();

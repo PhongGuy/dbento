@@ -1,11 +1,11 @@
 //! Opening a table from the explorer makes a browse tab that runs exactly its browse SQL.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, wait_real};
 use dbento_app::explorer::part_id;
 use dbento_app::schema_tree::select_sql;
 use dbento_core::{Engine, RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, launched, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  CREATE TABLE plain(a, b); \

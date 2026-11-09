@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::grid::{ResultsDelegate, cell_display, data_col};
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::tab_model::TabModel;

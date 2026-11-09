@@ -1,9 +1,10 @@
 //! The definition panel on its own: states, buttons, notes and titles.
-mod support;
+use crate::support;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::support::{click_id, label_of, present};
 use dbento_app::definition_panel::{
     DefinitionPanel, DefinitionPanelEvent, cap_words, definition_note, definition_title,
 };
@@ -16,7 +17,6 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Focusable as _, InputEvent as _, MouseMoveEvent,
     Pixels, ScrollDelta, ScrollEvent, TestAppContext, WindowHandle, point, px,
 };
-use support::{click_id, label_of, present};
 
 // fixture
 fn def(text: &str, truncated: bool, composed: bool) -> Definition {

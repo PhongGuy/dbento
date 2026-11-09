@@ -1,10 +1,10 @@
 //! The browse tab's filter row, header sort and the chip that says why it is not editable.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, opened, present, wait_real};
 use dbento_core::{BrowseError, RelationKind};
 use gpui_kit::component::table::TableSelection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  CREATE TABLE shadow(rowid, _rowid_, oid); \

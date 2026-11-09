@@ -1,5 +1,5 @@
 //! The editor's right-click menu holds the app's actions, not the kit's LSP items.
-mod support;
+use crate::support::{label_of, opened, present, wait_real};
 use dbento_app::keymap::{
     EXPLAIN_ANALYZE_KEYS, EXPLAIN_KEYS, FORMAT_SQL_KEYS, RUN_STATEMENT_KEYS,
     SAVE_QUERY_ALWAYS_KEYS, chip_keys,
@@ -8,7 +8,6 @@ use dbento_app::query_tab::{editor_menu_entries, formats};
 use dbento_core::Engine;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{label_of, opened, present, wait_real};
 
 #[gpui_kit::test]
 fn the_menu_holds_run_format_save_and_the_clipboard(cx: &mut TestAppContext) {

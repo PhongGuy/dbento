@@ -1,10 +1,9 @@
 //! Opening a browse tab filtered to a key: a new preview tab, a hop inside it, and the origin's
 //! staged edits left alone.
-mod support;
+use crate::support::{Opened, launched, present, wait_real};
 use dbento_app::runner::StatementEnd;
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \

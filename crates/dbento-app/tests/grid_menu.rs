@@ -1,5 +1,6 @@
 //! Which grid menu items a cell or row offers.
-mod support;
+use crate::support;
+use crate::support::{browsing, fixture, ready, wait_prompt, wait_real};
 use dbento_app::grid_menu::{
     GridTarget, MenuEntry, MenuSection, SectionKind, insert_table, menu_entries, menu_sections,
 };
@@ -9,7 +10,6 @@ use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::{Engine, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{browsing, fixture, ready, wait_prompt, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', NULL);";

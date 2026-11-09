@@ -1,4 +1,4 @@
-mod support;
+use crate::support::{Opened, click_id, opened, present, wait_real};
 use dbento_app::completion::CandidateKind;
 use dbento_app::completion_popup::{CompletionPopup, kind_icon};
 use dbento_app::schema_tree::CatalogTree;
@@ -7,7 +7,6 @@ use dbento_core::RelationRef;
 use gpui_kit::component::input::EditorState;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, Pixels, TestAppContext, px};
-use support::{Opened, click_id, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT); \
                  CREATE TABLE Artist(ArtistId INTEGER, Name TEXT);";

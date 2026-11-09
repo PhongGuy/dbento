@@ -1,10 +1,9 @@
 //! Reference links of one browse row: the far table, its key and the filter that browses it.
-mod support;
+use crate::support::{fixture, ready, wait_real};
 use dbento_app::record::{RefLink, key_text, references};
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::{EditValue, FkDirection, RelationRef};
 use gpui_kit::TestAppContext;
-use support::{fixture, ready, wait_real};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \

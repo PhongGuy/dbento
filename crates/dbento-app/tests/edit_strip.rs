@@ -1,9 +1,8 @@
 //! Editable browse grids always show the edit strip; a blocked one says why.
-mod support;
+use crate::support::{Opened, click_id, label_of, launched, present};
 use dbento_app::results_pane::ResultsPane;
 use dbento_core::RelationKind;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, present};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

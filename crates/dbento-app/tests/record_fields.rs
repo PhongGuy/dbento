@@ -1,5 +1,5 @@
 //! One result row as record fields: markers, shown values, display and edit text.
-mod support;
+use crate::support::{fixture, ready, wait_real};
 use dbento_app::record::{
     DOCUMENT_CAP, Marker, capped_document, display_text, edit_text, parse_edit, pretty_json,
     record_at, record_fields, record_position,
@@ -7,7 +7,6 @@ use dbento_app::record::{
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::EditValue;
 use gpui_kit::TestAppContext;
-use support::{fixture, ready, wait_real};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), doc JSON, \

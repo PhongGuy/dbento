@@ -1,11 +1,12 @@
 //! An expired browse result continues past its loaded rows: by keyset when unsorted, by
 //! re-running and skipping when sorted; both end with exactly the rows of one uncapped run.
-mod support;
+use crate::support;
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::support::{MANY, browsing, exec, fixture, init_tokio, spec, wait_real};
 use dbento_app::browse::BrowseEvent;
 use dbento_app::history::HistoryLog;
 use dbento_app::results_pane::skip_notice;
@@ -13,7 +14,6 @@ use dbento_app::runner::{Event, RunnerSpec, RunnerTuning, StatementEnd};
 use dbento_app::tab_model::{CapView, Continuation, Expiry, TabModel};
 use dbento_core::{CellRef, EditValue, History, HistoryEntry, HistoryFilter, RelationRef};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{MANY, browsing, exec, fixture, init_tokio, spec, wait_real};
 
 const LITE: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, g INTEGER, v TEXT); \
     WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2500) \

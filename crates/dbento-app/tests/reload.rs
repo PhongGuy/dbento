@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
 use dbento_app::explorer::{connection_id, part_id};
 
+use crate::support::{label_of, opened, present, reload, rewrite, wait_real};
 use dbento_app::schema_tree::NodeKey;
 use dbento_core::FolderPath;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{label_of, opened, present, reload, rewrite, wait_real};
 
 const AAA: &str = "[connections.aaa]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
 

@@ -1,5 +1,5 @@
 //! The bindings table is the one source for `bind`, key chips and the shortcut list.
-mod support;
+use crate::support;
 
 use dbento_app::keymap::{
     self, COMMANDS_KEYS, FORMAT_SQL_ALIASES, FORMAT_SQL_KEYS, NEW_TAB_KEYS, OPEN_QUERY_KEYS,

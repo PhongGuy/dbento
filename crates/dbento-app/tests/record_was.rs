@@ -1,15 +1,14 @@
 //! The record view and the inspector show a staged field's loaded value with a per-field
 //! revert, and copy a capped original whole.
-mod support;
+use crate::support::{
+    Opened, click_id, fixture, label_of, launched, present, ready, wait_idle, wait_prompt,
+};
 use dbento_app::record::{Was, record_fields};
 use dbento_app::results_pane::ResultsPane;
 use dbento_core::{CellRef, EditValue, RelationKind};
 use gpui_kit::component::table::TableSelection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
-use support::{
-    Opened, click_id, fixture, label_of, launched, present, ready, wait_idle, wait_prompt,
-};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', ' pad '), (2, 'a', NULL), \

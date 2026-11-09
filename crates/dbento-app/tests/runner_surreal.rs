@@ -1,14 +1,13 @@
 //! SurrealDB through the app's runner: the session's read-only level reaches the tab, a fenced
 //! result says its changes were rolled back, and the catalog lists no schema objects.
-mod support;
 use std::sync::Arc;
 
+use crate::support::{here, next_event, run_cmd, until_event};
 use dbento_app::catalog::{CatalogData, CatalogQuery, spawn_catalog};
 use dbento_app::results_pane::outcome_note;
 use dbento_app::runner::{Event, RunnerSpec, StatementEnd, spawn_on};
 use dbento_core::{Outcome, ReadOnlyEnforcement, Workspace};
 use dbento_testkit::{SrDb, surreal_db};
-use support::{here, next_event, run_cmd, until_event};
 
 const SR_SECRET_VAR: &str = "DBENTO_TEST_SR_SECRET";
 
