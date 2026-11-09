@@ -15,7 +15,7 @@ updates:
           - "*"
     ignore:
       - dependency-name: "gpui*"
-      - dependency-name: "mongodb"
+      - dependency-name: "mongodb*"
       - dependency-name: "tiberius"
   # The SHA-pinned workflow actions, monthly, as one grouped PR.
   - package-ecosystem: "github-actions"
