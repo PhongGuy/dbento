@@ -256,6 +256,10 @@ fn at_the_top_a_notch_up_is_left_to_the_kit(cx: &mut TestAppContext) {
         eased_takes(cx, &g, ScrollDelta::Lines(point(0., -3.))),
         "a notch down from the top is the eased handler's"
     );
+    assert!(
+        offset(cx, &g) < px(0.),
+        "the notch down did not move the grid"
+    );
 }
 
 #[gpui_kit::test]
@@ -271,6 +275,14 @@ fn at_the_bottom_a_notch_down_is_left_to_the_kit(cx: &mut TestAppContext) {
     let took = eased_takes(cx, &g, ScrollDelta::Lines(point(0., -3.)));
     assert!(!took, "the eased handler took a notch down at the bottom");
     assert_eq!(offset(cx, &g), bottom);
+    assert!(
+        eased_takes(cx, &g, ScrollDelta::Lines(point(0., 3.))),
+        "a notch up from the bottom is the eased handler's"
+    );
+    assert!(
+        offset(cx, &g) > bottom,
+        "the notch up did not move the grid"
+    );
 }
 
 #[gpui_kit::test]
