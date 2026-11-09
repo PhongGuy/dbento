@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+autotests = false
 
 [dependencies]
 testcontainers-modules.workspace = true
@@ -27,3 +28,15 @@ redis = { workspace = true, optional = true }
 duckdb = ["dep:duckdb"]
 mongodb = ["dep:mongodb", "dep:bson"]
 redis = ["dep:redis"]
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+[[test]]
+name = "parallel_start"
+path = "tests/parallel_start.rs"
+
+[[test]]
+name = "volumes"
+path = "tests/volumes.rs"
