@@ -322,6 +322,14 @@ fn visible_cols(view: Option<&ColumnView>) -> Option<&[usize]> {
     view.filter(|v| v.any_hidden()).map(ColumnView::visible)
 }
 
+/// An open grid menu: the menu, where it opened, the focus to restore and its dismiss watch.
+type GridPopup = (
+    Entity<PopupMenu>,
+    Point<Pixels>,
+    Option<FocusHandle>,
+    Subscription,
+);
+
 /// The pane under a query tab's editor.
 pub struct ResultsPane {
     model: Entity<TabModel>,
@@ -349,7 +357,7 @@ pub struct ResultsPane {
     /// Where the last right-click on the grid landed: a cell, a header or below the rows.
     menu_target: Rc<Cell<GridTarget>>,
     /// The open grid menu, where it opened, and its dismiss subscription.
-    grid_popup: Option<(Entity<PopupMenu>, Point<Pixels>, Subscription)>,
+    grid_popup: Option<GridPopup>,
     /// Grid or record view of the displayed result; never Plan, which follows the result.
     view: ResultView,
     /// The plan view of the displayed plan result, keyed by run, result and whether it has output.
@@ -1384,7 +1392,16 @@ impl ResultsPane {
         }
         // The kit's table menus own the bubble phase and build an empty, focus-taking menu a
         // defer later, so ours opens two defers out and takes focus last.
-        let (at, prior) = (e.position, window.focused(cx));
+        // A menu opened over an open one restores what the first saved, never the dead menu.
+        let open = self.grid_popup.as_ref().filter(|(menu, ..)| {
+            let focus = menu.focus_handle(cx);
+            focus.is_focused(window) || focus.contains_focused(window, cx)
+        });
+        let prior = match open {
+            Some((_, _, saved, _)) => saved.clone(),
+            None => window.focused(cx),
+        };
+        let at = e.position;
         let weak = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
             window.defer(cx, move |window, cx| {
@@ -1410,6 +1427,7 @@ impl ResultsPane {
             return;
         }
         let _ = weak.update(cx, |p, cx| {
+            let saved = prior.clone();
             let sub = cx.subscribe_in(
                 &menu,
                 window,
@@ -1426,7 +1444,7 @@ impl ResultsPane {
                 },
             );
             menu.focus_handle(cx).focus(window, cx);
-            p.grid_popup = Some((menu, at, sub));
+            p.grid_popup = Some((menu, at, saved, sub));
             cx.notify();
         });
     }
@@ -2911,7 +2929,7 @@ impl Render for ResultsPane {
                                     self.empty_overlay(text, header_shown, clearable, cx)
                                 })),
                         })
-                        .children(self.grid_popup.as_ref().map(|(menu, at, _)| {
+                        .children(self.grid_popup.as_ref().map(|(menu, at, ..)| {
                             deferred(
                                 anchored()
                                     .position(*at)

@@ -386,3 +386,38 @@ fn a_mongodb_result_offers_no_sql_insert(cx: &mut TestAppContext) {
         assert!(!ids.contains(&"grid-menu-copy-sql"), "{ids:?}");
     });
 }
+
+#[gpui_kit::test]
+fn escape_on_a_menu_opened_over_another_gives_the_grid_its_keys_back(cx: &mut TestAppContext) {
+    let o = support::opened(cx, T, "", 0);
+    o.run(cx, "SELECT id, name FROM t ORDER BY id");
+    o.idle(cx);
+    cx.update_window(o.win, |_, w, cx| w.click("cell-1-0", cx))
+        .unwrap();
+    cx.run_until_parked();
+    for cell in ["cell-0-1", "cell-1-0"] {
+        cx.update_window(o.win, |_, w, cx| w.right_click(cell, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            support::present(cx, o.win, "grid-menu-copy-csv"),
+            "{cell} has a menu"
+        );
+    }
+    cx.update_window(o.win, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        !support::present(cx, o.win, "grid-menu-copy-csv"),
+        "the menu closed"
+    );
+    cx.update_window(o.win, |_, w, cx| w.press("ctrl-c", cx))
+        .unwrap();
+    cx.run_until_parked();
+    let clip = cx.read_from_clipboard().and_then(|c| c.text());
+    assert_eq!(
+        clip.as_deref(),
+        Some("2"),
+        "the grid copies its selected cell"
+    );
+}
