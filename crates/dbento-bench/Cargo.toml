@@ -23,8 +23,3 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 [[test]]
 name = "integration"
 path = "tests/main.rs"
-
-# Alone, so no sibling test loads the CPUs while the memory probe reads its high-water mark.
-[[test]]
-name = "method"
-path = "tests/method.rs"
