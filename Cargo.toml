@@ -56,7 +56,7 @@ rpassword = "7.5.4"
 assert_cmd = "2.2.2"
 insta = { version = "1.49.0", features = ["json"] }
 sha2 = "0.11.0"
-gpui-kit = { version = "=0.7.1", features = ["tree-sitter", "tree-sitter-bash", "tree-sitter-javascript", "tree-sitter-sql"] }
+gpui-kit = { version = "=0.9.0", features = ["tree-sitter", "tree-sitter-bash", "tree-sitter-javascript", "tree-sitter-sql"] }
 async-channel = "2.5.0"
 rust-embed = { version = "=8.13.0", features = ["debug-embed"] }
 dirs = "7.0.0"
@@ -85,7 +85,7 @@ debug = 0
 [profile.xwin-release]
 inherits = "release"
 
-# gpui-pre-windows 0.3.8 precompiles shaders only on a Windows host (needs fxc.exe), so take its
+# gpui-pre-windows 0.3.11 precompiles shaders only on a Windows host (needs fxc.exe), so take its
 # runtime-compile path. Drop it once its build.rs checks CARGO_CFG_TARGET_OS or ships the bytecode.
 [profile.xwin-release.package.gpui-pre-windows]
 debug-assertions = true

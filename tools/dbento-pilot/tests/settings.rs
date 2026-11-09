@@ -120,3 +120,26 @@ async fn settings_apply_live_and_come_back_after_a_restart() {
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();
 }
+
+// A step and then a click into the size field each move focus to it once; with a11y on, a
+// field that reported focus twice per frame aborted the app.
+#[tokio::test(flavor = "multi_thread")]
+async fn stepping_a_size_and_clicking_into_it_keeps_the_app_up() {
+    let ws = sqlite_workspace();
+    let pilot = Pilot::start().await;
+    pilot.ok("launch", launch_args("headless", ws.path())).await;
+    pilot
+        .ok("tree", json!({ "wait_for": { "id": ["shell"] } }))
+        .await;
+    key(&pilot, "ctrl-,").await;
+    until(&pilot, "the dialog", |t| {
+        find_node(t, "settings-dialog").is_some()
+    })
+    .await;
+    increment(&pilot, "settings-grid-font-size", 1).await;
+    click(&pilot, "settings-grid-font-size").await;
+    pilot.ok("wait", json!({ "ms": 200 })).await;
+    find_node(&pilot.ok("tree", json!({})).await, "settings-dialog").expect("the dialog is gone");
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+    pilot.assert_bus_untouched();
+}

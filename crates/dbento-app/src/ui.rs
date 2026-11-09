@@ -35,6 +35,7 @@ impl Icons {
     pub const Square: IconName = IconName::Square;
     pub const Search: IconName = IconName::Search;
     pub const Plus: IconName = IconName::Plus;
+    pub const Minus: IconName = IconName::Minus;
     pub const Settings: IconName = IconName::Settings;
     pub const Folder: IconName = IconName::Folder;
     pub const FolderOpen: IconName = IconName::FolderOpen;

@@ -10,7 +10,7 @@ use gpui_kit::{KeyBindingContextPredicate, Keystroke, TestAppContext};
 
 fn strokes(keys: &str) -> Vec<Keystroke> {
     keys.split_whitespace()
-        .map(|k| Keystroke::parse(k).unwrap())
+        .map(|k| Keystroke::parse_with_os(k, keymap::HOST_OS).unwrap())
         .collect()
 }
 

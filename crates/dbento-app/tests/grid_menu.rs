@@ -4,6 +4,7 @@ use dbento_app::grid_menu::{
     GridTarget, MenuEntry, MenuSection, SectionKind, insert_table, menu_entries, menu_sections,
 };
 use dbento_app::keymap::{COPY_CELLS_KEYS, DELETE_ROW_KEYS, EDIT_CELL_KEYS, chip_keys};
+use dbento_app::results_pane::ResultView;
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::{Engine, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
@@ -385,4 +386,77 @@ fn a_mongodb_result_offers_no_sql_insert(cx: &mut TestAppContext) {
         assert!(ids.contains(&"grid-menu-copy-json"));
         assert!(!ids.contains(&"grid-menu-copy-sql"), "{ids:?}");
     });
+}
+
+#[gpui_kit::test]
+fn escape_on_a_menu_opened_over_another_gives_the_grid_its_keys_back(cx: &mut TestAppContext) {
+    let o = support::opened(cx, T, "", 0);
+    o.run(cx, "SELECT id, name FROM t ORDER BY id");
+    o.idle(cx);
+    cx.update_window(o.win, |_, w, cx| w.click("cell-1-0", cx))
+        .unwrap();
+    cx.run_until_parked();
+    for cell in ["cell-0-1", "cell-1-0"] {
+        cx.update_window(o.win, |_, w, cx| w.right_click(cell, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            support::present(cx, o.win, "grid-menu-copy-csv"),
+            "{cell} has a menu"
+        );
+    }
+    cx.update_window(o.win, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        !support::present(cx, o.win, "grid-menu-copy-csv"),
+        "the menu closed"
+    );
+    cx.update_window(o.win, |_, w, cx| w.press("ctrl-c", cx))
+        .unwrap();
+    cx.run_until_parked();
+    let clip = cx.read_from_clipboard().and_then(|c| c.text());
+    assert_eq!(
+        clip.as_deref(),
+        Some("2"),
+        "the grid copies its selected cell"
+    );
+}
+
+/// A query run with the grid menu open on its second row's id cell.
+fn menu_open(cx: &mut TestAppContext) -> support::Opened {
+    let o = support::opened(cx, T, "", 0);
+    o.run(cx, "SELECT id, name FROM t ORDER BY id");
+    o.idle(cx);
+    cx.update_window(o.win, |_, w, cx| w.right_click("cell-1-0", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(support::present(cx, o.win, "grid-menu-copy-csv"));
+    o
+}
+
+#[gpui_kit::test]
+fn a_new_run_closes_the_grid_menu(cx: &mut TestAppContext) {
+    let o = menu_open(cx);
+    let m = o.model(cx);
+    m.update(cx, |m, cx| m.run("SELECT name FROM t".into(), cx));
+    o.idle(cx);
+    cx.run_until_parked();
+    assert!(!support::present(cx, o.win, "grid-menu-copy-csv"));
+}
+
+#[gpui_kit::test]
+fn the_grid_menu_is_gone_after_a_visit_to_the_record_view(cx: &mut TestAppContext) {
+    let o = menu_open(cx);
+    let pane = o
+        .shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).results_pane().clone());
+    for view in [ResultView::Record, ResultView::Grid] {
+        cx.update_window(o.win, |_, w, cx| {
+            pane.update(cx, |p, cx| p.set_view(view, w, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+    assert!(!support::present(cx, o.win, "grid-menu-copy-csv"));
 }

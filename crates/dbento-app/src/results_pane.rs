@@ -13,7 +13,7 @@ use dbento_core::{
 use gpui_kit::ClipboardItem;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{EditorState, Input, InputEvent, InputState};
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::table::{
     DataTable, TableDelegate as _, TableEvent, TableSelection, TableState,
 };
@@ -25,6 +25,7 @@ use gpui_kit::{
     ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
     TestSupportExt, WeakEntity, Window, div, px,
 };
+use gpui_kit::{DismissEvent, FocusHandle, MouseButton, MouseDownEvent, Point, anchored, deferred};
 
 use crate::browse::{BrowseEvent, and_filter};
 use crate::catalog::CatalogQuery;
@@ -321,6 +322,14 @@ fn visible_cols(view: Option<&ColumnView>) -> Option<&[usize]> {
     view.filter(|v| v.any_hidden()).map(ColumnView::visible)
 }
 
+/// An open grid menu: the menu, where it opened, the focus to restore and its dismiss watch.
+type GridPopup = (
+    Entity<PopupMenu>,
+    Point<Pixels>,
+    Option<FocusHandle>,
+    Subscription,
+);
+
 /// The pane under a query tab's editor.
 pub struct ResultsPane {
     model: Entity<TabModel>,
@@ -347,6 +356,8 @@ pub struct ResultsPane {
     inserted: usize,
     /// Where the last right-click on the grid landed: a cell, a header or below the rows.
     menu_target: Rc<Cell<GridTarget>>,
+    /// The open grid menu, where it opened, and its dismiss subscription.
+    grid_popup: Option<GridPopup>,
     /// Grid or record view of the displayed result; never Plan, which follows the result.
     view: ResultView,
     /// The plan view of the displayed plan result, keyed by run, result and whether it has output.
@@ -466,6 +477,7 @@ impl ResultsPane {
             editing: None,
             inserted: 0,
             menu_target,
+            grid_popup: None,
             view: ResultView::Grid,
             plan: None,
             inspector_open: false,
@@ -532,6 +544,7 @@ impl ResultsPane {
         self.record.update(cx, |f, cx| f.stage_open(window, cx));
         match view {
             ResultView::Record => {
+                self.close_grid_menu(window, cx);
                 let row = self.grid_row_selected(cx).unwrap_or(0);
                 let stmt = displayed(self.model.read(cx).results(), self.selected).unwrap_or(0);
                 self.record
@@ -1371,6 +1384,85 @@ impl ResultsPane {
         (m.run_id(), m.edits().inserted())
     }
 
+    /// Capture-phase mouse down on the grid: clears the menu target, and on a right-click
+    /// opens the grid menu once the cell and header handlers have aimed it.
+    fn grid_mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_target.set(GridTarget::Below);
+        if e.button != MouseButton::Right {
+            return;
+        }
+        // The kit's table menus own the bubble phase and build an empty, focus-taking menu a
+        // defer later, so ours opens two defers out and takes focus last.
+        // A menu opened over an open one restores what the first saved, never the dead menu.
+        let open = self.grid_popup.as_ref().filter(|(menu, ..)| {
+            let focus = menu.focus_handle(cx);
+            focus.is_focused(window) || focus.contains_focused(window, cx)
+        });
+        let prior = match open {
+            Some((_, _, saved, _)) => saved.clone(),
+            None => window.focused(cx),
+        };
+        let at = e.position;
+        let weak = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            window.defer(cx, move |window, cx| {
+                Self::show_grid_menu(weak, at, prior, window, cx);
+            });
+        });
+    }
+
+    /// Drops the grid menu, handing focus back to where it came from if the menu held it.
+    fn close_grid_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((menu, _, prior, _)) = self.grid_popup.take() else {
+            return;
+        };
+        let focus = menu.focus_handle(cx);
+        let held = focus.is_focused(window) || focus.contains_focused(window, cx);
+        if let Some(prior) = prior.filter(|_| held) {
+            window.focus(&prior, cx);
+        }
+        cx.notify();
+    }
+
+    /// Builds the grid menu for the current target outside any pane borrow (the builder
+    /// reads the pane) and shows it at `at`, restoring `prior` focus on a plain dismiss.
+    fn show_grid_menu(
+        weak: WeakEntity<Self>,
+        at: Point<Pixels>,
+        prior: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let menu = PopupMenu::build(window, cx, {
+            let weak = weak.clone();
+            move |menu, window, cx| grid_menu(menu, &weak, window, cx)
+        });
+        if menu.read(cx).is_empty() {
+            return;
+        }
+        let _ = weak.update(cx, |p, cx| {
+            let saved = prior.clone();
+            let sub = cx.subscribe_in(
+                &menu,
+                window,
+                move |p, menu, _: &DismissEvent, window, cx| {
+                    if p.grid_popup.as_ref().is_some_and(|(m, ..)| m == menu) {
+                        p.grid_popup = None;
+                    }
+                    let lost =
+                        window.focused(cx).is_none() || menu.focus_handle(cx).is_focused(window);
+                    if let (true, Some(prior)) = (lost, prior.as_ref()) {
+                        window.focus(prior, cx);
+                    }
+                    cx.notify();
+                },
+            );
+            menu.focus_handle(cx).focus(window, cx);
+            p.grid_popup = Some((menu, at, saved, sub));
+            cx.notify();
+        });
+    }
+
     /// Opens the context menu where the right-click landed: selects that cell or column and
     /// returns the target with the menu's sections (`menu_sections`).
     fn open_menu(&mut self, cx: &mut Context<Self>) -> (MenuTarget, Vec<MenuSection>) {
@@ -1667,6 +1759,11 @@ impl ResultsPane {
             let store = &m.results()[ix].store;
             (m.run_id(), ix, store.columns().len(), store.rows() > 0)
         });
+        // The menu acts on the run and result it opened over, so either changing closes it.
+        let result = |k: Option<(u64, usize, usize, bool)>| k.map(|(run, ix, ..)| (run, ix));
+        if result(key) != result(self.built) {
+            self.close_grid_menu(window, cx);
+        }
         if key != self.built {
             self.built = key;
             // The note belongs to the result it was raised on; a run or another result drops it.
@@ -1722,6 +1819,9 @@ impl ResultsPane {
                 .update(cx, |f, cx| f.show(stmt, row, window, cx));
         }
         self.sync_plan(window, cx);
+        if self.view() != ResultView::Grid {
+            self.close_grid_menu(window, cx);
+        }
         // A hop's mark waits for a later run's statement 0 to stop, then selects a lone row.
         let m = self.model.read(cx);
         let landed = self
@@ -2829,13 +2929,10 @@ impl Render for ResultsPane {
                         .relative()
                         .flex_1()
                         .min_h_0()
-                        // Capture clears the target, a cell's right-click sets it, and the
-                        // menu's deferred builder reads it.
                         .on_key_down(cx.listener(Self::type_to_edit))
-                        .capture_any_mouse_down({
-                            let target = self.menu_target.clone();
-                            move |_, _, _| target.set(GridTarget::Below)
-                        })
+                        // Capture clears the target and, on a right-click, schedules our menu;
+                        // the cell and header handlers aim it before it is built.
+                        .capture_any_mouse_down(cx.listener(Self::grid_mouse_down))
                         .map(|d| match (error, dml) {
                             (Some((v, engine)), _) => d.child(self.error_body(v, engine, cx)),
                             (None, Some(text)) => d.child(status_body("result-dml", text)),
@@ -2854,10 +2951,15 @@ impl Render for ResultsPane {
                                     self.empty_overlay(text, header_shown, clearable, cx)
                                 })),
                         })
-                        .context_menu({
-                            let weak = cx.entity().downgrade();
-                            move |menu, window, cx| grid_menu(menu, &weak, window, cx)
-                        }),
+                        .children(self.grid_popup.as_ref().map(|(menu, at, ..)| {
+                            deferred(
+                                anchored()
+                                    .position(*at)
+                                    .snap_to_window_with_margin(px(8.))
+                                    .child(menu.clone()),
+                            )
+                            .with_priority(gpui_kit::base::POPUP_PRIORITY)
+                        })),
                 ),
             })
             .children(footer)

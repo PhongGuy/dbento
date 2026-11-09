@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::{
-    Action, App, DummyKeyboardMapper, Global, KeyBinding, KeyBindingContextPredicate, Keystroke,
+    Action, App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, OperatingSystem,
     SharedString,
 };
 
@@ -916,7 +916,12 @@ fn apply(keymap: ActiveKeymap, cx: &mut App) {
     let kit = cx.global::<KitBindings>().0.clone();
     cx.clear_key_bindings();
     cx.bind_keys(kit);
-    cx.bind_keys(keymap.rows.iter().filter_map(key_binding));
+    let rows: Vec<_> = keymap
+        .rows
+        .iter()
+        .filter_map(|r| key_binding(r, cx))
+        .collect();
+    cx.bind_keys(rows);
     cx.set_global(keymap);
     cx.refresh_windows();
 }
@@ -924,20 +929,22 @@ fn apply(keymap: ActiveKeymap, cx: &mut App) {
 /// The GPUI binding for `row`. A user key was already parsed by `user_keymap`, so one GPUI
 /// still rejects is dropped rather than panicking; a dropped table row fails
 /// `bind_registers_exactly_the_bindings_table`.
-fn key_binding(row: &Row) -> Option<KeyBinding> {
+fn key_binding(row: &Row, cx: &App) -> Option<KeyBinding> {
     let context = row
         .context
         .map(|c| Rc::new(KeyBindingContextPredicate::parse(c).expect("binding context")));
-    KeyBinding::load(
-        &row.keys,
-        (row.action)(),
-        context,
-        false,
-        None,
-        &DummyKeyboardMapper,
-    )
-    .ok()
+    KeyBinding::load(&row.keys, (row.action)(), context, false, None, cx).ok()
 }
+
+/// The OS that resolves `secondary-` in a key parsed without an `App`: the build target,
+/// as GPUI itself decides for a native app.
+pub const HOST_OS: OperatingSystem = if cfg!(target_os = "macos") {
+    OperatingSystem::Mac
+} else if cfg!(target_os = "windows") {
+    OperatingSystem::Windows
+} else {
+    OperatingSystem::Linux
+};
 
 /// The keymap file's current problems; empty before a user keymap is installed.
 pub fn problems(cx: &App) -> Vec<KeymapProblem> {
@@ -1090,7 +1097,7 @@ pub fn plus_keys(keys: &str) -> String {
 /// keys as "PgUp" and "PgDn", "home" and "end" as "Home" and "End", and any other key
 /// uppercased. Keys that do not parse give nothing.
 pub fn key_hint(keys: &str) -> Vec<String> {
-    let Ok(k) = Keystroke::parse(keys) else {
+    let Ok(k) = Keystroke::parse_with_os(keys, HOST_OS) else {
         return Vec::new();
     };
     let m = k.modifiers;

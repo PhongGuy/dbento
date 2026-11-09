@@ -117,7 +117,7 @@ fn enter_and_f2_open_the_selected_cell_and_escape_cancels(cx: &mut TestAppContex
 // key_char; the test window does not, so the predicate is pinned directly.
 #[test]
 fn only_printable_unmodified_keys_type_into_a_cell() {
-    let key = |s: &str, ch: Option<&str>| {
+    let key = |s: &'static str, ch: Option<&str>| {
         let mut k = Keystroke::parse(s).unwrap();
         k.key_char = ch.map(str::to_owned);
         k
