@@ -1,11 +1,9 @@
-mod support;
-
 use std::time::{Duration, Instant};
 
+use crate::support::{Cell, Fixture, edit_value, pairs, rejected, row_key, sqlite_fixture, val};
 use dbento_core::{
     ApplyError, Change, ChangeOutcome, EditBatch, EditValue, RowKey, apply, render_sql,
 };
-use support::{Cell, Fixture, edit_value, pairs, rejected, row_key, sqlite_fixture, val};
 
 const SETUP: &str = "
 CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT DEFAULT 'x''y', n INT, pic BLOB,

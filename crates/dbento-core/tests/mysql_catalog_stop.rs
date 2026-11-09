@@ -1,14 +1,13 @@
 //! MySQL catalog queries stuck behind DDL: the statement timeout and a cancel stop them, and
 //! a catalog call dropped mid-wait kills its statement, so the session goes on either way.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{MyFixture, my_fixtures, my_thread_id, run, text};
 use dbento_core::{
     DefinitionError, ExecuteError, IntrospectError, Limits, ObjectRef, RelationRef, SessionOptions,
 };
 use dbento_testkit::MyFlavor;
 use mysql_async::prelude::*;
-use support::{MyFixture, my_fixtures, my_thread_id, run, text};
 
 /// Polls the processlist until a thread matches `filter`.
 async fn wait_for(fx: &MyFixture, filter: &str) {

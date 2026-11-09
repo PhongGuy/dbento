@@ -1,6 +1,5 @@
-mod support;
+use crate::support::{run, sqlite_fixture};
 use dbento_core::{Limits, SessionOptions, Unguarded, Writes};
-use support::{run, sqlite_fixture};
 
 #[tokio::test]
 async fn statements_are_classified_before_they_run() {

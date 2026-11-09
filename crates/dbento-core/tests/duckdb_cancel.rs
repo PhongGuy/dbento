@@ -1,11 +1,10 @@
 #![cfg(feature = "duckdb")]
 //! Cancel and statement timeout on DuckDB sessions: an interrupt reaches only the statement
 //! it was meant for, and who fired it decides between `Cancelled` and `Timeout`.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{duckdb_fixture, run, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, Session, SessionOptions};
-use support::{duckdb_fixture, run, text};
 
 /// Cannot finish within any test bound: 10^13 rows through a cross join.
 const SPIN: &str = "SELECT count(*) FROM range(10000000) a, range(1000000) b";

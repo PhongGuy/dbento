@@ -1,14 +1,13 @@
 //! Row and byte cuts on MySQL: Drain keeps the session, Close kills, Park waits for extend.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{Cell, MyFixture, my_fixtures, run, text};
 use dbento_core::{
     CellRef, ExecuteError, ExtendError, Limits, OnTruncate, ResultStream, Session, SessionOptions,
     TruncatedBy,
 };
 use dbento_testkit::NUMS_SQL;
 use mysql_async::prelude::*;
-use support::{Cell, MyFixture, my_fixtures, run, text};
 
 /// 1,000,000 rows, and 1,000,000,000 rows, which no drain finishes within the cap.
 const BIG: &str = "SELECT a.n * 1000 + b.n AS x FROM nums a, nums b";

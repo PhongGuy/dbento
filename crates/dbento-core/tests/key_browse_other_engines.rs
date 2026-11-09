@@ -1,8 +1,7 @@
 //! Key browsing on an engine that is not Redis, in every build.
-mod support;
 
+use crate::support::sqlite_fixture;
 use dbento_core::{KeyBrowseError, KeyRead, KeyScan, SessionOptions};
-use support::sqlite_fixture;
 
 #[tokio::test]
 async fn sqlite_has_no_keys_to_scan_or_read() {

@@ -1,12 +1,11 @@
 //! The MySQL driver on both flavors: connect, refusals, errors and a streamed result.
-mod support;
 
+use crate::support::{my_fixtures, run, text};
 use dbento_core::{
     ConnectError, Engine, ExecuteError, Flavor, IntrospectError, Limits, RelationRef, Secret,
     SessionOptions, connect,
 };
 use dbento_testkit::MyFlavor;
-use support::{my_fixtures, run, text};
 
 #[tokio::test]
 async fn a_session_reports_its_flavor_and_a_wrong_password_its_number() {

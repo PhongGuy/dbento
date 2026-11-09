@@ -1,12 +1,12 @@
 //! The statement timeout on MySQL and MariaDB: the watchdog stops any statement at the
 //! deadline, MariaDB's max_statement_time backs it, and an ended statement's watchdog is gone.
-mod support;
+use crate::support;
 use std::time::{Duration, Instant};
 
+use crate::support::{Later, my_fixtures, run, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions};
 use dbento_testkit::{MyFlavor, NUMS_SQL};
 use mysql_async::prelude::*;
-use support::{Later, my_fixtures, run, text};
 
 fn timed_out(r: &[Result<support::Ran, ExecuteError>]) -> bool {
     matches!(r.last(), Some(Err(ExecuteError::Timeout)))

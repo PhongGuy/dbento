@@ -1,10 +1,9 @@
 //! A cancel reaches only the statement it was aimed at, and a cancel during a drain never
 //! turns a later timeout into a cancel.
-mod support;
 use std::time::Duration;
 
+use crate::support::{PgFixture, collect, pg_fixture, run};
 use dbento_core::{ExecuteError, Limits, SessionOptions, Workspace};
-use support::{PgFixture, collect, pg_fixture, run};
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 

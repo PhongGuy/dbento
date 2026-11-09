@@ -1,11 +1,10 @@
 //! The non-SQL seam: query languages, document-shaped unguarded kinds, syntax errors, read-only
 //! enforcement and saved shell queries.
-mod support;
+use crate::support::{run, sqlite_fixture};
 use dbento_core::{
     Engine, ExecuteError, Flavor, Limits, QueryLanguage, ReadOnlyEnforcement, SessionOptions,
     Unguarded, Workspace,
 };
-use support::{run, sqlite_fixture};
 
 #[test]
 fn every_sql_engine_reports_the_sql_language() {

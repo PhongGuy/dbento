@@ -1,12 +1,11 @@
 //! SQLite introspection on Chinook and torture names, attached schemas, the cap, and quoting.
-mod support;
 
+use crate::support::{run, sqlite_fixture};
 use RelationKind::{Table, View};
 use dbento_core::{
     ColumnMeta, Engine, Limits, RELATION_CAP, RelationKind, RelationList, RelationRef,
     SessionOptions, quote_ident,
 };
-use support::{run, sqlite_fixture};
 
 const TORTURE: &str = r#"
 CREATE TABLE "we""ird" (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT DEFAULT 'x');

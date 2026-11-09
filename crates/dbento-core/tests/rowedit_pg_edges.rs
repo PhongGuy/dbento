@@ -1,9 +1,7 @@
-mod support;
-
 use std::time::{Duration, Instant};
 
+use crate::support::{PgFixture, edit_value, pairs, pg_fixture, rejected, row_key, val};
 use dbento_core::{BatchError, Change, ChangeOutcome, EditBatch, EditValue, RowKey};
-use support::{PgFixture, edit_value, pairs, pg_fixture, rejected, row_key, val};
 
 const SETUP: &str = r#"
 CREATE TABLE nokey(a int, b text);

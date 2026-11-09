@@ -1,15 +1,13 @@
 //! Postgres over TLS: a verified connection with an extra CA, cancel over the same connector,
 //! and the failures that must never fall back to plaintext.
 
-mod support;
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::support::{pg_fixture, run, text};
 use dbento_core::{ConnectError, ExecuteError, Limits, Secret, SessionOptions, Workspace, connect};
-use support::{pg_fixture, run, text};
 
 async fn tls_workspace(
     ca_file: Option<&str>,

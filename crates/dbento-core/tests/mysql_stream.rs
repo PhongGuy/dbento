@@ -1,12 +1,11 @@
 //! MySQL streaming: batches leave as rows arrive, a dropped stream is settled, and the result
 //! sets after the first are counted and drained.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{Cell, my_fixtures, run, sqlite_fixture, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
 use dbento_testkit::NUMS_SQL;
 use mysql_async::prelude::*;
-use support::{Cell, my_fixtures, run, sqlite_fixture, text};
 
 #[tokio::test]
 async fn the_first_batch_leaves_before_a_slow_tail_arrives() {

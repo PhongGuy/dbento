@@ -1,10 +1,9 @@
 //! The statement timeout on SQL Server: a client watchdog sends Attention at the deadline.
-mod support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::support::{MsFixture, collect, ms_fixture, run, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions, Workspace};
-use support::{MsFixture, collect, ms_fixture, run, text};
 use tokio::sync::Notify;
 
 const CUBE: &str = "SELECT a.object_id FROM sys.all_objects a CROSS JOIN sys.all_objects b \

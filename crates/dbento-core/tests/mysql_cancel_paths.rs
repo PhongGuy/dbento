@@ -1,12 +1,12 @@
 //! Cancel off the happy path: a KILL that cannot connect, a cancel during a settle's drain,
 //! and a run dropped after its cancel, as MCP's until_cancelled does.
-mod support;
+use crate::support;
 use std::time::{Duration, Instant};
 
+use crate::support::{Later, my_fixtures, my_thread_id, run, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
 use dbento_testkit::NUMS_SQL;
 use mysql_async::prelude::*;
-use support::{Later, my_fixtures, my_thread_id, run, text};
 
 #[tokio::test]
 async fn a_cancel_whose_kill_cannot_connect_returns_at_once_and_closes_the_session() {

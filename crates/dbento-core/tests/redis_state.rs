@@ -1,15 +1,14 @@
 //! Timeouts and cancels end the session; SELECT and MULTI are tracked.
 #![cfg(feature = "redis")]
-mod support;
 
 use std::time::Duration;
 
+use crate::support::{Cell, client_field, code_of, failure, rd, read};
 use dbento_core::{ExecuteError, IntrospectError, KeyBrowseError, KeyScan, SessionOptions};
 use dbento_testkit::{
     RdUser::{Reader, Writer},
     RedisDb,
 };
-use support::{Cell, client_field, code_of, failure, rd, read};
 
 /// Waits until the server holds `n` blocked clients.
 async fn blocked_clients(db: &RedisDb, n: u64) {

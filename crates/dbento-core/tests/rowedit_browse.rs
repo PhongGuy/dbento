@@ -1,10 +1,8 @@
-mod support;
-
+use crate::support::{PgFixture, pg_fixture, run, sqlite_fixture, text};
 use dbento_core::{
     Browse, BrowseError, EditTarget, Engine, FormatOptions, Limits, SessionOptions, Sort,
     browse_sql, format_sql,
 };
-use support::{PgFixture, pg_fixture, run, sqlite_fixture, text};
 
 const PG_SETUP: &str = r#"
 CREATE TABLE t(id int PRIMARY KEY, "Sort Me" text);

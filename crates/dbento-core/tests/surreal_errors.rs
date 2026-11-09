@@ -1,12 +1,11 @@
 //! The error map on a real server: parse positions, a value with no CBOR form, a reply the
 //! decoder cannot read, and the ways a session ends.
-mod support;
 
 use std::time::Duration;
 
+use crate::support::{collect, run, sr_proxied, sr_root, sr_session, text};
 use dbento_core::{ExecuteError, Limits, Session, SessionOptions};
 use dbento_testkit::surreal_db;
-use support::{collect, run, sr_proxied, sr_root, sr_session, text};
 
 #[tokio::test]
 async fn a_parse_error_points_at_its_byte_in_the_unit() {

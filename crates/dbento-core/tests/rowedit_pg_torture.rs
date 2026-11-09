@@ -1,7 +1,5 @@
-mod support;
-
+use crate::support::{Cell, PgFixture, edit_value, pairs, pg_fixture, row_key, val};
 use dbento_core::{Change, EditBatch, EditValue, apply, render_sql};
-use support::{Cell, PgFixture, edit_value, pairs, pg_fixture, row_key, val};
 
 async fn scalar(fx: &PgFixture, sql: &str) -> String {
     fx.db.scalar(sql).await.unwrap()

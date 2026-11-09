@@ -1,9 +1,8 @@
 #![cfg(feature = "duckdb")]
-mod support;
+use crate::support::{duckdb_fixture, run, text};
 use dbento_core::{
     ExecuteError, ExtendError, Limits, OnTruncate, ResultStream, SessionOptions, TruncatedBy,
 };
-use support::{duckdb_fixture, run, text};
 
 fn rows(n: u64, on: OnTruncate) -> Limits {
     let mut l = Limits::default();

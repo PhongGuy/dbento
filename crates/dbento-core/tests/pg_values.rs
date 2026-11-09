@@ -1,8 +1,7 @@
-mod support;
 use std::time::Duration;
 
+use crate::support::{Cell, collect, pg_fixture, run, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions};
-use support::{Cell, collect, pg_fixture, run, text};
 
 #[tokio::test]
 async fn values_are_the_servers_text_with_qualified_type_names() {

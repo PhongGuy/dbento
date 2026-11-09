@@ -1,6 +1,5 @@
-mod support;
+use crate::support::{Cell, run, sqlite_fixture, text};
 use dbento_core::{Limits, SessionOptions};
-use support::{Cell, run, sqlite_fixture, text};
 
 #[tokio::test]
 async fn a_column_of_mixed_kinds_renders_each_row_on_its_own() {

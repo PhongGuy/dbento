@@ -1,7 +1,5 @@
-mod support;
-
+use crate::support::{pg_fixture, sqlite_fixture};
 use dbento_core::{EditTarget, Engine, IntrospectError, RelationRef, Session, SessionOptions};
-use support::{pg_fixture, sqlite_fixture};
 
 fn summary(t: &EditTarget) -> Vec<(String, String, bool)> {
     t.columns()

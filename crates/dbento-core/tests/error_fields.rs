@@ -1,7 +1,6 @@
 //! Database errors carry detail, hint and a byte position into the statement as sent.
-mod support;
+use crate::support::{pg_fixture, run, sqlite_fixture};
 use dbento_core::{Engine, ExecuteError, Limits, SessionOptions, statement_ranges};
-use support::{pg_fixture, run, sqlite_fixture};
 
 /// Statement `n` of `script` as the app records it: its range, trimmed.
 fn stmt(engine: Engine, script: &str, n: usize) -> String {

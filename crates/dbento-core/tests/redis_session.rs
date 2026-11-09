@@ -1,13 +1,12 @@
 //! Connecting to Valkey and running command lines.
 #![cfg(feature = "redis")]
-mod support;
 
+use crate::support::{Cell, code_of, failure, rd, read, text};
 use dbento_core::{ConnectError, ExecuteError, Flavor, SessionOptions, Workspace, connect};
 use dbento_testkit::{
     BINARY_VALUE,
     RdUser::{Reader, Writer},
 };
-use support::{Cell, code_of, failure, rd, read, text};
 
 #[tokio::test]
 async fn a_writable_session_names_valkey_and_has_no_level() {

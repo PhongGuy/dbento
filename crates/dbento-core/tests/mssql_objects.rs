@@ -1,12 +1,11 @@
 //! SQL Server keys, indexes, checks, triggers and foreign keys, read from the `sys` views of
 //! the connection's database with names compared as the database compares them.
-mod support;
 
+use crate::support::{MsFixture, ms_fixture, ms_off};
 use dbento_core::{
     ConstraintKind, FkDirection, ForeignKey, IndexInfo, RelationRef, Session, SessionOptions,
     TriggerInfo, TriggerState,
 };
-use support::{MsFixture, ms_fixture, ms_off};
 
 async fn setup(fx: &MsFixture, batches: &[&str]) {
     let mut c = fx.db.client().await;

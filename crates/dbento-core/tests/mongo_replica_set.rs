@@ -1,16 +1,15 @@
 //! What only a replica set shows: change streams and read preference.
 #![cfg(feature = "mongodb")]
-mod support;
 
 use std::time::Duration;
 
+use crate::support::{failure, one, read};
 use bson::doc;
 use dbento_core::{
     ExecuteError, IntrospectError, Limits, RelationRef, Session, SessionOptions, Workspace, Writes,
     connect,
 };
 use dbento_testkit::{MgReplicaSet, mongo_replica_set};
-use support::{failure, one, read};
 
 /// The set has no secondary, so a read that honours this fails selection, and fails fast.
 const SECONDARY: &str = "readPreference=secondary&serverSelectionTimeoutMS=200";

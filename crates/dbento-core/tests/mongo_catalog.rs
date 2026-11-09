@@ -1,11 +1,10 @@
 //! The catalog on a real server: databases, collections, views, inferred columns and indexes.
 #![cfg(feature = "mongodb")]
-mod support;
 
+use crate::support::{MgFixture, mg};
 use bson::doc;
 use dbento_core::{ExecuteError, IntrospectError, RelationKind, RelationRef, SessionOptions};
 use dbento_testkit::MgUser::{Reader, Root};
-use support::{MgFixture, mg};
 
 async fn seeded() -> MgFixture {
     let fx = mg("").await;

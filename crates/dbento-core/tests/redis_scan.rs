@@ -1,17 +1,16 @@
 //! The key browser's scan: every key once, filters, and the editor's DB untouched.
 #![cfg(feature = "redis")]
-mod support;
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use crate::support::{client_field, forced, rd, read, sqlite_fixture};
 use dbento_core::{KeyBrowseError, KeyEntry, KeyKind, KeyScan, KeyTtl, Session, SessionOptions};
 use dbento_testkit::{
     BINARY_KEY, MANY_KEYS,
     RdUser::{Reader, Writer},
     SEED_KEYS,
 };
-use support::{client_field, forced, rd, read, sqlite_fixture};
 
 async fn every_key(s: &mut Session, mut req: KeyScan) -> Vec<KeyEntry> {
     let mut out = Vec::new();

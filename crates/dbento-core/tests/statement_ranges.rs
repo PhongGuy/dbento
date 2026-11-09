@@ -1,6 +1,5 @@
-mod support;
+use crate::support::sqlite_fixture;
 use dbento_core::{Engine, Limits, SessionOptions, statement_ranges};
-use support::sqlite_fixture;
 
 fn texts(engine: Engine, sql: &str) -> Vec<&str> {
     statement_ranges(engine, sql)

@@ -1,8 +1,6 @@
-mod support;
-
+use crate::support::{PgFixture, edit_value, pairs, pg_fixture, rejected, row_key, run, val};
 use dbento_core::{ApplyError, Change, ChangeOutcome, EditValue};
 use dbento_core::{Limits, RelationRef, SessionOptions};
-use support::{PgFixture, edit_value, pairs, pg_fixture, rejected, row_key, run, val};
 
 const SETUP: &str = r#"
 CREATE DOMAIN d3 AS varchar(3) CHECK (VALUE <> 'no');

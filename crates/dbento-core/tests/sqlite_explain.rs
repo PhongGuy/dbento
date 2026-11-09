@@ -1,7 +1,6 @@
 //! `Session::explain` on SQLite: EXPLAIN QUERY PLAN rows, never an execution.
-mod support;
+use crate::support::{MANY, sqlite_fixture};
 use dbento_core::{Engine, ExecuteError, ExplainMode, Limits, SessionOptions, explain_request};
-use support::{MANY, sqlite_fixture};
 
 const SETUP: &str =
     "CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER); INSERT INTO t VALUES (1, 10), (2, 20);";

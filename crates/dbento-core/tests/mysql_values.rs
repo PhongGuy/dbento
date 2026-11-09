@@ -1,8 +1,7 @@
 //! What goes to a MySQL server and what comes back: scripts, literals, values and counts.
-mod support;
+use crate::support::{Cell, my_fixtures, run, text};
 use dbento_core::{CellRef, ColumnSource, Engine, Limits, SessionOptions, quote_literal};
 use mysql_async::prelude::*;
-use support::{Cell, my_fixtures, run, text};
 
 #[test]
 fn mysql_literals_quote_for_either_backslash_mode() {

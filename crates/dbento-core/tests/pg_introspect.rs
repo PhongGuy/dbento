@@ -1,16 +1,15 @@
 //! Postgres introspection: names, kinds and columns from the catalogs, read-only, and
 //! without touching the user's own transaction.
-mod support;
 
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use crate::support::{pg_fixture, run};
 use RelationKind::{MaterializedView, Table, View};
 use dbento_core::{
     ColumnMeta, Engine, ExecuteError, IntrospectError, Limits, RelationKind, RelationList,
     RelationRef, SessionOptions, quote_ident,
 };
-use support::{pg_fixture, run};
 
 const STATE: &str = "SELECT state FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()";
 

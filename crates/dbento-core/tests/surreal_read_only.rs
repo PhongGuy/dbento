@@ -1,11 +1,11 @@
 //! The fence: a read-only session runs each unit in a cancelled RPC transaction. Every effect is
 //! judged from a separate root connection, and a read-only level is only as good as what that
 //! connection sees.
-mod support;
+use crate::support;
 
+use crate::support::{run, sr_session, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, ReadOnlyEnforcement, SessionOptions, Writes};
 use dbento_testkit::{SrDb, surreal_db};
-use support::{run, sr_session, text};
 
 const LOGINS: [(&str, &str); 3] = [("ro", "root"), ("ne", "namespace"), ("dv", "database")];
 

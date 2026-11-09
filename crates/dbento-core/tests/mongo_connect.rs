@@ -1,14 +1,13 @@
 //! Connecting: the handshake and the privilege check.
 #![cfg(feature = "mongodb")]
-mod support;
 
 use std::time::{Duration, Instant};
 
+use crate::support::{forced, mg};
 use dbento_core::{
     ConnectError, Flavor, ReadOnlyEnforcement, Secret, SessionOptions, Workspace, connect,
 };
 use dbento_testkit::MgUser::{Anonymous, Reader, Root, Writer};
-use support::{forced, mg};
 
 #[tokio::test]
 async fn an_unauthenticated_session_has_no_privileges_so_it_is_best_effort() {

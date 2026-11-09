@@ -1,12 +1,12 @@
 //! Read-only SQL Server without a reader principal: Dbento's transaction fence around every
 //! batch and the refusals before sending, reported as best effort.
-mod support;
+use crate::support;
 
+use crate::support::{MsFixture, collect, ms_fixture, ms_off, run, sqlite_fixture, text};
 use dbento_core::{
     ExecuteError, Limits, OnTruncate, ReadOnlyEnforcement, RelationRef, Session, SessionOptions,
     Writes,
 };
-use support::{MsFixture, collect, ms_fixture, ms_off, run, sqlite_fixture, text};
 
 async fn read_only() -> (MsFixture, Session) {
     let fx = ms_fixture(

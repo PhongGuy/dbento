@@ -1,14 +1,13 @@
 #![cfg(feature = "duckdb")]
 //! The DuckDB catalog through `Session`: schemas, relations and columns of the current
 //! database, and relation definitions as DuckDB stores them.
-mod support;
 use std::time::Duration;
 
+use crate::support::{Cell, duckdb_fixture, run};
 use dbento_core::{
     DefinitionError, Limits, ObjectRef, RelationKind, RelationObjects, RelationRef, SchemaObjects,
     Session, SessionOptions,
 };
-use support::{Cell, duckdb_fixture, run};
 
 const SETUP: &str = "CREATE SCHEMA s2; \
     CREATE TABLE t(id INTEGER PRIMARY KEY, n VARCHAR NOT NULL DEFAULT 'x', l INTEGER[], d DECIMAL(10,2)); \

@@ -1,10 +1,9 @@
 //! Foreign keys in both directions on SQLite, and the filter a reference link browses with.
-mod support;
+use crate::support::{Fixture, sqlite_fixture};
 use dbento_core::{
     Browse, EditValue, Engine, FkDirection, ForeignKey, RelationRef, SessionOptions, browse_sql,
     key_filter,
 };
-use support::{Fixture, sqlite_fixture};
 
 const SETUP: &str = "
 CREATE TABLE artist(id INTEGER PRIMARY KEY, name TEXT);

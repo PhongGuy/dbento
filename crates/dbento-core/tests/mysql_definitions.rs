@@ -1,13 +1,12 @@
 //! MySQL routines and definitions on both flavors: the server's SHOW CREATE text, and
 //! Missing once the object is gone.
-mod support;
 
+use crate::support::{MyFixture, my_fixtures};
 use dbento_core::{
     Definition, DefinitionError, ObjectRef, RelationRef, RoutineInfo, RoutineKind, SchemaObjects,
     SessionOptions,
 };
 use mysql_async::prelude::*;
-use support::{MyFixture, my_fixtures};
 
 const SETUP: &str = "CREATE TABLE parent (id INT PRIMARY KEY, code VARCHAR(10) NOT NULL, UNIQUE KEY parent_code (code));
 CREATE TABLE child (id INT PRIMARY KEY, parent_id INT, note TEXT,

@@ -1,14 +1,13 @@
 //! MySQL over TLS: verify with tls_ca connects and cancels over TLS, a client certificate
 //! from a plain or encrypted key logs in, and a certificate failure names both ways out.
-mod support;
 use std::hash::{BuildHasher, RandomState};
 use std::time::Duration;
 
+use crate::support::{Cell, my_fixtures, run};
 use dbento_core::{ConnectError, ExecuteError, Limits, Secret, SessionOptions, Workspace, connect};
 use dbento_testkit::{CERT_USER, ClientCert, MyDb, MyFlavor, my_tls};
 use pkcs8::der::pem::LineEnding;
 use pkcs8::pkcs5::pbes2;
-use support::{Cell, my_fixtures, run};
 
 /// Random bytes from the std hasher's per-process keys; a test passphrase is never a literal.
 fn random_bytes<const N: usize>() -> [u8; N] {

@@ -1,11 +1,10 @@
 //! Every blocked case and every documented hole of the MySQL read-only recipe, on each gate
 //! server. A hole's test pins today's behavior, so a server change is noticed here.
-mod support;
 
+use crate::support::{MyFixture, Ran, my_fixtures, run, text};
 use dbento_core::{ExecuteError, Limits, Session, SessionOptions};
 use dbento_testkit::MyFlavor;
 use mysql_async::prelude::*;
-use support::{MyFixture, Ran, my_fixtures, run, text};
 
 const FIXTURE: &str = "CREATE TABLE t1 (a INT) ENGINE = InnoDB; \
     CREATE TABLE audit (n INT) ENGINE = InnoDB; \

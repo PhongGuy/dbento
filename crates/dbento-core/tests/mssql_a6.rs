@@ -1,10 +1,9 @@
 //! Research A6, row by row: what each read-only layer blocks on SQL Server, and the holes
 //! that remain, with and without a reader principal.
-mod support;
 use std::time::Duration;
 
+use crate::support::{MsFixture, Ran, collect, ms_reader, ms_until, run, text};
 use dbento_core::{ExecuteError, Limits, ReadOnlyEnforcement, Session, SessionOptions, Writes};
-use support::{MsFixture, Ran, collect, ms_reader, ms_until, run, text};
 
 const A6: &[&str] = &[
     "CREATE TABLE dbo.t (id int IDENTITY PRIMARY KEY, v nvarchar(40))",

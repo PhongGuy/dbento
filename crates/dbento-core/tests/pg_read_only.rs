@@ -1,12 +1,11 @@
 //! Read-only Postgres sessions: the engine refuses writes, and each statement is its own
 //! read-only transaction that has ended by the time its result is reported.
-mod support;
 
 use std::future::Future;
 use std::time::Duration;
 
+use crate::support::{collect, pg_fixture, run, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
-use support::{collect, pg_fixture, run, text};
 
 const STATE: &str = "SELECT state FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()";
 

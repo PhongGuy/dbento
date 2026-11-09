@@ -1,16 +1,15 @@
 //! Postgres schema objects: listings and definitions, read through the catalog session.
-mod support;
 
 use std::future::Future;
 use std::time::Duration;
 
+use crate::support::{PgFixture, pg_fixture, run, text};
 use dbento_core::{
     ConstraintInfo, ConstraintKind, DEFINITION_CAP, Definition, DefinitionError, ExecuteError,
     IndexInfo, IntrospectError, Limits, ObjectRef, RELATION_CAP, RelationObjects, RelationRef,
     RoutineInfo, RoutineKind, SchemaObjects, SessionOptions, TriggerInfo, TriggerState, TypeInfo,
     TypeKind,
 };
-use support::{PgFixture, pg_fixture, run, text};
 
 const SCHEMA: &str = "Obj";
 const STATE: &str = "SELECT state FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()";

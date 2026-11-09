@@ -1,12 +1,11 @@
 //! Cancel on MySQL and MariaDB: KILL QUERY from a side connection stops exactly the statement
 //! it was aimed at, and a cancel between prepare and execute stops the statement unsent.
-mod support;
 use std::time::Duration;
 
+use crate::support::{Later, my_fixtures, run, text};
 use dbento_core::{CancelHandle, ExecuteError, Limits, SessionOptions};
 use dbento_testkit::NUMS_SQL;
 use mysql_async::prelude::*;
-use support::{Later, my_fixtures, run, text};
 
 fn cancel_after(cancel: CancelHandle, after: Duration) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {

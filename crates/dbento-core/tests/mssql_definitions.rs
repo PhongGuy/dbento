@@ -1,12 +1,11 @@
 //! SQL Server schema objects and definitions: stored text as the server keeps it, composed text
 //! marked as composed, and a refusal where the server stores none.
-mod support;
 
+use crate::support::{MsFixture, ms_fixture, ms_off, ms_spid};
 use dbento_core::{
     ColumnMeta, ConstraintKind, DefinitionError, ObjectRef, RelationKind, RelationRef, RoutineKind,
     Session, SessionOptions, TypeKind,
 };
-use support::{MsFixture, ms_fixture, ms_off, ms_spid};
 
 async fn setup(fx: &MsFixture, batches: &[&str]) {
     let mut c = fx.db.client().await;

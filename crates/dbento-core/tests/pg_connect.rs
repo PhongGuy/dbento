@@ -1,8 +1,7 @@
-mod support;
 use std::time::Duration;
 
+use crate::support::{pg_fixture, run, text};
 use dbento_core::{ConnectError, ExecuteError, Limits, Secret, SessionOptions, Workspace, connect};
-use support::{pg_fixture, run, text};
 
 #[tokio::test]
 async fn settings_become_startup_parameters() {

@@ -1,5 +1,5 @@
 //! The shared session futures stay small whichever engines are built in.
-mod support;
+use crate::support;
 
 use std::mem::size_of_val;
 

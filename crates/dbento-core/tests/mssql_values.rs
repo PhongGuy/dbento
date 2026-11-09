@@ -1,8 +1,7 @@
 //! Every SQL Server type family renders as the Values table says; nothing becomes NULL.
-mod support;
 
+use crate::support::{Cell, Ran, ms_off, run, text};
 use dbento_core::{Limits, Session, SessionOptions};
-use support::{Cell, Ran, ms_off, run, text};
 
 /// The one result of `sql`.
 async fn one(s: &mut Session, sql: &str) -> Ran {
