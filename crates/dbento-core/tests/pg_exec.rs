@@ -1,7 +1,6 @@
-mod support;
+use crate::support::{pg_fixture, run, text};
 use dbento_core::{Engine, ExecuteError, Limits, SessionOptions, Unguarded, Writes};
 use std::time::Duration;
-use support::{pg_fixture, run, text};
 
 #[tokio::test]
 async fn statements_run_in_order_with_rows_affected_from_command_complete() {

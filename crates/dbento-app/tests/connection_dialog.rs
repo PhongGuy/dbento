@@ -1,12 +1,12 @@
-mod support;
+use crate::support;
 use dbento_app::explorer::{connection_id, part_id};
 
+use crate::support::{click_id, fill, form, label_of, opened, present};
 use dbento_app::connection_dialog::{Field, TestState};
 use gpui_kit::px;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use std::fs;
-use support::{click_id, fill, form, label_of, opened, present};
 
 fn toml(o: &support::Opened) -> String {
     fs::read_to_string(o.fx.dir.path().join("dbento.toml")).unwrap()

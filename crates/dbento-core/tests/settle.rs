@@ -1,10 +1,9 @@
 //! `is_last` tells the last statement apart; `settle` leaves a session idle, reports a
 //! drain error, and is a barrier on SQLite.
-mod support;
 use std::time::Duration;
 
+use crate::support::{PgFixture, collect, pg_fixture, run, sqlite_fixture};
 use dbento_core::{ExecuteError, Limits, Session, SessionOptions};
-use support::{PgFixture, collect, pg_fixture, run, sqlite_fixture};
 
 /// `is_last` for each statement of `sql`, asked before it runs; each runs to its end.
 async fn lasts(s: &mut Session, sql: &str) -> Vec<bool> {

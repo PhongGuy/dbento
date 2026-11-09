@@ -1,12 +1,11 @@
 //! Every connection the MySQL driver lets go of closes within the drain cap: after a KILL that
 //! cannot connect, after a dropped session, and across settles that are cut short.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{Later, my_fixtures, my_thread_id, run};
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions};
 use dbento_testkit::NUMS_SQL;
 use mysql_async::prelude::*;
-use support::{Later, my_fixtures, my_thread_id, run};
 
 /// 1,000,000,000 rows: nothing reads or drains it within the cap.
 const HUGE: &str = "SELECT a.n FROM nums a, nums b, nums c";

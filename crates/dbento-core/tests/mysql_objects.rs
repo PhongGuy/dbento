@@ -1,13 +1,12 @@
 //! MySQL keys, indexes, checks, triggers and foreign keys on both flavors, with names
 //! compared as the server compares them.
-mod support;
 
+use crate::support::{MyFixture, my_fixtures};
 use dbento_core::{
     ConstraintInfo, ConstraintKind, FkDirection, ForeignKey, IndexInfo, RelationObjects,
     RelationRef, SessionOptions, TriggerInfo, TriggerState,
 };
 use mysql_async::prelude::*;
-use support::{MyFixture, my_fixtures};
 
 /// InnoDB names each foreign key's own index after the constraint. `P1` and `p1` differ only
 /// in case, and `r1` references each.

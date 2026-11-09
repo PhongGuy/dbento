@@ -1,6 +1,5 @@
 //! `dbento import datagrip` on small synthetic projects; consoles are always off.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use std::path::Path;
 use std::process::Output;
 use tempfile::TempDir;

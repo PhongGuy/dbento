@@ -1,6 +1,6 @@
-mod support;
+use crate::support;
+use crate::support::{Cell, run, sqlite_fixture, text};
 use dbento_core::{ConnectError, Engine, ExecuteError, Limits, SessionOptions, Workspace, connect};
-use support::{Cell, run, sqlite_fixture, text};
 
 #[tokio::test]
 async fn a_script_creates_then_inserts_then_selects() {

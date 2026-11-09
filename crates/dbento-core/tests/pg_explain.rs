@@ -1,14 +1,13 @@
 //! `Session::explain` on Postgres: every block it opens is rolled back, on every path.
-mod support;
 use std::future::Future;
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
+use crate::support::{Cell, pg_fixture, run, text};
 use dbento_core::{
     Engine, ExecuteError, ExplainMode, ExplainRequest, Limits, Session, SessionOptions,
     explain_request,
 };
-use support::{Cell, pg_fixture, run, text};
 
 const SETUP: &str =
     "CREATE TABLE t(id serial PRIMARY KEY, a int); INSERT INTO t(a) VALUES (1), (2);";

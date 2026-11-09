@@ -1,12 +1,11 @@
 //! The value a staged cell was loaded with: its text rules, where the model reads it, the
 //! per-cell revert, and the status bar segment.
-mod support;
+use crate::support::{Opened, fixture, label_of, launched, present, ready, wait_real};
 use dbento_app::record::{ORIGINAL_CAP, original_text};
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::staged::{GridRow, was_text};
 use dbento_core::{CellRef, EditValue, RelationKind};
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
-use support::{Opened, fixture, label_of, launched, present, ready, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', ' pad '), (2, '', NULL), (3, 'c', 'n');";

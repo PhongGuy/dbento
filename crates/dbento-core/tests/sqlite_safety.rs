@@ -1,7 +1,6 @@
-mod support;
+use crate::support::{LONG, MANY, run, sqlite_fixture, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions};
 use std::time::{Duration, Instant};
-use support::{LONG, MANY, run, sqlite_fixture, text};
 
 /// Fails a test that would otherwise hang on a query that is never interrupted.
 async fn bounded<T>(f: impl std::future::Future<Output = T>) -> T {

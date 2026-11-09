@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::settings::{self, Density, Metrics, Settings};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{TestAppContext, px};

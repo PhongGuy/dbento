@@ -1,5 +1,4 @@
-mod common;
-use common::{MANY, dbento, query_json, sqlite_ws};
+use crate::common::{MANY, dbento, query_json, sqlite_ws};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

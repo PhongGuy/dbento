@@ -1,5 +1,5 @@
 //! The in-cell editor, the Delete key and Ctrl+S in a browse tab's grid.
-mod support;
+use crate::support::{Opened, label_of, launched, opened, present, wait_real};
 use dbento_app::grid::staged_display;
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::results_pane::types_into_cell;
@@ -9,7 +9,6 @@ use gpui_kit::Keystroke;
 use gpui_kit::component::table::TableSelection;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', 'y'); \

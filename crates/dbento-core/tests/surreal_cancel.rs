@@ -1,13 +1,12 @@
 //! Stopping a stream: `CancelHandle`, the statement deadline, the server's own timeout, and how
 //! long a parked result may live.
-mod support;
 
 use std::time::{Duration, Instant};
 
+use crate::support::{run, sr_root, text};
 use dbento_core::Session;
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions};
 use dbento_testkit::{SURREAL_TAG, surreal_db, surreal_server};
-use support::{run, sr_root, text};
 
 fn parked(max_rows: u64) -> Limits {
     let mut limits = Limits::default();

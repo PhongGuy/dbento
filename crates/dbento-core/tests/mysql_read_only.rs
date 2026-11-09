@@ -1,14 +1,13 @@
 //! Read-only MySQL sessions: writes fail inside a read-only transaction per statement,
 //! transaction control is refused before it runs, multi-statement text never reaches the
 //! server, and settle ends the transaction.
-mod support;
 
 use std::time::Duration;
 
+use crate::support::{MyFixture, Ran, collect, my_fixtures, my_thread_id, run, text};
 use dbento_core::{ExecuteError, Limits, Session, SessionOptions, Unguarded, Writes};
 use mysql_async::Conn;
 use mysql_async::prelude::*;
-use support::{MyFixture, Ran, collect, my_fixtures, my_thread_id, run, text};
 
 fn forced() -> SessionOptions {
     let mut o = SessionOptions::default();

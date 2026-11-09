@@ -1,5 +1,6 @@
 //! The tab model's state at the row cap, and the history entry a capped result leaves.
-mod support;
+use crate::support;
+use crate::support::{MANY, fixture, init_tokio, spec, wait_real};
 use dbento_app::history::HistoryLog;
 use dbento_app::runner::{Event, RunnerTuning, StatementEnd, StopReason};
 use dbento_app::tab_model::{CapView, Expiry, TabModel};
@@ -7,7 +8,6 @@ use dbento_core::{History, HistoryEntry, HistoryFilter, HistoryOutcome};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use support::{MANY, fixture, init_tokio, spec, wait_real};
 
 const LONG_PARK: Duration = Duration::from_secs(30);
 

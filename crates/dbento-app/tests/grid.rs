@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
+use crate::support::opened;
 use dbento_app::grid::{cell_display, is_numeric};
 use dbento_app::results_pane::{ResultsPane, format_rows};
 use dbento_app::tab_model::TabModel;
 use dbento_core::CellRef;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::opened;
 
 #[test]
 fn row_counts_read_naturally() {

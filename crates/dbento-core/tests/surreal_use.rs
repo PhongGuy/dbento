@@ -1,9 +1,9 @@
 //! `USE` as a unit: a pre-check, then RPC `use`, and the refusals around it.
-mod support;
+use crate::support;
 
+use crate::support::{run, sr_session, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
 use dbento_testkit::surreal_db;
-use support::{run, sr_session, text};
 
 const RO: Option<(&str, &str)> = Some(("ro", "root"));
 

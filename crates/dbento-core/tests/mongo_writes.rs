@@ -1,16 +1,15 @@
 //! Writes through a session: ids, counts, timeouts and the errors of an ok reply.
 #![cfg(feature = "mongodb")]
-mod support;
 
 use std::time::Duration;
 
+use crate::support::{code_of, failure, mg, one, read, run};
 use bson::{Document, RawDocumentBuf, doc};
 use dbento_core::{ExecuteError, Limits, Session, SessionOptions};
 use dbento_testkit::{
     MgDb,
     MgUser::{Reader, Root, Writer},
 };
-use support::{code_of, failure, mg, one, read, run};
 
 async fn affected(s: &mut Session, text: &str) -> Option<u64> {
     let ran = one(s, text, Limits::default()).await;

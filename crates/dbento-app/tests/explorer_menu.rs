@@ -1,10 +1,9 @@
-mod support;
+use crate::support::{
+    TREE, click_id, label_of, name, present, right_click, right_click_empty, started, wait_real,
+};
 use dbento_app::explorer::{connection_id, folder_id};
 use dbento_core::FolderPath;
 use gpui_kit::TestAppContext;
-use support::{
-    TREE, click_id, label_of, name, present, right_click, right_click_empty, started, wait_real,
-};
 
 fn path(p: &str) -> FolderPath {
     p.parse().unwrap()

@@ -1,6 +1,5 @@
 //! The no-WHERE confirmation on MySQL and MariaDB, through `dbento query` as for every engine.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{MY_SECRET_VAR, MyDb, my_matrix};
 
 fn workspace(db: &MyDb) -> tempfile::TempDir {

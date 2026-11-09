@@ -1,13 +1,12 @@
 //! DB indexes with key counts, the unsupported relation calls and COMMAND DOCS.
 #![cfg(feature = "redis")]
-mod support;
 
+use crate::support::{client_field, rd, read, sqlite_fixture};
 use dbento_core::{IntrospectError, KeyBrowseError, RelationRef, SessionOptions};
 use dbento_testkit::{
     RdUser::{Admin, Reader, Writer},
     SEED_KEYS,
 };
-use support::{client_field, rd, read, sqlite_fixture};
 
 #[tokio::test]
 async fn schemas_list_every_db_with_its_key_count() {

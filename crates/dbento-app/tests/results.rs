@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
+use crate::support::{click_id, label_of, opened, present};
 use dbento_app::results::ResultStore;
 use dbento_app::results_pane::displayed;
 use dbento_app::runner::StatementEnd;
 use dbento_core::CellRef;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{click_id, label_of, opened, present};
 
 fn store(sql: &str) -> (ResultStore, usize) {
     let (columns, batches) = support::batches(sql);

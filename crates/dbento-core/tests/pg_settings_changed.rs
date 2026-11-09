@@ -1,7 +1,5 @@
-mod support;
-
+use crate::support::{pg_fixture, run, sqlite_fixture};
 use dbento_core::{Limits, SessionOptions};
-use support::{pg_fixture, run, sqlite_fixture};
 
 #[tokio::test]
 async fn a_postgres_session_is_marked_once_it_sends_set() {

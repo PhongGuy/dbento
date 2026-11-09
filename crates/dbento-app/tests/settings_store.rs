@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::app::AppPaths;
 use dbento_app::settings::{Density, Settings};
 use dbento_app::settings_store::{self, SAVE_DELAY, SettingsEvent, SettingsStore};

@@ -1,12 +1,11 @@
 //! The explorer tree under the keyboard: Up and Down, Right and Left, Home and End, the row
 //! kept in view, and nothing happening while the explorer lacks focus.
-mod support;
+use crate::support::{Opened, click_id, label_of, launched, present, wait_real};
 use dbento_app::explorer::{connection_id, folder_id};
 use dbento_app::schema_tree::NodeKey;
 use dbento_core::FolderPath;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  CREATE VIEW Recent AS SELECT Title FROM Album;";

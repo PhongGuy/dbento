@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::app::start;
 use dbento_app::explorer::{connection_id, folder_id, part_id};
 use dbento_app::sidebar::{SidebarEvent, color_name, tag_color};

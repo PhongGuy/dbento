@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::theme::{DARK, LIGHT, THEME_JSON};
 use gpui_kit::component::{ActiveTheme as _, ThemeMode};
 use gpui_kit::{Hsla, Rgba};

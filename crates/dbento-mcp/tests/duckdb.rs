@@ -1,8 +1,7 @@
 //! The MCP tools on a DuckDB connection: reads on the locked instance with the server's
 //! timeout, and an approved write through the classify-then-write sequence.
 #![cfg(feature = "duckdb")]
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::Decision;
 use serde_json::{Value, json};
 

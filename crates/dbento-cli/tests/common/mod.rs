@@ -1,5 +1,5 @@
 //! Helpers shared by the CLI integration tests.
-#![allow(dead_code)] // each test binary uses a different subset
+#![allow(dead_code)] // not every feature set uses every helper
 
 use std::path::Path;
 use tempfile::TempDir;

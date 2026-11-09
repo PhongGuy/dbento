@@ -1,4 +1,4 @@
-mod support;
+use crate::support::{Started, TREE, click_id, label_of, present, started, wait_real};
 use dbento_app::explorer::{connection_id, drop_allowed, folder_id, part_id};
 use dbento_core::{FolderPath, WorkspaceItem};
 use gpui_kit::test::TestWindowExt as _;
@@ -6,7 +6,6 @@ use gpui_kit::{
     AppContext as _, ElementId, InputEvent as _, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, TestAppContext, point, px,
 };
-use support::{Started, TREE, click_id, label_of, present, started, wait_real};
 
 fn path(p: &str) -> FolderPath {
     p.parse().unwrap()

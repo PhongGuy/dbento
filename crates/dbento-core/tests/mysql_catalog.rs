@@ -1,10 +1,9 @@
 //! The MySQL catalog on both flavors: schemas, relations and columns, with names compared as
 //! the server compares them and MariaDB's spellings read as MySQL 8 prints them.
-mod support;
 
+use crate::support::{MyFixture, my_fixtures, run, text};
 use dbento_core::{ColumnMeta, Limits, Relation, RelationKind, RelationRef, SessionOptions};
 use mysql_async::prelude::*;
-use support::{MyFixture, my_fixtures, run, text};
 
 /// `Pk` and `pk` differ only in case and in their keys; `kinds` has one column per spelling
 /// the two flavors disagree on.

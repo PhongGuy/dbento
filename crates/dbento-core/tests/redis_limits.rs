@@ -1,10 +1,9 @@
 //! A whole reply under the row and byte limits, parked and extended.
 #![cfg(feature = "redis")]
-mod support;
 
+use crate::support::{failure, one, rd, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions, TruncatedBy};
 use dbento_testkit::{BIG_LIST_LEN, RdUser::Reader};
-use support::{failure, one, rd, text};
 
 fn limited(rows: u64, park: bool) -> Limits {
     let mut l = Limits::default();

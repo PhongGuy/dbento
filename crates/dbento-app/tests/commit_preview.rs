@@ -1,5 +1,6 @@
 //! The apply prompt's SQL sits in a read-only, highlighted editor with typed literals.
-mod support;
+use crate::support;
+use crate::support::{label_of, launched, opened, present, wait_real};
 use dbento_app::confirm::{sql_box, sql_preview};
 use dbento_core::RelationKind;
 use gpui_kit::component::input::EditorState;
@@ -8,7 +9,6 @@ use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     TestAppContext, Window, div, px,
 };
-use support::{label_of, launched, opened, present, wait_real};
 
 #[gpui_kit::test]
 fn the_preview_is_a_read_only_sql_editor_holding_the_text(cx: &mut TestAppContext) {

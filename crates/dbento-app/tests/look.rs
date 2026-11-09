@@ -1,9 +1,9 @@
-mod support;
+use crate::support;
+use crate::support::{opened, present};
 use dbento_app::app::start;
 use dbento_app::explorer::connection_id;
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ThemeMode;
-use support::{opened, present};
 
 const IDS: &[&str] = &[
     "connection-list",

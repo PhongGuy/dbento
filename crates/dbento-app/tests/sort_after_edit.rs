@@ -1,9 +1,8 @@
 //! A table tab whose query the user edited still sorts by its column headers.
-mod support;
+use crate::support::{label_of, launched, present};
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{label_of, launched, present};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  INSERT INTO Album(Title) VALUES ('b'), ('a'), ('c');";

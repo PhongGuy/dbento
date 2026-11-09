@@ -1,13 +1,12 @@
 //! The read-only probe and the gate, against the server's ACLs.
 #![cfg(feature = "redis")]
-mod support;
 
+use crate::support::{client_field, code_of, failure, forced, rd};
 use dbento_core::{ExecuteError, ReadOnlyEnforcement::*, Session, SessionOptions};
 use dbento_testkit::{
     RdUser::{Reader, Writer},
     SEED_KEYS,
 };
-use support::{client_field, code_of, failure, forced, rd};
 
 async fn sent(s: &mut Session) -> u64 {
     client_field(s, "tot-cmds").await.parse().unwrap()

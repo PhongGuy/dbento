@@ -1,8 +1,7 @@
 //! Quit, window close, disconnect and a workspace switch ask first while a statement runs,
 //! naming its tab.
-mod support;
+use crate::support::{LONG, Opened, click_id, label_of, opened, present, wait_real};
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
-use support::{LONG, Opened, click_id, label_of, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

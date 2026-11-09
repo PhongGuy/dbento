@@ -1,5 +1,5 @@
 //! The staged edit set and the words the save flow shows.
-mod support;
+use crate::support::{edit_target, fixture};
 use dbento_app::staged::{
     GridRow, PREVIEW_LINES, RowEdit, StagedEdits, commit_error_text, edit_value, outcome_text,
     pending_label, preview, prompt_detail, prompt_title, rejection_text, row_key,
@@ -8,7 +8,6 @@ use dbento_core::{
     ApplyError, CellRef, Change, ChangeOutcome, EditBatch, EditValue, ExecuteError, RelationRef,
     RowKey,
 };
-use support::{edit_target, fixture};
 
 fn key(id: &str) -> RowKey {
     RowKey::new(vec![("id".into(), EditValue::Text(id.into()))])

@@ -1,11 +1,11 @@
 //! The palette: Ctrl+P and Ctrl+Shift+P from the editor and the grid, ranked rows, Enter opens.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, opened, present, wait_real};
 use dbento_app::catalog::CatalogQuery;
 use dbento_app::keymap::{NEW_TAB_KEYS, chip_keys};
 use dbento_app::palette::{Mode, short_message};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Focusable as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, present, wait_real};
 
 #[test]
 fn a_catalog_error_shows_its_first_line_cut_to_80_characters() {

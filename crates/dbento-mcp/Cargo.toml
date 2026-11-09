@@ -5,6 +5,7 @@ description = "MCP server exposing a Dbento workspace's databases to AI clients,
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [features]
 default = ["duckdb", "mongodb", "surrealdb", "redis"]
@@ -34,3 +35,7 @@ dbento-testkit = { path = "../dbento-testkit" }
 rusqlite.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "io-util"] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

@@ -1,11 +1,10 @@
 //! Browse order ends with the row key; a keyset continues an unsorted browse after its
 //! last key; a batch drops its first rows.
-mod support;
 
+use crate::support::{Cell, pg_fixture, row_key, run, sqlite_fixture, text, val};
 use dbento_core::{
     Browse, BrowseError, EditValue, Keyset, Limits, SessionOptions, Sort, browse_sql,
 };
-use support::{Cell, pg_fixture, row_key, run, sqlite_fixture, text, val};
 
 const LITE: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, g INTEGER, v TEXT); \
     WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2500) \

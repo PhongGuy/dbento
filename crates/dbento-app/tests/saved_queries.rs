@@ -1,12 +1,11 @@
 //! Saved queries in the app: Ctrl+O lists and opens saved queries (`.sql`, `.surql`, `.js`),
 //! Ctrl+S names and saves.
-mod support;
+use crate::support::{Opened, label_of, opened, palette_pick, palette_rows, present, wait_real};
 use dbento_app::query_files::{name_problem, query_file_name};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Focusable as _, TestAppContext};
 use std::fs;
 use std::path::Path;
-use support::{Opened, label_of, opened, palette_pick, palette_rows, present, wait_real};
 
 fn click(cx: &mut TestAppContext, o: &Opened, id: impl Into<ElementId>) {
     let id = id.into();

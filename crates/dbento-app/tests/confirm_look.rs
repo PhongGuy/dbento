@@ -1,5 +1,6 @@
 //! The dangerous-write dialog's look: button styles and keys, its frame, and the initial focus.
-mod support;
+use crate::support;
+use crate::support::{label_of, opened, present, wait_real};
 use dbento_app::confirm::{
     Ask, Choice, ChoiceStyle, DIALOG_TOP, chip_colours, choice_keys, choice_style,
 };
@@ -7,7 +8,6 @@ use dbento_app::query_tab::{confirm_explanation, unguarded_ask};
 use dbento_core::Unguarded;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{label_of, opened, present, wait_real};
 
 fn ask(choices: [(&'static str, bool); 2], default: usize) -> Ask {
     Ask {

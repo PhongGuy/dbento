@@ -1,5 +1,5 @@
 //! The explorer's look: header, filter, row pitch, indent and node glyphs.
-mod support;
+use crate::support::{TREE, fixture, started};
 use dbento_app::explorer::{connection_id, folder_id, part_id};
 use dbento_app::schema_tree::{ObjectGroup, RowKind};
 use dbento_app::sidebar::{connection_tooltip, engine_icon, node_icon};
@@ -7,7 +7,6 @@ use dbento_app::ui::Icons;
 use dbento_core::{Engine, FolderPath, ObjectRef, RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Bounds, ElementId, Pixels, TestAppContext, px};
-use support::{TREE, fixture, started};
 
 fn at(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) -> Bounds<Pixels> {
     let id = id.into();

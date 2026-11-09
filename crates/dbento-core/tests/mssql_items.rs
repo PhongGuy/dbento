@@ -1,8 +1,7 @@
 //! A batch's result sets and row counts as script results, errors in order, GO counts and is_last.
-mod support;
 
+use crate::support::{Cell, collect, ms_off, run, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions, Writes};
-use support::{Cell, collect, ms_off, run, text};
 
 #[tokio::test]
 async fn each_result_set_and_row_count_is_a_result_with_the_batch_text() {

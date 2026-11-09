@@ -2,14 +2,14 @@
 //! accessibility tree only with both an element id and a role, so each must carry a role, and
 //! those the pilot reads by name must carry it. Test windows never activate
 //! accessibility, so the ids themselves are proven by the pilot's session test.
-mod support;
+use crate::support;
+use crate::support::opened;
 use dbento_app::definition_panel::DefinitionPanel;
 use dbento_app::explorer::{connection_a11y_id, connection_id};
 use dbento_app::query_tab::row_limit_label;
 use dbento_core::{Definition, ObjectRef, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Role};
-use support::opened;
 
 #[gpui_kit::test]
 fn the_pilot_ids_are_in_the_accessibility_tree(cx: &mut gpui_kit::TestAppContext) {

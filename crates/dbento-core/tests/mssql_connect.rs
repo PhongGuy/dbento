@@ -1,8 +1,7 @@
 //! Connecting to SQL Server with tls = "off": the server info, and USE or SET marking a session.
-mod support;
 
+use crate::support::{ms_off, run, text};
 use dbento_core::{Engine, Flavor, Limits, SessionOptions};
-use support::{ms_off, run, text};
 
 #[tokio::test]
 async fn off_connects_to_the_stock_certificate_and_reports_the_server() {

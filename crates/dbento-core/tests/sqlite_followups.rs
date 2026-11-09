@@ -1,6 +1,5 @@
-mod support;
+use crate::support::{run, sqlite_fixture, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
-use support::{run, sqlite_fixture, text};
 
 #[tokio::test]
 async fn a_failed_stream_ends_and_the_session_stays_usable() {

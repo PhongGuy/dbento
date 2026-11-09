@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::app::{start, window_options};
 use gpui_kit::TestAppContext;
 use gpui_kit::component::Theme;

@@ -1,12 +1,12 @@
-mod support;
+use crate::support;
 
+use crate::support::{label_of, present};
 use dbento_app::connection_dialog::{ConnectionForm, Field};
 use dbento_core::{
     AuthLevel, Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form,
 };
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
-use support::{label_of, present};
 
 fn open(
     cx: &mut TestAppContext,

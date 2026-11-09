@@ -1,11 +1,12 @@
 //! Saving a browse tab's staged edits: the open transaction, commit and its re-run, roll
 //! back, and rejected changes marked and kept.
-mod support;
+use crate::support::{
+    edit_target, exec, fixture, ready, value_of, wait_idle, wait_prompt, wait_real,
+};
 use dbento_app::staged::RowEdit;
 use dbento_app::tab_model::{SaveState, TabModel};
 use dbento_core::{CellRef, Change, EditBatch, EditValue, RowKey, render_sql};
 use gpui_kit::{Entity, TestAppContext};
-use support::{edit_target, exec, fixture, ready, value_of, wait_idle, wait_prompt, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c');";

@@ -1,7 +1,8 @@
 //! A failed statement fills the result body; Jump puts the caret on the error.
-mod support;
+use crate::support;
 use std::sync::Arc;
 
+use crate::support::{Opened, fixture, label_of, opened, present, spec, wait_real};
 use dbento_app::result_body::{ErrorView, code_label, error_copy_text, error_view, jump_target};
 use dbento_app::results::ResultStore;
 use dbento_app::runner::StatementEnd;
@@ -9,7 +10,6 @@ use dbento_app::tab_model::{StatementResult, TabModel, statement_source};
 use dbento_core::{Engine, ExecuteError};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{Opened, fixture, label_of, opened, present, spec, wait_real};
 
 fn model(cx: &mut TestAppContext, fx: &support::Fx) -> Entity<TabModel> {
     support::init_tokio(cx);

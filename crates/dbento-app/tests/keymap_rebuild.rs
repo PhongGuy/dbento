@@ -1,11 +1,11 @@
 //! keymap.json at startup and on Reload changes which keys run an action.
-mod support;
+use crate::support;
+use crate::support::{click_id, present};
 use dbento_app::app::start;
 use dbento_app::keymap::{self, OpenSettings};
 use dbento_app::user_keymap::KeymapProblem;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-use support::{click_id, present};
 
 fn press(cx: &mut TestAppContext, win: AnyWindowHandle, key: &str) {
     cx.update_window(win, |_, w, cx| {

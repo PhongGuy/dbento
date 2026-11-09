@@ -1,8 +1,7 @@
 //! MongoDB through the MCP tools: documents beside rows, the syntax code, approval of a
 //! write, and how the connection and the tools describe its language and level.
 #![cfg(feature = "mongodb")]
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_testkit::{MgUser, mongo_db};
 use serde_json::{Value, json};
 

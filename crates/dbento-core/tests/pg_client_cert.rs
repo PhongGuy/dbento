@@ -2,15 +2,13 @@
 //! certificate (`hostssl ... cert`): plain and encrypted keys connect, and a missing cert, a
 //! missing passphrase or a wrong one fails with an error that says which.
 
-mod support;
-
 use std::hash::{BuildHasher, RandomState};
 
+use crate::support::{run, text};
 use dbento_core::{ConnectError, Limits, Secret, SessionOptions, Workspace, connect};
 use dbento_testkit::{CERT_USER, ClientCert, PgDb};
 use pkcs8::der::pem::LineEnding;
 use pkcs8::pkcs5::pbes2;
-use support::{run, text};
 
 /// Random bytes from the std hasher's per-process keys; a test passphrase is never a literal.
 fn random_bytes<const N: usize>() -> [u8; N] {

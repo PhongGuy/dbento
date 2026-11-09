@@ -1,10 +1,10 @@
 //! Who signed in: the login's level and role, what that makes the session, and the existence
 //! pre-check that runs before any `use`.
-mod support;
+use crate::support;
 
+use crate::support::{run, sr_session, sr_try, text};
 use dbento_core::{ConnectError, ReadOnlyEnforcement, Session, SessionOptions};
 use dbento_testkit::{SURREAL_TAG, surreal_db, surreal_server};
-use support::{run, sr_session, sr_try, text};
 
 fn forced() -> SessionOptions {
     let mut opts = SessionOptions::default();

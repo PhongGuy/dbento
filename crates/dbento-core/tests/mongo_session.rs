@@ -1,14 +1,13 @@
 //! A MongoDB session's dispatch: what the engine lacks answers at once.
 #![cfg(feature = "mongodb")]
-mod support;
 
 use std::time::Duration;
 
+use crate::support::mg;
 use dbento_core::{
     DefinitionError, Engine, IntrospectError, ObjectRef, RelationRef, SessionOptions,
 };
 use dbento_testkit::MgUser::Reader;
-use support::mg;
 
 #[tokio::test]
 async fn what_the_engine_lacks_answers_as_unsupported_or_empty() {

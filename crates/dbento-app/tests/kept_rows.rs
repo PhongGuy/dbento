@@ -1,13 +1,12 @@
 //! A committed row the browse filter no longer matches stays listed, muted, until the next run.
-mod support;
+use crate::support::{
+    fixture, init_tokio, label_of, launched, pg_ready, ready, wait_idle, wait_prompt, wait_real,
+};
 use dbento_app::staged::GridRow;
 use dbento_app::staged::{KEPT_SHOWN, kept_label, kept_more};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{EditValue, RelationKind, RowKey};
 use gpui_kit::{Entity, TestAppContext};
-use support::{
-    fixture, init_tokio, label_of, launched, pg_ready, ready, wait_idle, wait_prompt, wait_real,
-};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, status TEXT); \
                  INSERT INTO t VALUES (1, 'pending'), (2, 'pending'), (3, 'pending'), (4, 'done');";

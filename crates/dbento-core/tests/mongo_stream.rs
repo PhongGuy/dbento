@@ -1,9 +1,10 @@
 //! Replies as rows, parked cursors and cancels.
 #![cfg(feature = "mongodb")]
-mod support;
+use crate::support;
 
 use std::time::{Duration, Instant};
 
+use crate::support::{code_of, cursors_back_to, failure, forced, mg, read, text};
 use bson::doc;
 use dbento_core::{
     CellRef, ExecuteError, ExtendError, Limits, OnTruncate, ResultStream, Session, SessionOptions,
@@ -13,7 +14,6 @@ use dbento_testkit::{
     MgDb,
     MgUser::{Reader, Writer},
 };
-use support::{code_of, cursors_back_to, failure, forced, mg, read, text};
 
 fn parked(rows: u64) -> Limits {
     let mut l = Limits::default();

@@ -1,10 +1,9 @@
 //! The header menu on browse and query grids.
-mod support;
+use crate::support::{Opened, fixture, label_of, launched, opened, present, ready, wait_real};
 use dbento_app::grid_menu::{GridTarget, MenuEntry, SectionKind, menu_sections};
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, TestAppContext};
-use support::{Opened, fixture, label_of, launched, opened, present, ready, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', NULL);";

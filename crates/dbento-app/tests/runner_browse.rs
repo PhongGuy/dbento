@@ -1,8 +1,8 @@
 //! The runner's Target command.
-mod support;
+use crate::support;
+use crate::support::{fixture, here, next_event, run_cmd, spec, until_event};
 use dbento_app::runner::{Command, Event, spawn_on};
 use dbento_core::RelationRef;
-use support::{fixture, here, next_event, run_cmd, spec, until_event};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn target_connects_and_describes_a_table() {

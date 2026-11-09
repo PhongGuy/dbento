@@ -1,10 +1,10 @@
 //! How staged edits look in the grid, and the edit tints in both themes.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, present, wait_real};
 use dbento_core::RelationKind;
 use gpui_kit::component::{ActiveTheme as _, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{Opened, label_of, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', 'y');";

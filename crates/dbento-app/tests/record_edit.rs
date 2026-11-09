@@ -1,10 +1,9 @@
 //! Editing a field in the record form: multi-line text, bytes as hex, cancel, implicit staging.
-mod support;
+use crate::support::{Opened, label_of, launched, opened, present, wait_real};
 use dbento_app::record_form::RecordForm;
 use dbento_core::{EditValue, RelationKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, note TEXT, pic BLOB); \
                  INSERT INTO t VALUES (1, 'b', 'two\nlines', x'01'), (2, 'a', NULL, NULL); \

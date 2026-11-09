@@ -1,7 +1,7 @@
 #![cfg(feature = "duckdb")]
-mod support;
+use crate::support;
+use crate::support::{Cell, duckdb_fixture, run, text};
 use dbento_core::{ConnectError, Engine, ExecuteError, Limits, SessionOptions};
-use support::{Cell, duckdb_fixture, run, text};
 
 #[tokio::test]
 async fn a_script_creates_inserts_and_selects() {

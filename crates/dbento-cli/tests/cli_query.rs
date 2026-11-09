@@ -1,5 +1,4 @@
-mod common;
-use common::{LITE_TOML, count, dbento, query_json, redact, sqlite_ws, write_tree};
+use crate::common::{LITE_TOML, count, dbento, query_json, redact, sqlite_ws, write_tree};
 
 const T: &str =
     "CREATE TABLE t(id INTEGER, note TEXT); INSERT INTO t VALUES (1, 'hello'), (2, NULL)";

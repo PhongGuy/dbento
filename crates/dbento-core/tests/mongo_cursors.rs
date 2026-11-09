@@ -1,16 +1,15 @@
 //! Cursors through a session: the column model, limits and the server cursor's end.
 #![cfg(feature = "mongodb")]
-mod support;
 
 use std::time::Duration;
 
+use crate::support::{Cell, code_of, cursors_back_to, failure, forced, mg, one, read, text};
 use bson::doc;
 use dbento_core::{CellRef, ExecuteError, Limits, OnTruncate, SessionOptions, TruncatedBy};
 use dbento_testkit::{
     MgDb,
     MgUser::{Reader, Root},
 };
-use support::{Cell, code_of, cursors_back_to, failure, forced, mg, one, read, text};
 
 fn cut(rows: Option<u64>, bytes: Option<u64>, on: OnTruncate) -> Limits {
     let mut l = Limits::default();

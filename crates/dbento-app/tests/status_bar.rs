@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
+use crate::support::{MANY, label_of, opened, present, wait_real};
 use dbento_app::results_pane::format_rows;
 use dbento_app::runner::Event;
 use dbento_app::status_bar::format_elapsed;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
 use std::time::Duration;
-use support::{MANY, label_of, opened, present, wait_real};
 
 #[test]
 fn elapsed_reads_naturally() {

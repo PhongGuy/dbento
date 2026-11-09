@@ -1,5 +1,5 @@
 //! The grid's context menu: right-click targets and what the items do.
-mod support;
+use crate::support::{Opened, label_of, launched, present};
 use dbento_app::keymap::{DELETE_ROW_KEYS, EDIT_CELL_KEYS, chip_keys};
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::staged::GridRow::Loaded;
@@ -11,7 +11,6 @@ use gpui_kit::{
     AppContext as _, Entity, InputEvent as _, MouseButton, MouseDownEvent, MouseUpEvent,
     TestAppContext, point, px,
 };
-use support::{Opened, label_of, launched, present};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', NULL); \

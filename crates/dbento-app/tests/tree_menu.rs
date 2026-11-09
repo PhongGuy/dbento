@@ -1,5 +1,5 @@
 //! The explorer's catalog rows: Enter to open, hints, and their own menus.
-mod support;
+use crate::support::{Opened, click_id, label_of, launched, present, wait_real};
 use dbento_app::explorer::part_id;
 use dbento_app::keymap::{EXPLORER_OPEN_KEYS, chip_keys};
 use dbento_app::keys::KeyItem;
@@ -9,7 +9,6 @@ use dbento_app::ui::Icons;
 use dbento_core::{Engine, KeyKind, KeyTtl, ObjectRef, RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, TestAppContext};
-use support::{Opened, click_id, label_of, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  INSERT INTO Album(Title) VALUES ('a'), ('b'), ('c'); \

@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::app::{AppPaths, SavedState, initial_workspace, start};
 use dbento_app::persist::{load_json, save_json};
 use gpui_kit::TestAppContext;

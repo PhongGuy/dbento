@@ -1,7 +1,7 @@
 #![cfg(feature = "duckdb")]
-mod support;
+use crate::support;
+use crate::support::{duckdb_fixture, run, text};
 use dbento_core::{ConnectError, ExecuteError, Limits, SessionOptions, Writes};
-use support::{duckdb_fixture, run, text};
 
 const SETUP: &str = "CREATE TABLE t(a INTEGER); INSERT INTO t VALUES (1)";
 

@@ -1,13 +1,13 @@
 //! Opening the Settings dialog from its key, the palette and the rail.
 
-mod support;
+use crate::support;
+use crate::support::{click_id, label_of, launched, palette_pick, present};
 use dbento_app::app::start;
 use dbento_app::keymap::{self, OpenSettings, SETTINGS_KEYS};
 use dbento_app::palette::{Mode, PaletteCommand};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Role, TestAppContext, px};
-use support::{click_id, label_of, launched, palette_pick, present};
 
 fn press(cx: &mut TestAppContext, win: AnyWindowHandle, key: &str) {
     cx.update_window(win, |_, w, cx| {

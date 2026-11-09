@@ -1,12 +1,11 @@
 //! Row and byte cuts on SQL Server: Drain, Close with Attention, Park and the drain cap.
-mod support;
 
 use std::time::{Duration, Instant};
 
+use crate::support::{MsFixture, collect, ms_off, ms_spid, ms_this_session, ms_until, run, text};
 use dbento_core::{
     ExecuteError, ExtendError, Limits, OnTruncate, ResultStream, SessionOptions, TruncatedBy,
 };
-use support::{MsFixture, collect, ms_off, ms_spid, ms_this_session, ms_until, run, text};
 
 const NUMS: &str = "SELECT TOP (1000) CAST(ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS int) AS n \
                     INTO dbo.nums FROM sys.all_objects a CROSS JOIN sys.all_objects b";

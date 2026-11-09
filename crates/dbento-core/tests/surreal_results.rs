@@ -1,10 +1,10 @@
 //! Results from units on a real server: one script result per statement index, frames ruling
 //! over the lexer, and the three kinds of statement failure.
-mod support;
+use crate::support;
 
+use crate::support::{Cell, run, sr_root, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions, Writes};
 use dbento_testkit::surreal_db;
-use support::{Cell, run, sr_root, text};
 
 fn null() -> Cell {
     Cell::Null

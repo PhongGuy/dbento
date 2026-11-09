@@ -1,5 +1,4 @@
-mod common;
-use common::{LONG, count, dbento, query_json, redact, sqlite_ws};
+use crate::common::{LONG, count, dbento, query_json, redact, sqlite_ws};
 use std::time::{Duration, Instant};
 
 const T: &str =

@@ -1,10 +1,9 @@
 //! Row operations on a browse tab's model: Set NULL and DEFAULT, add, duplicate, delete and
 //! revert rows.
-mod support;
+use crate::support::{browsing, fixture, ready, wait_real};
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::EditValue;
 use gpui_kit::TestAppContext;
-use support::{browsing, fixture, ready, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'anon', \
                  note TEXT, pic BLOB); \

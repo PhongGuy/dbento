@@ -1,9 +1,9 @@
 //! Scrolling pulls rows; Cancel stops a parked stream; the status bar shows the session.
-mod support;
+use crate::support;
+use crate::support::{LONG, MANY, label_of, opened, present, wait_real};
 use dbento_app::results_pane::summary;
 use dbento_app::runner::{Event, StatementEnd, StopReason};
 use gpui_kit::TestAppContext;
-use support::{LONG, MANY, label_of, opened, present, wait_real};
 
 fn rows(cx: &mut TestAppContext, o: &support::Opened) -> u64 {
     o.model(cx)

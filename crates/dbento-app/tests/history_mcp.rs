@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
 use std::time::{Duration, SystemTime};
 
+use crate::support::{label_of, present, wait_real};
 use dbento_app::app::{AppPaths, start};
 use dbento_core::{History, HistoryEntry, HistoryOutcome, HistorySource};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{label_of, present, wait_real};
 
 #[gpui_kit::test]
 fn mcp_rows_carry_an_mcp_tag_and_app_rows_do_not(cx: &mut TestAppContext) {

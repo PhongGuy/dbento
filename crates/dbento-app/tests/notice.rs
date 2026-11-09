@@ -1,12 +1,13 @@
 //! Notices: the kit's toast layer under the app root, and the commit notice.
-mod support;
 use std::time::Duration;
 
+use crate::support::{
+    TREE, label_of, launched, present, started, wait_idle, wait_prompt, wait_real,
+};
 use dbento_app::staged::{committed_text, pending_label};
 use dbento_app::ui::{Notice, NoticeKind, notice};
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{TREE, label_of, launched, present, started, wait_idle, wait_prompt, wait_real};
 
 fn hello() -> Notice {
     Notice {

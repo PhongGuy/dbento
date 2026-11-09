@@ -1,12 +1,11 @@
 //! The runner parks the last statement's stream and pulls it one batch per `Pull`.
-mod support;
+use crate::support::{MANY, fixture, here, next_event, quiet, run_cmd, spec, until_event};
 use dbento_app::results::ResultStore;
 use dbento_app::results_pane::summary;
 use dbento_app::runner::{Command, Event, RunnerTuning, StatementEnd, StopReason, spawn_tuned};
 use dbento_app::tab_model::StatementResult;
 use std::sync::Arc;
 use std::time::Duration;
-use support::{MANY, fixture, here, next_event, quiet, run_cmd, spec, until_event};
 
 fn tuned(idle_ms: u64) -> RunnerTuning {
     RunnerTuning {

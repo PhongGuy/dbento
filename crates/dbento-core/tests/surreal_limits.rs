@@ -1,14 +1,13 @@
 //! Row and byte limits: `Drain`, `Close` and `Park` for reads and for statements that may write,
 //! a dropped stream, and the drain bound.
-mod support;
 
 use std::time::{Duration, Instant};
 
+use crate::support::{collect, run, sr_root, text};
 use dbento_core::{
     Engine, ExecuteError, ExtendError, Limits, OnTruncate, SessionOptions, TruncatedBy,
 };
 use dbento_testkit::{SrDb, surreal_db};
-use support::{collect, run, sr_root, text};
 
 fn limits(max_rows: u64, on_truncate: OnTruncate) -> Limits {
     let mut limits = Limits::default();

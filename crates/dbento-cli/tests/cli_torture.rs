@@ -1,6 +1,5 @@
 // crates/dbento-cli/tests/cli_torture.rs
-mod common;
-use common::{count, dbento, query_json, redact, sqlite_ws};
+use crate::common::{count, dbento, query_json, redact, sqlite_ws};
 
 const FIXTURE: &str = include_str!("fixtures/sqlite_torture.sql");
 const TABLES: [&str; 15] = [

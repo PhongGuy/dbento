@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
 
+use crate::support::{click_id, fill, form, opened, present, wait_real};
 use dbento_app::connection_dialog::Field;
 use dbento_core::{SecretKey, SecretStore};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use std::sync::Arc;
-use support::{click_id, fill, form, opened, present, wait_real};
 
 fn store(cx: &mut TestAppContext, o: &support::Opened) -> Arc<dyn SecretStore> {
     o.shell.read_with(cx, |s, _| s.services().store.clone())

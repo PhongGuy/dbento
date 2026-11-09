@@ -1,11 +1,10 @@
 //! Enter in the record form: stages a one-line value, keeps newlines where text is long.
-mod support;
+use crate::support::{Opened, click_id, label_of, launched, present};
 use dbento_app::record_form::{edit_hint, enter_inserts_newline};
 use dbento_app::results_pane::ResultsPane;
 use dbento_core::{EditValue, RelationKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, present};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, doc JSON, x XML); \
                  INSERT INTO t VALUES (1, 'b', '{}', '<a/>'), (2, 'a', NULL, NULL);";

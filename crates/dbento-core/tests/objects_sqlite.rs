@@ -1,12 +1,12 @@
 //! SQLite schema objects: listings from pragmas and the stored CREATE text.
-mod support;
+use crate::support;
 
+use crate::support::{run, sqlite_fixture};
 use dbento_core::{
     ConstraintKind, DEFINITION_CAP, DefinitionError, IndexInfo, Limits, ObjectRef, RelationObjects,
     RelationRef, RoutineInfo, RoutineKind, SessionOptions, TriggerInfo, TriggerState, TypeInfo,
     TypeKind,
 };
-use support::{run, sqlite_fixture};
 
 fn read_only() -> SessionOptions {
     let mut opts = SessionOptions::default();

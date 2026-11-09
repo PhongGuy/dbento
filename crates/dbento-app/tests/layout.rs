@@ -1,11 +1,11 @@
-mod support;
+use crate::support;
+use crate::support::{label_of, opened, present, wait_real};
 use dbento_app::app::{AppPaths, MAX_RECENT, SavedState, WindowState, start, window_options_for};
 use dbento_app::persist::{load_json, save_json};
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext, WindowBounds, px, size};
 use std::path::{Path, PathBuf};
-use support::{label_of, opened, present, wait_real};
 
 fn saved(files: &Path) -> SavedState {
     load_json(&AppPaths::in_dir(files).state).value

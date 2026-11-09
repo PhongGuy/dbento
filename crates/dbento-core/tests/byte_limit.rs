@@ -1,7 +1,6 @@
 //! The byte bound: a result stops once the rows delivered hold the budget and another row exists.
-mod support;
+use crate::support::{pg_fixture, run, sqlite_fixture};
 use dbento_core::{ExecuteError, Limits, OnTruncate, Session, SessionOptions, TruncatedBy};
-use support::{pg_fixture, run, sqlite_fixture};
 
 /// 100 rows of exactly 100 bytes each.
 const LITE_HUNDREDS: &str = "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 100) SELECT printf('%0100d', x) FROM r";

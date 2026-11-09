@@ -1,10 +1,9 @@
 //! The Grid / Record toggle: one row as a Name / Value form, with row navigation.
-mod support;
+use crate::support::{Opened, label_of, launched, opened, present};
 use dbento_app::results_pane::{ResultView, ResultsPane};
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
-use support::{Opened, label_of, launched, opened, present};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \

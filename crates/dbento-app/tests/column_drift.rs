@@ -1,15 +1,17 @@
 //! A table whose columns change between a browse and its continuation or conflict reload is
 //! never mapped by position: the browse loads fresh, or, with edits staged, saving stops.
-mod support;
+use crate::support;
 use std::time::Duration;
 
+use crate::support::{
+    browsing, exec, fixture, init_tokio, ready, wait_idle, wait_real, wait_unlocked,
+};
 use dbento_app::browse::BrowseEvent;
 use dbento_app::runner::RunnerTuning;
 use dbento_app::staged::GridRow;
 use dbento_app::tab_model::{COLUMNS_BLOCKED, COLUMNS_RELOADED, TabModel};
 use dbento_core::{EditValue, RelationRef};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{browsing, exec, fixture, init_tokio, ready, wait_idle, wait_real, wait_unlocked};
 
 const LITE: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, g INTEGER, v TEXT); \
     WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 2500) \

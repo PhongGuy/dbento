@@ -1,6 +1,6 @@
 //! The 1 MiB probe of the read-only SQL editor the definition dock is built on. Run it in
 //! the timing profile; its line goes to the cap probe note.
-mod support;
+use crate::support;
 use std::time::Instant;
 
 use dbento_app::confirm::sql_preview;

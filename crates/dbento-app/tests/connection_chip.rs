@@ -1,11 +1,11 @@
 //! The connection chip leads the query toolbar, and its picker switches the tab's connection.
-mod support;
+use crate::support;
+use crate::support::{LONG, Opened, fixture, label_of, launched, opened, present, wait_real};
 use dbento_app::query_tab::connection_chip_text;
 use dbento_app::tab_model::SwitchBlocked;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, TestAppContext};
-use support::{LONG, Opened, fixture, label_of, launched, opened, present, wait_real};
 
 const LITE: &str = "lite \u{b7} sqlite \u{b7} data/app.db";
 const NOPG: &str = "nopg \u{b7} postgres \u{b7} x";

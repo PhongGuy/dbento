@@ -1,5 +1,5 @@
 //! The results footer and status bar at the row cap: Fetch next, Fetch all, expiry and raise limit.
-mod support;
+use crate::support::{MANY, Opened, label_of, opened, present, wait_real};
 use dbento_app::results_pane::{
     expiry_note, fetch_next_label, group_digits, more_rows, raise_label, run_again_label,
 };
@@ -8,7 +8,6 @@ use dbento_app::status_bar::truncation_text;
 use dbento_app::tab_model::{CapView, Expiry, raise_target};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{MANY, Opened, label_of, opened, present, wait_real};
 
 fn parked(cx: &mut TestAppContext, o: &Opened) {
     parked_with(cx, o, MANY);

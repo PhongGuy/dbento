@@ -1,9 +1,9 @@
 //! The key browser's value pages, one kind at a time.
 #![cfg(feature = "redis")]
-mod support;
 
 use std::collections::BTreeSet;
 
+use crate::support::{Cell, forced, rd, read, text};
 use dbento_core::{
     CellRef, KeyBrowseError, KeyKind, KeyRead, KeyTtl, KeyValuePage, Session, SessionOptions,
 };
@@ -11,7 +11,6 @@ use dbento_testkit::{
     BIG_LEN, BIG_LIST_LEN, BIG_STRING_LEN, BINARY_KEY, BINARY_VALUE,
     RdUser::{Reader, Writer},
 };
-use support::{Cell, forced, rd, read, text};
 
 fn cells(p: &KeyValuePage) -> Vec<Vec<Cell>> {
     (0..p.batch.len())

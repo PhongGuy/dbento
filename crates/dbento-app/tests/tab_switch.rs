@@ -1,5 +1,6 @@
 //! Tab switching in recent order, jumping by number, and reordering by keys or drag.
-mod support;
+use crate::support;
+use crate::support::{Opened, opened, present};
 use dbento_app::app::start;
 use dbento_app::drafts::DRAFT_DEBOUNCE;
 use gpui_kit::test::TestWindowExt as _;
@@ -7,7 +8,6 @@ use gpui_kit::{
     AppContext as _, ElementId, EntityId, Focusable as _, InputEvent as _, Modifiers,
     ModifiersChangedEvent, TestAppContext,
 };
-use support::{Opened, opened, present};
 
 fn click(cx: &mut TestAppContext, o: &Opened, id: impl Into<ElementId>) {
     let id = id.into();

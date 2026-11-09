@@ -1,11 +1,13 @@
 //! The definition dock in the app: opened from the explorer, one dock at a time, Reload
 //! and Open in query tab.
-mod support;
+use crate::support;
+use crate::support::{
+    Opened, click_id, label_of, launched, open_connection_row, present, wait_real,
+};
 use dbento_app::explorer::part_id;
 use dbento_core::{ObjectRef, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, open_connection_row, present, wait_real};
 
 const OBJ: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                    CREATE INDEX album_title ON Album(Title);";

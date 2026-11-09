@@ -1,11 +1,10 @@
 //! Truncation policy, settling, reconnecting, and the panic path of the runner.
-mod support;
+use crate::support::{MANY, fixture, here, next_event, pg_spec, run_cmd, spec, until_event};
 use dbento_app::runner::{
     Command, Event, RunnerTuning, SessionSlot, StatementEnd, guarded, spawn_tuned,
 };
 use std::sync::Arc;
 use std::time::Duration;
-use support::{MANY, fixture, here, next_event, pg_spec, run_cmd, spec, until_event};
 
 const SLOW: &str = "SELECT repeat('x', 10000), pg_sleep(0.1) FROM generate_series(1, 300)";
 const DIV: &str = "SELECT 1 / (x - 3000) FROM generate_series(1, 5000) x";

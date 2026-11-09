@@ -1,10 +1,10 @@
 //! A query result sorts its loaded rows; a browse sets its server sort through the guard.
-mod support;
+use crate::support;
+use crate::support::{fixture, opened, ready, wait_real};
 use dbento_app::results::ResultStore;
 use dbento_app::tab_model::Discard;
 use dbento_core::{CellRef, Sort};
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{fixture, opened, ready, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT); \
                  INSERT INTO t VALUES (1, 'b', 'x'), (2, 'a', NULL);";

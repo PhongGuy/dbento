@@ -1,14 +1,13 @@
 //! The SQL Server catalog: schemas, relations and columns of the connection's database, with
 //! names compared as the database's collation compares them.
-mod support;
 
 use std::time::{Duration, Instant};
 
+use crate::support::{MsFixture, ms_fixture, ms_off, run, text};
 use dbento_core::{
     ColumnMeta, ExecuteError, IntrospectError, Limits, Relation, RelationKind, RelationRef,
     SessionOptions,
 };
-use support::{MsFixture, ms_fixture, ms_off, run, text};
 
 /// Runs each batch on a client of the fixture's database.
 async fn setup(fx: &MsFixture, batches: &[&str]) {

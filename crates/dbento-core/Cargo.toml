@@ -5,6 +5,7 @@ description = "UI-free core of Dbento: workspace format, secrets and SQL executi
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 mysql_async.workspace = true
@@ -82,3 +83,19 @@ keychain = [
 tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
 dbento-testkit = { path = "../dbento-testkit" }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+[[test]]
+name = "duckdb_stream_memory"
+path = "tests/duckdb_stream_memory.rs"
+
+[[test]]
+name = "mssql_thread"
+path = "tests/mssql_thread.rs"
+
+[[test]]
+name = "query_files"
+path = "tests/query_files.rs"

@@ -1,12 +1,11 @@
 //! Each known route out of the read-only wrapper, including a ROLLBACK over a COMMIT. Every
 //! attempt must leave the rows, the listener, the session's statement_timeout and the advisory
 //! locks as they were.
-mod support;
 use std::time::Duration;
 
+use crate::support::{PgFixture, Ran, pg_fixture, run, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
 use dbento_testkit::Listener;
-use support::{PgFixture, Ran, pg_fixture, run, text};
 
 const SETUP: &str = "CREATE TABLE t(a int); INSERT INTO t VALUES (1), (2); CREATE SEQUENCE s; \
     CREATE PROCEDURE p() LANGUAGE plpgsql AS $$ BEGIN COMMIT; DELETE FROM t; END $$";

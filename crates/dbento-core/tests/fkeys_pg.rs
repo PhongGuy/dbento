@@ -1,10 +1,9 @@
 //! Foreign keys in both directions on Postgres, partitions included.
-mod support;
+use crate::support::{PgFixture, pg_fixture, text};
 use dbento_core::{
     Browse, EditValue, Engine, FkDirection, ForeignKey, RelationRef, SessionOptions, browse_sql,
     key_filter,
 };
-use support::{PgFixture, pg_fixture, text};
 
 const SETUP: &str = r#"
 CREATE SCHEMA "Other";

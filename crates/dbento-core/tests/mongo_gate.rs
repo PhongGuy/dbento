@@ -1,10 +1,9 @@
 //! The script and the read-only gate: a refused statement never reaches the server.
 #![cfg(feature = "mongodb")]
-mod support;
 
+use crate::support::{failure, forced, mg, read, run};
 use dbento_core::{ExecuteError, Limits, ReadOnlyEnforcement, SessionOptions};
 use dbento_testkit::MgUser::{Reader, Writer};
-use support::{failure, forced, mg, read, run};
 
 const WRITES: [&str; 13] = [
     "db.many.insertOne({a: 1})",

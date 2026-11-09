@@ -1,11 +1,10 @@
-mod support;
+use crate::support::{click_id, label_of, opened, present, wait_real};
 use dbento_app::keymap::{PALETTE_KEYS, chip_keys};
 use dbento_app::theme::Appearance;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, Focusable as _, Pixels, TestAppContext, px, size,
 };
-use support::{click_id, label_of, opened, present, wait_real};
 
 fn at(cx: &mut TestAppContext, win: AnyWindowHandle, id: &'static str) -> Bounds<Pixels> {
     cx.update_window(win, |_, w, cx| {

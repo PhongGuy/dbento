@@ -1,8 +1,7 @@
 //! The server skeleton: list_connections, the fence, instructions and per-call workspace reads.
-mod common;
 use std::sync::Arc;
 
-use common::{TestServer, text, unfence};
+use crate::common::{TestServer, text, unfence};
 use dbento_core::MemoryStore;
 use dbento_mcp::{DbentoServer, McpError, McpOptions};
 use serde_json::{Value, json};

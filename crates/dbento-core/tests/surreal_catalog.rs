@@ -1,12 +1,12 @@
 //! The SurrealDB catalog on a real server: databases, tables and views, declared and
 //! inferred columns, indexes and events, at root, namespace and database level.
-mod support;
+use crate::support;
 
+use crate::support::{run, sr_root, sr_session, text};
 use dbento_core::{
     ColumnMeta, Limits, RelationKind, RelationRef, Session, SessionOptions, TriggerState,
 };
 use dbento_testkit::{SrDb, surreal_db};
-use support::{run, sr_root, sr_session, text};
 
 // The view is defined before the row so it holds it; the event after, so no `audit` table appears.
 const SETUP: &str = "DEFINE TABLE person SCHEMAFULL; \

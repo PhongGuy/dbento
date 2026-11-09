@@ -1,9 +1,12 @@
 //! DuckDB in the app: the schema tree, a query, a table opened as a plain query, the
 //! read-only refusal and the in-process mode conflict, on files the test builds.
 #![cfg(feature = "duckdb")]
-mod support;
+use crate::support;
 use std::sync::Arc;
 
+use crate::support::{
+    Fx, Opened, click_id, label_of, open_connection_row, present, services, wait_real,
+};
 use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::query_tab::{READ_ONLY_DUCKDB_TOOLTIP, read_only_tooltip};
 use dbento_app::result_body::{ErrorView, code_label};
@@ -11,7 +14,6 @@ use dbento_app::sidebar::{SidebarEvent, connection_tooltip};
 use dbento_core::{Engine, ObjectRef, RelationKind, RelationRef, Workspace};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-use support::{Fx, Opened, click_id, label_of, open_connection_row, present, services, wait_real};
 
 const SETUP: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, l INTEGER[]); \
                      INSERT INTO t VALUES (1, [1, 2]), (2, NULL);";

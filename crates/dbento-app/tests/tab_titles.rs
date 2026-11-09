@@ -1,14 +1,14 @@
 //! Tab titles: the connection is added when titles clash, production lines stay strong, labels persist.
-mod support;
+use crate::support;
 use std::path::Path;
 
+use crate::support::{label_of, launched, opened, present, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::drafts::{DRAFT_DEBOUNCE, Draft};
 use dbento_app::restore::plan_restore;
 use dbento_app::shell::{tab_labels, tab_line_strength};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
-use support::{label_of, launched, opened, present, wait_real};
 
 #[test]
 fn clashing_titles_name_their_connection() {

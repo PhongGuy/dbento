@@ -1,5 +1,6 @@
 //! The Keyboard section: the file path, Open, Reload, the problem list and the command list.
-mod support;
+use crate::support;
+use crate::support::{click_id, label_of, present};
 use dbento_app::app::start;
 use dbento_app::keymap::{self, FileOpener};
 use gpui_kit::test::TestWindowExt as _;
@@ -7,7 +8,6 @@ use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use support::{click_id, label_of, present};
 
 fn opened(
     cx: &mut TestAppContext,

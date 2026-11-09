@@ -1,10 +1,9 @@
 //! The drain cap, close with rows unread, and how 57014 is reported.
-mod support;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use crate::support::{PgFixture, collect, pg_fixture, run, text};
 use dbento_core::{ExecuteError, Limits, SessionOptions};
-use support::{PgFixture, collect, pg_fixture, run, text};
 
 /// About 30 s of 10 kB rows; each row is flushed as it is produced.
 const SLOW: &str = "SELECT repeat('x', 10000), pg_sleep(0.1) FROM generate_series(1, 300)";

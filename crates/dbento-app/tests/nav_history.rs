@@ -1,11 +1,10 @@
 //! Back and Forward walk a preview tab's hops: the pure history, the inspector's buttons and
 //! Alt+Left/Right from the grid and the inspector, never from an input.
-mod support;
+use crate::support::{Opened, click_id, launched, present, wait_real};
 use dbento_app::nav::{Hop, NavHistory};
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Focusable as _, TestAppContext};
-use support::{Opened, click_id, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \

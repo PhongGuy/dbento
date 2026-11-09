@@ -1,6 +1,5 @@
 //! The no-WHERE confirmation and the best-effort note on SQL Server, through `dbento query`.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{MS_SECRET_VAR, MsDb, mssql_db};
 
 const READER: &str = "CREATE USER dbento_reader WITHOUT LOGIN; \

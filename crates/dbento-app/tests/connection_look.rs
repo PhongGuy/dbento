@@ -1,5 +1,5 @@
 //! The connection dialog's choices, swatches, placeholders and Port width.
-mod support;
+use crate::support;
 use dbento_app::connection_dialog::{ConnectionForm, Field, placeholder};
 use dbento_app::ui::segment_colors;
 use dbento_core::{Engine, connection_form};

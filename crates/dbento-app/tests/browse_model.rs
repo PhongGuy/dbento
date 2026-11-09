@@ -1,14 +1,14 @@
 //! The tab model's browse state: target, filter, sort and why editing is blocked.
-mod support;
+use crate::support;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::support::{edit_target, fixture, init_tokio, spec, wait_real};
 use dbento_app::browse::{BrowseEvent, BrowseState, EditBlock};
 use dbento_app::runner::Event;
 use dbento_app::tab_model::TabModel;
 use dbento_core::{Browse, BrowseError, RelationRef};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{edit_target, fixture, init_tokio, spec, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c'); \

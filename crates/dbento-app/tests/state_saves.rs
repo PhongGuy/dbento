@@ -1,11 +1,11 @@
 //! The app state file: written off the UI turn, once per burst, and read only at start.
-mod support;
+use crate::support;
+use crate::support::{Started, TREE, present, started};
 use dbento_app::app::{AppPaths, SavedState, start};
 use dbento_app::explorer::part_id;
 use dbento_app::persist::{load_json, save_json};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
-use support::{Started, TREE, present, started};
 
 fn state(s: &Started) -> std::path::PathBuf {
     AppPaths::in_dir(s.files.path()).state

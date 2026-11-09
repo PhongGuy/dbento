@@ -1,6 +1,5 @@
 //! `dbento import beekeeper` on small synthetic data folders; the keychain is always disabled.
-mod common;
-use common::dbento;
+use crate::common::dbento;
 use serde_json::json;
 use std::path::Path;
 use std::process::Output;

@@ -1,9 +1,9 @@
 //! Connection state: merged from catalog and tab sessions, drawn on the row and in the bar.
-mod support;
+use crate::support;
+use crate::support::{TREE, click_id, label_of, launched, opened, present, started, wait_real};
 use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::link::LinkState::{Connected, Connecting, Failed, Idle};
 use gpui_kit::{AnyWindowHandle, TestAppContext};
-use support::{TREE, click_id, label_of, launched, opened, present, started, wait_real};
 
 fn status(cx: &mut TestAppContext, win: AnyWindowHandle, conn: &str) -> Option<String> {
     label_of(cx, win, part_id("connection-status", conn))

@@ -6,6 +6,7 @@ publish = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
@@ -18,3 +19,7 @@ tempfile.workspace = true
 xtask = { path = "../xtask" }
 dbento-testkit = { path = "../dbento-testkit" }
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

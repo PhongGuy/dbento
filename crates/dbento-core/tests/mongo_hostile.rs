@@ -1,10 +1,9 @@
 //! A hostile server: replies nested past the driver's wire bound are refused, not decoded.
 #![cfg(feature = "mongodb")]
-mod support;
 
+use crate::support::{code_of, failure, read};
 use bson::{RawDocument, RawDocumentBuf, Timestamp, rawdoc};
 use dbento_core::{Session, SessionOptions, Workspace, connect};
-use support::{code_of, failure, read};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 

@@ -1,8 +1,8 @@
 //! Closing the window, once a running statement's question is answered Close, cancels,
 //! closes the session, then closes; a second close is immediate.
-mod support;
+use crate::support;
+use crate::support::{LONG, opened, present, wait_real};
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
-use support::{LONG, opened, present, wait_real};
 
 fn session_label(cx: &mut TestAppContext, o: &support::Opened) -> Option<String> {
     use gpui_kit::test::TestWindowExt as _;

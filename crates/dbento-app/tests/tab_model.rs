@@ -1,10 +1,10 @@
-mod support;
+use crate::support;
+use crate::support::{LONG, fixture, init_tokio, spec, wait_real};
 use dbento_app::link::LinkState;
 use dbento_app::runner::{Event, SETTINGS_LOST, StatementEnd};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, ExecuteError};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{LONG, fixture, init_tokio, spec, wait_real};
 
 fn model(cx: &mut TestAppContext, fx: &support::Fx) -> Entity<TabModel> {
     init_tokio(cx);

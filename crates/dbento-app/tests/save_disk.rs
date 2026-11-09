@@ -1,11 +1,10 @@
 //! Saving a query tab whose file changed on disk since it was opened asks Reload, Overwrite
 //! or Cancel instead of writing over the change.
-mod support;
+use crate::support::{Opened, click_id, opened, palette_pick, palette_rows, present, wait_real};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use std::fs;
 use std::path::PathBuf;
-use support::{Opened, click_id, opened, palette_pick, palette_rows, present, wait_real};
 
 /// Opens `queries/lite/a.sql` holding `SELECT 1` in a new tab and returns its path.
 fn open_file(cx: &mut TestAppContext, o: &Opened) -> PathBuf {

@@ -1,11 +1,10 @@
 //! The MCP tools on SQL Server: what the read-only fence finds reaches the client as an error,
 //! writes and transaction control are refused, writes are filed with their unguarded kinds, and
 //! the timeout and a client cancel stop the batch on the server.
-mod common;
 
 use std::time::Duration;
 
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::{Decision, Unguarded};
 use dbento_testkit::{MsDb, mssql_db};
 use serde_json::{Value, json};

@@ -1,11 +1,10 @@
 //! A SQLite result parked at its row cap holds its statement on the worker until extended or dropped.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{MANY, run, sqlite_fixture, text};
 use dbento_core::{
     CellRef, ExtendError, Limits, OnTruncate, ResultStream, SessionOptions, TruncatedBy,
 };
-use support::{MANY, run, sqlite_fixture, text};
 
 const ENDLESS: &str =
     "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r) SELECT x FROM r";

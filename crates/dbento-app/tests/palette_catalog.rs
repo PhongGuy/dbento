@@ -1,12 +1,11 @@
 //! The palette loads catalogs only for connections already open, and on request.
-mod support;
+use crate::support::{Opened, launched, opened, palette_pick, palette_rows, present, wait_real};
 use dbento_app::catalog::CatalogQuery;
 use dbento_app::palette::Mode;
 use gpui_kit::component::IndexPath;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use gpui_kit::{Bounds, Pixels, Point, point, px};
-use support::{Opened, launched, opened, palette_pick, palette_rows, present, wait_real};
 
 const SETUP: &str = "CREATE TABLE orders(id INTEGER PRIMARY KEY);";
 

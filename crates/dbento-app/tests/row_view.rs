@@ -1,10 +1,9 @@
 //! The inspector is the one row view: its toggle sits in the result footer and Record is its
 //! expand mode, which takes the dock's place.
-mod support;
+use crate::support::{Opened, click_id, label_of, launched, opened, present};
 use dbento_app::results_pane::{ResultView, ResultsPane};
 use dbento_core::RelationKind;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, opened, present};
 
 const T: &str = "CREATE TABLE b(id INTEGER PRIMARY KEY, note TEXT); \
                  INSERT INTO b VALUES (1, 'n'), (2, 'm');";

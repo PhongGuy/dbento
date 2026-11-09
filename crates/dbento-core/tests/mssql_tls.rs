@@ -1,8 +1,7 @@
 //! TLS against the stock and the test-CA certificate, and login errors.
-mod support;
 
+use crate::support::{ms_fixture, ms_off, run, text};
 use dbento_core::{ConnectError, Limits, Secret, SessionOptions, connect};
-use support::{ms_fixture, ms_off, run, text};
 
 #[tokio::test]
 async fn verify_refuses_the_stock_v1_certificate_with_the_tls_hint() {

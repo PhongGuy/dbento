@@ -1,5 +1,7 @@
 //! The connection menu: its order, New query, Refresh schema, Disconnect and Duplicate.
-mod support;
+use crate::support::{
+    MANY, Opened, click_id, exec, form, label_of, launched, opened, present, wait_real,
+};
 use dbento_app::catalog::CatalogQuery;
 use dbento_app::connection_dialog::Field;
 use dbento_app::explorer::{connection_id, part_id};
@@ -7,7 +9,6 @@ use dbento_app::link::LinkState;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-use support::{MANY, Opened, click_id, exec, form, label_of, launched, opened, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

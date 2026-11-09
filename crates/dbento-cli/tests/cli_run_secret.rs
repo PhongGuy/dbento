@@ -1,5 +1,5 @@
-mod common;
-use common::{dbento, sqlite_ws};
+use crate::common;
+use crate::common::{dbento, sqlite_ws};
 
 fn json(out: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).unwrap()

@@ -1,8 +1,7 @@
 //! MongoDB through `dbento query` and `dbento run`: each row's document in JSON, the
 //! refusal reasons and syntax code, and the saved-file language check.
 #![cfg(feature = "mongodb")]
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{MG_SECRET_VAR, MgDb, MgUser, mongo_db};
 use serde_json::{Value, json};
 

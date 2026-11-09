@@ -1,9 +1,8 @@
 //! Connecting: the socket, the version floor, signin, and `ws` against `wss`.
-mod support;
 
+use crate::support::{sr_root, sr_try};
 use dbento_core::{ConnectError, Engine, Flavor, Session, SessionOptions};
 use dbento_testkit::{surreal_db, surreal_server, surreal_tls};
-use support::{sr_root, sr_try};
 
 fn open_message(e: Result<Session, ConnectError>) -> String {
     match e {

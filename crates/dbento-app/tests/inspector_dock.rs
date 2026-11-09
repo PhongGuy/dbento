@@ -1,12 +1,12 @@
 //! The row inspector's dock: one slot shared with history, a key, a saved flag, the header.
-mod support;
+use crate::support;
+use crate::support::{Opened, click_id, label_of, launched, opened, present};
 use dbento_app::app::{AppPaths, SavedState, start};
 use dbento_app::persist::{load_json, save_json};
 use dbento_app::results_pane::ResultsPane;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
-use support::{Opened, click_id, label_of, launched, opened, present};
 
 const T: &str = "CREATE TABLE b(id INTEGER PRIMARY KEY, note TEXT); \
                  INSERT INTO b VALUES (1, 'n'), (2, 'm');";

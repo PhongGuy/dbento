@@ -1,14 +1,13 @@
 //! One document per BSON type, from canonical Extended JSON through the server and back.
 #![cfg(feature = "mongodb")]
-mod support;
 
+use crate::support::{Cell, mg, read, text};
 use bson::doc;
 use dbento_core::{CellRef, Limits, ResultBatch, Session, SessionOptions};
 use dbento_testkit::{
     MgUser::{Reader, Writer},
     TORTURE,
 };
-use support::{Cell, mg, read, text};
 
 async fn batches(s: &mut Session, q: &str) -> Vec<ResultBatch> {
     let mut script = s.script(q);

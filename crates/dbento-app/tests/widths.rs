@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use dbento_app::grid::{
     MONO_ADVANCE, ResultsDelegate, column_width, column_width_at, fit_width_at,
 };

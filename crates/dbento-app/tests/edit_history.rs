@@ -1,9 +1,8 @@
 //! Undo and redo of a browse tab's staged edits, and saving inserted rows.
-mod support;
+use crate::support::{browsing, fixture, ready, wait_idle, wait_prompt, wait_real};
 use dbento_app::staged::GridRow::{Inserted, Loaded};
 use dbento_core::EditValue;
 use gpui_kit::TestAppContext;
-use support::{browsing, fixture, ready, wait_idle, wait_prompt, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'anon', \
                  note TEXT, pic BLOB); \

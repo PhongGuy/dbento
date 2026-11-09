@@ -1,10 +1,9 @@
 //! Cancel on SQL Server: Attention on the session's own connection stops the batch it was
 //! aimed at, and the session goes on reading its own results.
-mod support;
 use std::time::{Duration, Instant};
 
+use crate::support::{collect, ms_off, ms_spid, ms_until, run, text};
 use dbento_core::{CancelHandle, ExecuteError, Limits, SessionOptions};
-use support::{collect, ms_off, ms_spid, ms_until, run, text};
 
 const CUBE: &str = "SELECT a.object_id FROM sys.all_objects a CROSS JOIN sys.all_objects b \
                     CROSS JOIN sys.all_objects c";

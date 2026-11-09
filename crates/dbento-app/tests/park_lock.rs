@@ -1,15 +1,15 @@
 //! A commit to a SQLite file is not blocked by another tab's browse parked on that file.
-mod support;
+use crate::support;
 use std::time::Duration;
 
+use crate::support::{
+    Fx, browsing, fixture, init_tokio, spec, value_of, wait_idle, wait_prompt, wait_real,
+};
 use dbento_app::browse::BrowseEvent;
 use dbento_app::runner::{RunnerTuning, StatementEnd};
 use dbento_app::tab_model::{CapView, Continuation, Expiry, TabModel};
 use dbento_core::RelationRef;
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
-use support::{
-    Fx, browsing, fixture, init_tokio, spec, value_of, wait_idle, wait_prompt, wait_real,
-};
 
 const TABLES: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                       INSERT INTO t VALUES (1, 'b'), (2, 'a'), (3, 'c'); \

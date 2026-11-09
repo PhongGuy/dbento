@@ -1,10 +1,10 @@
 //! Segmented options driven by keys: Tab reaches the row, the arrows step the choice
 //! without wrapping, and Home and End jump to its ends.
-mod support;
+use crate::support;
 
+use crate::support::{Opened, click_id, form, opened};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, TestAppContext};
-use support::{Opened, click_id, form, opened};
 
 fn press(cx: &mut TestAppContext, win: AnyWindowHandle, key: &str) {
     cx.update_window(win, |_, w, cx| w.press(key, cx)).unwrap();

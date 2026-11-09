@@ -1,6 +1,6 @@
 //! `TestServer`: a `DbentoServer` on a temporary workspace, driven by an in-process rmcp
 //! client over a duplex pipe, so tests see exactly what an AI client sees.
-#![allow(dead_code)] // each test binary uses a different subset
+#![allow(dead_code)] // not every feature set uses every helper
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -1,10 +1,10 @@
 //! Closing a tab, switching workspaces or closing the window with staged edits asks first.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, launched, present, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
-use support::{Opened, label_of, launched, present, wait_real};
 
 const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
                  INSERT INTO t VALUES (1, 'b'), (2, 'a');";

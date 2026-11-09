@@ -1,8 +1,7 @@
 //! Inserted rows, Revert row and the undo history of the staged set.
-mod support;
+use crate::support::{edit_target, fixture};
 use dbento_app::staged::{EditHistory, GridRow, StagedEdits, UNDO_DEPTH, discard_title, grid_row};
 use dbento_core::{Change, ChangeOutcome, EditBatch, EditValue, RowKey};
-use support::{edit_target, fixture};
 
 fn key(id: &str) -> RowKey {
     RowKey::new(vec![("id".into(), EditValue::Text(id.into()))])

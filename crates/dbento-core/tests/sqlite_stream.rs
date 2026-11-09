@@ -1,8 +1,7 @@
-mod support;
 use std::time::Duration;
 
+use crate::support::{MANY, collect, run, sqlite_fixture, text};
 use dbento_core::{Limits, Pending, ResultStream, Script, Session, SessionOptions};
-use support::{MANY, collect, run, sqlite_fixture, text};
 
 /// Yields rows forever, so only a stopped worker lets the session be used again.
 const ENDLESS: &str =

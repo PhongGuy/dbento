@@ -1,6 +1,5 @@
 //! list_schemas, list_tables and describe_table on SQLite and Postgres, and connect failures.
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_testkit::pg_db;
 use serde_json::json;
 

@@ -1,7 +1,6 @@
 //! SurrealDB through `dbento query` and `dbento run`: units, the rolled-back note, the level
 //! and residual on stderr, the server warning and a saved `.surql` file.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{SrDb, surreal_db, surreal_server};
 use serde_json::{Value, json};
 

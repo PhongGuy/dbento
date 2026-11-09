@@ -1,9 +1,8 @@
 //! A Postgres result parked at its row cap resumes on `extend` without losing or repeating a row.
-mod support;
+use crate::support::{collect, pg_fixture, run, text};
 use dbento_core::{
     CellRef, ExtendError, Limits, OnTruncate, ResultStream, SessionOptions, TruncatedBy,
 };
-use support::{collect, pg_fixture, run, text};
 
 fn park(rows: u64) -> Limits {
     let mut l = Limits::default();

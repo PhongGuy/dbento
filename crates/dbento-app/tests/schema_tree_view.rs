@@ -1,9 +1,10 @@
 //! The explorer's schema tree: select on click, expand with the chevron, load, retry, and close
 //! sessions on quit.
-mod support;
+use crate::support;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::support::{Fx, fixture, init, init_tokio, label_of, present, services, wait_real};
 use dbento_app::app::start;
 use dbento_app::catalog::{CatalogQuery, CatalogReply};
 use dbento_app::explorer::{connection_id, part_id};
@@ -15,7 +16,6 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext, VisualTestContext,
 };
-use support::{Fx, fixture, init, init_tokio, label_of, present, services, wait_real};
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  CREATE VIEW Recent AS SELECT Title FROM Album; \

@@ -1,11 +1,10 @@
 //! Read-only SQL Server through a reader principal: the session impersonates it, so the
 //! database refuses writes whatever the batch does.
-mod support;
 
+use crate::support::{ms_fixture, ms_off, ms_reader, run, text};
 use dbento_core::{
     ConnectError, ExecuteError, Limits, ReadOnlyEnforcement, RelationRef, SessionOptions,
 };
-use support::{ms_fixture, ms_off, ms_reader, run, text};
 
 const T: &[&str] = &[
     "CREATE TABLE dbo.t (id int IDENTITY PRIMARY KEY, v nvarchar(20))",

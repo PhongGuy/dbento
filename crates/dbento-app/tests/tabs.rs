@@ -1,9 +1,9 @@
 //! Several query tabs: open-or-activate, new and close, and no edited SQL lost on the way.
-mod support;
+use crate::support;
+use crate::support::{Opened, label_of, opened, present, wait_real};
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, TestAppContext, VisualTestContext, px, size};
-use support::{Opened, label_of, opened, present, wait_real};
 
 fn click(cx: &mut TestAppContext, o: &Opened, id: impl Into<ElementId>) {
     let id = id.into();

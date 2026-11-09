@@ -1,9 +1,8 @@
 //! Each result column knows the table column it reads, and a session maps those back to a
 //! relation's column names: an alias resolves, a computed or foreign column does not.
-mod support;
+use crate::support::{my_fixtures, pg_fixture, sqlite_fixture};
 use dbento_core::{ColumnInfo, RelationRef, Session, SessionOptions, named_source_columns};
 use mysql_async::prelude::*;
-use support::{my_fixtures, pg_fixture, sqlite_fixture};
 
 const SQLITE_SETUP: &str = "CREATE TABLE t(a INTEGER, b TEXT); CREATE TABLE u(c INTEGER);
 INSERT INTO t VALUES (1, 'x'); INSERT INTO u VALUES (5);";
