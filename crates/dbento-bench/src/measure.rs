@@ -7,17 +7,46 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::path::Path;
 use std::process::Command;
 
-/// Reads the `VmHWM:` line of a `/proc/<pid>/status` text, in kB.
-pub fn parse_vm_hwm_kib(status: &str) -> Option<u64> {
-    let rest = status.lines().find_map(|l| l.strip_prefix("VmHWM:"))?;
-    rest.trim().strip_suffix("kB")?.trim().parse().ok()
+/// One reading of this process's memory from `/proc/<pid>/status`, in KiB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemReading {
+    /// The peak resident set so far (`VmHWM`).
+    pub hwm_kib: u64,
+    /// Resident pages backed by files or shared memory (`RssFile` plus `RssShmem`).
+    pub file_kib: u64,
+}
+
+impl MemReading {
+    /// Parses a status text; `None` when a needed line is missing or malformed.
+    pub fn parse(status: &str) -> Option<MemReading> {
+        let kib = |key: &str| -> Option<u64> {
+            let rest = status.lines().find_map(|l| l.strip_prefix(key))?;
+            rest.trim().strip_suffix("kB")?.trim().parse().ok()
+        };
+        Some(MemReading {
+            hwm_kib: kib("VmHWM:")?,
+            file_kib: kib("RssFile:")? + kib("RssShmem:")?,
+        })
+    }
+
+    /// Reads this process's memory now (Linux only).
+    pub fn now() -> Result<MemReading> {
+        let status =
+            std::fs::read_to_string("/proc/self/status").context("reading /proc/self/status")?;
+        MemReading::parse(&status).ok_or_else(|| anyhow!("no memory lines in /proc/self/status"))
+    }
+
+    /// How far the peak grew since `before`, in KiB, not counting file-backed pages mapped in
+    /// between: code run for the first time pages in the binary, which is not memory the work used.
+    pub fn grown_kib_since(&self, before: &MemReading) -> u64 {
+        let own = |m: &MemReading| m.hwm_kib.saturating_sub(m.file_kib);
+        own(self).saturating_sub(own(before))
+    }
 }
 
 /// The peak resident set of this process so far, in KiB (Linux only).
 pub fn vm_hwm_kib() -> Result<u64> {
-    let status =
-        std::fs::read_to_string("/proc/self/status").context("reading /proc/self/status")?;
-    parse_vm_hwm_kib(&status).ok_or_else(|| anyhow!("no VmHWM line in /proc/self/status"))
+    Ok(MemReading::now()?.hwm_kib)
 }
 
 /// The median of `samples`; an even count averages the middle pair. Panics on empty input.
@@ -124,11 +153,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vm_hwm_is_read_from_its_line() {
-        let status = "Name:\tx\nVmPeak:\t  9000 kB\nVmHWM:\t    4812 kB\nVmRSS:\t 4700 kB\n";
-        assert_eq!(parse_vm_hwm_kib(status), Some(4812));
-        assert_eq!(parse_vm_hwm_kib("VmRSS:\t1 kB\n"), None);
-        assert_eq!(parse_vm_hwm_kib("VmHWM:\tlots kB\n"), None);
+    fn a_reading_takes_the_peak_and_the_file_backed_pages() {
+        let status = "Name:\tx\nVmHWM:\t    4812 kB\nVmRSS:\t 4700 kB\nRssAnon:\t 1000 kB\n\
+                      RssFile:\t 3600 kB\nRssShmem:\t 100 kB\n";
+        assert_eq!(
+            MemReading::parse(status),
+            Some(MemReading {
+                hwm_kib: 4812,
+                file_kib: 3700
+            })
+        );
+        assert_eq!(MemReading::parse("VmRSS:\t1 kB\n"), None);
+        assert_eq!(
+            MemReading::parse("VmHWM:\tlots kB\nRssFile:\t1 kB\nRssShmem:\t0 kB\n"),
+            None
+        );
+        assert_eq!(MemReading::parse("VmHWM:\t9 kB\nRssShmem:\t0 kB\n"), None);
+    }
+
+    #[test]
+    fn growth_leaves_out_pages_mapped_from_files() {
+        let before = MemReading {
+            hwm_kib: 10_000,
+            file_kib: 8_000,
+        };
+        // 16 MiB of heap plus 600 KiB of code paged in on first use.
+        let after = MemReading {
+            hwm_kib: 10_000 + 16_384 + 600,
+            file_kib: 8_600,
+        };
+        assert_eq!(after.grown_kib_since(&before), 16_384);
+        // Code paged in under an older, higher peak is not negative growth.
+        let idle = MemReading {
+            hwm_kib: 10_000,
+            file_kib: 8_600,
+        };
+        assert_eq!(idle.grown_kib_since(&before), 0);
     }
 
     #[test]

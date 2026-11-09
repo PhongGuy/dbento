@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dbento_bench::cases::{Case, PgUrl, Targets, measure};
-use dbento_bench::measure::{Sample, run_child, sample_args, vm_hwm_kib};
+use dbento_bench::measure::{MemReading, Sample, run_child, sample_args};
 use dbento_bench::report::{Measure, check_rows, report, runs};
 use dbento_core::Engine;
 
@@ -54,14 +54,14 @@ fn main() {
 fn run_cmd(cmd: Cmd) -> Result<i32> {
     match cmd {
         Cmd::Probe { mib } => {
-            let before = vm_hwm_kib()?;
+            let before = MemReading::now()?;
             // Filled with 1s: a zeroed Vec is calloc'd and not resident until touched.
             let buf = std::hint::black_box(vec![1u8; mib << 20]);
-            let after = vm_hwm_kib()?;
+            let after = MemReading::now()?;
             std::hint::black_box(&buf);
             let s = Sample {
                 case: "probe".into(),
-                value: (after - before) as f64 / 1024.0,
+                value: after.grown_kib_since(&before) as f64 / 1024.0,
                 rows: 0,
             };
             println!("{}", s.to_line());
