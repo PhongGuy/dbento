@@ -248,6 +248,23 @@ fn the_step_buttons_change_a_size_within_its_range(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn up_and_down_step_a_focused_size(cx: &mut TestAppContext) {
+    let d = dialog(cx);
+    focus_size(cx, &d, FontTarget::Grid);
+    press(cx, &d, "up");
+    assert_eq!(get(cx, &d).grid_font.size, 13);
+    press(cx, &d, "down");
+    press(cx, &d, "down");
+    assert_eq!(
+        (
+            get(cx, &d).grid_font.size,
+            size_text(cx, &d, FontTarget::Grid)
+        ),
+        (11, "11".to_owned())
+    );
+}
+
+#[gpui_kit::test]
 fn typing_a_size_applies_and_is_not_rewritten_midway(cx: &mut TestAppContext) {
     let d = dialog(cx);
     focus_size(cx, &d, FontTarget::Ui);
