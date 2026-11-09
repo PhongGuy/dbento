@@ -176,7 +176,7 @@ optional = true
 default-features = false
 
 [dependencies.base64]
-version = "0.22"
+version = "0.23"
 
 [dependencies.bitflags]
 version = "2"
@@ -257,7 +257,7 @@ version = "0.4.17"
 optional = true
 
 [dependencies.macro_magic]
-version = "0.5.1"
+version = "0.6.0"
 
 [dependencies.md-5]
 version = "0.11.0"
@@ -411,7 +411,7 @@ version = "0.1.36"
 optional = true
 
 [dependencies.typed-builder]
-version = "0.22.0"
+version = "0.23.2"
 
 [dependencies.uuid]
 version = "1.1.2"
@@ -523,7 +523,7 @@ optional = true
 default-features = false
 
 [target."cfg(windows)".dependencies.windows-sys]
-version = "0.60"
+version = "0.61"
 features = [
     "Win32_Security_Authentication_Identity",
     "Win32_Security_Credentials",
