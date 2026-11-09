@@ -544,6 +544,7 @@ impl ResultsPane {
         self.record.update(cx, |f, cx| f.stage_open(window, cx));
         match view {
             ResultView::Record => {
+                self.close_grid_menu(window, cx);
                 let row = self.grid_row_selected(cx).unwrap_or(0);
                 let stmt = displayed(self.model.read(cx).results(), self.selected).unwrap_or(0);
                 self.record
@@ -1410,6 +1411,19 @@ impl ResultsPane {
         });
     }
 
+    /// Drops the grid menu, handing focus back to where it came from if the menu held it.
+    fn close_grid_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((menu, _, prior, _)) = self.grid_popup.take() else {
+            return;
+        };
+        let focus = menu.focus_handle(cx);
+        let held = focus.is_focused(window) || focus.contains_focused(window, cx);
+        if let Some(prior) = prior.filter(|_| held) {
+            window.focus(&prior, cx);
+        }
+        cx.notify();
+    }
+
     /// Builds the grid menu for the current target outside any pane borrow (the builder
     /// reads the pane) and shows it at `at`, restoring `prior` focus on a plain dismiss.
     fn show_grid_menu(
@@ -1745,6 +1759,11 @@ impl ResultsPane {
             let store = &m.results()[ix].store;
             (m.run_id(), ix, store.columns().len(), store.rows() > 0)
         });
+        // The menu acts on the run and result it opened over, so either changing closes it.
+        let result = |k: Option<(u64, usize, usize, bool)>| k.map(|(run, ix, ..)| (run, ix));
+        if result(key) != result(self.built) {
+            self.close_grid_menu(window, cx);
+        }
         if key != self.built {
             self.built = key;
             // The note belongs to the result it was raised on; a run or another result drops it.
@@ -1800,6 +1819,9 @@ impl ResultsPane {
                 .update(cx, |f, cx| f.show(stmt, row, window, cx));
         }
         self.sync_plan(window, cx);
+        if self.view() != ResultView::Grid {
+            self.close_grid_menu(window, cx);
+        }
         // A hop's mark waits for a later run's statement 0 to stop, then selects a lone row.
         let m = self.model.read(cx);
         let landed = self
