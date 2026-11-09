@@ -30,6 +30,9 @@ jobs:
           toolchain: beta
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # rust-cache keeps this tree's folders but strips its files, which breaks a libduckdb-sys rerun.
+      - name: Drop the cached DuckDB sources
+        run: rm -rf target/duckdb-sources
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -48,6 +51,9 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # rust-cache keeps this tree's folders but strips its files, which breaks a libduckdb-sys rerun.
+      - name: Drop the cached DuckDB sources
+        run: rm -rf target/duckdb-sources
       - name: Install build dependencies
         run: |
           sudo apt-get update

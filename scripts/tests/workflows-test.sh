@@ -85,6 +85,18 @@ test_ci_gate_timeout_and_pins() {
   pinned_uses_only "$CI"
 }
 
+# rust-cache strips the files out of target/duckdb-sources but keeps its folders, so every
+# restore must be followed by removing that tree before anything builds.
+test_every_cache_restore_drops_the_duckdb_sources() {
+  local file restores drops
+  for file in "$CI" "$WEEKLY"; do
+    restores=$(grep -c 'uses: Swatinem/rust-cache@' "$file")
+    drops=$(grep -A3 'uses: Swatinem/rust-cache@' "$file" | grep -cxF '        run: rm -rf target/duckdb-sources' || true)
+    [[ $restores -gt 0 && $restores == "$drops" ]] \
+      || fail "$(basename "$file"): $drops of $restores cache restores drop target/duckdb-sources"
+  done
+}
+
 # Tests need containers, so macOS runs clippy alone.
 test_ci_macos_runs_locked_clippy() {
   grep -qxF '    runs-on: macos-latest' "$CI" || fail "no macos-latest job"
