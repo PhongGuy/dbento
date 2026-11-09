@@ -1,6 +1,5 @@
 //! The Beekeeper fixture through the binary: report snapshot, rerun, and running the imports.
-mod common;
-use common::dbento;
+use crate::common::dbento;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;

@@ -1,8 +1,7 @@
 //! Redis through `dbento query` and `dbento run`: a value prints, a flush is refused by its
 //! reason, a best-effort session names the reader ACL, and saved files keep their language.
 #![cfg(feature = "redis")]
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{RD_SECRET_VAR, RdUser, RedisDb, redis_db};
 use serde_json::{Value, json};
 

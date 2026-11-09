@@ -1,6 +1,5 @@
 //! Every query that reached the database is appended to the history, marked as MCP.
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::{History, HistoryEntry, HistoryFilter, HistoryOutcome, HistorySource};
 use serde_json::json;
 

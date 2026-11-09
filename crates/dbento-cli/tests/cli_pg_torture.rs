@@ -1,6 +1,5 @@
 //! The Postgres type-torture fixture, pinned as JSON on every matrix server.
-mod common;
-use common::{dbento, redact, write_tree};
+use crate::common::{dbento, redact, write_tree};
 use dbento_testkit::{PgDb, SECRET_VAR, matrix, pg_db};
 
 const FIXTURE: &str = include_str!("fixtures/pg_torture.sql");

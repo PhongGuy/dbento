@@ -1,7 +1,6 @@
 //! SurrealDB through the MCP tools: the one-statement gate, the read-only level and
 //! rolled_back on query results, and inferred columns.
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_testkit::surreal_db;
 use serde_json::json;
 

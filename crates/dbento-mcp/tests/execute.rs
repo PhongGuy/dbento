@@ -1,6 +1,5 @@
 //! `execute` refusals and approval requests on SQLite; nothing runs before an approval.
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::{Unguarded, Writes, approval_id};
 use serde_json::{Value, json};
 

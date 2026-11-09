@@ -1,8 +1,7 @@
 //! `execute` on Postgres: classification in a read-only session, then approval.
-mod common;
 use std::time::Duration;
 
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::{Decision, History, HistoryFilter, HistoryOutcome};
 use dbento_testkit::{PgDb, pg_db};
 use serde_json::json;

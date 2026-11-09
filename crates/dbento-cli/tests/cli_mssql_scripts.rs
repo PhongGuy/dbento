@@ -1,7 +1,6 @@
 //! SQL Server scripts through `dbento query`: every result of a batch, GO counts, the error
 //! number, and stop wording.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{MS_SECRET_VAR, MsDb, mssql_db};
 use serde_json::{Value, json};
 

@@ -1,10 +1,9 @@
 //! The MCP tools on MySQL and MariaDB: read-only by the database, transaction control refused,
 //! writes filed with their unguarded kinds, and the timeout and a client cancel stop the
 //! statement on the server.
-mod common;
 use std::time::Duration;
 
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::Unguarded;
 use dbento_testkit::{MyDb, my_matrix};
 use serde_json::{Value, json};

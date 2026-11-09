@@ -1,8 +1,7 @@
 //! Approved, denied and expired calls on SQLite, and what the history records.
-mod common;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::{Decision, History, HistoryFilter, HistoryOutcome, HistorySource};
 use serde_json::{Value, json};
 

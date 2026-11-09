@@ -1,6 +1,5 @@
 //! `dbento import dbeaver` on small synthetic projects; the keychain is always disabled.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use serde_json::json;
 use std::path::Path;
 use std::process::Output;

@@ -1,6 +1,5 @@
 //! The modern fixture through the binary: report snapshot, rerun, dry run, and running the imports.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;

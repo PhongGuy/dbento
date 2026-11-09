@@ -1,6 +1,5 @@
 #![cfg(unix)]
-mod common;
-use common::{LONG, count, sqlite_ws};
+use crate::common::{LONG, count, sqlite_ws};
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};

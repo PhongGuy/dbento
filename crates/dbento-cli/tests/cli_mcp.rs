@@ -1,9 +1,8 @@
 //! `dbento mcp`: the real binary over stdio, driven by an rmcp client as an AI host would.
-mod common;
 use std::path::Path;
 use std::time::Duration;
 
-use common::{LITE_TOML, dbento, sqlite_ws};
+use crate::common::{LITE_TOML, dbento, sqlite_ws};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::transport::TokioChildProcess;

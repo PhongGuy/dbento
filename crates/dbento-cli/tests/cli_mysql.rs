@@ -1,9 +1,8 @@
 //! `dbento query` and `dbento run` on MySQL and MariaDB: the statement timeout and Ctrl-C stop
 //! the statement on the server, and a drain past the cap is worded for MySQL.
-mod common;
 use std::time::{Duration, Instant};
 
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{MY_SECRET_VAR, MyDb, NUMS_SQL, my_matrix};
 
 /// What the CLI says when a cut-short MySQL statement that may write outlasts the drain cap.

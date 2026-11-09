@@ -1,6 +1,5 @@
 //! The MySQL type-torture fixture, pinned as JSON on every MySQL-family matrix server.
-mod common;
-use common::{dbento, redact, write_tree};
+use crate::common::{dbento, redact, write_tree};
 use dbento_testkit::{MY_SECRET_VAR, MyDb, MyFlavor, my_matrix};
 
 const FIXTURE: &str = include_str!("fixtures/mysql_torture.sql");

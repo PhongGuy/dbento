@@ -1,6 +1,5 @@
 //! The SQL Server type-torture fixture, loaded through `dbento run` and pinned as JSON.
-mod common;
-use common::{dbento, redact, write_tree};
+use crate::common::{dbento, redact, write_tree};
 use dbento_testkit::{MS_SECRET_VAR, MsDb, mssql_db};
 
 const FIXTURE: &str = include_str!("fixtures/mssql_torture.sql");

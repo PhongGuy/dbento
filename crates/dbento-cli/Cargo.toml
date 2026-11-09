@@ -5,6 +5,7 @@ description = "The dbento command line"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [[bin]]
 name = "dbento"
@@ -42,3 +43,7 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "process"] }
 # Not forwarded from [features]: `cargo install` drops dev-dependencies, so a feature naming one fails.
 dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb", "redis"] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

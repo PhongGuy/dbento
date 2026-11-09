@@ -1,8 +1,7 @@
 //! Redis through the MCP tools: the listing's language and level, the keyspace hint on the
 //! table tools, the category refusals on `query`, and a flush waiting on `execute`.
 #![cfg(feature = "redis")]
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_testkit::{RdUser, redis_db};
 use serde_json::{Value, json};
 

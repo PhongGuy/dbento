@@ -1,6 +1,5 @@
 //! Vendored Chinook answers the same questions on SQLite and on every matrix server.
-mod common;
-use common::{LITE_TOML, dbento, write_tree};
+use crate::common::{LITE_TOML, dbento, write_tree};
 use dbento_testkit::{SECRET_VAR, chinook_pg_sql, chinook_sqlite_sql, matrix};
 use serde_json::json;
 

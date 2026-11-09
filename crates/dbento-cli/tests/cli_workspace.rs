@@ -1,5 +1,4 @@
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 
 const TWO: &str = "dbento = 1\n[connections.prod]\nengine = \"postgres\"\nhost = \"db.example.com\"\ndatabase = \"app\"\nuser = \"app\"\nread_only = true\ncolor = \"red\"\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
 

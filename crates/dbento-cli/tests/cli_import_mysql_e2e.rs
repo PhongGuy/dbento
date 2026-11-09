@@ -1,6 +1,5 @@
 //! MySQL and MariaDB Beekeeper connections through the binary, with and without secrets.
-mod common;
-use common::dbento;
+use crate::common::dbento;
 use dbento_core::{Engine, Workspace};
 use serde_json::json;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,5 @@
 //! The query tool: one statement, read-only, row and byte bounds and cut cells.
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_testkit::pg_db;
 use serde_json::{Value, json};
 

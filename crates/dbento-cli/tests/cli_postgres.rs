@@ -1,6 +1,5 @@
 //! The CLI end to end on Postgres, one container per test.
-mod common;
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use dbento_testkit::{PgDb, SECRET_VAR, pg_db};
 
 fn workspace(db: &PgDb, files: &[(&str, &str)]) -> tempfile::TempDir {

@@ -1,8 +1,7 @@
 //! Saved queries: list and read the workspace's `queries/*.sql`, confined to that folder.
-mod common;
 use std::path::Path;
 
-use common::{TestServer, text, unfence};
+use crate::common::{TestServer, text, unfence};
 use dbento_testkit::pg_db;
 use serde_json::{Value, json};
 

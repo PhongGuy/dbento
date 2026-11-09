@@ -1,12 +1,11 @@
 //! `dbento query` against a DuckDB workspace, and what a second process sees while one
 //! process holds the file.
 #![cfg(feature = "duckdb")]
-mod common;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{dbento, write_tree};
+use crate::common::{dbento, write_tree};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

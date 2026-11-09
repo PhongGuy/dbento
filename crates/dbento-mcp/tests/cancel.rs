@@ -1,8 +1,7 @@
 //! Client cancellation and statement timeouts on Postgres.
-mod common;
 use std::time::{Duration, Instant};
 
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_core::{History, HistoryFilter, HistoryOutcome};
 use dbento_testkit::{PgDb, pg_db};
 use serde_json::json;

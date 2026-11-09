@@ -1,6 +1,5 @@
 //! The explain tool: a plan, never an execution, in the same read-only session as `query`.
-mod common;
-use common::TestServer;
+use crate::common::TestServer;
 use dbento_testkit::pg_db;
 use serde_json::{Value, json};
 
