@@ -5,4 +5,3 @@
 
 mod cases;
 mod exit_codes;
-mod method;
