@@ -19,23 +19,21 @@ use gpui_kit::{
 };
 use support::MANY;
 
-/// The results pane under a root that counts the wheel events reaching it, with an optional
-/// occluding cover on top (as a dialog or popover is) that counts the ones it receives.
+/// The results pane under a root, with an optional occluding cover on top (as a dialog or
+/// popover is) that counts the wheel events it receives.
 struct Probe {
     pane: Entity<ResultsPane>,
-    reached_root: Rc<Cell<u32>>,
     reached_cover: Rc<Cell<u32>>,
     covered: bool,
 }
 
 impl Render for Probe {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let (root, cover) = (self.reached_root.clone(), self.reached_cover.clone());
+        let cover = self.reached_cover.clone();
         div()
             .id("probe")
             .size_full()
             .relative()
-            .on_scroll(move |_, _, _| root.set(root.get() + 1))
             .child(self.pane.clone())
             .when(self.covered, |d| {
                 d.child(
@@ -71,7 +69,6 @@ fn grid(cx: &mut TestAppContext) -> Grid {
                 let pane = cx.new(|cx| ResultsPane::new(m, window, cx));
                 cx.new(|_| Probe {
                     pane,
-                    reached_root: Rc::default(),
                     reached_cover: Rc::default(),
                     covered: false,
                 })
@@ -137,6 +134,39 @@ fn wheel(cx: &mut TestAppContext, g: &Grid, delta: ScrollDelta) {
                 position: at,
                 delta,
                 ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        w.render_frame(cx);
+    })
+    .unwrap();
+}
+
+/// Whether the eased handler takes one wheel event over the hovered grid: taking a notch
+/// notifies the pane and asks for frames until it settles, so any notification counts.
+fn eased_takes(cx: &mut TestAppContext, g: &Grid, delta: ScrollDelta) -> bool {
+    hover(cx, g);
+    let pane = g.probe.read_with(cx, |p, _| p.pane.clone());
+    let notified = Rc::new(Cell::new(0u32));
+    let _sub = cx.update(|cx| {
+        let notified = notified.clone();
+        cx.observe(&pane, move |_, _| notified.set(notified.get() + 1))
+    });
+    wheel(cx, g, delta);
+    frames(cx, g, 20);
+    notified.get() > 0
+}
+
+/// The pointer over the grid's centre, drawn, so hover changes settle before a wheel event.
+fn hover(cx: &mut TestAppContext, g: &Grid) {
+    cx.update_window(g.win, |_, w, cx| {
+        let at = w.find("result-grid").bounds().center();
+        w.dispatch_event(
+            MouseMoveEvent {
+                position: at,
+                pressed_button: None,
+                modifiers: Default::default(),
             }
             .to_platform_input(),
             cx,
@@ -214,18 +244,22 @@ fn a_second_notch_mid_motion_retargets_without_a_jump(cx: &mut TestAppContext) {
     assert_eq!(offset(cx, &g), line * -6.0);
 }
 
+// The kit's scroll area keeps a notch at its own edge rather than hand it to the parent,
+// so these pin only the eased handler: at the edge it leaves the notch alone.
 #[gpui_kit::test]
-fn at_the_top_a_notch_up_reaches_the_parent(cx: &mut TestAppContext) {
+fn at_the_top_a_notch_up_is_left_to_the_kit(cx: &mut TestAppContext) {
     let g = grid(cx);
-    wheel(cx, &g, ScrollDelta::Lines(point(0., 3.)));
-    frames(cx, &g, 2);
+    let took = eased_takes(cx, &g, ScrollDelta::Lines(point(0., 3.)));
+    assert!(!took, "the eased handler took a notch up at the top");
     assert_eq!(offset(cx, &g), px(0.));
-    let reached = g.probe.read_with(cx, |p, _| p.reached_root.get());
-    assert_eq!(reached, 1);
+    assert!(
+        eased_takes(cx, &g, ScrollDelta::Lines(point(0., -3.))),
+        "a notch down from the top is the eased handler's"
+    );
 }
 
 #[gpui_kit::test]
-fn at_the_bottom_a_notch_down_reaches_the_parent(cx: &mut TestAppContext) {
+fn at_the_bottom_a_notch_down_is_left_to_the_kit(cx: &mut TestAppContext) {
     let g = grid(cx);
     let table = g
         .probe
@@ -234,11 +268,9 @@ fn at_the_bottom_a_notch_down_reaches_the_parent(cx: &mut TestAppContext) {
     frames(cx, &g, 3);
     let bottom = offset(cx, &g);
     assert!(bottom < px(-20_000.), "{bottom:?}");
-    notch_down(cx, &g);
-    frames(cx, &g, 2);
+    let took = eased_takes(cx, &g, ScrollDelta::Lines(point(0., -3.)));
+    assert!(!took, "the eased handler took a notch down at the bottom");
     assert_eq!(offset(cx, &g), bottom);
-    let reached = g.probe.read_with(cx, |p, _| p.reached_root.get());
-    assert_eq!(reached, 1);
 }
 
 #[gpui_kit::test]
