@@ -26,11 +26,14 @@ duckdb = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+aws-smithy-http-client = { workspace = true, optional = true }
 
 [features]
 duckdb = ["dep:duckdb"]
 mongodb = ["dep:mongodb", "dep:bson"]
 redis = ["dep:redis"]
+dynamodb = ["dep:aws-sdk-dynamodb", "dep:aws-smithy-http-client"]
 
 [[test]]
 name = "integration"

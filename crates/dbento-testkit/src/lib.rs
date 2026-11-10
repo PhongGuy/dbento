@@ -24,6 +24,8 @@ use tokio_postgres::{Client, Config, NoTls, config::Host};
 
 #[cfg(feature = "duckdb")]
 mod duck;
+#[cfg(feature = "dynamodb")]
+mod dynamo;
 #[cfg(feature = "mongodb")]
 mod mongo;
 mod mssql;
@@ -35,6 +37,8 @@ mod surreal;
 pub use self::redis::*;
 #[cfg(feature = "duckdb")]
 pub use duck::duckdb_file;
+#[cfg(feature = "dynamodb")]
+pub use dynamo::*;
 #[cfg(feature = "mongodb")]
 pub use mongo::*;
 pub use mssql::*;
