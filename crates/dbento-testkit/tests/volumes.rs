@@ -1,22 +1,27 @@
-//! Its own test binary, so no other test in the process starts a container meanwhile.
-use std::collections::BTreeSet;
-
+//! Its own test binary, so the container under test is the only one this process starts.
 use dbento_testkit::pg_container;
-
-// Asked of the engine testcontainers itself uses, so Docker on CI and podman locally both count.
-async fn volumes() -> BTreeSet<String> {
-    dbento_testkit::volumes().await.expect("listing volumes")
-}
 
 #[tokio::test]
 async fn a_test_container_creates_no_volume() {
-    let before = volumes().await;
     let db = pg_container().await;
-    // Checked while the container runs, so a run killed before drop leaves nothing either.
-    let running: Vec<_> = volumes().await.difference(&before).cloned().collect();
-    assert!(running.is_empty(), "new volumes while running: {running:?}");
+    let id = db
+        .container_id()
+        .expect("pg_container runs on a container")
+        .to_owned();
+    // Asked of the container itself while it runs, so another process's volumes never count
+    // and a run killed before drop leaves nothing either.
+    let mounts = dbento_testkit::mounts(&id)
+        .await
+        .expect("inspecting the container");
+    let named: Vec<String> = mounts.iter().filter_map(|m| m.name.clone()).collect();
+    let volumes: Vec<_> = mounts.iter().filter(|m| m.kind == "volume").collect();
+    assert!(
+        volumes.is_empty(),
+        "volume mounts while running: {volumes:?}"
+    );
     assert_eq!(db.scalar("SELECT 1").await.as_deref(), Some("1"));
     drop(db);
-    let after: Vec<_> = volumes().await.difference(&before).cloned().collect();
-    assert!(after.is_empty(), "new volumes after drop: {after:?}");
+    let all = dbento_testkit::volumes().await.expect("listing volumes");
+    let left: Vec<_> = named.iter().filter(|n| all.contains(*n)).collect();
+    assert!(left.is_empty(), "volumes left after drop: {left:?}");
 }

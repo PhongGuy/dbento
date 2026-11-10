@@ -11,7 +11,7 @@ use rcgen::{
 };
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::bollard::query_parameters::{
-    ListContainersOptions, ListVolumesOptions, RemoveContainerOptions,
+    InspectContainerOptions, ListContainersOptions, ListVolumesOptions, RemoveContainerOptions,
 };
 use testcontainers_modules::testcontainers::bollard::{API_DEFAULT_VERSION, Docker};
 use testcontainers_modules::testcontainers::{
@@ -70,6 +70,10 @@ impl PgDb {
     }
     pub fn database(&self) -> &str {
         &self.database
+    }
+    /// The engine's id of the container this database lives on, if it has one.
+    pub fn container_id(&self) -> Option<&str> {
+        self._container.as_ref().map(|c| c.id())
     }
 
     /// URL of the server's `postgres` database, not of this test database.
@@ -532,6 +536,34 @@ pub async fn volumes() -> Result<BTreeSet<String>, String> {
         .unwrap_or_default()
         .into_iter()
         .map(|v| v.name)
+        .collect())
+}
+
+/// One mount of a container, as the engine reports it.
+#[derive(Debug, Clone)]
+pub struct ContainerMount {
+    /// `volume`, `bind`, `tmpfs` and so on.
+    pub kind: String,
+    /// The volume's name, for a mount of kind `volume`.
+    pub name: Option<String>,
+    pub destination: Option<String>,
+}
+
+/// The mounts of the container with id `container`, from the engine's inspect.
+pub async fn mounts(container: &str) -> Result<Vec<ContainerMount>, String> {
+    let inspected = engine()?
+        .inspect_container(container, None::<InspectContainerOptions>)
+        .await
+        .map_err(|e| format!("cannot inspect container {container}: {e}"))?;
+    Ok(inspected
+        .mounts
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| ContainerMount {
+            kind: m.typ.map(|t| t.to_string()).unwrap_or_default(),
+            name: m.name,
+            destination: m.destination,
+        })
         .collect())
 }
 
