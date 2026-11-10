@@ -286,3 +286,22 @@ async fn a_listed_redis_query_can_be_read() {
         json!({"path": "queries/lite/user.redis", "connection": "lite", "sql": redis, "truncated": false})
     );
 }
+
+#[tokio::test]
+async fn a_listed_partiql_query_can_be_read() {
+    let server = TestServer::start(TWO).await;
+    let partiql = "SELECT * FROM \"orders\" WHERE pk = 'c1'\n";
+    put(server.root(), "queries/lite/orders.partiql", partiql);
+    let listed = server.ok("list_saved_queries", json!({})).await;
+    assert_eq!(
+        listed["queries"],
+        json!([{"path": "queries/lite/orders.partiql", "connection": "lite"}])
+    );
+    let r = server
+        .ok("read_saved_query", read("queries/lite/orders.partiql"))
+        .await;
+    assert_eq!(
+        r,
+        json!({"path": "queries/lite/orders.partiql", "connection": "lite", "sql": partiql, "truncated": false})
+    );
+}

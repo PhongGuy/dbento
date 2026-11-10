@@ -34,6 +34,7 @@ pub(crate) fn language_mismatch(file: &Path, engine: Engine) -> Option<String> {
         QueryLanguage::MongoShell,
         QueryLanguage::SurrealQl,
         QueryLanguage::RedisCommands,
+        QueryLanguage::PartiQl,
     ]
     .into_iter()
     .find(|l| l.file_extension() == ext)?;
@@ -70,5 +71,7 @@ mod tests {
         assert!(language_mismatch(Path::new("q.REDIS"), Engine::Redis).is_none());
         let e = language_mismatch(Path::new("q.sql"), Engine::Redis).unwrap();
         assert!(e.contains("Redis commands") && e.contains(".redis"), "{e}");
+        let e = language_mismatch(Path::new("q.PartiQL"), Engine::Postgres).unwrap();
+        assert!(e.contains("PartiQL") && e.contains(".partiql"), "{e}");
     }
 }

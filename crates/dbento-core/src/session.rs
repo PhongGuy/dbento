@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::Secret;
+use crate::capacity::CapacityUnits;
 #[cfg(feature = "duckdb")]
 use crate::duckdb::{DuckCancel, DuckDriver};
 use crate::explain::{ExplainOutput, ExplainRequest};
@@ -130,6 +131,9 @@ pub struct Outcome {
     /// The statement's changes did not persist: a transaction was rolled back around it.
     /// False on every engine but SurrealDB.
     pub rolled_back: bool,
+    /// Capacity units the statement consumed over the pages fetched so far; `None` on every
+    /// engine but DynamoDB.
+    pub consumed_capacity: Option<CapacityUnits>,
 }
 
 impl Outcome {
@@ -143,6 +147,7 @@ impl Outcome {
             truncated_by: None,
             extra_results: 0,
             rolled_back: false,
+            consumed_capacity: None,
         }
     }
 }
@@ -270,27 +275,32 @@ pub enum QueryLanguage {
     SurrealQl,
     /// One redis-cli command per line.
     RedisCommands,
+    /// DynamoDB's PartiQL dialect.
+    PartiQl,
 }
 
 impl QueryLanguage {
-    /// The name shells show for the language: "SQL", "MongoDB shell", "SurrealQL" or
-    /// "Redis commands".
+    /// The name shells show for the language: "SQL", "MongoDB shell", "SurrealQL", "Redis
+    /// commands" or "PartiQL".
     pub fn name(self) -> &'static str {
         match self {
             Self::Sql => "SQL",
             Self::MongoShell => "MongoDB shell",
             Self::SurrealQl => "SurrealQL",
             Self::RedisCommands => "Redis commands",
+            Self::PartiQl => "PartiQL",
         }
     }
 
-    /// The saved-query file extension, without the dot: "sql", "js", "surql" or "redis".
+    /// The saved-query file extension, without the dot: "sql", "js", "surql", "redis" or
+    /// "partiql".
     pub fn file_extension(self) -> &'static str {
         match self {
             Self::Sql => "sql",
             Self::MongoShell => "js",
             Self::SurrealQl => "surql",
             Self::RedisCommands => "redis",
+            Self::PartiQl => "partiql",
         }
     }
 }
@@ -315,6 +325,8 @@ pub enum Flavor {
     Redis,
     /// Valkey.
     Valkey,
+    /// Amazon DynamoDB.
+    DynamoDb,
 }
 
 /// The server a session is connected to, as its handshake reported it.
@@ -742,6 +754,9 @@ pub async fn connect(
         Engine::Redis => Err(ConnectError::Unsupported {
             reason: "Redis is not available in this build".to_owned(),
         }),
+        Engine::Dynamodb => Err(ConnectError::Unsupported {
+            reason: "DynamoDB is not available in this build".to_owned(),
+        }),
     }
 }
 
@@ -756,7 +771,7 @@ pub enum ReadOnlyEnforcement {
     /// SQL Server without read_only_user: Dbento's fence and refusals, with known holes; MongoDB
     /// with any other user, where Dbento refuses every statement it cannot prove reads; and
     /// SurrealDB's fence for root OWNER, EDITOR or anonymous, where stored code can reach what
-    /// the fence cannot undo.
+    /// the fence cannot undo; and DynamoDB, where only IAM, out of Dbento's sight, refuses writes.
     BestEffort,
 }
 
@@ -774,6 +789,13 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
             "Redis has no read-only session: the ACL check runs once at connect, so a later ACL \
              SETUSER, from this session or another, can widen the user mid-session. Dbento's own \
              refusals follow the command table it read at connect.",
+        ),
+        Engine::Dynamodb => Some(
+            "DynamoDB has no read-only session. Dbento sends only reads in a read-only session, \
+             but it cannot see IAM, so anyone holding these keys can still write with other \
+             tools. For a reader the server enforces, grant only dynamodb:ListTables, \
+             DescribeTable, Scan, Query, GetItem, BatchGetItem and dynamodb:PartiQLSelect, \
+             scoped to the tables.",
         ),
         Engine::Postgres
         | Engine::Sqlite

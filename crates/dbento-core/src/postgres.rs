@@ -1750,6 +1750,7 @@ fn outcome(
         truncated_by,
         extra_results,
         rolled_back: false,
+        consumed_capacity: None,
     }
 }
 

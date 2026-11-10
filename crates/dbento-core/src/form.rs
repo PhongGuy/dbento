@@ -59,6 +59,8 @@ pub enum FieldKind {
     Tls,
     /// A connection string; it never holds the password.
     Uri,
+    /// A true-or-false key, shown as a checkbox; absent means false.
+    Flag,
 }
 
 const MYSQL_READ_ONLY_HELP: &str = "Read-only blocks writes in each statement's transaction, \
@@ -118,6 +120,7 @@ pub fn connection_form(engine: Engine) -> ConnectionForm {
         Engine::Mongodb => mongodb_form(),
         Engine::Surrealdb => surrealdb_form(),
         Engine::Redis => redis_form(),
+        Engine::Dynamodb => dynamodb_form(),
     }
 }
 
@@ -300,6 +303,68 @@ fn redis_form() -> ConnectionForm {
             ),
         ],
         read_only_help: Some(REDIS_READ_ONLY_HELP),
+    }
+}
+
+const DYNAMODB_READ_ONLY_HELP: &str = "DynamoDB has no read-only session: Dbento sends only \
+     reads, but anyone holding these keys can write with other tools. For a reader IAM enforces, \
+     grant only dynamodb:ListTables, DescribeTable, Scan, Query, GetItem, BatchGetItem and \
+     dynamodb:PartiQLSelect, scoped to the tables.";
+
+/// DynamoDB's layout: every key is optional, since the AWS_* variables can supply the
+/// region and the credentials, and the endpoint only overrides the region's own.
+fn dynamodb_form() -> ConnectionForm {
+    let help = |mut f: FormField, text: &'static str| {
+        f.help = Some(text);
+        f
+    };
+    ConnectionForm {
+        sections: vec![
+            section(
+                "Connection",
+                vec![
+                    help(
+                        field("region", "Region", FieldKind::Text, "e.g. eu-west-1", false),
+                        "Leave empty to take it from AWS_REGION or AWS_DEFAULT_REGION.",
+                    ),
+                    help(
+                        field("endpoint", "Endpoint", FieldKind::Text, "optional", false),
+                        "Overrides the region's endpoint: https, or http only to this machine.",
+                    ),
+                ],
+            ),
+            section(
+                "Authentication",
+                vec![
+                    help(
+                        field(
+                            "access_key_id",
+                            "Access key ID",
+                            FieldKind::Text,
+                            "optional",
+                            false,
+                        ),
+                        "Leave empty to take AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and \
+                         AWS_SESSION_TOKEN from the environment.",
+                    ),
+                    field("secret", "Secret access key", FieldKind::Secret, "", false),
+                ],
+            ),
+            section(
+                "Options",
+                vec![help(
+                    field(
+                        "consistent_read",
+                        "Consistent reads",
+                        FieldKind::Flag,
+                        "",
+                        false,
+                    ),
+                    "Strongly consistent table reads cost double the capacity units.",
+                )],
+            ),
+        ],
+        read_only_help: Some(DYNAMODB_READ_ONLY_HELP),
     }
 }
 

@@ -1538,6 +1538,7 @@ async fn run_item(
         truncated_by: None,
         extra_results: 0,
         rolled_back: false,
+        consumed_capacity: None,
     };
     match lead {
         // A stopped send that yields no item was cut before its first.
@@ -1634,6 +1635,7 @@ fn truncated(rows: u64, by: TruncatedBy) -> Outcome {
         truncated_by: Some(by),
         extra_results: 0,
         rolled_back: false,
+        consumed_capacity: None,
     }
 }
 

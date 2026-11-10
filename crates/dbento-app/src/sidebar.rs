@@ -2043,7 +2043,7 @@ pub fn engine_icon(engine: Engine) -> IconName {
         Engine::Surrealdb => Icons::Layers,
         Engine::Mongodb => Icons::FileCode,
         Engine::Redis => Icons::Zap,
-        _ => Icons::Database,
+        Engine::Dynamodb | _ => Icons::Database,
     }
 }
 

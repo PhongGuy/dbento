@@ -89,6 +89,8 @@ pub use crate::redis::browse::{
 pub use crate::redis::catalog::{ArgDoc, CommandDoc};
 mod tsql;
 pub use ranges::{result_ranges, statement_count, statement_ranges};
+mod capacity;
+pub use capacity::CapacityUnits;
 mod session;
 mod split;
 mod surreal;
@@ -105,6 +107,7 @@ pub use source::single_source;
 pub use sources::named_source_columns;
 #[cfg(feature = "duckdb")]
 mod duckdb;
+mod dynamo;
 mod sqlite;
 
 mod rowedit;

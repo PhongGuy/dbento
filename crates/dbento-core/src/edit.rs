@@ -53,6 +53,14 @@ pub struct ConnectionSpec {
     pub namespace: Option<String>,
     /// `auth_level` (SurrealDB).
     pub auth_level: Option<AuthLevel>,
+    /// `region` (DynamoDB).
+    pub region: Option<String>,
+    /// `endpoint` (DynamoDB).
+    pub endpoint: Option<String>,
+    /// `access_key_id` (DynamoDB).
+    pub access_key_id: Option<String>,
+    /// `consistent_read` (DynamoDB).
+    pub consistent_read: Option<bool>,
 }
 
 impl ConnectionSpec {
@@ -78,11 +86,15 @@ impl ConnectionSpec {
             uri: None,
             namespace: None,
             auth_level: None,
+            region: None,
+            endpoint: None,
+            access_key_id: None,
+            consistent_read: None,
         }
     }
 
     /// Every key in the order a new entry writes them, with its TOML value when present.
-    fn values(&self) -> [(&'static str, Option<Value>); 19] {
+    fn values(&self) -> [(&'static str, Option<Value>); 23] {
         let engine = self.engine.name();
         let tls = |t: &TlsMode| match t {
             TlsMode::Verify => "verify",
@@ -108,12 +120,16 @@ impl ConnectionSpec {
             ("namespace", text(&self.namespace)),
             ("user", text(&self.user)),
             ("auth_level", self.auth_level.map(|l| Value::from(l.name()))),
+            ("region", text(&self.region)),
+            ("endpoint", text(&self.endpoint)),
+            ("access_key_id", text(&self.access_key_id)),
             ("secret", self.secret.as_ref().map(secret)),
             ("tls", self.tls.as_ref().map(|t| Value::from(tls(t)))),
             ("tls_ca", text(&self.tls_ca)),
             ("tls_cert", text(&self.tls_cert)),
             ("tls_key", text(&self.tls_key)),
             ("read_only_user", text(&self.read_only_user)),
+            ("consistent_read", self.consistent_read.map(Value::from)),
             ("read_only", self.read_only.map(Value::from)),
             ("color", self.color.map(|c| Value::from(color_word(c)))),
             (

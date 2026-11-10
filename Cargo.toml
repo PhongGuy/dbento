@@ -43,6 +43,9 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 cbor4ii = { version = "=1.2.4", features = ["use_alloc", "half-f16"] }
 half = "=2.7.1"
 redis = { version = "=1.8.1", default-features = false, features = ["tokio-rustls-comp", "tls-rustls"] }
+aws-sdk-dynamodb = { version = "=1.138.0", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http-client = { version = "=1.5.2", default-features = false, features = ["rustls-ring"] }
+url = "2.5.8"
 sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }
 tokio-postgres-rustls = "0.14.0"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }

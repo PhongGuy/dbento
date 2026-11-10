@@ -47,6 +47,7 @@ impl RedisStream {
                 truncated_by: None,
                 extra_results: 0,
                 rolled_back: false,
+                consumed_capacity: None,
             },
         };
         stream.fill();

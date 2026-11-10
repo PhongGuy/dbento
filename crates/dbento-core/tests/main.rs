@@ -26,6 +26,8 @@ mod duckdb_engine;
 mod duckdb_exec;
 mod duckdb_limits;
 mod duckdb_read_only;
+mod dynamo_crate;
+mod dynamo_engine;
 mod edit;
 mod edit_apply;
 mod edit_folders;

@@ -211,6 +211,7 @@ impl Run {
             truncated_by: by,
             extra_results: 0,
             rolled_back: self.rolled_back(),
+            consumed_capacity: None,
         }
     }
 }
@@ -440,6 +441,7 @@ impl Served {
                         truncated_by: None,
                         extra_results: 0,
                         rolled_back: false,
+                        consumed_capacity: None,
                     };
                     out.send(Event::Done(done)).await;
                     After::Next
@@ -927,6 +929,7 @@ impl Served {
             truncated_by: None,
             extra_results: run.extra,
             rolled_back,
+            consumed_capacity: None,
         };
         out.send(Event::Done(done)).await;
         After::Next

@@ -1,7 +1,7 @@
 //! The connection form descriptor agrees with the dbento.toml parser for every engine.
 use dbento_core::{Engine, FieldKind, FormField, Workspace, connection_form};
 
-const ENGINES: [Engine; 8] = [
+const ENGINES: [Engine; 9] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -10,10 +10,11 @@ const ENGINES: [Engine; 8] = [
     Engine::Mongodb,
     Engine::Surrealdb,
     Engine::Redis,
+    Engine::Dynamodb,
 ];
 /// Engine-specific keys the parser knows; the TLS kind's file keys and `settings` are not
 /// form fields of their own.
-const SERVER_KEYS: [&str; 11] = [
+const SERVER_KEYS: [&str; 15] = [
     "path",
     "host",
     "port",
@@ -25,6 +26,10 @@ const SERVER_KEYS: [&str; 11] = [
     "uri",
     "namespace",
     "auth_level",
+    "region",
+    "endpoint",
+    "access_key_id",
+    "consistent_read",
 ];
 
 fn fields(engine: Engine) -> Vec<FormField> {
@@ -38,10 +43,13 @@ fn fields(engine: Engine) -> Vec<FormField> {
 fn line(key: &str, kind: Option<FieldKind>) -> String {
     let value = match (key, kind) {
         (_, Some(FieldKind::Port { default })) => default.to_string(),
+        (_, Some(FieldKind::Flag)) | ("consistent_read", _) => "true".to_owned(),
         ("port", _) => "1".to_owned(),
-        ("secret", _) => "\"none\"".to_owned(),
+        // An env secret is valid with a user or an access key, where "none" may not be.
+        ("secret", _) => "{ env = \"DBENTO_FORM_SECRET\" }".to_owned(),
         ("tls", _) => "\"off\"".to_owned(),
-        ("uri", _) => "\"mongodb://localhost/x\"".to_owned(),
+        ("uri", _) => "\"mongodb://u@localhost/x\"".to_owned(),
+        ("endpoint", _) => "\"http://127.0.0.1:5000\"".to_owned(),
         ("auth_level", _) => "\"root\"".to_owned(),
         ("database", _) => "\"0\"".to_owned(),
         _ => "\"x.db\"".to_owned(),
@@ -127,6 +135,7 @@ fn a_port_left_out_is_the_descriptor_default() {
             | FieldKind::Secret
             | FieldKind::Tls
             | FieldKind::Uri
+            | FieldKind::Flag
             | _ => None,
         });
         assert_eq!(default, Some(want), "{engine:?}");
@@ -306,4 +315,40 @@ fn the_redis_descriptor_pins_its_fields_sections_and_help() {
     assert!(pinned && !help.contains("@connection"), "{help}");
     let host = rd.iter().find(|f| f.key == "host").unwrap();
     assert_eq!(host.placeholder, "127.0.0.1");
+}
+
+#[test]
+fn the_dynamodb_descriptor_pins_its_fields_sections_and_help() {
+    let dy = fields(Engine::Dynamodb);
+    let keys: Vec<(&str, &str, bool, FieldKind)> = dy
+        .iter()
+        .map(|f| (f.key, f.label, f.required, f.kind))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("region", "Region", false, FieldKind::Text),
+            ("endpoint", "Endpoint", false, FieldKind::Text),
+            ("access_key_id", "Access key ID", false, FieldKind::Text),
+            ("secret", "Secret access key", false, FieldKind::Secret),
+            (
+                "consistent_read",
+                "Consistent reads",
+                false,
+                FieldKind::Flag
+            ),
+        ]
+    );
+    let form = connection_form(Engine::Dynamodb);
+    let titles: Vec<&str> = form.sections.iter().map(|s| s.title).collect();
+    assert_eq!(titles, ["Connection", "Authentication", "Options"]);
+    let ro = form.read_only_help.unwrap();
+    assert!(
+        ro.contains("IAM") && ro.contains("dynamodb:PartiQLSelect"),
+        "{ro}"
+    );
+    let help = |key: &str| dy.iter().find(|f| f.key == key).and_then(|f| f.help);
+    assert!(help("region").is_some_and(|h| h.contains("AWS_REGION")));
+    assert!(help("endpoint").is_some_and(|h| h.contains("https")));
+    assert!(help("access_key_id").is_some_and(|h| h.contains("AWS_ACCESS_KEY_ID")));
 }

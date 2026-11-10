@@ -2,8 +2,8 @@
 //! enforcement and saved shell queries.
 use crate::support::{run, sqlite_fixture};
 use dbento_core::{
-    Engine, ExecuteError, Flavor, Limits, QueryLanguage, ReadOnlyEnforcement, SessionOptions,
-    Unguarded, Workspace,
+    Engine, ExecuteError, Flavor, Limits, Outcome, QueryLanguage, ReadOnlyEnforcement,
+    SessionOptions, Unguarded, Workspace,
 };
 
 #[test]
@@ -262,6 +262,71 @@ fn redis_files_under_queries_are_saved_queries_in_redis_commands() {
             ),
             ("queries/lite/c.sql".to_owned(), QueryLanguage::Sql),
             ("queries/lite/d.surql".to_owned(), QueryLanguage::SurrealQl),
+        ]
+    );
+}
+
+#[test]
+fn partiql_is_a_query_language_and_dynamodb_a_flavor() {
+    let q = QueryLanguage::PartiQl;
+    assert_eq!((q.name(), q.file_extension()), ("PartiQL", "partiql"));
+    assert_ne!(Flavor::DynamoDb, Flavor::MongoDb);
+}
+
+#[tokio::test]
+async fn an_outcome_reports_no_capacity_on_an_existing_engine() {
+    let fx = sqlite_fixture("CREATE TABLE t(x)", "");
+    let mut s = fx.session(SessionOptions::default()).await;
+    let results = run(
+        &mut s,
+        "INSERT INTO t VALUES (1); SELECT x FROM t",
+        Limits::default(),
+    )
+    .await;
+    assert_eq!(results.len(), 2);
+    for r in results {
+        assert_eq!(r.unwrap().outcome.consumed_capacity, None);
+    }
+    let complete: Option<dbento_core::CapacityUnits> = Outcome::complete(3).consumed_capacity;
+    assert_eq!(complete, None);
+}
+
+#[test]
+fn partiql_files_under_queries_are_saved_queries_in_partiql() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n",
+    )
+    .unwrap();
+    let q = dir.path().join("queries");
+    std::fs::create_dir_all(q.join("lite")).unwrap();
+    for f in [
+        "lite/a.partiql",
+        "b.PARTIQL",
+        "lite/c.sql",
+        "lite/d.redis",
+        "e.pql",
+    ] {
+        std::fs::write(q.join(f), "x").unwrap();
+    }
+    let ws = Workspace::open(dir.path()).unwrap();
+    let listed: Vec<(String, QueryLanguage)> = ws
+        .saved_queries()
+        .unwrap()
+        .iter()
+        .map(|s| (s.path().to_string_lossy().replace('\\', "/"), s.language()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("queries/b.PARTIQL".to_owned(), QueryLanguage::PartiQl),
+            ("queries/lite/a.partiql".to_owned(), QueryLanguage::PartiQl),
+            ("queries/lite/c.sql".to_owned(), QueryLanguage::Sql),
+            (
+                "queries/lite/d.redis".to_owned(),
+                QueryLanguage::RedisCommands
+            ),
         ]
     );
 }
