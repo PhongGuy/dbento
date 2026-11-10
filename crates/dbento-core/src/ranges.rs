@@ -41,7 +41,13 @@ pub fn statement_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
 pub fn statement_count(engine: Engine, sql: &str) -> usize {
     match engine {
         Engine::Surrealdb => crate::surreal::units::statement_count(sql),
-        _ => statement_ranges(engine, sql).len(),
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis => statement_ranges(engine, sql).len(),
     }
 }
 
@@ -50,7 +56,13 @@ pub fn statement_count(engine: Engine, sql: &str) -> usize {
 pub fn result_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
     match engine {
         Engine::Surrealdb => crate::surreal::units::result_ranges(sql),
-        _ => statement_ranges(engine, sql),
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis => statement_ranges(engine, sql),
     }
 }
 
@@ -140,7 +152,12 @@ fn go_line(sql: &str, toks: &[TsqlToken], i: usize) -> Option<(usize, usize, u32
                 repeat = Some(n.and_then(Result::ok).filter(|&n| n >= 1)?);
             }
             TsqlKind::LineComment if !comment => comment = true,
-            _ => return None,
+            TsqlKind::Word
+            | TsqlKind::Str
+            | TsqlKind::Ident
+            | TsqlKind::LineComment
+            | TsqlKind::BlockComment
+            | TsqlKind::Punct => return None,
         }
     }
     Some((line, sql.len(), repeat.unwrap_or(1)))

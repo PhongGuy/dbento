@@ -228,6 +228,10 @@ mod server {
     }
 
     fn map<'a>(value: &'a Value, what: &str) -> Result<&'a [(Value, Value)], String> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         match value {
             Value::Map(pairs) => Ok(pairs),
             _ => Err(format!("{what}: a reply that is not a map")),

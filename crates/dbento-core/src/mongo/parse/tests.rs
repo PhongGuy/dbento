@@ -13,7 +13,7 @@ fn one(src: &str) -> MongoStatement {
 fn cmd(src: &str) -> (MongoMethod, Document) {
     match one(src).op {
         MongoOp::Method { method, command } => (method, command),
-        other => panic!("{src}: {other:?}"),
+        other @ (MongoOp::Use(_) | MongoOp::RunCommand(_)) => panic!("{src}: {other:?}"),
     }
 }
 

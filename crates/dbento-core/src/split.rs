@@ -37,6 +37,10 @@ pub(crate) fn split(sql: &str) -> Vec<Piece> {
     // inside one nests so its END is not taken for the body's.
     let (mut pieces, mut start, mut depth, mut blank) = (Vec::new(), 0usize, 0u32, true);
     for (i, &(token, end)) in code.iter().enumerate() {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Token has too many variants to list; the rest share one arm"
+        )]
         match token {
             Token::Ascii59 if depth == 0 => {
                 pieces.push(Piece {

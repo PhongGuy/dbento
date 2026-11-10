@@ -95,7 +95,15 @@ fn scan(toks: &[Tok]) -> Classification {
         match tok.kind {
             Kind::Punct('(' | '[' | '{') => depth += 1,
             Kind::Punct(')' | ']' | '}') => depth = depth.saturating_sub(1),
-            _ => {}
+            Kind::Ident { .. }
+            | Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script
+            | Kind::PathSep
+            | Kind::DotDot
+            | Kind::Punct(_) => {}
         }
         if define.is_some_and(|open| depth < open || (depth == open && tok.is_punct(';'))) {
             define = None;
@@ -298,7 +306,15 @@ fn target_end(toks: &[Tok], mut at: usize) -> usize {
             Kind::Punct(')' | ']' | '}') => depth -= 1,
             Kind::Punct(',' | ';') if depth == 0 => break,
             _ if depth == 0 && tok.is_any_word(&CLAUSE_WORDS) => break,
-            _ => {}
+            Kind::Ident { .. }
+            | Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script
+            | Kind::PathSep
+            | Kind::DotDot
+            | Kind::Punct(_) => {}
         }
         at += 1;
     }
@@ -318,7 +334,15 @@ fn has_own_where(toks: &[Tok], at: usize) -> bool {
             _ if depth > 0 || is_name(toks, i) => {}
             _ if tok.is_word("where") => return true,
             _ if tok.is_word("from") || is_verb(tok) => return false,
-            _ => {}
+            Kind::Ident { .. }
+            | Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script
+            | Kind::PathSep
+            | Kind::DotDot
+            | Kind::Punct(_) => {}
         }
     }
     false

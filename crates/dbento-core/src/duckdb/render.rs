@@ -104,6 +104,10 @@ impl Renderer {
             (L::Hugeint, DataType::Decimal128(38, 0)) => Some(Kind::Hugeint),
             (L::UHugeint, DataType::Decimal128(38, 0)) => Some(Kind::Uhugeint),
             (L::Varchar | L::Uuid, DataType::Utf8) => Some(Kind::Text),
+            #[allow(
+                clippy::wildcard_enum_match_arm,
+                reason = "DataType has too many variants to list; the rest share one arm"
+            )]
             (L::Enum, DataType::Dictionary(key, value)) if **value == DataType::Utf8 => match **key
             {
                 DataType::UInt8 => Some(Kind::Enum(EnumKey::U8)),
@@ -301,7 +305,33 @@ impl Renderer {
                 let member = u.child(u.type_id(row));
                 member.is_null(u.value_offset(row))
             }
-            _ => column.is_null(row),
+            Kind::Bool
+            | Kind::I8
+            | Kind::I16
+            | Kind::I32
+            | Kind::I64
+            | Kind::U8
+            | Kind::U16
+            | Kind::U32
+            | Kind::U64
+            | Kind::F32
+            | Kind::F64
+            | Kind::Decimal(_)
+            | Kind::Hugeint
+            | Kind::Uhugeint
+            | Kind::Text
+            | Kind::Enum(_)
+            | Kind::Blob
+            | Kind::Date
+            | Kind::Time
+            | Kind::Timestamp(..)
+            | Kind::Interval
+            | Kind::List(_)
+            | Kind::Array(_)
+            | Kind::Struct(..)
+            | Kind::Map(..)
+            | Kind::Bit
+            | Kind::Bignum => column.is_null(row),
         }
     }
 
@@ -418,7 +448,29 @@ impl Renderer {
                     None => out.push_str("NULL"),
                 }
             }
-            _ => match self.render(column, row, tmp)? {
+            Kind::Bool
+            | Kind::I8
+            | Kind::I16
+            | Kind::I32
+            | Kind::I64
+            | Kind::U8
+            | Kind::U16
+            | Kind::U32
+            | Kind::U64
+            | Kind::F32
+            | Kind::F64
+            | Kind::Decimal(_)
+            | Kind::Hugeint
+            | Kind::Uhugeint
+            | Kind::Text
+            | Kind::Enum(_)
+            | Kind::Blob
+            | Kind::Date
+            | Kind::Time
+            | Kind::Timestamp(..)
+            | Kind::Interval
+            | Kind::Bit
+            | Kind::Bignum => match self.render(column, row, tmp)? {
                 CellRef::Null => out.push_str("NULL"),
                 CellRef::Text(t) => out.push_str(t),
                 CellRef::Bytes(b) => blob_text(out, b),
@@ -446,6 +498,10 @@ fn nested_kind(logical: &LogicalTypeHandle, arrow: &DataType) -> Option<Kind> {
             let unnamed = members[0].0.is_empty();
             Kind::Struct(members, unnamed)
         }
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "DataType has too many variants to list; the rest share one arm"
+        )]
         (L::Map, DataType::Map(entries, _)) => match entries.data_type() {
             DataType::Struct(kv) if kv.len() == 2 => Kind::Map(
                 Box::new(child(0, kv[0].data_type())?),
@@ -686,6 +742,10 @@ fn interval(s: &mut String, months: i32, days: i32, micros: i64) {
 fn type_text(logical: &LogicalTypeHandle, arrow: Option<&DataType>) -> String {
     use LogicalTypeId as L;
     let child_arrow = |i: usize| -> Option<&DataType> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "DataType has too many variants to list; the rest share one arm"
+        )]
         match arrow? {
             DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
                 Some(f.data_type())
@@ -756,6 +816,10 @@ fn type_text(logical: &LogicalTypeHandle, arrow: Option<&DataType>) -> String {
         L::Map => {
             // Arrow carries a map as a list of key/value structs; DuckDB names neither.
             let entry = match arrow {
+                #[allow(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "DataType has too many variants to list; the rest share one arm"
+                )]
                 Some(DataType::Map(f, _)) => match f.data_type() {
                     DataType::Struct(kv) if kv.len() == 2 => {
                         Some((kv[0].data_type().clone(), kv[1].data_type().clone()))
@@ -795,7 +859,15 @@ fn type_text(logical: &LogicalTypeHandle, arrow: Option<&DataType>) -> String {
             out.push(')');
             out
         }
-        other => logical
+        other @ (L::Invalid
+        | L::Any
+        | L::SqlNull
+        | L::StringLiteral
+        | L::IntegerLiteral
+        | L::Geometry
+        | L::Variant
+        | L::Unsupported
+        | _) => logical
             .get_alias()
             .unwrap_or_else(|| format!("{other:?}").to_uppercase()),
     }

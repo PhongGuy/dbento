@@ -320,6 +320,10 @@ fn detail_text(v: Value) -> String {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>()
             .join(", "),
-        other => other.to_string(),
+        other @ (Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::Array(_)
+        | Value::Object(_)) => other.to_string(),
     }
 }

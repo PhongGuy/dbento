@@ -421,7 +421,10 @@ impl Driver for RedisSession {
                     ConnectError::Open { message } => ConnectError::Open {
                         message: format!("{target}: {message}"),
                     },
-                    other => other,
+                    other @ (ConnectError::NotFound { .. }
+                    | ConnectError::Tls { .. }
+                    | ConnectError::InvalidTimeout { .. }
+                    | ConnectError::Unsupported { .. }) => other,
                 })?;
             (Some(found.level), found.unprobeable)
         } else {
@@ -521,6 +524,10 @@ impl Driver for RedisSession {
         }
         // A write's integer is also its count, so `DEL` reads as rows affected beside its row.
         let writes = entry.is_some_and(|e| e.has_flag("write"));
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         let affected = match reply {
             Value::Int(n) if writes => u64::try_from(n).ok(),
             _ => None,
@@ -605,6 +612,10 @@ fn shape_failure(e: ShapeError) -> ExecuteError {
 
 /// `ServerInfo` from a `HELLO 3` reply: `server` names the flavor, `version` must be 7.0 or later.
 pub(crate) fn server_info(hello: &Value) -> Result<ServerInfo, String> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
     let field = |name: &str| match hello {
         Value::Map(pairs) => pairs
             .iter()
@@ -629,6 +640,10 @@ fn too_old(what: &str) -> String {
 }
 
 pub(super) fn text_of(value: &Value) -> Option<String> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
     match value {
         Value::BulkString(bytes) => String::from_utf8(bytes.clone()).ok(),
         Value::SimpleString(text) => Some(text.clone()),

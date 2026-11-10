@@ -377,7 +377,7 @@ async fn constraints(
         ConstraintKind::Unique => 1,
         ConstraintKind::ForeignKey => 2,
         ConstraintKind::Check => 3,
-        _ => 4,
+        ConstraintKind::Exclusion | ConstraintKind::Other => 4,
     };
     constraints.sort_by(|a, b| (rank(a.kind()), a.name()).cmp(&(rank(b.kind()), b.name())));
     Ok(constraints)
@@ -622,7 +622,9 @@ pub(crate) async fn definition(
             let text = format!("ALTER TABLE {schema}.{table} ADD CONSTRAINT {name} CHECK {check}");
             finish(Some(text), DEFINITION_CAP, true, object)
         }
-        _ => Err(unsupported()),
+        ObjectRef::Index { .. } | ObjectRef::Constraint { .. } | ObjectRef::Type { .. } => {
+            Err(unsupported())
+        }
     }
 }
 

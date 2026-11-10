@@ -65,7 +65,17 @@ pub(crate) fn cell(v: &Wire) -> Cell<'_> {
             rfc_3339(*secs, *nanos).unwrap_or_else(|| datetime_parts(*secs, *nanos)),
         )),
         Wire::Uuid(id) => Cell::Text(Cow::Owned(uuid_text(id))),
-        other => Cell::Text(Cow::Owned(surql_text(other))),
+        other @ (Wire::Bool(_)
+        | Wire::Float(_)
+        | Wire::Duration { .. }
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. }) => Cell::Text(Cow::Owned(surql_text(other))),
     }
 }
 
@@ -174,7 +184,25 @@ fn write_key(out: &mut String, key: &Wire) {
     match key {
         Wire::Text(name) => write_name(out, name),
         Wire::Range(ends) => write_range(out, &ends.0, &ends.1, write_key),
-        other => write_value(out, other),
+        other @ (Wire::None
+        | Wire::Null
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Int(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. }) => write_value(out, other),
     }
 }
 
@@ -234,7 +262,26 @@ fn write_coordinates(out: &mut String, items: &[Wire]) {
     out.push('[');
     write_list(out, items, |out, item| match item {
         Wire::Geometry { items, .. } => write_coordinates(out, items),
-        other => write_value(out, other),
+        other @ (Wire::None
+        | Wire::Null
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Int(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Text(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. }) => write_value(out, other),
     });
     out.push(']');
 }
@@ -265,7 +312,21 @@ fn write_diagnostic(out: &mut String, v: &Wire) {
             });
             out.push('}');
         }
-        other => write_value(out, other),
+        other @ (Wire::None
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Int(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }) => write_value(out, other),
     }
 }
 

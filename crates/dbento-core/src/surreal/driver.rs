@@ -66,7 +66,9 @@ impl SurrealDriver {
     ) -> Result<RelationObjects, IntrospectError> {
         match self.ask(Ask::Objects(rel.clone())).await? {
             Answer::Objects(objects) => Ok(objects),
-            _ => Err(wrong_answer("relation objects")),
+            Answer::Schemas(_) | Answer::Relations(_) | Answer::Columns(_) | Answer::Place(..) => {
+                Err(wrong_answer("relation objects"))
+            }
         }
     }
 
@@ -195,7 +197,7 @@ impl Driver for SurrealDriver {
                 let (tx, rx) = mpsc::unbounded_channel();
                 (Some(tx), Some(rx))
             }
-            _ => (None, None),
+            OnTruncate::Drain | OnTruncate::Close => (None, None),
         };
         let sent = script.ctl.send(Ctl::Execute {
             reply,
@@ -263,21 +265,27 @@ impl Driver for SurrealDriver {
     async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, IntrospectError> {
         match self.ask(Ask::Schemas).await? {
             Answer::Schemas(schemas) => Ok(schemas),
-            _ => Err(wrong_answer("schemas")),
+            Answer::Relations(_) | Answer::Columns(_) | Answer::Objects(_) | Answer::Place(..) => {
+                Err(wrong_answer("schemas"))
+            }
         }
     }
 
     async fn relations(&mut self, schema: &str) -> Result<RelationList, IntrospectError> {
         match self.ask(Ask::Relations(schema.to_owned())).await? {
             Answer::Relations(relations) => Ok(relations),
-            _ => Err(wrong_answer("relations")),
+            Answer::Schemas(_) | Answer::Columns(_) | Answer::Objects(_) | Answer::Place(..) => {
+                Err(wrong_answer("relations"))
+            }
         }
     }
 
     async fn columns(&mut self, rel: &RelationRef) -> Result<Vec<ColumnMeta>, IntrospectError> {
         match self.ask(Ask::Columns(rel.clone())).await? {
             Answer::Columns(columns) => Ok(columns),
-            _ => Err(wrong_answer("columns")),
+            Answer::Schemas(_) | Answer::Relations(_) | Answer::Objects(_) | Answer::Place(..) => {
+                Err(wrong_answer("columns"))
+            }
         }
     }
 

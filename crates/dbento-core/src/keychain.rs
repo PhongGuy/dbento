@@ -90,13 +90,29 @@ fn map_error(error: Error) -> SecretError {
         Error::BadEncoding(_) => "the stored value is not UTF-8".to_owned(),
         Error::BadDataFormat(..) => "the stored value is malformed".to_owned(),
         Error::Ambiguous(items) => format!("{} entries match", items.len()),
-        other => other.to_string(),
+        other @ (Error::PlatformFailure(_)
+        | Error::NoStorageAccess(_)
+        | Error::NoEntry
+        | Error::BadStoreFormat(_)
+        | Error::TooLong(..)
+        | Error::Invalid(..)
+        | Error::NoDefaultStore
+        | Error::NotSupportedByStore(_)
+        | _) => other.to_string(),
     };
     match error {
         Error::NoStorageAccess(_) | Error::PlatformFailure(_) | Error::NoDefaultStore => {
             SecretError::Unavailable { message }
         }
-        _ => SecretError::Failed { message },
+        Error::NoEntry
+        | Error::BadEncoding(_)
+        | Error::BadDataFormat(..)
+        | Error::BadStoreFormat(_)
+        | Error::TooLong(..)
+        | Error::Invalid(..)
+        | Error::Ambiguous(_)
+        | Error::NotSupportedByStore(_)
+        | _ => SecretError::Failed { message },
     }
 }
 

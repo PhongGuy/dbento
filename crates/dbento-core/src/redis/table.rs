@@ -137,6 +137,10 @@ impl CommandTable {
 
 /// An Array or a Set, either of which a server may send for a list.
 fn list<'a>(value: &'a Value, what: &str) -> Result<&'a [Value], TableError> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
     match value {
         Value::Array(items) | Value::Set(items) => Ok(items),
         _ => Err(TableError(format!("{what} is not a list"))),
@@ -145,6 +149,10 @@ fn list<'a>(value: &'a Value, what: &str) -> Result<&'a [Value], TableError> {
 
 /// A simple or bulk string, as UTF-8.
 fn text(value: &Value, what: &str) -> Result<String, TableError> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
     match value {
         Value::SimpleString(s) => Ok(s.clone()),
         Value::BulkString(b) => {

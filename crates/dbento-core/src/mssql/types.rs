@@ -103,6 +103,10 @@ pub(crate) fn wire_type(ty: &TypeInfo, user_type: u32) -> Option<(String, bool)>
                 _ => return None,
             }
         }
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "VarLenType has too many variants to list; the rest share one arm"
+        )]
         TypeInfo::VarLenSizedPrecision {
             ty,
             precision,

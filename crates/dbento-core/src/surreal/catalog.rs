@@ -59,7 +59,26 @@ pub(crate) fn statement(reply: &Wire, at: usize) -> Result<Statement<'_>, Intros
     let mut error = WireError::of(one);
     error.message = match result {
         Wire::Text(message) => message.clone(),
-        other => super::cell::surql_text(other),
+        other @ (Wire::None
+        | Wire::Null
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Int(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. }) => super::cell::surql_text(other),
     };
     Ok(Statement::Err(error))
 }
@@ -175,7 +194,26 @@ pub(crate) fn relation_objects(
             .iter()
             .map(|col| match col {
                 Wire::Text(col) => Ok(col.clone()),
-                _ => Err(changed(INFO_TABLE, "cols", "a list of text")),
+                Wire::None
+                | Wire::Null
+                | Wire::Undefined
+                | Wire::Bool(_)
+                | Wire::Int(_)
+                | Wire::Float(_)
+                | Wire::Decimal(_)
+                | Wire::Bytes(_)
+                | Wire::Datetime { .. }
+                | Wire::Duration { .. }
+                | Wire::Uuid(_)
+                | Wire::Table(_)
+                | Wire::Record { .. }
+                | Wire::Range(_)
+                | Wire::Geometry { .. }
+                | Wire::Set(_)
+                | Wire::File { .. }
+                | Wire::Array(_)
+                | Wire::Object(_)
+                | Wire::Unknown { .. } => Err(changed(INFO_TABLE, "cols", "a list of text")),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let kind = text_of(entry, "index", INFO_TABLE)?;

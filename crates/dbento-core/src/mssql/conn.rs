@@ -227,6 +227,10 @@ async fn become_reader(
     let failed = |why: &dyn Display| ConnectError::Open {
         message: format!("{target}: read_only_user {name:?}: {why}"),
     };
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Error has too many variants to list; the rest share one arm"
+    )]
     let refused = |e: Error| match &e {
         Error::Server(t) => failed(&format_args!("{} ({})", t.message(), t.code())),
         other => failed(other),
@@ -308,7 +312,7 @@ async fn serve(client: MsClient, session: &Thread, mut requests: mpsc::Unbounded
                 while let Some(msg) = ctl.recv().await {
                     let e = match msg {
                         Ctl::Next { .. } => owed.take(),
-                        _ => None,
+                        Ctl::IsLast { .. } | Ctl::Execute { .. } => None,
                     };
                     msg.reject(e.unwrap_or(ExecuteError::SessionClosed));
                 }
@@ -472,11 +476,23 @@ impl Owed {
     /// will not say itself.
     fn keep(&mut self, e: ExecuteError) {
         self.send_failed = true;
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "closes_session decides which errors close, so its guard arm stays general"
+        )]
         match e {
             ExecuteError::SessionClosed => {}
             e @ ExecuteError::ReadOnlyViolation { .. } => self.statement = Some(e),
             e if e.closes_session() => drop(self.closing.get_or_insert(e)),
-            e => drop(self.statement.get_or_insert(e)),
+            e @ (ExecuteError::Database { .. }
+            | ExecuteError::Timeout
+            | ExecuteError::Cancelled
+            | ExecuteError::Unsupported { .. }
+            | ExecuteError::TransactionControl { .. }
+            | ExecuteError::StoppedAtDrainCap
+            | ExecuteError::Syntax { .. }
+            | ExecuteError::ResultExpired
+            | ExecuteError::SessionEnded { .. }) => drop(self.statement.get_or_insert(e)),
         }
     }
 
@@ -921,7 +937,7 @@ async fn close_fence(
                 message: UNCONFIRMED_CUT.to_owned(),
             }));
         }
-        _ => (client.transaction_descriptor(), true),
+        After::Next(_) | After::Ended | After::Gone => (client.transaction_descriptor(), true),
     };
     let clean = !owed.send_failed && guard.stopped().is_none() && !matches!(after, After::Ended);
     let count = close_out(client).await;

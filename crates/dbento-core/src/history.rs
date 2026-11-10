@@ -367,7 +367,9 @@ impl HistoryEntry {
             HistoryOutcome::Failed { message } => HistoryOutcome::Failed {
                 message: cut(&message, HISTORY_MAX_MESSAGE_BYTES).to_owned(),
             },
-            other => other,
+            other @ (HistoryOutcome::Ok { .. }
+            | HistoryOutcome::Cancelled
+            | HistoryOutcome::Skipped) => other,
         };
         HistoryEntry {
             at: UNIX_EPOCH + Duration::from_millis(millis(at)),

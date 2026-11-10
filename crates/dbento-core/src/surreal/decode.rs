@@ -339,7 +339,26 @@ fn two(parts: Vec<Wire>) -> Option<[Wire; 2]> {
 fn seconds(wire: &Wire) -> Option<u64> {
     match wire {
         Wire::Int(secs) => u64::try_from(*secs).ok(),
-        _ => None,
+        Wire::None
+        | Wire::Null
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Text(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. } => None,
     }
 }
 
@@ -348,7 +367,26 @@ fn subsecond(wire: &Wire) -> Option<u32> {
         Wire::Int(nanos) => u32::try_from(*nanos)
             .ok()
             .filter(|nanos| *nanos < NANOS_PER_SECOND),
-        _ => None,
+        Wire::None
+        | Wire::Null
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Text(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. } => None,
     }
 }
 
@@ -357,7 +395,26 @@ fn bound(end: Wire) -> Option<Bound<Wire>> {
         Wire::Null => Some(Bound::Unbounded),
         Wire::Unknown { tag: 50, payload } => Some(Bound::Included(*payload)),
         Wire::Unknown { tag: 51, payload } => Some(Bound::Excluded(*payload)),
-        _ => None,
+        Wire::None
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Int(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Text(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Object(_)
+        | Wire::Unknown { .. } => None,
     }
 }
 

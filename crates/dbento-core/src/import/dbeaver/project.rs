@@ -314,7 +314,7 @@ fn text(v: Option<&Value>) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        _ => None,
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
 

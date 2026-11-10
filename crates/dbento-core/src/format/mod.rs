@@ -440,7 +440,14 @@ impl<'a> Layout<'a> {
                 Kind::Space => nl |= self.text(k).contains(['\n', '\r']),
                 Kind::LineComment => {}
                 Kind::String if nl => (last, nl) = (k, false),
-                _ => break,
+                Kind::BlockComment
+                | Kind::Word
+                | Kind::QuotedIdent
+                | Kind::String
+                | Kind::Number
+                | Kind::Param
+                | Kind::Punct
+                | Kind::Op => break,
             }
         }
         last

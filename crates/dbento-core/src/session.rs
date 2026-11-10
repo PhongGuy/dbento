@@ -775,7 +775,12 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
              SETUSER, from this session or another, can widen the user mid-session. Dbento's own \
              refusals follow the command table it read at connect.",
         ),
-        _ => None,
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb => None,
     }
 }
 

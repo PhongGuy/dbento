@@ -370,7 +370,10 @@ impl Cells<'_> {
         };
         match self.row.get_ref(i).map_err(|e| classify(self.path, e))? {
             ValueRef::Null => Ok(None),
-            v => Ok(Some(v)),
+            v @ (ValueRef::Integer(_)
+            | ValueRef::Real(_)
+            | ValueRef::Text(_)
+            | ValueRef::Blob(_)) => Ok(Some(v)),
         }
     }
 

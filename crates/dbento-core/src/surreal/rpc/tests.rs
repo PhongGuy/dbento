@@ -145,7 +145,13 @@ fn a_frame_too_deep_to_decode_still_reaches_its_stream() {
     route(&frame, &mut routes, &gauge).unwrap();
     match rx.try_recv().unwrap().0 {
         Frame::Unreadable { message } => assert!(message.contains("nesting"), "{message}"),
-        other => panic!("{other:?}"),
+        other @ (Frame::Begin { .. }
+        | Frame::Rows { .. }
+        | Frame::Value { .. }
+        | Frame::Finished { .. }
+        | Frame::End { .. }
+        | Frame::Refused(_)
+        | Frame::Closed(_)) => panic!("{other:?}"),
     }
     assert!(routes.contains_key(&3), "the stream goes on");
 }

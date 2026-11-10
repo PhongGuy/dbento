@@ -993,7 +993,7 @@ impl Driver for MysqlDriver {
         // `settle` leaves the connection at rest whenever it leaves one at all.
         if let Some(conn) = conn.and_then(|h| match h {
             Held::Idle(g) => g.release(),
-            _ => None,
+            Held::Reading(_) | Held::Draining(_) => None,
         }) {
             let _ = conn.disconnect().await;
         }
@@ -1534,6 +1534,10 @@ const BINARY_CHARSET: u16 = 63;
 /// Whether every cell of `c` is bytes: BIT, GEOMETRY and VECTOR, and binary strings.
 fn always_bytes(c: &Column) -> bool {
     use ColumnType::*;
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "mysql ColumnType has too many variants to list; the rest share one arm"
+    )]
     match c.column_type() {
         MYSQL_TYPE_BIT | MYSQL_TYPE_GEOMETRY | MYSQL_TYPE_VECTOR => true,
         MYSQL_TYPE_STRING
@@ -1593,7 +1597,10 @@ fn type_name(c: &Column) -> String {
         MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB | MYSQL_TYPE_BLOB => {
             pick("TEXT", "BLOB")
         }
-        other => {
+        other @ (MYSQL_TYPE_NULL
+        | MYSQL_TYPE_TYPED_ARRAY
+        | MYSQL_TYPE_VECTOR
+        | MYSQL_TYPE_UNKNOWN) => {
             let wire = format!("{other:?}");
             wire.strip_prefix("MYSQL_TYPE_").unwrap_or(&wire).to_owned()
         }
@@ -1712,7 +1719,10 @@ fn tls_failure(conn: &ConnectionConfig, e: &mysql_async::Error) -> Option<Connec
             .and_then(|inner| inner.downcast_ref::<rustls::Error>())?
             .to_string(),
         mysql_async::Error::Driver(DriverError::NoClientSslFlagFromServer) => e.to_string(),
-        _ => return None,
+        mysql_async::Error::Driver(_)
+        | mysql_async::Error::Other(_)
+        | mysql_async::Error::Server(_)
+        | mysql_async::Error::Url(_) => return None,
     };
     Some(tls_error(
         conn,
@@ -1731,7 +1741,10 @@ fn connect_error(conn: &ConnectionConfig, e: &mysql_async::Error) -> ConnectErro
     let target = conn.display_target();
     let message = match e {
         mysql_async::Error::Server(s) => format!("{target}: {} ({})", s.message, s.code),
-        other => format!("{target}: {other}"),
+        other @ (mysql_async::Error::Driver(_)
+        | mysql_async::Error::Io(_)
+        | mysql_async::Error::Other(_)
+        | mysql_async::Error::Url(_)) => format!("{target}: {other}"),
     };
     ConnectError::Open { message }
 }
@@ -1764,7 +1777,10 @@ fn execute_error(e: &mysql_async::Error, stop: Option<Stop>) -> ExecuteError {
             hint: None,
             position: None,
         },
-        _ => ExecuteError::SessionClosed,
+        mysql_async::Error::Driver(_)
+        | mysql_async::Error::Io(_)
+        | mysql_async::Error::Other(_)
+        | mysql_async::Error::Url(_) => ExecuteError::SessionClosed,
     }
 }
 

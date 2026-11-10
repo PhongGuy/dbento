@@ -111,7 +111,27 @@ pub(crate) fn role_of(user: &Wire) -> Option<Role> {
             Wire::Text(role) if role.eq_ignore_ascii_case("owner") => Some(Role::Owner),
             Wire::Text(role) if role.eq_ignore_ascii_case("editor") => Some(Role::Editor),
             Wire::Text(role) if role.eq_ignore_ascii_case("viewer") => Some(Role::Viewer),
-            _ => None,
+            Wire::None
+            | Wire::Null
+            | Wire::Undefined
+            | Wire::Bool(_)
+            | Wire::Int(_)
+            | Wire::Float(_)
+            | Wire::Decimal(_)
+            | Wire::Text(_)
+            | Wire::Bytes(_)
+            | Wire::Datetime { .. }
+            | Wire::Duration { .. }
+            | Wire::Uuid(_)
+            | Wire::Table(_)
+            | Wire::Record { .. }
+            | Wire::Range(_)
+            | Wire::Geometry { .. }
+            | Wire::Set(_)
+            | Wire::File { .. }
+            | Wire::Array(_)
+            | Wire::Object(_)
+            | Wire::Unknown { .. } => None,
         })
         .max()
 }
@@ -156,7 +176,26 @@ fn statement(reply: &Wire, at: usize) -> Result<Wire, String> {
         Some(Wire::Text(status)) if status == "OK" => Ok(result),
         _ => Err(match result {
             Wire::Text(message) => message,
-            other => super::cell::surql_text(&other),
+            other @ (Wire::None
+            | Wire::Null
+            | Wire::Undefined
+            | Wire::Bool(_)
+            | Wire::Int(_)
+            | Wire::Float(_)
+            | Wire::Decimal(_)
+            | Wire::Bytes(_)
+            | Wire::Datetime { .. }
+            | Wire::Duration { .. }
+            | Wire::Uuid(_)
+            | Wire::Table(_)
+            | Wire::Record { .. }
+            | Wire::Range(_)
+            | Wire::Geometry { .. }
+            | Wire::Set(_)
+            | Wire::File { .. }
+            | Wire::Array(_)
+            | Wire::Object(_)
+            | Wire::Unknown { .. }) => super::cell::surql_text(&other),
         }),
     }
 }

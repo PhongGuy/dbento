@@ -94,6 +94,10 @@ fn driver_syntax(uri: &str) -> Result<(), String> {
     let Err(error) = ConnectionString::parse(uri) else {
         return Ok(());
     };
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ErrorKind has too many variants to list; the rest share one arm"
+    )]
     match *error.kind {
         ErrorKind::InvalidArgument { message, .. }
             if !uri.contains('@') && message.contains("the port must be an integer") =>

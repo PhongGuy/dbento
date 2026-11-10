@@ -81,6 +81,10 @@ fn check_depth(raw: &RawDocument) -> Result<(), String> {
 // The document a value holds, if any. Code with scope is read by hand, since bson's own reader
 // refuses invalid UTF-8 in the code that the lossy decode accepts.
 fn container(kind: ElementType, value: &[u8]) -> Result<Option<&RawDocument>, String> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ElementType has too many variants to list; the rest share one arm"
+    )]
     let bytes = match kind {
         ElementType::EmbeddedDocument | ElementType::Array => value,
         // Total length, code length, the code with its NUL, then the scope.
@@ -98,6 +102,10 @@ fn container(kind: ElementType, value: &[u8]) -> Result<Option<&RawDocument>, St
 
 /// A grid cell, per the spec's cell list.
 pub(crate) fn cell(value: &Bson) -> CellText {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match value {
         Bson::Null => CellText::Null,
         Bson::String(s) => CellText::Text(s.clone()),
@@ -165,6 +173,10 @@ pub(crate) fn extended_json(document: Document, canonical: bool) -> String {
 // Relaxed Extended JSON by bson, except that a date RFC 3339 cannot spell takes its exact
 // canonical form wherever it nests, because bson's relaxed output clamps it.
 fn relaxed(value: Bson) -> Value {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match value {
         Bson::Document(d) => Value::Object(d.into_iter().map(|(k, v)| (k, relaxed(v))).collect()),
         Bson::Array(items) => Value::Array(items.into_iter().map(relaxed).collect()),
@@ -267,6 +279,10 @@ fn write_array(out: &mut String, items: &[Bson]) {
 }
 
 fn write_pretty(out: &mut String, value: &Bson, depth: usize) {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match value {
         Bson::Document(d) => write_pretty_document(out, d, depth),
         Bson::Array(items) if !items.is_empty() => {

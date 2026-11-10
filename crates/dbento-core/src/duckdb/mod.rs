@@ -239,7 +239,7 @@ impl Driver for DuckDriver {
                 let (tx, rx) = std_mpsc::channel();
                 (Some(tx), Some(rx))
             }
-            _ => (None, None),
+            OnTruncate::Drain | OnTruncate::Close => (None, None),
         };
         // Taken before the request goes out, so a cancel from now on aims at this statement.
         let generation = script.cancel.next_generation();

@@ -279,7 +279,7 @@ impl WriteError {
                 path: strip(path),
                 message,
             },
-            other => other,
+            other @ WriteError::Changed => other,
         }
     }
 }
@@ -754,7 +754,7 @@ fn last_position(table: &Table) -> Option<isize> {
     let nested = table.iter().flat_map(|(_, item)| match item {
         Item::Table(t) => vec![last_position(t)],
         Item::ArrayOfTables(a) => a.iter().map(last_position).collect(),
-        _ => Vec::new(),
+        Item::None | Item::Value(_) => Vec::new(),
     });
     nested.chain([table.position()]).flatten().max()
 }

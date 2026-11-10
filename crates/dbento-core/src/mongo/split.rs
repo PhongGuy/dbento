@@ -44,7 +44,7 @@ pub(crate) fn split(src: &str) -> (Vec<Tok>, Vec<Piece>) {
             }
             Kind::Punct(b'(' | b'[' | b'{') => depth += 1,
             Kind::Punct(b')' | b']' | b'}') => depth = depth.saturating_sub(1),
-            _ => {}
+            Kind::Ident | Kind::Str | Kind::Num | Kind::Regex | Kind::Punct(_) => {}
         }
         open.get_or_insert((i, tok.range.start));
     }

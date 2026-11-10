@@ -90,6 +90,10 @@ fn dml_without_where(tokens: &[pg_query::protobuf::ScanToken], with: bool) -> Op
     let mut code = tokens.iter().filter_map(|t| {
         let token = Token::try_from(t.token).ok()?;
         let at = depth;
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Token has too many variants to list; the rest share one arm"
+        )]
         match token {
             Token::SqlComment | Token::CComment => return None,
             Token::Ascii40 => depth += 1,
@@ -103,6 +107,10 @@ fn dml_without_where(tokens: &[pg_query::protobuf::ScanToken], with: bool) -> Op
     } else {
         code.next()?
     };
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Token has too many variants to list; the rest share one arm"
+    )]
     let found = match verb.0 {
         Token::Update => Unguarded::UpdateWithoutWhere,
         Token::DeleteP => Unguarded::DeleteWithoutWhere,

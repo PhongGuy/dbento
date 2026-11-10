@@ -351,6 +351,10 @@ mod server {
 
     /// A reply, or the server error it carries as `Database`.
     pub(in crate::redis) fn server_error(reply: Value) -> Result<Value, KeyBrowseError> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         match reply {
             Value::ServerError(e) => {
                 let code = e.code().to_owned();
@@ -383,6 +387,10 @@ mod server {
             .ok()
             .and_then(|n| n.parse::<u64>().ok())
             .ok_or_else(|| unexpected("SCAN"))?;
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         let names = names
             .into_iter()
             .map(|n| match n {
@@ -402,11 +410,19 @@ mod server {
         names
             .into_iter()
             .map(|name| {
+                #[allow(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "Value has too many variants to list; the rest share one arm"
+                )]
                 let kind = match server_error(replies.next().unwrap_or(Value::Nil))? {
                     Value::SimpleString(t) => KeyKind::from_type(&t),
                     Value::BulkString(t) => KeyKind::from_type(&String::from_utf8_lossy(&t)),
                     _ => return Err(unexpected("TYPE")),
                 };
+                #[allow(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "Value has too many variants to list; the rest share one arm"
+                )]
                 let ttl = match server_error(replies.next().unwrap_or(Value::Nil))? {
                     Value::Int(ms) => KeyTtl::from_pttl(ms),
                     _ => return Err(unexpected("PTTL")),
@@ -540,7 +556,16 @@ mod server {
             let mut next_reply = || replies.next().unwrap_or(Ok(Value::Nil));
             let length = match kind {
                 KeyKind::Other(_) => None,
-                _ => match next_reply()? {
+                #[allow(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "Value has too many variants to list; the rest share one arm"
+                )]
+                KeyKind::String
+                | KeyKind::Hash
+                | KeyKind::List
+                | KeyKind::Set
+                | KeyKind::SortedSet
+                | KeyKind::Stream => match next_reply()? {
                     Value::Int(n) => Some(u64::try_from(n).unwrap_or(0)),
                     _ => return Err(unexpected("length")),
                 },
@@ -612,6 +637,10 @@ mod server {
                     Ok(page(STREAM, batch, more.then_some(cursor), false))
                 }
                 KeyKind::Other(name) => {
+                    #[allow(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "Value has too many variants to list; the rest share one arm"
+                    )]
                     let bytes = match next_reply()? {
                         Value::Int(n) => n.to_string().into_bytes(),
                         Value::Nil => Vec::new(),
@@ -682,6 +711,10 @@ mod server {
     }
 
     fn bulk(reply: Value, what: &str) -> Result<Vec<u8>, KeyBrowseError> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         match reply {
             Value::BulkString(b) => Ok(b),
             Value::SimpleString(s) => Ok(s.into_bytes()),
@@ -690,6 +723,10 @@ mod server {
     }
 
     fn array(reply: Value, what: &str) -> Result<Vec<Value>, KeyBrowseError> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         match reply {
             Value::Array(items) | Value::Set(items) => Ok(items),
             _ => Err(unexpected(what)),
@@ -713,6 +750,10 @@ mod server {
         let mut flat = flat.into_iter();
         let mut rows = Vec::new();
         while let (Some(member), Some(score)) = (flat.next(), flat.next()) {
+            #[allow(
+                clippy::wildcard_enum_match_arm,
+                reason = "Value has too many variants to list; the rest share one arm"
+            )]
             let score = match score {
                 Value::Double(f) => double_text(f).into_bytes(),
                 other => bulk(other, "ZRANGE")?,

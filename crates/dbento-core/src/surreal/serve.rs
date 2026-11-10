@@ -630,7 +630,11 @@ impl Served {
                         run.ended = true;
                         break;
                     }
-                    _ => {}
+                    Frame::Begin { .. }
+                    | Frame::Rows { .. }
+                    | Frame::Value { .. }
+                    | Frame::Finished { .. }
+                    | Frame::Unreadable { .. } => {}
                 }
             }
             extras.len()
@@ -791,7 +795,10 @@ impl Served {
                     out.fail(e).await;
                     return After::Stop;
                 }
-                _ => {}
+                Frame::Begin { .. }
+                | Frame::Rows { .. }
+                | Frame::Value { .. }
+                | Frame::Finished { .. } => {}
             }
         }
         let sample = rows.make_contiguous();
@@ -864,7 +871,10 @@ impl Served {
                     out.fail(e).await;
                     return After::Stop;
                 }
-                _ => {}
+                Frame::Begin { .. }
+                | Frame::Rows { .. }
+                | Frame::Value { .. }
+                | Frame::Finished { .. } => {}
             }
         }
     }
@@ -953,7 +963,7 @@ impl Served {
                 run.ended = true;
                 Cut::Over(After::Stop)
             }
-            _ => {
+            OnTruncate::Drain | OnTruncate::Close | OnTruncate::Park => {
                 out.send(Event::Done(run.outcome(delivered, Some(by))))
                     .await;
                 // One read alone is stopped; its table may be far longer than the drain bound.
@@ -1070,7 +1080,26 @@ impl Served {
         self.close_fence(Some(fence)).await;
         match &sampled?[0] {
             Wire::Array(rows) => Ok(catalog::with_inferred(declared, rows)),
-            _ => Err(IntrospectError::Unexpected {
+            Wire::None
+            | Wire::Null
+            | Wire::Undefined
+            | Wire::Bool(_)
+            | Wire::Int(_)
+            | Wire::Float(_)
+            | Wire::Decimal(_)
+            | Wire::Text(_)
+            | Wire::Bytes(_)
+            | Wire::Datetime { .. }
+            | Wire::Duration { .. }
+            | Wire::Uuid(_)
+            | Wire::Table(_)
+            | Wire::Record { .. }
+            | Wire::Range(_)
+            | Wire::Geometry { .. }
+            | Wire::Set(_)
+            | Wire::File { .. }
+            | Wire::Object(_)
+            | Wire::Unknown { .. } => Err(IntrospectError::Unexpected {
                 message: "the sample of a table is not a list of rows".to_owned(),
             }),
         }
