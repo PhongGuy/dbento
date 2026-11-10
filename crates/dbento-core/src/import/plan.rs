@@ -595,10 +595,10 @@ impl ImportPlan {
             None if self.writes.is_empty() => return Ok(Applied { written }),
             None => String::new(),
         };
-        let io = |path: &Path, e: std::io::Error, written: &Vec<PathBuf>| ApplyError::Io {
+        let io = |path: &Path, e: std::io::Error, written: &[PathBuf]| ApplyError::Io {
             path: path.to_path_buf(),
             message: e.to_string(),
-            written: written.clone(),
+            written: written.to_vec(),
         };
         std::fs::create_dir_all(&self.dir).map_err(|e| io(&self.dir, e, &written))?;
 
