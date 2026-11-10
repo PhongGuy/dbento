@@ -731,14 +731,23 @@ fn run_statement(
     }
     let arm = |value| *control.armed.lock().unwrap_or_else(PoisonError::into_inner) = value;
     arm(Some((control.generation, control.deadline)));
-    let (truncated, abandoned) = stream_rows(conn, stmt, limits, &control, reply, events, counts);
+    let Streamed {
+        truncated,
+        abandoned,
+    } = stream_rows(conn, stmt, limits, &control, reply, events, counts);
     arm(None);
     (truncated || abandoned) && limits.on_truncate == OnTruncate::Close
 }
 
+/// How [`stream_rows`] ended: whether a bound cut the rows, and whether the stream was dropped.
+struct Streamed {
+    truncated: bool,
+    abandoned: bool,
+}
+
 /// The first step answers `Execute`; rows then go out in batches over the depth-1 channel,
 /// followed by the outcome or the failure. Stepping stops at a reached row or byte bound or
-/// when the stream is dropped (a failed send); returns `(truncated, abandoned)`. Under
+/// when the stream is dropped (a failed send). Under
 /// `OnTruncate::Park` a row cut instead parks and continues on the stream's extend.
 fn stream_rows(
     conn: &Connection,
@@ -748,7 +757,7 @@ fn stream_rows(
     reply: oneshot::Sender<Result<Vec<ColumnInfo>, ExecuteError>>,
     events: &mpsc::Sender<Event>,
     counts: bool,
-) -> (bool, bool) {
+) -> Streamed {
     let mut ncols = stmt.column_count();
     let writes = !stmt.readonly();
     let changes_before = conn.total_changes();
@@ -771,7 +780,10 @@ fn stream_rows(
                 match step {
                     Err(e) => {
                         let _ = r.send(Err(control.map_error(e)));
-                        return (false, false);
+                        return Streamed {
+                            truncated: false,
+                            abandoned: false,
+                        };
                     }
                     Ok(Some(row)) => {
                         let columns = column_infos(row.as_ref());
@@ -882,7 +894,10 @@ fn stream_rows(
     let truncated = truncated_by.is_some();
     // Nobody is listening once the stream is gone; returning resets the statement.
     if abandoned {
-        return (truncated, true);
+        return Streamed {
+            truncated,
+            abandoned: true,
+        };
     }
     // total_changes also counts trigger and cascade rows and changes() goes stale
     // after DDL, so changes() is trusted only when the counter moved; DDL counts none.
@@ -900,7 +915,10 @@ fn stream_rows(
             rolled_back: false,
         }),
     });
-    (truncated, false)
+    Streamed {
+        truncated,
+        abandoned: false,
+    }
 }
 
 /// Each result column of `stmt` with its declared type and the table column it reads.

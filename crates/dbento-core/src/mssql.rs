@@ -499,17 +499,36 @@ fn database_error(e: &TokenError, reader: bool) -> ExecuteError {
     error
 }
 
-/// A tiberius error read mid-response, and whether it closes the session: a server error is
-/// the statement's own, but any other leaves tiberius's token decoder out of step.
-fn stream_error(e: &tiberius::error::Error, reader: bool) -> (ExecuteError, bool) {
+/// A tiberius error read mid-response.
+struct StreamError {
+    error: ExecuteError,
+    /// A server error is the statement's own, but any other leaves tiberius's token decoder
+    /// out of step, so the session closes.
+    closes: bool,
+}
+
+fn stream_error(e: &tiberius::error::Error, reader: bool) -> StreamError {
     use tiberius::error::Error;
     let reason = match e {
-        Error::Server(t) => return (database_error(t, reader), false),
-        Error::Io { .. } | Error::Protocol(_) => return (ExecuteError::SessionClosed, true),
+        Error::Server(t) => {
+            return StreamError {
+                error: database_error(t, reader),
+                closes: false,
+            };
+        }
+        Error::Io { .. } | Error::Protocol(_) => {
+            return StreamError {
+                error: ExecuteError::SessionClosed,
+                closes: true,
+            };
+        }
         Error::Encoding(m) => format!("a text cell could not be decoded: {m}"),
         other => format!("a cell could not be decoded: {other}"),
     };
-    (ExecuteError::Unsupported { reason }, true)
+    StreamError {
+        error: ExecuteError::Unsupported { reason },
+        closes: true,
+    }
 }
 
 /// Major, minor and build of `SERVERPROPERTY('ProductVersion')`, such as "16.0.4295.3".
@@ -587,7 +606,7 @@ mod tests {
             (Error::Utf16, "UTF-16"),
         ];
         for (e, want) in cases {
-            let (err, closes) = stream_error(&e, false);
+            let StreamError { error: err, closes } = stream_error(&e, false);
             assert!(closes, "{e:?}");
             assert!(err.to_string().contains(want), "{e:?}: {err}");
             assert!(!matches!(err, ExecuteError::Database { .. }), "{e:?}");
