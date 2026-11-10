@@ -131,7 +131,11 @@ pub fn packager_config(
         for resource in resources {
             let src = match resource {
                 Value::Object(entry) => entry.get_mut("src"),
-                other => Some(other),
+                other @ (Value::Null
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::String(_)
+                | Value::Array(_)) => Some(other),
             };
             if let Some(src) = src
                 && let Some(path) = src.as_str()

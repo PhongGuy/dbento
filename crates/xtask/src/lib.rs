@@ -1,5 +1,5 @@
 //! Repository automation for dbento, run as `cargo xtask`.
-
+#![warn(clippy::wildcard_enum_match_arm)]
 // A developer tool, where a failed invariant is best reported as the panic itself.
 #![allow(clippy::expect_used)]
 
