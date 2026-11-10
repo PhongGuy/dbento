@@ -2592,7 +2592,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let Ok(name) = reply.recv().await else { return };
             let _ = this.update_in(cx, |shell, window, cx| {
-                let Ok(path) = child_text(parent.as_ref(), &name).parse() else {
+                let Ok(path) = child_text(parent.as_ref(), &name).parse::<FolderPath>() else {
                     return;
                 };
                 shell.apply_edit(Edit::PutFolder { path, color: None }, window, cx);
@@ -2640,7 +2640,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let Ok(name) = reply.recv().await else { return };
             let _ = this.update_in(cx, |shell, window, cx| {
-                let Ok(to) = child_text(parent.as_ref(), &name).parse() else {
+                let Ok(to) = child_text(parent.as_ref(), &name).parse::<FolderPath>() else {
                     return;
                 };
                 shell.apply_edit(Edit::RenameFolder { from, to }, window, cx);
@@ -4722,7 +4722,7 @@ fn rail_button(
     active: bool,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
-    let label = label.into();
+    let label: SharedString = label.into();
     let theme = cx.theme();
     let (fg, dim, hover) = (theme.foreground, theme::dim(cx), theme.list_hover);
     let bar = active.then(|| {

@@ -251,7 +251,7 @@ pub fn edit_deleted(cx: &App) -> Hsla {
 pub fn tooltip(text: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> AnyView {
     // The kit puts text in a flex child sized to its content, so the cap goes on our own
     // content (360 less the kit's 8 px side padding) for the text to wrap inside the box.
-    let text = text.into();
+    let text: SharedString = text.into();
     framed(
         move |_, _| div().max_w(px(344.)).child(text.clone()),
         window,

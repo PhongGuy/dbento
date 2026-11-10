@@ -104,7 +104,7 @@ impl PgUrl {
         let (user, password) = auth.split_once(':').with_context(bad)?;
         let (hostport, database) = rest.split_once('/').with_context(bad)?;
         let (host, port) = hostport.rsplit_once(':').with_context(bad)?;
-        let port = port.parse().with_context(bad)?;
+        let port: u16 = port.parse().with_context(bad)?;
         if [user, host, database].iter().any(|s| s.is_empty()) {
             bail!(bad());
         }

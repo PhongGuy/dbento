@@ -416,7 +416,7 @@ fn orphans(
         .into_iter()
         .filter(|(_, labels)| labels.get("dbento.role").map(String::as_str) == Some("test"))
         .filter_map(|(id, labels)| {
-            let pid = labels.get("dbento.pid")?.parse().ok()?;
+            let pid: u32 = labels.get("dbento.pid")?.parse().ok()?;
             (!alive(pid)).then_some(id)
         })
         .collect()

@@ -212,7 +212,7 @@ pub fn chip(
     label: impl Into<SharedString>,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
-    let label = label.into();
+    let label: SharedString = label.into();
     chip_base(cx)
         .id(id)
         .aria_label(label.clone())
