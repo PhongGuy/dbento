@@ -36,7 +36,11 @@ pub(crate) fn resolve(
             warnings.push(WarningKind::TlsWeaker { from });
             TlsMode::Off
         }
-        _ => {
+        SourceTls::Allow
+        | SourceTls::Prefer
+        | SourceTls::Require
+        | SourceTls::VerifyCa
+        | SourceTls::Unrecognised => {
             warnings.push(WarningKind::TlsStricter { from });
             TlsMode::Verify
         }

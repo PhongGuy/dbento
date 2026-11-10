@@ -367,7 +367,7 @@ pub async fn my_thread_id(s: &mut Session) -> String {
     let mut ran = run(s, "SELECT CONNECTION_ID()", Limits::default()).await;
     match ran.remove(0).unwrap().rows.remove(0).remove(0) {
         Cell::Text(t) => t,
-        other => panic!("{other:?}"),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{other:?}"),
     }
 }
 
@@ -544,7 +544,17 @@ pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
 pub fn code_of(e: ExecuteError) -> String {
     match e {
         ExecuteError::Database { code, .. } => code,
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }
+        | _) => panic!("{other:?}"),
     }
 }
 
@@ -659,7 +669,7 @@ pub async fn ms_spid(s: &mut Session) -> String {
     .unwrap();
     match ran.rows.remove(0).remove(0) {
         Cell::Text(t) => t,
-        other => panic!("{other:?}"),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{other:?}"),
     }
 }
 
@@ -678,7 +688,7 @@ pub async fn ms_this_session(s: &mut Session) -> String {
     .unwrap();
     match ran.rows.remove(0).remove(0) {
         Cell::Text(t) => t,
-        other => panic!("{other:?}"),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{other:?}"),
     }
 }
 

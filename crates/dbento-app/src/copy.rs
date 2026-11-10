@@ -367,7 +367,7 @@ pub fn json_literal(
     let CellRef::Text(text) = cell else {
         return match cell {
             CellRef::Null => "null".to_owned(),
-            other => json_string(&cell_copy(other)),
+            other @ (CellRef::Text(_) | CellRef::Bytes(_) | _) => json_string(&cell_copy(other)),
         };
     };
     let t = type_name.to_ascii_lowercase();
@@ -429,7 +429,7 @@ fn markdown_text(text: &str) -> String {
 fn markdown_cell(cell: CellRef<'_>) -> String {
     match cell {
         CellRef::Null => "NULL".to_owned(),
-        other => markdown_text(&cell_copy(other)),
+        other @ (CellRef::Text(_) | CellRef::Bytes(_) | _) => markdown_text(&cell_copy(other)),
     }
 }
 
@@ -469,7 +469,9 @@ pub(crate) fn sql_literal(
                 Engine::Sqlite | Engine::Mysql => format!("X'{}'", &hex[2..]),
                 Engine::Postgres => format!("{}::bytea", quote_literal(engine, &hex)),
                 Engine::Mssql => format!("0x{}", &hex[2..]),
-                _ => return None,
+                Engine::Duckdb | Engine::Mongodb | Engine::Surrealdb | Engine::Redis | _ => {
+                    return None;
+                }
             }
         }
         CellRef::Text(text) => quote_literal(engine, text),

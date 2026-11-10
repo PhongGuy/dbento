@@ -1,7 +1,7 @@
 //! Test-only Postgres, MySQL and SQL Server harness: every `PgDb`, `MyDb` or `MsDb` is a fresh
 //! database, on its own container or on the server a URL variable names. Never depends on
 //! dbento-core.
-
+#![warn(clippy::wildcard_enum_match_arm)]
 // A harness that cannot start its server has nothing to report but the panic.
 #![allow(clippy::expect_used)]
 
@@ -114,7 +114,9 @@ impl PgDb {
         let rows = client.simple_query(sql).await.expect("scalar query failed");
         rows.into_iter().find_map(|m| match m {
             tokio_postgres::SimpleQueryMessage::Row(r) => r.get(0).map(str::to_owned),
-            _ => None,
+            tokio_postgres::SimpleQueryMessage::CommandComplete(_)
+            | tokio_postgres::SimpleQueryMessage::RowDescription(_)
+            | _ => None,
         })
     }
 }

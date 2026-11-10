@@ -235,7 +235,10 @@ async fn an_encrypted_routine_says_why_it_has_no_text() {
             assert!(message.contains("encrypted"), "{message}");
             assert!(message.contains("VIEW DEFINITION"), "{message}");
         }
-        other => panic!("{other:?}"),
+        other @ (DefinitionError::Execute(_)
+        | DefinitionError::Missing { .. }
+        | DefinitionError::Unsupported { .. }
+        | _) => panic!("{other:?}"),
     }
 }
 
@@ -311,7 +314,10 @@ async fn the_system_schema_lists_extended_procedures_and_shows_its_views() {
         DefinitionError::Unexpected { message } => {
             assert!(message.contains("extended"), "{message}");
         }
-        other => panic!("{other:?}"),
+        other @ (DefinitionError::Execute(_)
+        | DefinitionError::Missing { .. }
+        | DefinitionError::Unsupported { .. }
+        | _) => panic!("{other:?}"),
     }
     let view = ObjectRef::relation(RelationRef::new("sys", "tables"));
     let text = s.definition(&view).await.unwrap();
@@ -371,7 +377,10 @@ async fn a_restricted_login_lists_what_it_may_call_and_hears_why_it_sees_no_text
             DefinitionError::Unexpected { message } => {
                 assert!(message.contains("VIEW DEFINITION"), "{message}");
             }
-            other => panic!("{other:?}"),
+            other @ (DefinitionError::Execute(_)
+            | DefinitionError::Missing { .. }
+            | DefinitionError::Unsupported { .. }
+            | _) => panic!("{other:?}"),
         }
     }
 }

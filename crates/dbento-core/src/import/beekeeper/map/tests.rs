@@ -363,7 +363,19 @@ fn mysql_tls_follows_ssl_and_reject_unauthorized_without_a_host_name_check() {
         });
         let from = m.warnings.iter().find_map(|w| match w {
             WarningKind::TlsStricter { from } | WarningKind::TlsWeaker { from } => Some(*from),
-            _ => None,
+            WarningKind::PasswordInUrl
+            | WarningKind::DroppedParameter(_)
+            | WarningKind::CaCertMissing
+            | WarningKind::ClientCertMissing
+            | WarningKind::MachineSpecificPath
+            | WarningKind::FileMissing
+            | WarningKind::NotUtf8
+            | WarningKind::ColorsNotImported
+            | WarningKind::BoundByFolder
+            | WarningKind::AuthModel(_)
+            | WarningKind::KeyMissing
+            | WarningKind::SecretUnreadable
+            | WarningKind::ColorUnknown(_) => None,
         });
         (m.draft.tls(), from)
     };

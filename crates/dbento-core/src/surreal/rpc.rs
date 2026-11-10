@@ -412,6 +412,10 @@ fn open_error(conn: &ConnectionConfig, message: String) -> ConnectError {
 // each error names the setting that would fix it.
 fn handshake_error(conn: &ConnectionConfig, tls: bool, e: WsError) -> ConnectError {
     use tokio_tungstenite::tungstenite::error::{ProtocolError, SubProtocolError};
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "WsError has too many variants to list; the rest share one arm"
+    )]
     match e {
         WsError::Protocol(ProtocolError::SecWebSocketSubProtocolError(
             SubProtocolError::NoSubProtocol,
@@ -608,7 +612,26 @@ fn stream_frame(reply: Wire, bytes: usize) -> Frame {
             index,
             values: match take(result, "values") {
                 Wire::Array(values) => values,
-                _ => Vec::new(),
+                Wire::None
+                | Wire::Null
+                | Wire::Undefined
+                | Wire::Bool(_)
+                | Wire::Int(_)
+                | Wire::Float(_)
+                | Wire::Decimal(_)
+                | Wire::Text(_)
+                | Wire::Bytes(_)
+                | Wire::Datetime { .. }
+                | Wire::Duration { .. }
+                | Wire::Uuid(_)
+                | Wire::Table(_)
+                | Wire::Record { .. }
+                | Wire::Range(_)
+                | Wire::Geometry { .. }
+                | Wire::Set(_)
+                | Wire::File { .. }
+                | Wire::Object(_)
+                | Wire::Unknown { .. } => Vec::new(),
             },
             bytes,
         },

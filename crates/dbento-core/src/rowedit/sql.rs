@@ -209,7 +209,7 @@ impl<'a> Gen<'a> {
                             "({k} = {v} OR (typeof({k}) IN ('integer','real') AND CAST({k} AS NUMERIC) = {v}))"
                         )
                     }
-                    _ => format!("{k} = {}", self.value(c, v)),
+                    EditValue::Default | EditValue::Text(_) | EditValue::Bytes(_) => format!("{k} = {}", self.value(c, v)),
                 }
             })
             .collect::<Vec<_>>()

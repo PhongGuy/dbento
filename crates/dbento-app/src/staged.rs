@@ -394,7 +394,7 @@ pub fn outcome_text(outcome: &ChangeOutcome) -> Option<String> {
         ChangeOutcome::Conflict => Some("modified or deleted by someone else".to_owned()),
         ChangeOutcome::Ambiguous(n) => Some(format!("matched {n} rows")),
         ChangeOutcome::Failed(message) => Some(message.clone()),
-        _ => None,
+        ChangeOutcome::Applied(_) | ChangeOutcome::NotAttempted | _ => None,
     }
 }
 
@@ -403,7 +403,11 @@ pub fn rejection_text(outcomes: &[ChangeOutcome]) -> String {
     let count = |want: fn(&ChangeOutcome) -> bool| outcomes.iter().filter(|o| want(o)).count();
     let failed = outcomes.iter().find_map(|o| match o {
         ChangeOutcome::Failed(message) => Some(message.clone()),
-        _ => None,
+        ChangeOutcome::Applied(_)
+        | ChangeOutcome::Conflict
+        | ChangeOutcome::Ambiguous(_)
+        | ChangeOutcome::NotAttempted
+        | _ => None,
     });
     let conflicts = count(|o| matches!(o, ChangeOutcome::Conflict));
     let reason = if let Some(message) = failed {
@@ -439,7 +443,12 @@ pub fn commit_error_text(error: &ApplyError) -> String {
             format!("Commit failed: {message}. Nothing was committed.")
         }
         ApplyError::CommitFailed(e) => format!("Commit failed: {e}. Nothing was committed."),
-        _ => "The connection closed during COMMIT, so whether the changes were saved is \
+        ApplyError::ReadOnly
+        | ApplyError::Connect(_)
+        | ApplyError::Session(_)
+        | ApplyError::CommitUnknown(_)
+        | ApplyError::Rejected { .. }
+        | _ => "The connection closed during COMMIT, so whether the changes were saved is \
               unknown. Run the table query again to check."
             .to_owned(),
     }

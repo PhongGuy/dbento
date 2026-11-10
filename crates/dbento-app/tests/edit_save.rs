@@ -15,7 +15,7 @@ fn cell(cx: &mut TestAppContext, m: &Entity<TabModel>, row: u64, col: usize) -> 
     m.read_with(cx, |m, _| {
         match m.results().first()?.store.cell(row, col)? {
             CellRef::Text(s) => Some(s.to_owned()),
-            _ => None,
+            CellRef::Null | CellRef::Bytes(_) | _ => None,
         }
     })
 }

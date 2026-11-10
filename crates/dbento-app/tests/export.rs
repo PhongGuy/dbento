@@ -2,6 +2,7 @@
 // Test helpers may panic on a broken fixture too; clippy's in-tests exemption covers only
 // #[test] functions, not the helpers they call.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![warn(clippy::wildcard_enum_match_arm)]
 mod support;
 use dbento_app::export::{ExportFormat, chosen_path, export_format, export_text, write_export};
 use dbento_app::results::ResultStore;

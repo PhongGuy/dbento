@@ -7,6 +7,10 @@ use dbento_testkit::{MgUser, TORTURE, mongo_db};
 use mongodb::error::ErrorKind;
 
 fn code(e: mongodb::error::Error) -> i32 {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ErrorKind has too many variants to list; the rest share one arm"
+    )]
     match *e.kind {
         ErrorKind::Command(c) => c.code,
         other => panic!("{other:?}"),

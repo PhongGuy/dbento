@@ -109,7 +109,16 @@ fn an_iam_refusal_is_a_violation_only_in_a_read_only_session() {
         ExecuteError::ReadOnlyViolation { message } => {
             assert!(message.contains("VIEWER"), "{message}");
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Database { .. }
+        | ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     }
     // Refusing a change of database is not a refused write.
     let moved = wire(-32000, "NotAllowed", &[], "You don't have permission");
@@ -149,7 +158,16 @@ fn the_error_table_maps_each_wire_error() {
             assert_eq!(detail.as_deref(), Some("Validation"));
             assert_eq!(message, "Parse error");
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -167,7 +185,16 @@ fn an_encode_failure_says_to_cast_and_that_the_statement_may_have_run() {
             assert!(message.contains("may have run"), "{message}");
             assert!(hint.unwrap().contains("<string>"));
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -194,7 +221,16 @@ fn a_call_level_error_carries_its_position_and_others_none() {
     );
     match call_error(&parse, "SELEC 1", QUIET) {
         ExecuteError::Database { position, .. } => assert_eq!(position, Some(6)),
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     }
     let timed = wire(-32004, "Query", &["TimedOut"], "x");
     assert!(matches!(

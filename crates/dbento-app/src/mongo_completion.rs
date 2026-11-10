@@ -363,7 +363,7 @@ fn open_brackets(toks: &[Tok]) -> i32 {
     toks.iter().fold(0, |depth, t| match t.kind {
         Kind::Punct(b'(' | b'[' | b'{') => depth + 1,
         Kind::Punct(b')' | b']' | b'}') => depth - 1,
-        _ => depth,
+        Kind::Ident | Kind::Str | Kind::Comment | Kind::Regex | Kind::Punct(_) => depth,
     })
 }
 
@@ -379,7 +379,7 @@ fn receiver(toks: &[Tok], src: &str, last: Option<usize>) -> Recv {
         Kind::Ident if text(t) == "db" && !dotted(last) => Recv::Db(None),
         Kind::Ident if dotted(last) => match receiver(toks, src, last.checked_sub(2)) {
             Recv::Db(_) => Recv::Collection,
-            _ => Recv::Other,
+            Recv::Collection | Recv::Cursor | Recv::Other => Recv::Other,
         },
         Kind::Punct(close @ (b')' | b']')) => {
             let Some(open) = matching(toks, last, close) else {
@@ -392,7 +392,7 @@ fn receiver(toks: &[Tok], src: &str, last: Option<usize>) -> Recv {
             if close == b']' {
                 return match receiver(toks, src, open.checked_sub(1)) {
                     Recv::Db(_) => Recv::Collection,
-                    _ => Recv::Other,
+                    Recv::Collection | Recv::Cursor | Recv::Other => Recv::Other,
                 };
             }
             let Some(m) = open.checked_sub(1).filter(|&m| dotted(m)) else {
@@ -407,7 +407,7 @@ fn receiver(toks: &[Tok], src: &str, last: Option<usize>) -> Recv {
                 _ => Recv::Other,
             }
         }
-        _ => Recv::Other,
+        Kind::Ident | Kind::Str | Kind::Comment | Kind::Regex | Kind::Punct(_) => Recv::Other,
     }
 }
 
@@ -424,7 +424,7 @@ fn matching(toks: &[Tok], at: usize, close: u8) -> Option<usize> {
                     return Some(i);
                 }
             }
-            _ => {}
+            Kind::Ident | Kind::Str | Kind::Comment | Kind::Regex | Kind::Punct(_) => {}
         }
     }
     None

@@ -1186,7 +1186,20 @@ impl TabModel {
                 self.target_pending = None;
                 self.target_landed = Some(result.map(|t| (t, foreign_keys)));
             }
-            _ => {}
+            Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::RunDone { .. }
+            | Event::SettingsLost { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. } => {}
         }
     }
 
@@ -1774,7 +1787,7 @@ impl TabModel {
         match at {
             GridRow::Loaded(row) if row >= store.rows() => return None,
             GridRow::Inserted(ix) if ix >= self.edits.inserted() => return None,
-            _ => {}
+            GridRow::Inserted(_) | GridRow::Loaded(_) => {}
         }
         let mut cells = Vec::new();
         for (col, info) in store.columns().iter().enumerate() {
@@ -1843,7 +1856,7 @@ impl TabModel {
     pub fn original_at(&self, at: GridRow, col: usize) -> Option<CellRef<'_>> {
         match at {
             GridRow::Loaded(row) if self.browse_result() => self.results[0].store.cell(row, col),
-            _ => None,
+            GridRow::Inserted(_) | GridRow::Loaded(_) => None,
         }
     }
 
@@ -1886,7 +1899,7 @@ impl TabModel {
         match at {
             GridRow::Loaded(row) if row >= store.rows() => return None,
             GridRow::Inserted(ix) if ix >= self.edits.inserted() => return None,
-            _ => {}
+            GridRow::Inserted(_) | GridRow::Loaded(_) => {}
         }
         // Shown values are the staged cell over the loaded one; an inserted row's unset
         // cells stay out, since an INSERT leaves them to their default anyway.
@@ -2862,7 +2875,10 @@ impl TabModel {
                 o.rows = rows;
                 StatementEnd::Truncated(o)
             }
-            other => {
+            other @ (StatementEnd::Skipped
+            | StatementEnd::Failed(_)
+            | StatementEnd::Stopped { .. }
+            | StatementEnd::Planned) => {
                 if let StatementEnd::Failed(e) = &other {
                     self.notice = Some(format!("Could not fetch more: {e}"));
                 }

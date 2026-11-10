@@ -163,6 +163,10 @@ fn with_detail(mut failure: ExecuteError, text: &str) -> ExecuteError {
 /// a network or selection failure is `SessionClosed`; other commands are `Database`.
 pub(crate) fn command_error(e: Error, writes: Writes, read_only: bool) -> ExecuteError {
     // Reads `e.kind`, not `e`, because `Error`'s `Display` dumps the server's reply as hex.
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ErrorKind has too many variants to list; the rest share one arm"
+    )]
     match &*e.kind {
         ErrorKind::Command(c) if c.code == MAX_TIME_EXPIRED => ExecuteError::Timeout,
         ErrorKind::Command(c) if c.code == UNAUTHORIZED && read_only && writes != Writes::No => {
@@ -199,6 +203,10 @@ fn code_text(name: &str, code: i32) -> String {
 
 // The server picks the numeric type of a count, and it may differ by version and size.
 fn number(value: &Bson) -> Option<f64> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match value {
         Bson::Int32(n) => Some(f64::from(*n)),
         Bson::Int64(n) => Some(*n as f64),

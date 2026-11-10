@@ -122,7 +122,12 @@ fn a_port_left_out_is_the_descriptor_default() {
         let fields = fields(engine);
         let default = fields.iter().find_map(|f| match f.kind {
             FieldKind::Port { default } => Some(default),
-            _ => None,
+            FieldKind::Text
+            | FieldKind::Path
+            | FieldKind::Secret
+            | FieldKind::Tls
+            | FieldKind::Uri
+            | _ => None,
         });
         assert_eq!(default, Some(want), "{engine:?}");
         let ws = parses(engine, &lines(&fields, true)).unwrap();

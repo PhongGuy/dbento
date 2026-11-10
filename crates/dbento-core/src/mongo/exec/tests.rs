@@ -235,7 +235,16 @@ fn an_unauthorized_write_in_a_read_only_session_is_a_violation() {
     for writes in [Writes::Yes, Writes::Unknown] {
         match command_error(server_error(13, "Unauthorized"), writes, true) {
             ExecuteError::ReadOnlyViolation { message } => assert_eq!(message, "refused"),
-            other => panic!("{other:?}"),
+            other @ (ExecuteError::Database { .. }
+            | ExecuteError::Timeout
+            | ExecuteError::Cancelled
+            | ExecuteError::Unsupported { .. }
+            | ExecuteError::TransactionControl { .. }
+            | ExecuteError::SessionClosed
+            | ExecuteError::StoppedAtDrainCap
+            | ExecuteError::Syntax { .. }
+            | ExecuteError::ResultExpired
+            | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
         }
     }
 }
@@ -250,7 +259,16 @@ fn an_unauthorized_read_or_a_session_that_may_write_stays_a_database_error() {
                     ("Unauthorized", "refused")
                 );
             }
-            other => panic!("{other:?}"),
+            other @ (ExecuteError::Timeout
+            | ExecuteError::Cancelled
+            | ExecuteError::ReadOnlyViolation { .. }
+            | ExecuteError::Unsupported { .. }
+            | ExecuteError::TransactionControl { .. }
+            | ExecuteError::SessionClosed
+            | ExecuteError::StoppedAtDrainCap
+            | ExecuteError::Syntax { .. }
+            | ExecuteError::ResultExpired
+            | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
         }
     }
 }
@@ -259,7 +277,16 @@ fn an_unauthorized_read_or_a_session_that_may_write_stays_a_database_error() {
 fn a_reply_with_no_code_name_uses_the_number() {
     match command_error(server_error(11000, ""), Writes::Yes, false) {
         ExecuteError::Database { code, .. } => assert_eq!(code, "11000"),
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -272,7 +299,16 @@ fn an_unreadable_reply_may_follow_a_write_but_not_a_read() {
             assert_eq!(code, "driver");
             detail
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     };
     let landed = Some("the write may have landed, but its reply could not be read".to_owned());
     assert_eq!(detail(Writes::Yes), landed);
@@ -285,6 +321,15 @@ fn any_other_driver_failure_names_the_driver() {
     let e = mongodb::error::Error::custom("odd");
     match command_error(e, Writes::No, false) {
         ExecuteError::Database { code, .. } => assert_eq!(code, "driver"),
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => panic!("{other:?}"),
     }
 }

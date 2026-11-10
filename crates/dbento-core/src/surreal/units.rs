@@ -134,7 +134,15 @@ fn cuts(toks: &[Tok]) -> Vec<usize> {
             Kind::Punct('(' | '[' | '{') => depth += 1,
             Kind::Punct(')' | ']' | '}') => depth = depth.saturating_sub(1),
             Kind::Punct(';') if depth == 0 => out.push(i),
-            _ => {}
+            Kind::Ident { .. }
+            | Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script
+            | Kind::PathSep
+            | Kind::DotDot
+            | Kind::Punct(_) => {}
         }
     }
     out
@@ -274,7 +282,14 @@ fn literal_name(src: &str, tok: &Tok) -> Option<String> {
             .filter(|name| !name.contains('\\'))
             .map(str::to_owned),
         Kind::Ident { .. } | Kind::Str { prefix: None } => unquoted(raw),
-        _ => None,
+        Kind::Str { .. }
+        | Kind::Num
+        | Kind::Param
+        | Kind::Regex
+        | Kind::Script
+        | Kind::PathSep
+        | Kind::DotDot
+        | Kind::Punct(_) => None,
     }
 }
 

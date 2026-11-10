@@ -60,7 +60,7 @@ impl Was {
         let capped = match cell {
             CellRef::Text(s) => s.chars().count() > ORIGINAL_CAP,
             CellRef::Bytes(b) => b.len() > 8,
-            _ => false,
+            CellRef::Null | _ => false,
         };
         Was {
             text: format!("was: {}", original_text(cell, ORIGINAL_CAP)),
@@ -263,7 +263,7 @@ pub fn display_text(value: &EditValue, type_name: &str) -> String {
         {
             pretty_json(text).unwrap_or_else(|| text.clone())
         }
-        _ => edit_text(value),
+        EditValue::Text(_) | EditValue::Bytes(_) | _ => edit_text(value),
     }
 }
 

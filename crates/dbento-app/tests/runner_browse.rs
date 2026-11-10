@@ -24,14 +24,52 @@ async fn target_connects_and_describes_a_table() {
             assert_eq!(t.locators(), ["rowid"]);
             assert!(t.has_identity());
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     r.send(Command::Target {
         rel: RelationRef::new("main", "k"),
     });
     match next_event(&ev).await {
         Event::Target { result: Ok(t), .. } => assert_eq!(t.identity(), ["id"]),
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -89,7 +127,26 @@ async fn target_carries_the_tables_foreign_keys() {
             assert_eq!(foreign_keys.len(), 1);
             assert_eq!(foreign_keys[0].referenced_columns(), ["id"]);
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -127,7 +184,26 @@ async fn a_failed_foreign_key_read_still_answers_the_target_without_keys() {
             assert_eq!(t.identity(), ["id"]);
             assert!(foreign_keys.is_empty(), "{foreign_keys:?}");
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     r.send(run_cmd(1, "SELECT 1", None));
     let (_, rows) = until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 1 })).await;

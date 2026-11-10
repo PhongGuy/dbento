@@ -118,7 +118,7 @@ pub fn ttl_text(ttl: &KeyTtl) -> String {
     let left = match ttl {
         KeyTtl::Expires(d) => d.as_secs(),
         KeyTtl::Gone => return "gone".into(),
-        _ => return String::new(),
+        KeyTtl::Persistent | _ => return String::new(),
     };
     match left {
         0 => "<1s".into(),

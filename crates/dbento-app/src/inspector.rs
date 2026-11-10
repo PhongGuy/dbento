@@ -455,7 +455,7 @@ impl Render for Inspector {
             let rows = links.into_iter().enumerate().map(|(i, link)| {
                 let (id, icon) = match link.direction {
                     FkDirection::Incoming => ("ref-in", Icons::Table2),
-                    _ => ("ref-out", Icons::Link),
+                    FkDirection::Outgoing | _ => ("ref-out", Icons::Link),
                 };
                 let live = link.follow.is_some();
                 let row = h_flex()

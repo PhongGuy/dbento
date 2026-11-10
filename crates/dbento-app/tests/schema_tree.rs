@@ -278,7 +278,13 @@ fn stale_replies_after_refresh_are_dropped_and_expanded_levels_reload() {
                 &[("Album", Table), ("Artist", Table), ("Recent", View)],
                 false,
             ),
-            _ => cols(&[
+            CatalogQuery::Columns { .. }
+            | CatalogQuery::Count { .. }
+            | CatalogQuery::RelationObjects { .. }
+            | CatalogQuery::SchemaObjects { .. }
+            | CatalogQuery::Definition { .. }
+            | CatalogQuery::Keys { .. }
+            | CatalogQuery::CommandDocs => cols(&[
                 ("AlbumId", "INTEGER", Some(1)),
                 ("Title", "NVARCHAR(160)", None),
             ]),
@@ -492,7 +498,9 @@ fn expand_opens_and_never_collapses() {
 fn waiting(step: RevealStep) -> LoadRequest {
     match step {
         RevealStep::Waiting(mut loads) if loads.len() == 1 => loads.remove(0),
-        other => panic!("expected one load, got {other:?}"),
+        other @ (RevealStep::Waiting(_) | RevealStep::Shown | RevealStep::Missing | _) => {
+            panic!("expected one load, got {other:?}")
+        }
     }
 }
 
@@ -643,7 +651,14 @@ fn with_objects(
     for req in t.objects_to_load() {
         let result = match req.query {
             CatalogQuery::RelationObjects { .. } => album.clone(),
-            _ => main.clone(),
+            CatalogQuery::Schemas
+            | CatalogQuery::Relations { .. }
+            | CatalogQuery::Columns { .. }
+            | CatalogQuery::Count { .. }
+            | CatalogQuery::SchemaObjects { .. }
+            | CatalogQuery::Definition { .. }
+            | CatalogQuery::Keys { .. }
+            | CatalogQuery::CommandDocs => main.clone(),
         };
         answer(&mut t, req, result);
     }
@@ -663,7 +678,10 @@ fn fixture_for(q: &CatalogQuery) -> CatalogData {
         ]),
         CatalogQuery::RelationObjects { .. } => album_objects(),
         CatalogQuery::SchemaObjects { .. } => main_objects(false),
-        other => panic!("{other:?} is no tree level"),
+        other @ (CatalogQuery::Count { .. }
+        | CatalogQuery::Definition { .. }
+        | CatalogQuery::Keys { .. }
+        | CatalogQuery::CommandDocs) => panic!("{other:?} is no tree level"),
     }
 }
 const ALL_GROUPS: [ObjectGroup; 6] = [
@@ -933,7 +951,18 @@ fn object_groups_follow_columns_and_kinds_collapsed() {
         .iter()
         .filter_map(|r| match &r.kind {
             RowKind::Object { detail, .. } => Some((r.label.clone(), detail.clone())),
-            _ => None,
+            RowKind::Schema
+            | RowKind::Kind(_)
+            | RowKind::Relation(_)
+            | RowKind::Column { .. }
+            | RowKind::Group(_)
+            | RowKind::Loading
+            | RowKind::Failed { .. }
+            | RowKind::Truncated
+            | RowKind::Empty
+            | RowKind::KeyFolder { .. }
+            | RowKind::Key(_)
+            | RowKind::LoadMore => None,
         })
         .collect();
     let want: Vec<(String, String)> = [
@@ -969,7 +998,18 @@ fn a_replica_only_trigger_says_so_like_a_disabled_one() {
         .iter()
         .filter_map(|r| match &r.kind {
             RowKind::Object { detail, .. } => Some((r.label.clone(), detail.clone())),
-            _ => None,
+            RowKind::Schema
+            | RowKind::Kind(_)
+            | RowKind::Relation(_)
+            | RowKind::Column { .. }
+            | RowKind::Group(_)
+            | RowKind::Loading
+            | RowKind::Failed { .. }
+            | RowKind::Truncated
+            | RowKind::Empty
+            | RowKind::KeyFolder { .. }
+            | RowKind::Key(_)
+            | RowKind::LoadMore => None,
         })
         .collect();
     assert_eq!(
@@ -997,7 +1037,14 @@ fn unreadable_album(columns: Result<CatalogData, String>) -> CatalogTree {
             CatalogQuery::RelationObjects { .. } => Ok(CatalogData::RelationObjects(
                 RelationObjects::unreadable("no such module: nope"),
             )),
-            _ => Ok(no_objects().1),
+            CatalogQuery::Schemas
+            | CatalogQuery::Relations { .. }
+            | CatalogQuery::Columns { .. }
+            | CatalogQuery::Count { .. }
+            | CatalogQuery::SchemaObjects { .. }
+            | CatalogQuery::Definition { .. }
+            | CatalogQuery::Keys { .. }
+            | CatalogQuery::CommandDocs => Ok(no_objects().1),
         };
         answer(&mut t, req, result);
     }
@@ -1206,7 +1253,12 @@ fn a_connection_refresh_keeps_another_connections_objects() {
             conn: "pg".into(),
             rel,
         },
-        other => other,
+        other @ (NodeKey::Connection(_)
+        | NodeKey::Kind { .. }
+        | NodeKey::RelationGroup { .. }
+        | NodeKey::SchemaGroup { .. }
+        | NodeKey::Objects(_)
+        | NodeKey::KeyFolder { .. }) => other,
     };
     // pg mirrors lite: main and Album expanded, their objects loaded.
     for key in [
@@ -1279,7 +1331,18 @@ fn object_details_name_index_flags_and_constraint_kinds() {
         .iter()
         .filter_map(|r| match &r.kind {
             RowKind::Object { detail, .. } => Some((r.label.clone(), detail.clone())),
-            _ => None,
+            RowKind::Schema
+            | RowKind::Kind(_)
+            | RowKind::Relation(_)
+            | RowKind::Column { .. }
+            | RowKind::Group(_)
+            | RowKind::Loading
+            | RowKind::Failed { .. }
+            | RowKind::Truncated
+            | RowKind::Empty
+            | RowKind::KeyFolder { .. }
+            | RowKind::Key(_)
+            | RowKind::LoadMore => None,
         })
         .collect();
     let want: Vec<(String, String)> = [

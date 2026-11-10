@@ -76,7 +76,7 @@ pub fn drop_allowed(dragged: &WorkspaceItem, target: Option<&FolderPath>) -> boo
         WorkspaceItem::Folder(from) => {
             std::iter::successors(target.cloned(), FolderPath::parent).all(|p| &p != from)
         }
-        _ => true,
+        WorkspaceItem::Connection(_) | _ => true,
     }
 }
 

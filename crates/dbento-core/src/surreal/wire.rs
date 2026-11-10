@@ -80,7 +80,26 @@ pub(crate) fn field<'w>(value: &'w Wire, name: &str) -> Option<&'w Wire> {
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value),
-        _ => None,
+        Wire::None
+        | Wire::Null
+        | Wire::Undefined
+        | Wire::Bool(_)
+        | Wire::Int(_)
+        | Wire::Float(_)
+        | Wire::Decimal(_)
+        | Wire::Text(_)
+        | Wire::Bytes(_)
+        | Wire::Datetime { .. }
+        | Wire::Duration { .. }
+        | Wire::Uuid(_)
+        | Wire::Table(_)
+        | Wire::Record { .. }
+        | Wire::Range(_)
+        | Wire::Geometry { .. }
+        | Wire::Set(_)
+        | Wire::File { .. }
+        | Wire::Array(_)
+        | Wire::Unknown { .. } => None,
     }
 }
 

@@ -703,7 +703,7 @@ async fn in_transaction_block(client: &Client) -> Option<bool> {
     let messages = client.simple_query(probe).await.ok()?;
     messages.iter().find_map(|m| match m {
         SimpleQueryMessage::Row(row) => row.get(0).map(|same| same == "f"),
-        _ => None,
+        SimpleQueryMessage::CommandComplete(_) | SimpleQueryMessage::RowDescription(_) | _ => None,
     })
 }
 
@@ -1713,7 +1713,7 @@ impl PgStream {
 fn first_cell(messages: &[SimpleQueryMessage]) -> Result<String, ExecuteError> {
     let cell = messages.iter().find_map(|m| match m {
         SimpleQueryMessage::Row(row) => Some(row.try_get(0).map(|c| c.map(str::to_owned))),
-        _ => None,
+        SimpleQueryMessage::CommandComplete(_) | SimpleQueryMessage::RowDescription(_) | _ => None,
     });
     match cell {
         Some(Ok(Some(text))) => Ok(text),
@@ -1758,7 +1758,14 @@ fn type_name(t: &Type) -> String {
     match t.kind() {
         Kind::Array(elem) => format!("{}[]", type_name(elem)),
         _ if t.schema() == "pg_catalog" => t.name().to_owned(),
-        _ => format!("{}.{}", t.schema(), t.name()),
+        Kind::Simple
+        | Kind::Enum(_)
+        | Kind::Pseudo
+        | Kind::Range(_)
+        | Kind::Multirange(_)
+        | Kind::Domain(_)
+        | Kind::Composite(_)
+        | _ => format!("{}.{}", t.schema(), t.name()),
     }
 }
 

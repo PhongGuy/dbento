@@ -385,7 +385,11 @@ fn parse_table(sql: &str) -> Option<Vec<Declared>> {
                 ColumnConstraint::Unique(_) => ConstraintKind::Unique,
                 ColumnConstraint::Check(_) => ConstraintKind::Check,
                 ColumnConstraint::ForeignKey { .. } => ConstraintKind::ForeignKey,
-                _ => continue,
+                ColumnConstraint::NotNull { .. }
+                | ColumnConstraint::Default(_)
+                | ColumnConstraint::Defer(_)
+                | ColumnConstraint::Collate { .. }
+                | ColumnConstraint::Generated { .. } => continue,
             };
             declared.push(declare(&c.name, kind, own.clone()));
         }
@@ -416,6 +420,10 @@ fn sorted(columns: &[SortedColumn]) -> Vec<String> {
             while let Expr::Collate(inner, _) = expr {
                 expr = inner;
             }
+            #[allow(
+                clippy::wildcard_enum_match_arm,
+                reason = "Expr has too many variants to list; the rest share one arm"
+            )]
             match expr {
                 Expr::Id(id) => unquote(&Name(id.0)),
                 Expr::Name(name) => unquote(name),

@@ -1,5 +1,6 @@
 //! Its own test binary: twenty containers start at once while other sockets churn through the
 //! ephemeral port range, the way a full suite's connections do.
+#![warn(clippy::wildcard_enum_match_arm)]
 // Test helpers may panic on a broken fixture too; clippy's in-tests exemption covers only
 // #[test] functions, not the helpers they call.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

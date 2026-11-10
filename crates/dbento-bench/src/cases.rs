@@ -177,7 +177,14 @@ impl Targets {
                     .context("no Postgres target: pass --pg-url")?;
                 ("pg", Some(Secret::new(&pg.password)))
             }
-            _ => {
+            Engine::Sqlite
+            | Engine::Mysql
+            | Engine::Mssql
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Surrealdb
+            | Engine::Redis
+            | _ => {
                 self.sqlite
                     .as_ref()
                     .context("no SQLite target: pass --sqlite")?;
@@ -221,7 +228,7 @@ pub async fn measure(case: Case, targets: &Targets) -> Result<Sample> {
             let elapsed = ms(start);
             (elapsed, stream.outcome().context("no outcome")?.rows)
         }
-        _ => {
+        Case::NarrowPg | Case::NarrowSqlite | Case::WidePg | Case::WideSqlite => {
             let mut stream = pending.execute(Limits::default()).await?;
             let mut kept: Vec<ResultBatch> = Vec::new();
             while let Some(b) = stream.next_batch().await? {

@@ -342,7 +342,13 @@ impl Entry {
         match self {
             Self::Command(c) => c.keys(cx).into_iter().collect(),
             Self::Shortcut { keys, .. } => keys.clone(),
-            _ => Vec::new(),
+            Self::Table(_)
+            | Self::Recent(_)
+            | Self::Query(_)
+            | Self::Connection(_)
+            | Self::SearchIn(_)
+            | Self::Loading(_)
+            | Self::Failed { .. } => Vec::new(),
         }
     }
 }

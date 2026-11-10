@@ -350,7 +350,7 @@ fn execute(
                     Writes::Yes if !leading_keyword(text).eq_ignore_ascii_case("CALL") => {
                         "; the statement's changes were applied"
                     }
-                    _ => "; the statement may have changed data",
+                    Writes::Yes | Writes::Unknown => "; the statement may have changed data",
                 };
                 let name = quote_ident(Engine::Duckdb, field.name());
                 return Err(ExecuteError::Unsupported {

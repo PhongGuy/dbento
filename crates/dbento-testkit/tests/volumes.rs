@@ -1,4 +1,5 @@
 //! Its own test binary, so the container under test is the only one this process starts.
+#![warn(clippy::wildcard_enum_match_arm)]
 // Test helpers may panic on a broken fixture too; clippy's in-tests exemption covers only
 // #[test] functions, not the helpers they call.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

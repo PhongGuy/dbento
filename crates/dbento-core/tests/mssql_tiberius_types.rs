@@ -38,6 +38,10 @@ async fn money_and_smallmoney_decode_as_exact_scale_four_numerics() {
     ];
     assert_eq!(cells.len(), want.len());
     for (i, (cell, want)) in cells.iter().zip(want).enumerate() {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "ColumnData has too many variants to list; the rest share one arm"
+        )]
         match cell {
             ColumnData::Numeric(n) => assert_eq!(
                 n.map(|n| (n.value(), n.scale())),
@@ -110,13 +114,19 @@ async fn result_columns_carry_their_size_precision_scale_udt_and_user_type() {
             assert_eq!((cx.r#type(), cx.len()), (VarLenType::NVarchar, 40));
             assert!(cx.collation().is_some());
         }
-        other => panic!("n: {other:?}"),
+        other @ (TypeInfo::FixedLen(_)
+        | TypeInfo::VarLenSizedPrecision { .. }
+        | TypeInfo::Xml { .. }
+        | TypeInfo::Udt(_)) => panic!("n: {other:?}"),
     }
     match info[1] {
         TypeInfo::VarLenSized(cx) => {
             assert_eq!((cx.r#type(), cx.len()), (VarLenType::NVarchar, 0xFFFF))
         }
-        other => panic!("m: {other:?}"),
+        other @ (TypeInfo::FixedLen(_)
+        | TypeInfo::VarLenSizedPrecision { .. }
+        | TypeInfo::Xml { .. }
+        | TypeInfo::Udt(_)) => panic!("m: {other:?}"),
     }
     match (info[2], info[3]) {
         (
@@ -150,14 +160,20 @@ async fn result_columns_carry_their_size_precision_scale_udt_and_user_type() {
             (u.schema_name.as_str(), u.type_name.as_str()),
             ("sys", "hierarchyid")
         ),
-        other => panic!("h: {other:?}"),
+        other @ (TypeInfo::FixedLen(_)
+        | TypeInfo::VarLenSized(_)
+        | TypeInfo::VarLenSizedPrecision { .. }
+        | TypeInfo::Xml { .. }) => panic!("h: {other:?}"),
     }
     for ix in [7, 9] {
         match info[ix] {
             TypeInfo::VarLenSized(cx) => {
                 assert_eq!((cx.r#type(), cx.len()), (VarLenType::BigBinary, 8), "{ix}")
             }
-            other => panic!("{ix}: {other:?}"),
+            other @ (TypeInfo::FixedLen(_)
+            | TypeInfo::VarLenSizedPrecision { .. }
+            | TypeInfo::Xml { .. }
+            | TypeInfo::Udt(_)) => panic!("{ix}: {other:?}"),
         }
     }
     assert!(

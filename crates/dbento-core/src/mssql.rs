@@ -365,7 +365,7 @@ impl Driver for MssqlDriver {
                 let (tx, rx) = mpsc::unbounded_channel();
                 (Some(tx), Some(rx))
             }
-            _ => (None, None),
+            OnTruncate::Drain | OnTruncate::Close => (None, None),
         };
         let sent = script.ctl.send(Ctl::Execute {
             reply,
@@ -469,7 +469,14 @@ fn connect_error(host: &str, target: &str, e: &tiberius::error::Error) -> Connec
             )
         }
         Error::Server(t) => format!("{target}: {} ({})", t.message(), t.code()),
-        other => format!("{target}: {other}"),
+        other @ (Error::Io { .. }
+        | Error::Protocol(_)
+        | Error::Encoding(_)
+        | Error::Conversion(_)
+        | Error::Utf8
+        | Error::Utf16
+        | Error::ParseInt(_)
+        | Error::BulkInput(_)) => format!("{target}: {other}"),
     };
     ConnectError::Open { message }
 }
@@ -523,7 +530,13 @@ fn stream_error(e: &tiberius::error::Error, reader: bool) -> StreamError {
             };
         }
         Error::Encoding(m) => format!("a text cell could not be decoded: {m}"),
-        other => format!("a cell could not be decoded: {other}"),
+        other @ (Error::Conversion(_)
+        | Error::Utf8
+        | Error::Utf16
+        | Error::ParseInt(_)
+        | Error::Tls(_)
+        | Error::Routing { .. }
+        | Error::BulkInput(_)) => format!("a cell could not be decoded: {other}"),
     };
     StreamError {
         error: ExecuteError::Unsupported { reason },
@@ -566,7 +579,10 @@ mod tests {
                         "{message}"
                     );
                 }
-                other => panic!("{other:?}"),
+                other @ (ConnectError::NotFound { .. }
+                | ConnectError::Open { .. }
+                | ConnectError::InvalidTimeout { .. }
+                | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
             }
         }
     }
@@ -579,7 +595,10 @@ mod tests {
                 message,
                 format!("UnknownIssuer; {}", crate::postgres::TLS_WAYS_OUT)
             ),
-            other => panic!("{other:?}"),
+            other @ (ConnectError::NotFound { .. }
+            | ConnectError::Open { .. }
+            | ConnectError::InvalidTimeout { .. }
+            | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
         }
         assert_eq!(
             crate::postgres::TLS_WAYS_OUT,
@@ -640,7 +659,10 @@ mod tests {
                     && message.contains("app@db.example.com:1433"),
                 "{message}"
             ),
-            other => panic!("{other:?}"),
+            other @ (ConnectError::NotFound { .. }
+            | ConnectError::Tls { .. }
+            | ConnectError::InvalidTimeout { .. }
+            | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
         }
     }
 }

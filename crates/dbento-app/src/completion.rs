@@ -528,7 +528,7 @@ pub(crate) fn kind_detail(kind: RelationKind) -> &'static str {
         RelationKind::View => "view",
         RelationKind::MaterializedView => "materialized view",
         RelationKind::ForeignTable => "foreign table",
-        _ => "relation",
+        RelationKind::Other | _ => "relation",
     }
 }
 
@@ -556,7 +556,7 @@ impl Tok {
         match &self.kind {
             TokKind::Word => Some(&src[self.range.clone()]),
             TokKind::Quoted(n) => Some(n),
-            _ => None,
+            TokKind::Str | TokKind::Comment | TokKind::Punct(_) => None,
         }
     }
 

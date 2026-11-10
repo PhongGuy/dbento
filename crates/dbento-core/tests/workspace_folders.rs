@@ -104,7 +104,14 @@ fn no_folders_table_means_no_folders() {
 fn folder_err(toml: &str) -> (String, String) {
     match open(toml).unwrap_err() {
         OpenError::InvalidFolder { folder, message } => (folder, message),
-        other => panic!("expected InvalidFolder, got {other:?}"),
+        other @ (OpenError::NotFound { .. }
+        | OpenError::Io { .. }
+        | OpenError::Parse { .. }
+        | OpenError::Password { .. }
+        | OpenError::UnsupportedVersion { .. }
+        | OpenError::InvalidName { .. }
+        | OpenError::Invalid { .. }
+        | _) => panic!("expected InvalidFolder, got {other:?}"),
     }
 }
 
@@ -134,11 +141,25 @@ fn bad_folder_tables_are_open_errors() {
 fn unknown_keys_passwords_and_bad_connection_folders_are_rejected() {
     match open("dbento = 1\n[folders.\"P\"]\nread_only = true\n").unwrap_err() {
         OpenError::Parse { message, .. } => assert!(message.contains("read_only"), "{message}"),
-        other => panic!("{other:?}"),
+        other @ (OpenError::NotFound { .. }
+        | OpenError::Io { .. }
+        | OpenError::Password { .. }
+        | OpenError::UnsupportedVersion { .. }
+        | OpenError::InvalidName { .. }
+        | OpenError::Invalid { .. }
+        | OpenError::InvalidFolder { .. }
+        | _) => panic!("{other:?}"),
     }
     match open("dbento = 1\n[folders.\"P\"]\npassword = \"x\"\n").unwrap_err() {
         OpenError::Password { key } => assert_eq!(key, "folders.P.password"),
-        other => panic!("{other:?}"),
+        other @ (OpenError::NotFound { .. }
+        | OpenError::Io { .. }
+        | OpenError::Parse { .. }
+        | OpenError::UnsupportedVersion { .. }
+        | OpenError::InvalidName { .. }
+        | OpenError::Invalid { .. }
+        | OpenError::InvalidFolder { .. }
+        | _) => panic!("{other:?}"),
     }
     let toml =
         "dbento = 1\n[connections.a]\nengine = \"sqlite\"\npath = \"a.db\"\nfolder = \"/x\"\n";
@@ -150,6 +171,13 @@ fn unknown_keys_passwords_and_bad_connection_folders_are_rejected() {
             assert_eq!(connection, "a");
             assert_eq!(message, "folder path `/x` has an empty segment");
         }
-        other => panic!("{other:?}"),
+        other @ (OpenError::NotFound { .. }
+        | OpenError::Io { .. }
+        | OpenError::Parse { .. }
+        | OpenError::Password { .. }
+        | OpenError::UnsupportedVersion { .. }
+        | OpenError::InvalidName { .. }
+        | OpenError::InvalidFolder { .. }
+        | _) => panic!("{other:?}"),
     }
 }

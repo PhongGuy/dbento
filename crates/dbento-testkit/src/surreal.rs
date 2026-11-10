@@ -137,7 +137,12 @@ impl SrDb {
         let last = self.admin(sql).await.pop().unwrap_or_default();
         match last {
             serde_json::Value::Array(mut rows) if !rows.is_empty() => rows.swap_remove(0),
-            other => other,
+            other @ (serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_)
+            | serde_json::Value::Array(_)
+            | serde_json::Value::Object(_)) => other,
         }
     }
 

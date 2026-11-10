@@ -41,7 +41,25 @@ async fn connected(spec: RunnerSpec) -> (bool, Option<ReadOnlyEnforcement>) {
         Event::Connected {
             read_only, level, ..
         } => (read_only, level),
-        other => panic!("{other:?}"),
+        other @ (Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -58,7 +76,26 @@ async fn outcome_of(spec: RunnerSpec, sql: &str) -> (Outcome, usize) {
                 end: StatementEnd::Complete(o),
                 ..
             } => Some(o.clone()),
-            _ => None,
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => None,
         })
         .unwrap_or_else(|| panic!("no completed statement in {seen:?}"));
     (outcome, rows)

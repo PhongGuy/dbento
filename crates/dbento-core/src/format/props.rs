@@ -230,7 +230,12 @@ fn engines(engine: Engine, sql: &str) -> Vec<String> {
                 .map(|t| norm(&t.to_string()))
                 .collect()
         }
-        _ => {
+        Sqlite
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Surrealdb
+        | Engine::Redis => {
             use sqlite3_parser::lexer::{Scanner, sql::Tokenizer};
             let mut s = Scanner::new(Tokenizer::new());
             let mut out = Vec::new();

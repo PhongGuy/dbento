@@ -44,6 +44,10 @@ pub(crate) fn reply_to_rows(value: Value, max_rows: Option<u64>) -> Result<Shape
     while let Value::Attribute { data, .. } = value {
         value = *data;
     }
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
     match value {
         Value::Okay => Ok(Shaped {
             columns: Vec::new(),
@@ -64,6 +68,10 @@ pub(crate) fn reply_to_rows(value: Value, max_rows: Option<u64>) -> Result<Shape
             Some(width) => {
                 let names: Vec<String> = (1..=width).map(|i| i.to_string()).collect();
                 let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                #[allow(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "Value has too many variants to list; the rest share one arm"
+                )]
                 let rows = items.iter().map(|row| match row {
                     Value::Array(cells) | Value::Set(cells) => cells.iter().collect(),
                     _ => unreachable!("numbered_width admits only arrays and sets"),
@@ -112,7 +120,7 @@ impl Kind {
         match self {
             Kind::None => Kind::One(kind),
             Kind::One(k) if k == kind => self,
-            _ => Kind::Mixed,
+            Kind::One(_) | Kind::Mixed => Kind::Mixed,
         }
     }
 
@@ -276,7 +284,11 @@ pub(crate) fn json(value: &Value) -> Result<Json, ShapeError> {
 pub(crate) fn json_key(key: &Value) -> Result<String, ShapeError> {
     Ok(match json(key)? {
         Json::String(s) => s,
-        other => other.to_string(),
+        other @ (Json::Null
+        | Json::Bool(_)
+        | Json::Number(_)
+        | Json::Array(_)
+        | Json::Object(_)) => other.to_string(),
     })
 }
 

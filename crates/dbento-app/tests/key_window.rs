@@ -26,7 +26,18 @@ fn folder_keys(cx: &mut TestAppContext, s: &Started, aria: &str) -> Option<usize
         .find(|r| r.aria == aria)
         .and_then(|r| match r.kind {
             RowKind::KeyFolder { keys, .. } => Some(keys),
-            _ => None,
+            RowKind::Schema
+            | RowKind::Kind(_)
+            | RowKind::Relation(_)
+            | RowKind::Column { .. }
+            | RowKind::Group(_)
+            | RowKind::Object { .. }
+            | RowKind::Loading
+            | RowKind::Failed { .. }
+            | RowKind::Truncated
+            | RowKind::Empty
+            | RowKind::Key(_)
+            | RowKind::LoadMore => None,
         })
 }
 

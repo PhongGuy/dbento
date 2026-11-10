@@ -24,7 +24,26 @@ fn run_done(e: &Event, id: u64) -> bool {
 fn end_of(seen: &[Event], id: u64) -> Option<&StatementEnd> {
     seen.iter().find_map(|e| match e {
         Event::StatementDone { run_id, end, .. } if *run_id == id => Some(end),
-        _ => None,
+        Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. } => None,
     })
 }
 fn truncated_at(seen: &[Event], id: u64, rows: u64) -> bool {
@@ -289,7 +308,25 @@ async fn the_time_parked_at_the_cap_is_not_statement_time() {
         .iter()
         .find_map(|e| match e {
             Event::StatementDone { elapsed, .. } => Some(*elapsed),
-            _ => None,
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => None,
         })
         .unwrap();
     assert!(elapsed < Duration::from_millis(900), "{elapsed:?}");

@@ -18,7 +18,17 @@ fn fields(e: &ExecuteError) -> (String, Option<String>, Option<String>, Option<u
             position,
             ..
         } => (code.clone(), detail.clone(), hint.clone(), *position),
-        other => panic!("not a database error: {other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }
+        | _) => panic!("not a database error: {other:?}"),
     }
 }
 

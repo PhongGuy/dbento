@@ -517,7 +517,13 @@ fn same_server(dir: &Path, existing: &ConnectionConfig, draft: &ConnectionDraft)
             }
             normalize(have) == normalize(&dir.join(path))
         }
-        engine => {
+        engine @ (Engine::Postgres
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Surrealdb
+        | Engine::Redis) => {
             let default_port = if engine == Engine::Mysql { 3306 } else { 5432 };
             existing
                 .host()
@@ -560,7 +566,9 @@ pub(crate) fn normalize(path: &Path) -> PathBuf {
             Component::ParentDir => {
                 out.pop();
             }
-            other => out.push(other),
+            other @ (Component::Prefix(_) | Component::RootDir | Component::Normal(_)) => {
+                out.push(other)
+            }
         }
     }
     out

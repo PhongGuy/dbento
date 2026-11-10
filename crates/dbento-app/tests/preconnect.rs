@@ -75,7 +75,25 @@ async fn a_failed_connect_is_reported_and_the_next_run_retries() {
         Event::ConnectFailed { message } => {
             assert!(message.contains("DBENTO_SECRET_NOPG"), "{message}")
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     r.send(run_cmd(1, "SELECT 1", Some(10)));
     let (seen, _) = until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 1 })).await;

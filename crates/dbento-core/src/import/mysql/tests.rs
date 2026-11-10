@@ -241,7 +241,19 @@ fn tls_first_then_ssl_mode_then_legacy_then_fallback_then_the_driver_default() {
         .unwrap();
         let from = w.iter().find_map(|w| match w {
             WarningKind::TlsStricter { from } | WarningKind::TlsWeaker { from } => Some(*from),
-            _ => None,
+            WarningKind::PasswordInUrl
+            | WarningKind::DroppedParameter(_)
+            | WarningKind::CaCertMissing
+            | WarningKind::ClientCertMissing
+            | WarningKind::MachineSpecificPath
+            | WarningKind::FileMissing
+            | WarningKind::NotUtf8
+            | WarningKind::ColorsNotImported
+            | WarningKind::BoundByFolder
+            | WarningKind::AuthModel(_)
+            | WarningKind::KeyMissing
+            | WarningKind::SecretUnreadable
+            | WarningKind::ColorUnknown(_) => None,
         });
         (d.tls, from)
     };

@@ -90,7 +90,7 @@ impl StoredSecrets {
             .iter()
             .filter_map(|(n, o)| match o {
                 SecretOutcome::Failed(e) => Some((n.as_str(), e.as_str())),
-                _ => None,
+                SecretOutcome::Stored | SecretOutcome::Present | SecretOutcome::Missing => None,
             })
             .collect()
     }

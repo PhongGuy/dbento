@@ -208,6 +208,10 @@ fn mysql_text_classification(sql: &str) -> Classification {
 /// Reads are queries without DML in their body, SHOW, DESCRIBE, plain EXPLAIN and USE; the rest
 /// writes.
 fn mysql_writes(statement: &Statement) -> bool {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Statement has too many variants to list; the rest share one arm"
+    )]
     match statement {
         Statement::Query(query) => body_writes(&query.body),
         Statement::Explain { .. }
@@ -237,16 +241,26 @@ fn body_writes(body: &SetExpr) -> bool {
         SetExpr::Insert(_) | SetExpr::Update(_) | SetExpr::Delete(_) | SetExpr::Merge(_) => true,
         SetExpr::Query(query) => body_writes(&query.body),
         SetExpr::SetOperation { left, right, .. } => body_writes(left) || body_writes(right),
-        _ => false,
+        SetExpr::Select(_) | SetExpr::Values(_) | SetExpr::Table(_) => false,
     }
 }
 
 /// The confirmation a parsed statement needs, if any; a DML body under WITH counts as top level.
 fn mysql_unguarded(statement: &Statement) -> Option<Unguarded> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Statement has too many variants to list; the rest share one arm"
+    )]
     match statement {
         Statement::Query(query) => match &*query.body {
             SetExpr::Update(inner) | SetExpr::Delete(inner) => mysql_unguarded(inner),
-            _ => None,
+            SetExpr::Select(_)
+            | SetExpr::Query(_)
+            | SetExpr::SetOperation { .. }
+            | SetExpr::Values(_)
+            | SetExpr::Insert(_)
+            | SetExpr::Merge(_)
+            | SetExpr::Table(_) => None,
         },
         Statement::Update(update) if update.selection.is_none() => {
             Some(Unguarded::UpdateWithoutWhere)
@@ -490,6 +504,10 @@ fn unguarded(sql: &str) -> Vec<Unguarded> {
     let bump = Bump::new();
     let mut parser = Parser::new(&bump, sql.as_bytes());
     match parser.next() {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Stmt has too many variants to list; the rest share one arm"
+        )]
         Ok(Some(Cmd::Stmt(s) | Cmd::Explain(s) | Cmd::ExplainQueryPlan(s))) => match s {
             Stmt::Delete {
                 where_clause: None, ..
@@ -555,6 +573,10 @@ pub(crate) fn pg_classification(sql: &str) -> PgClass {
     // runs it without another prompt.
     let mut queue: VecDeque<NodeRef> = parsed.protobuf.nodes().into_iter().map(|n| n.0).collect();
     while let Some(node) = queue.pop_front() {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "NodeRef has too many variants to list; the rest share one arm"
+        )]
         match node {
             NodeRef::PrepareStmt(p) => {
                 if let Some(body) = p.query.as_ref().and_then(|q| q.node.as_ref()) {
@@ -659,7 +681,7 @@ fn reach_walk(value: &Value, reach: &mut PgReach, ctes: &mut Vec<String>) -> Opt
             return items.iter().try_for_each(|v| reach_walk(v, reach, ctes));
         }
         Value::Object(map) => map,
-        _ => return Some(()),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return Some(()),
     };
     let eq = || (String::new(), "=".to_owned());
     for (key, node) in map {

@@ -1,3 +1,4 @@
+#![warn(clippy::wildcard_enum_match_arm)]
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dbento_bench::cases::{Case, PgUrl, Targets, measure};
