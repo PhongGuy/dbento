@@ -1,6 +1,7 @@
 # The gate on every push to master and every pull request. The Linux job runs what
 # `make check` runs locally, with a locked Cargo.lock, and also cross-checks Windows and checks
 # icons, notices and the release scripts. macOS runs clippy only, since tests need containers.
+# A third job checks each engine feature of the core and its shells on its own.
 name: CI
 
 on:
@@ -77,3 +78,28 @@ jobs:
         run: rm -rf target/duckdb-sources
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -Dwarnings
+
+  each-feature:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # rust-cache keeps this tree's folders but strips its files, which breaks a libduckdb-sys rerun.
+      - name: Drop the cached DuckDB sources
+        run: rm -rf target/duckdb-sources
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-hack
+      - name: Each feature alone
+        run: make LOCKED=--locked each-feature

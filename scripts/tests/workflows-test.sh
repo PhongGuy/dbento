@@ -81,7 +81,7 @@ test_ci_installs_the_cross_and_notices_tools() {
 }
 
 test_ci_gate_timeout_and_pins() {
-  [[ $(job_timeouts "$CI") == "gate=120 macos-clippy=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
+  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
   pinned_uses_only "$CI"
 }
 
@@ -102,6 +102,22 @@ test_ci_macos_runs_locked_clippy() {
   grep -qxF '    runs-on: macos-latest' "$CI" || fail "no macos-latest job"
   grep -qxF '        run: cargo clippy --workspace --all-targets --all-features --locked -- -Dwarnings' "$CI" \
     || fail "macOS clippy line"
+}
+
+# Each engine feature builds on its own, so a cfg gap under reduced features fails CI; the
+# powerset is skipped because every combination rebuilds DuckDB and pg_query.
+test_ci_checks_each_feature_alone() {
+  local job
+  job=$(job_body "$CI" each-feature)
+  [[ -n $job ]] || { fail "ci has no each-feature job"; return 0; }
+  grep -qE '^      - uses: taiki-e/install-action@[0-9a-f]{40} # v[0-9.]+$' <<<"$job" || fail "each-feature does not install cargo-hack by pinned action"
+  grep -qxF '          tool: cargo-hack' <<<"$job" || fail "each-feature does not install cargo-hack"
+  grep -qxF '        run: make LOCKED=--locked each-feature' <<<"$job" || fail "each-feature run line"
+  grep -qE '^each-feature:' "$ROOT/Makefile" || fail "no Makefile each-feature target"
+  grep -qxF 'FEATURE_CRATES := -p dbento-core -p dbento-cli -p dbento-mcp' "$ROOT/Makefile" || fail "Makefile FEATURE_CRATES"
+  grep -qE -- 'RUSTFLAGS=-Dwarnings \$\(CARGO\) hack check --each-feature --no-dev-deps \$\(FEATURE_CRATES\)$' "$ROOT/Makefile" \
+    || fail "Makefile each-feature does not run cargo hack on the three crates"
+  if grep -qE -- '--feature-powerset' "$ROOT/Makefile"; then fail "Makefile checks the feature powerset"; fi
 }
 
 # Beta clippy plus a check after cargo update, unlocked on purpose, read-only and pinned.

@@ -96,6 +96,8 @@ impl SecretKey {
         }
     }
 
+    /// Which keychain entry of the connection this names; only the keychain store reads it.
+    #[cfg(feature = "keychain")]
     pub(crate) fn slot(&self) -> Slot {
         self.slot
     }
