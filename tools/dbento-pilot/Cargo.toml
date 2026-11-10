@@ -23,7 +23,7 @@ serde_json = "1"
 toml = "1"
 tempfile = "3"
 png = "0.18"
-dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "mongodb", "redis"] }
+dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb"] }
 
 # Headless frame numbers need an optimised host and app.
 [profile.dev.package."*"]

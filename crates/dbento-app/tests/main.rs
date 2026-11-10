@@ -47,6 +47,7 @@ mod definition_probe;
 mod draft_tabs;
 mod drafts;
 mod duckdb_app;
+mod dynamo_form;
 mod edit_bar;
 mod edit_cells;
 mod edit_copy;

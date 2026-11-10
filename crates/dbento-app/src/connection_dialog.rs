@@ -74,6 +74,12 @@ pub enum Field {
     ReadOnlyUser,
     /// The SurrealDB login's level (`auth_level`).
     AuthLevel,
+    /// The DynamoDB region.
+    Region,
+    /// The DynamoDB endpoint override.
+    Endpoint,
+    /// The DynamoDB access key ID.
+    AccessKeyId,
     /// The statement timeout.
     Timeout,
     /// The sidebar folder.
@@ -99,6 +105,9 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::Uri => Some("e.g. mongodb://user@host:27017/database"),
         Field::Namespace => Some("e.g. app"),
         Field::AuthLevel => Some("root, namespace or database"),
+        Field::Region => Some("e.g. eu-west-1"),
+        Field::Endpoint => Some("optional"),
+        Field::AccessKeyId => Some("optional"),
         Field::Timeout => Some("e.g. 30s"),
         Field::Folder => Some("e.g. Production"),
     }
@@ -177,11 +186,15 @@ pub struct ConnectionForm {
     key_passphrase: Entity<InputState>,
     read_only_user: Entity<InputState>,
     auth_level: Entity<InputState>,
+    region: Entity<InputState>,
+    endpoint: Entity<InputState>,
+    access_key_id: Entity<InputState>,
     timeout: Entity<InputState>,
     folder: Entity<InputState>,
     secret: SecretChoice,
     tls: TlsChoice,
     read_only: bool,
+    consistent_read: bool,
     color: Option<Color>,
     error: Option<String>,
     stale: bool,
@@ -244,6 +257,9 @@ impl ConnectionForm {
         let tls_key = text(Field::TlsKey, &shown.tls_key);
         let read_only_user = text(Field::ReadOnlyUser, &shown.read_only_user);
         let auth_level = text(Field::AuthLevel, &shown.auth_level);
+        let region = text(Field::Region, &shown.region);
+        let endpoint = text(Field::Endpoint, &shown.endpoint);
+        let access_key_id = text(Field::AccessKeyId, &shown.access_key_id);
         let timeout = text(Field::Timeout, &shown.timeout);
         let folder = text(Field::Folder, &shown.folder);
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
@@ -275,6 +291,9 @@ impl ConnectionForm {
             &key_passphrase,
             &read_only_user,
             &auth_level,
+            &region,
+            &endpoint,
+            &access_key_id,
             &timeout,
         ];
         let field_changes = inputs
@@ -306,11 +325,15 @@ impl ConnectionForm {
             key_passphrase,
             read_only_user,
             auth_level,
+            region,
+            endpoint,
+            access_key_id,
             timeout,
             folder,
             secret: shown.secret,
             tls: shown.tls,
             read_only: shown.read_only,
+            consistent_read: shown.consistent_read,
             color: loaded.color,
             loaded,
             error: None,
@@ -404,6 +427,9 @@ impl ConnectionForm {
             (Field::TlsKey, was.tls_key, now.tls_key),
             (Field::ReadOnlyUser, was.read_only_user, now.read_only_user),
             (Field::AuthLevel, was.auth_level, now.auth_level),
+            (Field::Region, was.region, now.region),
+            (Field::Endpoint, was.endpoint, now.endpoint),
+            (Field::AccessKeyId, was.access_key_id, now.access_key_id),
             (Field::Timeout, was.timeout, now.timeout),
             (Field::Folder, was.folder, now.folder),
         ] {
@@ -424,6 +450,9 @@ impl ConnectionForm {
         }
         if self.read_only == was.read_only {
             self.read_only = now.read_only;
+        }
+        if self.consistent_read == was.consistent_read {
+            self.consistent_read = now.consistent_read;
         }
         if self.color == self.loaded.color {
             self.color = loaded.color;
@@ -515,6 +544,9 @@ impl ConnectionForm {
             Field::KeyPassphrase => &self.key_passphrase,
             Field::ReadOnlyUser => &self.read_only_user,
             Field::AuthLevel => &self.auth_level,
+            Field::Region => &self.region,
+            Field::Endpoint => &self.endpoint,
+            Field::AccessKeyId => &self.access_key_id,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
         }
@@ -627,6 +659,12 @@ impl ConnectionForm {
                         };
                     }
                 }
+                // Only `consistent_read` is a flag today; ticked writes true, unticked drops the key.
+                FieldKind::Flag => {
+                    if f.key == "consistent_read" && self.consistent_read != shown.consistent_read {
+                        spec.consistent_read = self.consistent_read.then_some(true);
+                    }
+                }
                 FieldKind::Text | FieldKind::Path | FieldKind::Uri | _ => {
                     let Some((field, _)) = field_of(f.key) else {
                         continue;
@@ -645,6 +683,9 @@ impl ConnectionForm {
                         Field::Database => (&shown.database, &mut spec.database),
                         Field::User => (&shown.user, &mut spec.user),
                         Field::ReadOnlyUser => (&shown.read_only_user, &mut spec.read_only_user),
+                        Field::Region => (&shown.region, &mut spec.region),
+                        Field::Endpoint => (&shown.endpoint, &mut spec.endpoint),
+                        Field::AccessKeyId => (&shown.access_key_id, &mut spec.access_key_id),
                         Field::Name
                         | Field::Port
                         | Field::Password
@@ -710,6 +751,7 @@ impl ConnectionForm {
                 | FieldKind::Secret
                 | FieldKind::Tls
                 | FieldKind::Uri
+                | FieldKind::Flag
                 | _ => None,
             })
         };
@@ -740,6 +782,9 @@ impl ConnectionForm {
             if !was.iter().any(|f| f.kind == FieldKind::Tls) {
                 self.tls = shown.tls;
             }
+            if !had("consistent_read") {
+                self.consistent_read = shown.consistent_read;
+            }
             cx.notify();
             return;
         }
@@ -764,6 +809,9 @@ impl ConnectionForm {
         }
         if !now.iter().any(|f| f.kind == FieldKind::Tls) {
             self.tls = TlsChoice::Default;
+        }
+        if !has("consistent_read") {
+            self.consistent_read = false;
         }
         cx.notify();
     }
@@ -973,6 +1021,22 @@ impl ConnectionForm {
         rows
     }
 
+    // A flag key as a checkbox labelled by its descriptor, `conn-<key with dashes>`; the
+    // only flag key so far is `consistent_read`, whose state the form holds.
+    fn flag_row(&self, f: &FormField, cx: &mut Context<Self>) -> AnyElement {
+        let id = SharedString::from(format!("conn-{}", f.key.replace('_', "-")));
+        let flag = Checkbox::new(id)
+            .small()
+            .label(f.label)
+            .checked(self.consistent_read)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.consistent_read = *checked;
+                this.touched(cx);
+                cx.notify();
+            }));
+        Self::row("", flag, cx)
+    }
+
     // The rows of one descriptor section, in order; a Port joins the field before it.
     fn section_rows(
         &self,
@@ -991,6 +1055,7 @@ impl ConnectionForm {
             match (f.kind, field_of(f.key)) {
                 (FieldKind::Secret, _) => rows.extend(self.secret_rows(f.label, window, cx)),
                 (FieldKind::Tls, _) => rows.extend(self.tls_rows(f.label, window, cx)),
+                (FieldKind::Flag, _) => rows.push(self.flag_row(f, cx)),
                 (FieldKind::Text, Some((field, id))) if next_is_port => {
                     rows.push(self.host_port_row(f.label, id, field, cx));
                     shown.push(&fields[ix + 1]);
@@ -1006,6 +1071,7 @@ impl ConnectionForm {
                         | Engine::Mongodb
                         | Engine::Surrealdb
                         | Engine::Redis
+                        | Engine::Dynamodb
                         | _ => "Choose SQLite file",
                     };
                     rows.push(self.file_row(f.label, id, field, prompt, cx));
@@ -1200,6 +1266,7 @@ impl Render for ConnectionForm {
                 "SurrealDB",
                 "MongoDB",
                 "Redis",
+                "DynamoDB",
             ],
             // An engine the picker does not offer highlights no option.
             ENGINES
@@ -1394,11 +1461,15 @@ struct Shown {
     tls_key: String,
     read_only_user: String,
     auth_level: String,
+    region: String,
+    endpoint: String,
+    access_key_id: String,
     timeout: String,
     folder: String,
     secret: SecretChoice,
     tls: TlsChoice,
     read_only: bool,
+    consistent_read: bool,
 }
 
 impl Shown {
@@ -1418,6 +1489,9 @@ impl Shown {
             Field::TlsKey => &self.tls_key,
             Field::ReadOnlyUser => &self.read_only_user,
             Field::AuthLevel => &self.auth_level,
+            Field::Region => &self.region,
+            Field::Endpoint => &self.endpoint,
+            Field::AccessKeyId => &self.access_key_id,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
             Field::Name | Field::Password | Field::KeyPassphrase => "",
@@ -1449,6 +1523,9 @@ impl Shown {
                 .auth_level
                 .map(|l| l.name().to_owned())
                 .unwrap_or_default(),
+            region: text(&spec.region),
+            endpoint: text(&spec.endpoint),
+            access_key_id: text(&spec.access_key_id),
             timeout: text(&spec.statement_timeout),
             folder: spec
                 .folder
@@ -1462,12 +1539,13 @@ impl Shown {
                 Some(_) => TlsChoice::Verify,
             },
             read_only: spec.read_only.unwrap_or(false),
+            consistent_read: spec.consistent_read.unwrap_or(false),
         }
     }
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 8] = [
+const ENGINES: [Engine; 9] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -1476,6 +1554,7 @@ const ENGINES: [Engine; 8] = [
     Engine::Surrealdb,
     Engine::Mongodb,
     Engine::Redis,
+    Engine::Dynamodb,
 ];
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {
@@ -1498,6 +1577,9 @@ fn field_of(key: &str) -> Option<(Field, &'static str)> {
         "user" => (Field::User, "conn-user"),
         "read_only_user" => (Field::ReadOnlyUser, "conn-read-only-user"),
         "auth_level" => (Field::AuthLevel, "conn-auth-level"),
+        "region" => (Field::Region, "conn-region"),
+        "endpoint" => (Field::Endpoint, "conn-endpoint"),
+        "access_key_id" => (Field::AccessKeyId, "conn-access-key-id"),
         _ => return None,
     })
 }
@@ -1512,6 +1594,8 @@ fn fields_owned(f: &FormField) -> Vec<Field> {
             Field::TlsKey,
             Field::KeyPassphrase,
         ],
+        // A flag is a checkbox, not an input, so it owns none.
+        FieldKind::Flag => Vec::new(),
         FieldKind::Text | FieldKind::Port { .. } | FieldKind::Path | FieldKind::Uri | _ => {
             field_of(f.key)
                 .map(|(field, _)| field)
@@ -1533,6 +1617,9 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
         ("database", &mut spec.database),
         ("user", &mut spec.user),
         ("read_only_user", &mut spec.read_only_user),
+        ("region", &mut spec.region),
+        ("endpoint", &mut spec.endpoint),
+        ("access_key_id", &mut spec.access_key_id),
     ] {
         if !has(key) {
             *slot = None;
@@ -1543,6 +1630,9 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     }
     if !has("auth_level") {
         spec.auth_level = None;
+    }
+    if !has("consistent_read") {
+        spec.consistent_read = None;
     }
     if !has("secret") {
         spec.secret = None;
@@ -1556,9 +1646,19 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     }
 }
 
-// Whether the engine takes a client certificate and key: SQL Server and SurrealDB refuse both.
+// Whether the engine takes a client certificate and key: SQL Server and SurrealDB refuse both,
+// and DynamoDB has no TLS key at all.
 fn client_cert(engine: Engine) -> bool {
-    !matches!(engine, Engine::Mssql | Engine::Surrealdb)
+    match engine {
+        Engine::Mssql | Engine::Surrealdb | Engine::Dynamodb => false,
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis
+        | _ => true,
+    }
 }
 
 // One of the three level names, in any case; trimmed already by the caller.
