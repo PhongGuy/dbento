@@ -545,9 +545,11 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) key_passphrase: Option<&'a Secret>,
     pub(crate) read_only: bool,
     pub(crate) timeout: Option<Duration>,
-    /// See [`SessionOptions::trusted_sql`].
+    /// See [`SessionOptions::trusted_sql`]. Only DuckDB reads it.
+    #[cfg(feature = "duckdb")]
     pub(crate) trusted_sql: bool,
-    /// See [`SessionOptions::bounds`].
+    /// See [`SessionOptions::bounds`]. Only SurrealDB reads it.
+    #[cfg(feature = "surrealdb")]
     pub(crate) bounds: TestBounds,
     /// The workspace folder, which relative certificate paths in a MongoDB `uri` resolve from.
     #[cfg_attr(not(feature = "mongodb"), allow(dead_code))] // only MongoDB reads it
@@ -649,7 +651,9 @@ pub async fn connect(
         key_passphrase: opts.key_passphrase.as_ref(),
         read_only,
         timeout,
+        #[cfg(feature = "duckdb")]
         trusted_sql: opts.trusted_sql,
+        #[cfg(feature = "surrealdb")]
         bounds: opts.bounds,
         ws_dir: ws.dir(),
     };

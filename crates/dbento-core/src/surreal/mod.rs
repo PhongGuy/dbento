@@ -6,6 +6,7 @@ pub(crate) mod cancel;
 pub(crate) mod catalog;
 #[cfg(feature = "surrealdb")]
 pub(crate) mod cell;
+#[cfg(feature = "surrealdb")]
 pub(crate) mod classify;
 #[cfg(feature = "surrealdb")]
 pub(crate) mod decode;

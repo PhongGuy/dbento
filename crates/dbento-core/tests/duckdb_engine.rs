@@ -1,7 +1,7 @@
 //! `Engine::Duckdb`: workspace rules, the connection form, capabilities and dialect arms.
 use dbento_core::{
     Engine, FieldKind, FormatOptions, OpenError, Workspace, connection_form, default_schema,
-    format_sql, line_comment_starts, quote_ident, quote_literal, statement_ranges,
+    format_sql, line_comment_starts, quote_ident, statement_ranges,
 };
 
 fn ws_with(conn: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -191,7 +191,7 @@ fn quoted_names_and_literals_round_trip_through_duckdb() {
         assert_eq!(st.schema().field(0).name(), name, "{q}");
     }
     for text in ["it's", "a\\b", "", "é", "line\nbreak", "''"] {
-        let lit = quote_literal(Engine::Duckdb, text);
+        let lit = dbento_core::quote_literal(Engine::Duckdb, text);
         let back: String = c
             .query_row(&format!("SELECT {lit}"), [], |r| r.get(0))
             .unwrap();
