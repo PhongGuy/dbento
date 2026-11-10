@@ -3,6 +3,7 @@
 pub(crate) mod classify;
 #[cfg(feature = "dynamodb")]
 pub(crate) mod columns;
+pub(crate) mod creds;
 pub(crate) mod lex;
 pub(crate) mod ops;
 #[cfg(feature = "dynamodb")]
