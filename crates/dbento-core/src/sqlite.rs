@@ -820,6 +820,7 @@ fn stream_rows(
                                     truncated_by,
                                     extra_results: 0,
                                     rolled_back: false,
+                                    consumed_capacity: None,
                                 }))
                                 .is_ok();
                         match parked.then(|| resume.recv()) {
@@ -913,6 +914,7 @@ fn stream_rows(
             truncated_by,
             extra_results: 0,
             rolled_back: false,
+            consumed_capacity: None,
         }),
     });
     Streamed {

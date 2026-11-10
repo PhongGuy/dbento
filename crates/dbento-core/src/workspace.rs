@@ -356,14 +356,15 @@ impl SavedQuery {
         self.connection.as_deref()
     }
 
-    /// The language its extension implies: `.js` (any case) is the shell, `.surql` is
-    /// SurrealQL, `.redis` is Redis commands, anything else SQL.
+    /// The language its extension implies, in any case: `.js` is the shell, `.surql` is
+    /// SurrealQL, `.redis` is Redis commands, `.partiql` is PartiQL, anything else SQL.
     pub fn language(&self) -> QueryLanguage {
         let ext = self.path.extension();
         [
             QueryLanguage::MongoShell,
             QueryLanguage::SurrealQl,
             QueryLanguage::RedisCommands,
+            QueryLanguage::PartiQl,
         ]
         .into_iter()
         .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
@@ -726,7 +727,8 @@ impl Workspace {
         std::fs::create_dir_all(&queries).map_err(|e| io(&queries, e))
     }
 
-    /// Every `.sql`, `.js` and `.surql` file under `queries/`, sorted by path.
+    /// Every `.sql`, `.js`, `.surql`, `.redis` and `.partiql` file under `queries/`, sorted by
+    /// path.
     pub fn saved_queries(&self) -> Result<Vec<SavedQuery>, OpenError> {
         let root = self.dir.join("queries");
         let mut found = Vec::new();
@@ -1019,8 +1021,8 @@ impl Workspace {
     }
 }
 
-/// Recursively gathers `.sql`, `.js`, `.surql` and `.redis` files below `dir`, skipping any whose
-/// real path leaves `root` (the canonical `queries/`) and dangling links.
+/// Recursively gathers `.sql`, `.js`, `.surql`, `.redis` and `.partiql` files below `dir`,
+/// skipping any whose real path leaves `root` (the canonical `queries/`) and dangling links.
 fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -1033,6 +1035,7 @@ fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::
                 QueryLanguage::MongoShell,
                 QueryLanguage::SurrealQl,
                 QueryLanguage::RedisCommands,
+                QueryLanguage::PartiQl,
             ]
             .iter()
             .any(|l| e.eq_ignore_ascii_case(l.file_extension()))

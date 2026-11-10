@@ -508,6 +508,7 @@ fn outcome(rows: u64, rows_affected: Option<u64>, cut: Option<TruncatedBy>) -> O
         truncated_by: cut,
         extra_results: 0,
         rolled_back: false,
+        consumed_capacity: None,
     }
 }
 
