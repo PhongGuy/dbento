@@ -85,14 +85,30 @@ async fn a_client_cancel_stops_an_approved_statement_in_the_database() {
     let server = TestServer::postgres(&db, "").await;
     let sql = "UPDATE t SET a = (SELECT 2 FROM pg_sleep(60))";
     server.decided("pg", sql, Decision::Approve).await;
-    let active = format!(
-        "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query = '{}' AND datname = '{}'",
+    let backends = format!(
+        "SELECT count(*) FROM pg_stat_activity WHERE query = '{}' AND datname = '{}'",
         sql.replace('\'', "''"),
         db.database()
     );
+    // Only the run sleeps: the classification's Parse also shows the text as active, and a
+    // cancel there ends the call before anything runs. A lock holds that Parse visible.
+    let active = format!("{backends} AND state = 'active' AND wait_event = 'PgSleep'");
+    let locker = db.admin().await;
+    locker
+        .batch_execute("BEGIN; LOCK TABLE t IN ACCESS EXCLUSIVE MODE")
+        .await
+        .unwrap();
     let handle = server
         .start_call("execute", json!({"connection": "pg", "sql": sql}))
         .await;
+    let blocked = format!("{backends} AND wait_event_type = 'Lock'");
+    assert!(
+        until(&db, &blocked, "1").await,
+        "the classification never waited"
+    );
+    let early = db.scalar(&active).await;
+    locker.batch_execute("COMMIT").await.unwrap();
+    assert_eq!(early.as_deref(), Some("0"), "a parse read as the run");
     assert!(until(&db, &active, "1").await, "the update never started");
     handle.cancel(None).await.expect("cancel sent");
     assert!(
