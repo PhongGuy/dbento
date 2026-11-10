@@ -3,8 +3,11 @@
 //! A finished batch keeps every cell in one byte arena, column after column, with one end offset
 //! per cell and three bitmaps (null, bytes, number). It costs a handful of allocations however
 //! many columns it has, since Postgres can close tens of thousands of small batches per result.
-//! MongoDB rows also keep their exact document in a side arena, which costs SQL engines nothing.
+//! MongoDB and DynamoDB rows also keep their exact document in a side arena, which costs SQL
+//! engines nothing.
 
+#[cfg(feature = "dynamodb")]
+use crate::dynamo::render as dynamo_render;
 #[cfg(feature = "mongodb")]
 use crate::mongo::render;
 
@@ -147,19 +150,51 @@ pub struct ResultBatch {
     documents: Vec<u8>,
     /// Each row's end in `documents`: one per row, or none at all.
     document_ends: Vec<u32>,
+    /// How every document in `documents` is encoded.
+    doc_format: DocFormat,
 }
 
-/// The exact stored document behind a row. Rendering needs the `mongodb` feature, without which
-/// no batch holds a document.
+/// How a batch's documents are encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DocFormat {
+    /// MongoDB's raw BSON.
+    #[default]
+    Bson,
+    /// Typed DynamoDB JSON, such as `{"pk":{"S":"a"}}`.
+    #[cfg_attr(not(feature = "dynamodb"), allow(dead_code))]
+    // only the DynamoDB driver builds it
+    DynamoJson,
+}
+
+/// The exact stored document behind a row: MongoDB BSON or typed DynamoDB JSON. Rendering needs
+/// the engine's feature, without which no batch holds such a document.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DocumentRef<'a> {
     bytes: &'a [u8],
+    format: DocFormat,
 }
 
 impl DocumentRef<'_> {
-    /// Mongosh syntax; one field per line when `pretty`.
+    /// The engine's own syntax: mongosh for MongoDB, a PartiQL literal for DynamoDB; one field
+    /// per line when `pretty`.
     pub fn to_shell(self, pretty: bool) -> String {
+        match self.format {
+            DocFormat::Bson => self.bson_shell(pretty),
+            DocFormat::DynamoJson => self.dynamo_shell(pretty),
+        }
+    }
+
+    /// JSON in field order. `canonical` keeps every type (MongoDB extended JSON, or typed
+    /// DynamoDB JSON); otherwise it reads as plain JSON.
+    pub fn to_extended_json(self, canonical: bool) -> String {
+        match self.format {
+            DocFormat::Bson => self.bson_extended_json(canonical),
+            DocFormat::DynamoJson => self.dynamo_json(canonical),
+        }
+    }
+
+    fn bson_shell(self, pretty: bool) -> String {
         #[cfg(feature = "mongodb")]
         {
             self.rendered(|document| {
@@ -177,13 +212,41 @@ impl DocumentRef<'_> {
         }
     }
 
-    /// Extended JSON in field order; `canonical` keeps every type, relaxed reads as plain JSON.
-    pub fn to_extended_json(self, canonical: bool) -> String {
+    fn bson_extended_json(self, canonical: bool) -> String {
         #[cfg(feature = "mongodb")]
         {
             self.rendered(|document| render::extended_json(document, canonical))
         }
         #[cfg(not(feature = "mongodb"))]
+        {
+            let _ = canonical;
+            String::new()
+        }
+    }
+
+    fn dynamo_shell(self, pretty: bool) -> String {
+        #[cfg(feature = "dynamodb")]
+        {
+            dynamo_render::document_literal(self.bytes, pretty)
+        }
+        #[cfg(not(feature = "dynamodb"))]
+        {
+            let _ = pretty;
+            String::new()
+        }
+    }
+
+    // The stored bytes already are typed DynamoDB JSON, so the canonical form is them as text.
+    fn dynamo_json(self, canonical: bool) -> String {
+        #[cfg(feature = "dynamodb")]
+        {
+            if canonical {
+                String::from_utf8_lossy(self.bytes).into_owned()
+            } else {
+                dynamo_render::document_plain_json(self.bytes)
+            }
+        }
+        #[cfg(not(feature = "dynamodb"))]
         {
             let _ = canonical;
             String::new()
@@ -266,6 +329,7 @@ impl ResultBatch {
             .map_or(0, |prev| self.document_ends[prev]);
         Some(DocumentRef {
             bytes: &self.documents[start as usize..end as usize],
+            format: self.doc_format,
         })
     }
 
@@ -286,6 +350,7 @@ impl ResultBatch {
         let n = n.min(self.rows);
         let rows = self.rows - n;
         let mut out = ResultBatch::empty(rows, self.cols);
+        out.doc_format = self.doc_format;
         // Each column keeps its tail of cells, with ends rebased to the tail's first byte.
         let cut = |col: usize| match n {
             0 => 0,
@@ -343,6 +408,7 @@ impl ResultBatch {
             numbers: Vec::new(),
             documents: Vec::new(),
             document_ends: Vec::new(),
+            doc_format: DocFormat::Bson,
         }
     }
 
@@ -412,6 +478,8 @@ pub(crate) struct BatchBuilder {
     total: u64,
     documents: Vec<u8>,
     document_ends: Vec<u32>,
+    /// Stamped on every batch `finish` closes.
+    doc_format: DocFormat,
 }
 
 impl BatchBuilder {
@@ -423,7 +491,15 @@ impl BatchBuilder {
             total: 0,
             documents: Vec::new(),
             document_ends: Vec::new(),
+            doc_format: DocFormat::Bson,
         }
+    }
+
+    /// Marks every batch this builder closes as holding documents in `format`.
+    #[cfg_attr(not(feature = "dynamodb"), allow(dead_code))]
+    pub(crate) fn with_document_format(mut self, format: DocFormat) -> Self {
+        self.doc_format = format;
+        self
     }
 
     /// Cell and document bytes of every row pushed since creation, across batches.
@@ -447,7 +523,7 @@ impl BatchBuilder {
     }
 
     /// `push_typed_row` plus the raw document, whose bytes count toward the caps and the total.
-    #[cfg_attr(not(feature = "mongodb"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "mongodb", feature = "dynamodb")), allow(dead_code))]
     pub(crate) fn push_document_row(
         &mut self,
         row: &[CellRef<'_>],
@@ -528,6 +604,7 @@ impl BatchBuilder {
         batch.documents.shrink_to_fit();
         batch.document_ends = std::mem::take(&mut self.document_ends);
         batch.document_ends.shrink_to_fit();
+        batch.doc_format = self.doc_format;
         batch
     }
 }
@@ -707,6 +784,7 @@ mod tests {
             numbers: Vec::with_capacity(4),
             documents: Vec::with_capacity(7),
             document_ends: Vec::with_capacity(1),
+            doc_format: DocFormat::Bson,
         };
         let want = 10 + 6 * size_of::<usize>() + 5 * 4 + (3 + 2 + 4) * 8 + 7 + 4;
         assert_eq!(batch.heap_bytes(), want);
@@ -839,12 +917,44 @@ mod tests {
         assert_eq!(own.document(0).unwrap().bytes.len(), MAX_BATCH_BYTES);
     }
 
+    #[test]
+    fn a_builder_stamps_its_document_format_on_every_batch_and_skip_keeps_it() {
+        let mut b = BatchBuilder::new(1).with_document_format(DocFormat::DynamoJson);
+        for doc in [&b"{}"[..], b"{\"a\":{\"S\":\"x\"}}"] {
+            assert!(
+                b.push_document_row(&[CellRef::Null], |_| false, doc)
+                    .is_none()
+            );
+        }
+        let batch = b.finish();
+        assert_eq!(batch.document(0).unwrap().format, DocFormat::DynamoJson);
+        let tail = batch.skip(1);
+        assert_eq!(tail.document(0).unwrap().format, DocFormat::DynamoJson);
+        assert_eq!(tail.document(0).unwrap().bytes, b"{\"a\":{\"S\":\"x\"}}");
+        assert!(
+            b.push_document_row(&[CellRef::Null], |_| false, b"{}")
+                .is_none()
+        );
+        assert_eq!(
+            b.finish().document(0).unwrap().format,
+            DocFormat::DynamoJson
+        );
+        let mut plain = BatchBuilder::new(1);
+        assert!(
+            plain
+                .push_document_row(&[CellRef::Null], |_| false, b"x")
+                .is_none()
+        );
+        assert_eq!(plain.finish().document(0).unwrap().format, DocFormat::Bson);
+    }
+
     #[cfg(feature = "mongodb")]
     #[test]
     fn a_document_renders_in_the_shell_and_as_extended_json() {
         let raw = bson::rawdoc! { "b": 5_i64, "a": [1] };
         let document = DocumentRef {
             bytes: raw.as_bytes(),
+            format: DocFormat::Bson,
         };
         assert_eq!(document.to_shell(false), "{ b: Long('5'), a: [ 1 ] }");
         assert_eq!(
@@ -867,7 +977,10 @@ mod tests {
             let len = i32::try_from(bytes.len() + 8).unwrap();
             bytes = [&len.to_le_bytes()[..], &[3, b'a', 0], &bytes, &[0]].concat();
         }
-        let document = DocumentRef { bytes: &bytes };
+        let document = DocumentRef {
+            bytes: &bytes,
+            format: DocFormat::Bson,
+        };
         for text in [document.to_shell(true), document.to_extended_json(false)] {
             assert!(text.starts_with("/* undecodable document: "), "{text}");
             assert!(text.contains("nested deeper than 200 levels"), "{text}");
@@ -879,7 +992,10 @@ mod tests {
     fn an_undecodable_document_says_so_and_why() {
         // Too short to be a document, then a sound frame around an element type BSON lacks.
         for bytes in [&b"one"[..], &[8, 0, 0, 0, 0x42, b'a', 0, 0]] {
-            let document = DocumentRef { bytes };
+            let document = DocumentRef {
+                bytes,
+                format: DocFormat::Bson,
+            };
             for text in [document.to_shell(false), document.to_extended_json(true)] {
                 let reason = text
                     .strip_prefix("/* undecodable document: ")

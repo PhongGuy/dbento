@@ -11,6 +11,8 @@ use base64::engine::general_purpose::STANDARD;
 use serde::de::IgnoredAny;
 use serde_json::{Map, Value, json};
 
+use crate::dynamo::lex::quote_string;
+
 /// One rendered grid cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cell {
@@ -163,18 +165,14 @@ pub(crate) fn map_literal(item: &Map<String, Value>, pretty: bool) -> String {
     }
     let lines: Vec<String> = item
         .iter()
-        .map(|(k, v)| format!("  {}: {}", quote(k), literal(v)))
+        .map(|(k, v)| format!("  {}: {}", quote_string(k), literal(v)))
         .collect();
     format!("{{\n{}\n}}", lines.join(",\n"))
 }
 
-fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
 fn write_literal(out: &mut String, typed: &Value) {
     match view(typed) {
-        Typed::S(s) | Typed::B(s) => out.push_str(&quote(s)),
+        Typed::S(s) | Typed::B(s) => out.push_str(&quote_string(s)),
         Typed::N(n) => out.push_str(n),
         Typed::Bool(b) => out.push_str(if b { "true" } else { "false" }),
         Typed::Null => out.push_str("NULL"),
@@ -187,7 +185,7 @@ fn write_literal(out: &mut String, typed: &Value) {
         Typed::Ss(items) | Typed::Bs(items) => {
             out.push_str("<<");
             write_list(out, items, |out, v| match v.as_str() {
-                Some(s) => out.push_str(&quote(s)),
+                Some(s) => out.push_str(&quote_string(s)),
                 None => out.push_str(UNKNOWN_LITERAL),
             });
             out.push_str(">>");
@@ -209,7 +207,7 @@ fn write_map_literal(out: &mut String, map: &Map<String, Value>) {
         if i > 0 {
             out.push_str(", ");
         }
-        out.push_str(&quote(k));
+        out.push_str(&quote_string(k));
         out.push_str(": ");
         write_literal(out, v);
     }
@@ -237,6 +235,27 @@ pub(crate) fn map_plain_json(item: &Map<String, Value>) -> String {
     let mut out = String::new();
     write_plain_map(&mut out, item);
     out
+}
+
+/// A stored typed-JSON item as a PartiQL map literal, as `map_literal` renders it.
+pub(crate) fn document_literal(bytes: &[u8], pretty: bool) -> String {
+    decoded(bytes, |item| map_literal(item, pretty))
+}
+
+/// A stored typed-JSON item as compact plain JSON.
+pub(crate) fn document_plain_json(bytes: &[u8]) -> String {
+    decoded(bytes, map_plain_json)
+}
+
+// These return text with no error path, so a document that will not decode gives its reason.
+fn decoded(bytes: &[u8], write: impl FnOnce(&Map<String, Value>) -> String) -> String {
+    match serde_json::from_slice::<Value>(bytes) {
+        Ok(Value::Object(item)) => write(&item),
+        Ok(
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_),
+        ) => "/* undecodable document: not a JSON object */".to_owned(),
+        Err(e) => format!("/* undecodable document: {e} */"),
+    }
 }
 
 // Written by hand because serde_json's Number cannot hold a 38-digit integer exactly.

@@ -5,8 +5,8 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use serde_json::{Value, json};
 
 use super::{
-    Cell, cell, item_to_typed, literal, map_literal, map_plain_json, plain_json, to_typed,
-    type_name,
+    Cell, cell, document_literal, document_plain_json, item_to_typed, literal, map_literal,
+    map_plain_json, plain_json, to_typed, type_name,
 };
 
 const BIG: &str = "12345678901234567890123456789012345678";
@@ -187,5 +187,18 @@ fn a_number_json_cannot_spell_is_written_as_a_string() {
         ("NaN", "\"NaN\""),
     ] {
         assert_eq!(plain_json(&json!({ "N": text })), want, "{text}");
+    }
+}
+
+#[test]
+fn a_stored_document_that_is_not_a_json_object_says_why() {
+    for bytes in [&b"[1]"[..], b"{\"a\":"] {
+        for text in [document_literal(bytes, false), document_plain_json(bytes)] {
+            let reason = text
+                .strip_prefix("/* undecodable document: ")
+                .and_then(|t| t.strip_suffix(" */"))
+                .unwrap_or_else(|| panic!("{text}"));
+            assert!(!reason.is_empty(), "{text}");
+        }
     }
 }
