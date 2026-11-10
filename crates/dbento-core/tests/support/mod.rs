@@ -511,7 +511,7 @@ impl MgFixture {
 }
 
 /// Options that force a read-only session.
-#[cfg(any(feature = "mongodb", feature = "redis"))]
+#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
 pub fn forced() -> SessionOptions {
     let mut o = SessionOptions::default();
     o.force_read_only = true;
@@ -519,19 +519,19 @@ pub fn forced() -> SessionOptions {
 }
 
 /// One statement that must succeed.
-#[cfg(any(feature = "mongodb", feature = "redis"))]
+#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
 pub async fn one(s: &mut Session, text: &str, limits: Limits) -> Ran {
     run(s, text, limits).await.remove(0).unwrap()
 }
 
 /// `one` with no limits.
-#[cfg(any(feature = "mongodb", feature = "redis"))]
+#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
 pub async fn read(s: &mut Session, text: &str) -> Ran {
     one(s, text, Limits::default()).await
 }
 
 /// One statement that must fail.
-#[cfg(any(feature = "mongodb", feature = "redis"))]
+#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
 pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
     match run(s, text, Limits::default()).await.remove(0) {
         Ok(ran) => panic!("{text}: {:?}", ran.outcome),
@@ -540,7 +540,7 @@ pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
 }
 
 /// A `Database` error's code.
-#[cfg(any(feature = "mongodb", feature = "redis"))]
+#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
 pub fn code_of(e: ExecuteError) -> String {
     match e {
         ExecuteError::Database { code, .. } => code,
@@ -555,6 +555,35 @@ pub fn code_of(e: ExecuteError) -> String {
         | ExecuteError::ResultExpired
         | ExecuteError::SessionEnded { .. }
         | _) => panic!("{other:?}"),
+    }
+}
+
+#[cfg(feature = "dynamodb")]
+pub struct DyFixture {
+    pub db: dbento_testkit::DynamoDb,
+    pub dir: tempfile::TempDir,
+    pub ws: Workspace,
+}
+
+/// One connection `moto` on a fresh seeded `dynamo_db()`; `extra_toml` joins its table.
+#[cfg(feature = "dynamodb")]
+pub async fn dy(extra_toml: &str) -> DyFixture {
+    let db = dbento_testkit::dynamo_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!("dbento = 1\n{}", db.connection_toml("moto", extra_toml));
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    DyFixture { db, dir, ws }
+}
+
+#[cfg(feature = "dynamodb")]
+impl DyFixture {
+    pub fn conn(&self) -> &ConnectionConfig {
+        self.ws.connection("moto").unwrap()
+    }
+    pub async fn session(&self, opts: SessionOptions) -> Session {
+        let secret = Some(Secret::new(dbento_testkit::DY_SECRET));
+        connect(&self.ws, self.conn(), secret, opts).await.unwrap()
     }
 }
 
