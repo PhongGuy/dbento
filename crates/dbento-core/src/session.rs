@@ -12,6 +12,8 @@ use crate::Secret;
 use crate::capacity::CapacityUnits;
 #[cfg(feature = "duckdb")]
 use crate::duckdb::{DuckCancel, DuckDriver};
+#[cfg(feature = "dynamodb")]
+use crate::dynamo::{driver::DynamoSession, stream::DynamoCancel};
 use crate::explain::{ExplainOutput, ExplainRequest};
 use crate::fkeys::{ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
@@ -487,6 +489,10 @@ impl ExecuteError {
                  stand, and only an open transaction was rolled back"
                     .to_owned()
             }
+            // An unanswered write may still have been applied; DynamoDB has no transaction here.
+            (ExecuteError::Timeout, Engine::Dynamodb) => {
+                "the statement timed out; if it wrote, the write may have been applied".to_owned()
+            }
             (ExecuteError::Timeout, Engine::Mongodb) => {
                 "the statement timed out; a write may have kept part of its changes".to_owned()
             }
@@ -610,6 +616,8 @@ enum SessionInner {
     Mongodb(MongoDriver),
     #[cfg(feature = "redis")]
     Redis(RedisSession),
+    #[cfg(feature = "dynamodb")]
+    Dynamodb(DynamoSession),
 }
 
 enum ScriptInner {
@@ -626,6 +634,8 @@ enum ScriptInner {
     Mongodb(Box<<MongoDriver as Driver>::Script>),
     #[cfg(feature = "redis")]
     Redis(Box<<RedisSession as Driver>::Script>),
+    #[cfg(feature = "dynamodb")]
+    Dynamodb(Box<<DynamoSession as Driver>::Script>),
 }
 
 enum StreamInner {
@@ -642,6 +652,8 @@ enum StreamInner {
     Mongodb(Box<<MongoDriver as Driver>::Stream>),
     #[cfg(feature = "redis")]
     Redis(Box<<RedisSession as Driver>::Stream>),
+    #[cfg(feature = "dynamodb")]
+    Dynamodb(Box<<DynamoSession as Driver>::Stream>),
 }
 
 /// Opens a session on `conn`. `secret` is the resolved password, if the engine needs one.
@@ -754,6 +766,16 @@ pub async fn connect(
         Engine::Redis => Err(ConnectError::Unsupported {
             reason: "Redis is not available in this build".to_owned(),
         }),
+        #[cfg(feature = "dynamodb")]
+        Engine::Dynamodb => {
+            let d = DynamoSession::connect(params).await?;
+            let level = d.read_only_level(read_only);
+            Ok(Session {
+                inner: SessionInner::Dynamodb(d),
+                read_only: level,
+            })
+        }
+        #[cfg(not(feature = "dynamodb"))]
         Engine::Dynamodb => Err(ConnectError::Unsupported {
             reason: "DynamoDB is not available in this build".to_owned(),
         }),
@@ -828,6 +850,8 @@ impl Session {
             SessionInner::Mongodb(_) => Engine::Mongodb,
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Engine::Redis,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Engine::Dynamodb,
         }
     }
 
@@ -846,6 +870,8 @@ impl Session {
             SessionInner::Mongodb(d) => Some(d.server()),
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => Some(d.server()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => Some(d.server()),
         }
     }
 
@@ -886,6 +912,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.settings_changed(),
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.settings_changed(),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => false,
         }
     }
 
@@ -910,6 +938,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.moved_database(),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => None,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => None,
         }
     }
 
@@ -933,6 +963,8 @@ impl Session {
             SessionInner::Mongodb(d) => ScriptInner::Mongodb(Box::new(d.start_script(sql))),
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => ScriptInner::Redis(Box::new(d.start_script(sql))),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => ScriptInner::Dynamodb(Box::new(d.start_script(sql))),
         };
         Script {
             inner,
@@ -955,6 +987,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.cancel_handle(),
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.cancel_handle(),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.cancel_handle(),
         }
     }
 
@@ -979,6 +1013,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.settle().await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.settle().await,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.settle().await,
         }
     }
 
@@ -1000,6 +1036,8 @@ impl Session {
             SessionInner::Mongodb(_) => std::future::pending().await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.closed().await,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => std::future::pending().await,
         }
     }
 
@@ -1018,6 +1056,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.schemas().await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.schemas().await,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.schemas().await,
         }
     }
 
@@ -1036,6 +1076,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.relations(schema).await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.relations(schema).await,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.relations(schema).await,
         }
     }
 
@@ -1054,6 +1096,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.columns(rel).await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.columns(rel).await,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.columns(rel).await,
         }
     }
 
@@ -1080,6 +1124,10 @@ impl Session {
             }),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(IntrospectError::Unsupported {
+                what: "edit targets",
+            }),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
         }
@@ -1116,6 +1164,8 @@ impl Session {
                     what: "foreign keys",
                 });
             }
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Vec::new(),
         };
         sort_keys(&mut keys);
         Ok(keys)
@@ -1140,6 +1190,8 @@ impl Session {
             SessionInner::Mongodb(d) => crate::mongo::catalog::relation_objects(d, rel).await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(IntrospectError::Unsupported { what: NO_TABLES }),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.relation_objects(rel).await,
         }
     }
 
@@ -1161,6 +1213,8 @@ impl Session {
             SessionInner::Mongodb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
         }
     }
 
@@ -1185,6 +1239,10 @@ impl Session {
             }),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(DefinitionError::Unsupported {
+                what: object.label(),
+            }),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Err(DefinitionError::Unsupported {
                 what: object.label(),
             }),
         }
@@ -1255,6 +1313,8 @@ impl Session {
             SessionInner::Mongodb(_) => Ok(vec![None; columns.len()]),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Ok(vec![None; columns.len()]),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Ok(vec![None; columns.len()]),
         }
     }
 
@@ -1311,6 +1371,8 @@ impl Session {
             SessionInner::Mongodb(_) => Err(bound_unsupported()),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(bound_unsupported()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Err(bound_unsupported()),
         }
     }
 
@@ -1342,6 +1404,8 @@ impl Session {
             SessionInner::Mongodb(_) => Err(bound_unsupported()),
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(bound_unsupported()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Err(bound_unsupported()),
         }
     }
 
@@ -1365,6 +1429,8 @@ impl Session {
             SessionInner::Mongodb(d) => d.close().await,
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.close().await,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => d.close().await,
         }
     }
 }
@@ -1392,6 +1458,8 @@ impl Script<'_> {
             ScriptInner::Mongodb(s) => MongoDriver::prepare_next(s).await?,
             #[cfg(feature = "redis")]
             ScriptInner::Redis(s) => RedisSession::prepare_next(s).await?,
+            #[cfg(feature = "dynamodb")]
+            ScriptInner::Dynamodb(s) => DynamoSession::prepare_next(s).await?,
         };
         Some(prepared.map(|prepared| Pending {
             script: &mut self.inner,
@@ -1433,6 +1501,8 @@ impl<'a> Pending<'a> {
             ScriptInner::Mongodb(s) => MongoDriver::is_last(s).await,
             #[cfg(feature = "redis")]
             ScriptInner::Redis(s) => RedisSession::is_last(s).await,
+            #[cfg(feature = "dynamodb")]
+            ScriptInner::Dynamodb(s) => DynamoSession::is_last(s).await,
         }
     }
 
@@ -1477,6 +1547,11 @@ impl<'a> Pending<'a> {
             ScriptInner::Redis(s) => {
                 let (columns, stream) = Box::pin(RedisSession::execute(s, limits)).await?;
                 (columns, StreamInner::Redis(Box::new(stream)))
+            }
+            #[cfg(feature = "dynamodb")]
+            ScriptInner::Dynamodb(s) => {
+                let (columns, stream) = Box::pin(DynamoSession::execute(s, limits)).await?;
+                (columns, StreamInner::Dynamodb(Box::new(stream)))
             }
         };
         Ok(ResultStream {
@@ -1526,6 +1601,10 @@ impl ResultStream<'_> {
             StreamInner::Mongodb(s) => MongoDriver::next_event(s).await,
             #[cfg(feature = "redis")]
             StreamInner::Redis(s) => RedisSession::next_event(s).await,
+            #[cfg(feature = "dynamodb")]
+            // Pinned on the heap: the SDK's send future nests deep enough to overflow the
+            // layout query depth of any caller that holds this future inline.
+            StreamInner::Dynamodb(s) => Box::pin(DynamoSession::next_event(s)).await,
         };
         let item = match item {
             Ok(i) => i,
@@ -1573,6 +1652,8 @@ impl ResultStream<'_> {
             StreamInner::Mongodb(s) => MongoDriver::extend(s, more)?,
             #[cfg(feature = "redis")]
             StreamInner::Redis(s) => RedisSession::extend(s, more)?,
+            #[cfg(feature = "dynamodb")]
+            StreamInner::Dynamodb(s) => DynamoSession::extend(s, more)?,
         }
         self.outcome = None;
         Ok(())
@@ -1602,6 +1683,8 @@ enum CancelInner {
     Mongodb(Arc<MongoCancel>),
     #[cfg(feature = "redis")]
     Redis(Arc<RedisCancel>),
+    #[cfg(feature = "dynamodb")]
+    Dynamodb(Arc<DynamoCancel>),
 }
 
 impl CancelHandle {
@@ -1657,6 +1740,13 @@ impl CancelHandle {
         }
     }
 
+    #[cfg(feature = "dynamodb")]
+    pub(crate) fn dynamo(cancel: Arc<DynamoCancel>) -> Self {
+        CancelHandle {
+            inner: CancelInner::Dynamodb(cancel),
+        }
+    }
+
     /// Best effort; never blocks. A Postgres cancel runs on the runtime that opened the
     /// session, so once that runtime has shut down this does nothing.
     pub fn cancel(&self) {
@@ -1673,6 +1763,8 @@ impl CancelHandle {
             CancelInner::Mongodb(c) => c.cancel(),
             #[cfg(feature = "redis")]
             CancelInner::Redis(c) => c.cancel(),
+            #[cfg(feature = "dynamodb")]
+            CancelInner::Dynamodb(c) => c.cancel(),
         }
     }
 }
@@ -1731,6 +1823,12 @@ mod tests {
         let text = ExecuteError::StoppedAtDrainCap.message_for(Engine::Surrealdb);
         assert!(text.contains("earlier statements"), "{text}");
         assert!(text.contains("socket was closed"), "{text}");
+    }
+
+    #[test]
+    fn dynamodb_says_a_timed_out_write_may_have_been_applied() {
+        let text = ExecuteError::Timeout.message_for(Engine::Dynamodb);
+        assert!(text.contains("may have been applied"), "{text}");
     }
 
     #[test]

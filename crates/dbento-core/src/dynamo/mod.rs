@@ -9,6 +9,8 @@ pub(crate) mod client;
 pub(crate) mod columns;
 pub(crate) mod creds;
 #[cfg(feature = "dynamodb")]
+pub(crate) mod driver;
+#[cfg(feature = "dynamodb")]
 pub(crate) mod errors;
 pub(crate) mod lex;
 pub(crate) mod ops;

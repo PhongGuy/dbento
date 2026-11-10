@@ -253,8 +253,29 @@ fn the_residual_says_iam_is_out_of_sight() {
     );
 }
 
+#[cfg(feature = "dynamodb")]
 #[tokio::test]
-async fn connect_refuses_dynamodb_until_the_driver_exists() {
+async fn connect_without_a_server_is_open_naming_the_endpoint() {
+    let (_d, ws) = open(&DY.replace("http://127.0.0.1:5000", "http://127.0.0.1:9"));
+    match connect(
+        &ws,
+        ws.connection("orders").unwrap(),
+        Some(dbento_core::Secret::new("s")),
+        SessionOptions::default(),
+    )
+    .await
+    {
+        Err(ConnectError::Open { message }) => {
+            assert!(message.contains("127.0.0.1:9"), "{message}")
+        }
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("a DynamoDB session opened with no server"),
+    }
+}
+
+#[cfg(not(feature = "dynamodb"))]
+#[tokio::test]
+async fn connect_refuses_dynamodb_without_the_feature() {
     let (_d, ws) = open(DY);
     match connect(
         &ws,
