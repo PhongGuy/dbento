@@ -33,7 +33,8 @@ pub struct ArgDoc {
     pub arguments: Vec<ArgDoc>,
 }
 
-#[cfg(all(test, feature = "redis"))]
+#[cfg(test)]
+#[cfg(feature = "redis")]
 mod tests;
 
 #[cfg(all(test, feature = "redis"))]

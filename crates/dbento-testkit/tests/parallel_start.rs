@@ -1,5 +1,8 @@
 //! Its own test binary: twenty containers start at once while other sockets churn through the
 //! ephemeral port range, the way a full suite's connections do.
+// Test helpers may panic on a broken fixture too; clippy's in-tests exemption covers only
+// #[test] functions, not the helpers they call.
+#![allow(clippy::unwrap_used)]
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
