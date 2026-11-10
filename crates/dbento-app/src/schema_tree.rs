@@ -1915,6 +1915,17 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             entry("tree-menu-copy-error", "Copy error"),
         ],
         RowKind::Group(_) => vec![refresh],
+        // A DynamoDB index keeps no definition but reads as its own PartiQL target.
+        RowKind::Object {
+            group: ObjectGroup::Indexes,
+            ..
+        } if engine == Engine::Dynamodb => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..entry("tree-menu-open", "Open data")
+            },
+            copy_name,
+        ],
         RowKind::Object { .. } => vec![
             MenuEntry {
                 keys: keys_for(&OpenSelected, cx),
@@ -1937,13 +1948,14 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
 
 /// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`
 /// with default options (`"SELECT *\nFROM main.Album"` on SQLite). SurrealDB names the table
-/// alone, `` SELECT * FROM `t` ``, since a dotted name reads as a field path there. MongoDB
-/// gets `db.getCollection("<name>").find()`, the name JSON-quoted.
+/// alone, `` SELECT * FROM `t` ``, since a dotted name reads as a field path there, and so
+/// does DynamoDB, whose schema is the region. MongoDB gets `db.getCollection("<name>").find()`,
+/// the name JSON-quoted.
 pub fn select_sql(engine: Engine, rel: &RelationRef) -> String {
     if engine == Engine::Mongodb {
         return format!("db.getCollection({}).find()", json_string(rel.name()));
     }
-    if engine == Engine::Surrealdb {
+    if matches!(engine, Engine::Surrealdb | Engine::Dynamodb) {
         return format!("SELECT * FROM {}", quote_ident(engine, rel.name()));
     }
     let raw = format!(
@@ -1975,8 +1987,19 @@ pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
         | Engine::Mssql
         | Engine::Duckdb
         | Engine::Redis
+        | Engine::Dynamodb
         | _ => select,
     }
+}
+
+/// `SELECT * FROM <table>.<index>`, both through `quote_ident`: how PartiQL reads a DynamoDB
+/// secondary index (`SELECT * FROM "orders"."by_status"`).
+pub fn index_select_sql(engine: Engine, rel: &RelationRef, index: &str) -> String {
+    format!(
+        "SELECT * FROM {}.{}",
+        quote_ident(engine, rel.name()),
+        quote_ident(engine, index)
+    )
 }
 
 fn json_string(s: &str) -> String {

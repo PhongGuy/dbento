@@ -2255,6 +2255,13 @@ impl Shell {
                         SidebarEvent::NewQuery { connection, sql } => {
                             this.open_sql(connection, sql, window, cx)
                         }
+                        SidebarEvent::OpenIndex { connection, sql } => {
+                            let before = this.tabs.len();
+                            this.open_sql(connection, sql, window, cx);
+                            if let Some(tab) = this.tabs.get(before).cloned() {
+                                tab.update(cx, |t, cx| t.run_all(cx));
+                            }
+                        }
                         SidebarEvent::Notice(notice) => ui::notice(window, cx, notice.clone()),
                         SidebarEvent::Disconnect(name) => this.disconnect(name, window, cx),
                         SidebarEvent::Duplicate(name) => {
