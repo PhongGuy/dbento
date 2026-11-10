@@ -2544,6 +2544,7 @@ dependencies = [
  "toml 1.2.0+spec-1.1.0",
  "toml_edit 0.25.18+spec-1.1.0",
  "unicode-width",
+ "url",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
  "zeroize",

@@ -270,3 +270,59 @@ async fn connect_refuses_dynamodb_until_the_driver_exists() {
         Ok(_) => panic!("a DynamoDB session opened"),
     }
 }
+
+#[test]
+fn a_region_or_access_key_must_not_be_blank() {
+    for blank in ["", "  "] {
+        let m = invalid(&format!("{HEAD}access_key_id = \"{blank}\"\n"));
+        assert!(m.contains("`access_key_id` must not be empty"), "{m}");
+        let m = invalid(&format!("{HEAD}region = \"{blank}\"\n"));
+        assert!(m.contains("`region` must not be empty"), "{m}");
+    }
+}
+
+#[test]
+fn an_endpoint_is_https_or_loopback_http_with_no_user_path_or_query() {
+    for ok in [
+        "https://dynamodb.eu-west-1.amazonaws.com",
+        "https://vpce-1.dynamodb.eu-west-1.vpce.amazonaws.com:443/",
+        "http://localhost:8000",
+        "http://127.0.0.1:5000",
+        "http://127.9.9.9",
+        "http://[::1]:5000",
+        "HTTP://LOCALHOST:5000",
+    ] {
+        let (_d, ws) = open(&format!("{HEAD}endpoint = \"{ok}\"\n"));
+        assert_eq!(
+            ws.connection("orders").unwrap().endpoint(),
+            Some(ok),
+            "{ok}"
+        );
+    }
+    for plain in [
+        "http://dynamo.internal:8000",
+        "http://10.0.0.5",
+        "http://[::2]",
+    ] {
+        let m = invalid(&format!("{HEAD}endpoint = \"{plain}\"\n"));
+        assert!(
+            m.contains("use https; signed requests over http expose the data"),
+            "{plain}: {m}"
+        );
+    }
+    for bad in [
+        "dynamodb.eu-west-1.amazonaws.com",
+        "ftp://h",
+        "https://",
+        "https://u:hunter2@h",
+        "https://u@h",
+        "https://h/path",
+        "https://h?x=1",
+        "https://h#f",
+        "not a url",
+    ] {
+        let m = invalid(&format!("{HEAD}endpoint = \"{bad}\"\n"));
+        assert!(m.contains("`endpoint`"), "{bad}: {m}");
+        assert!(!m.contains("hunter2"), "{bad}: {m}");
+    }
+}

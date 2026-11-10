@@ -1151,6 +1151,35 @@ pub(crate) fn is_local_host(host: &str) -> bool {
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Ok when `text` is a usable endpoint; the error never holds `text`, which may hold credentials.
+fn endpoint_rule(text: &str) -> Result<(), &'static str> {
+    let url = url::Url::parse(text).map_err(|_| "`endpoint` must be an http or https URL")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("`endpoint` must be an http or https URL");
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("`endpoint` must not hold a user, a path, a query or a fragment");
+    }
+    // Plain http is fine only when the request never leaves this machine.
+    let loopback = match url.host() {
+        Some(url::Host::Domain(d)) => d == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if url.scheme() == "http" && !loopback {
+        return Err(
+            "`endpoint` uses http on a host that is not this machine: use https; signed requests over http expose the data",
+        );
+    }
+    Ok(())
+}
+
 /// Postgres takes whole milliseconds in an i32, and 0 there means no timeout.
 pub(crate) fn timeout_in_range(d: Duration) -> bool {
     !d.is_zero() && d.as_micros().div_ceil(1000) <= i32::MAX as u128
@@ -1564,6 +1593,17 @@ impl ConnectionConfig {
                         ));
                     }
                 };
+                for (key, value) in [
+                    ("region", &raw.region),
+                    ("access_key_id", &raw.access_key_id),
+                ] {
+                    if value.as_deref().is_some_and(|v| v.trim().is_empty()) {
+                        return Err(invalid(format!("`{key}` must not be empty")));
+                    }
+                }
+                if let Some(endpoint) = &raw.endpoint {
+                    endpoint_rule(endpoint).map_err(|m| invalid(m.to_owned()))?;
+                }
                 config.region = raw.region;
                 config.endpoint = raw.endpoint;
                 config.access_key_id = raw.access_key_id;
