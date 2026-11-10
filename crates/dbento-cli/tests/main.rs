@@ -8,6 +8,7 @@
 
 mod cli_chinook;
 mod cli_duckdb;
+mod cli_dynamo;
 mod cli_formats;
 mod cli_import;
 mod cli_import_beekeeper;

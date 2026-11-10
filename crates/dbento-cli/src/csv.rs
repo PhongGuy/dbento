@@ -7,7 +7,7 @@ use dbento_core::{ColumnInfo, Engine, ExecuteError, Outcome, ResultBatch, Unguar
 
 use crate::cell::cell_text;
 use crate::exec::Sink;
-use crate::table::{error_note, more_results, refused_note};
+use crate::table::{capacity_phrase, error_note, more_results, refused_note};
 
 /// Streams each result as CSV on `out`; failures and truncation notes go to `err`.
 /// NULL is an empty unquoted field and empty text is `""`, so the two stay apart.
@@ -104,6 +104,14 @@ impl<W: Write, E: Write> Sink for CsvSink<W, E> {
                 self.index + 1
             )?;
         }
+        if let Some(units) = outcome.consumed_capacity {
+            writeln!(
+                self.err,
+                "statement {}: {}",
+                self.index + 1,
+                capacity_phrase(units)
+            )?;
+        }
         Ok(())
     }
 
@@ -124,5 +132,28 @@ impl<W: Write, E: Write> Sink for CsvSink<W, E> {
     /// A closing failure is already on stderr, where these formats report every error.
     fn end(&mut self, _closing: Option<&ExecuteError>) -> io::Result<()> {
         self.out.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CsvSink;
+    use crate::exec::Sink;
+    use dbento_core::{CapacityUnits, Engine, Outcome};
+    use std::time::Duration;
+
+    #[test]
+    fn the_consumed_capacity_goes_to_stderr() {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut sink = CsvSink::new(&mut out, &mut err, Engine::Dynamodb);
+        sink.begin("dy").unwrap();
+        sink.started(0, "SELECT * FROM \"t\"", &[]).unwrap();
+        let mut o = Outcome::complete(1);
+        o.consumed_capacity = Some(CapacityUnits::from_thousandths(1_500));
+        sink.finished(&o, Duration::from_millis(3)).unwrap();
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "statement 1: consumed 1.5 capacity units\n"
+        );
     }
 }
