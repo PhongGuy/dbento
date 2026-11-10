@@ -137,3 +137,34 @@ async fn a_cancel_stops_a_fetch_in_flight_and_an_early_one_sends_nothing() {
     );
     assert!(matches!(got, Err(ExecuteError::Cancelled)));
 }
+
+#[tokio::test]
+async fn a_first_page_validation_error_carries_no_stale_token_hint() {
+    let message = "Statement wasn't well formed";
+    let replay = Replay::new(vec![Reply::error(
+        400,
+        aws_error("ValidationException", message),
+    )]);
+    let failed = open_with(
+        &replay,
+        Kind::Select,
+        limits(None, OnTruncate::Drain),
+        Arc::new(Shared::new(None)),
+    )
+    .await;
+    match failed {
+        Err(ExecuteError::Database {
+            code,
+            message: got,
+            hint,
+            ..
+        }) => {
+            assert_eq!(
+                (code.as_str(), got.as_str(), hint),
+                ("ValidationException", message, None)
+            );
+        }
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("the first page should fail"),
+    }
+}
