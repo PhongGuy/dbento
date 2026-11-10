@@ -107,6 +107,7 @@ pub use source::single_source;
 pub use sources::named_source_columns;
 #[cfg(feature = "duckdb")]
 mod duckdb;
+mod dynamo;
 mod sqlite;
 
 mod rowedit;
