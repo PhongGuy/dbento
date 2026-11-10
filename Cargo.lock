@@ -2574,6 +2574,8 @@ dependencies = [
 name = "dbento-testkit"
 version = "0.1.0"
 dependencies = [
+ "aws-sdk-dynamodb",
+ "aws-smithy-http-client",
  "base64 0.23.1",
  "bson",
  "duckdb",

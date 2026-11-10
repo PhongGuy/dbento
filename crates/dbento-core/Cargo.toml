@@ -83,6 +83,7 @@ dynamodb = [
     "dep:aws-sdk-dynamodb",
     "dep:aws-smithy-http-client",
     "dep:aws-smithy-runtime-api",
+    "dbento-testkit/dynamodb",
 ]
 # The platform keychain as a SecretStore.
 keychain = [

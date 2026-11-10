@@ -7,6 +7,7 @@
 // #[test] functions, not the helpers they call.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod dynamo_harness;
 mod harness;
 mod mongo_harness;
 mod mssql_harness;
