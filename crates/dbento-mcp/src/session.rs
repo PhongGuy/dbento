@@ -88,6 +88,16 @@ static REDIS: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+// DynamoDB's level is always best effort: only IAM, which Dbento cannot see, refuses writes, so
+// the text names the reader policy through core's residual rather than SQL Server's remedy.
+static DYNAMODB: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "Dbento sends only reads on this connection and refuses every statement it reads as a \
+         write or cannot classify; DynamoDB has no read-only session. {}",
+        read_only_residual(Engine::Dynamodb).unwrap_or_default()
+    )
+});
+
 const UNKNOWN: &str = "The enforcement of read-only sessions on this connection is unknown to \
     this server.";
 
@@ -107,6 +117,7 @@ fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static s
         ReadOnlyEnforcement::Database if engine == Engine::Mysql => MYSQL,
         ReadOnlyEnforcement::Database if engine == Engine::Postgres => POSTGRES,
         ReadOnlyEnforcement::Database => ENFORCED,
+        ReadOnlyEnforcement::BestEffort if engine == Engine::Dynamodb => DYNAMODB.as_str(),
         ReadOnlyEnforcement::BestEffort => BEST_EFFORT,
         _ => UNKNOWN,
     }
@@ -285,5 +296,15 @@ mod tests {
             enforcement_name(ReadOnlyEnforcement::BestEffort),
             "best_effort"
         );
+    }
+
+    #[test]
+    fn a_dynamodb_listing_says_best_effort_in_iam_terms() {
+        let (name, text) = listed_level(Engine::Dynamodb, ReadOnlyEnforcement::BestEffort);
+        assert_eq!(name, "best_effort");
+        for word in ["only reads", "IAM", "dynamodb:PartiQLSelect"] {
+            assert!(text.contains(word), "{word}: {text}");
+        }
+        assert!(!text.contains("read_only_user"), "{text}");
     }
 }

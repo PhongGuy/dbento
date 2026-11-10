@@ -3,8 +3,8 @@
 use std::time::{Instant, SystemTime};
 
 use dbento_core::{
-    CellRef, Classification, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome, HistorySource,
-    Limits, OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy,
+    CapacityUnits, CellRef, Classification, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome,
+    HistorySource, Limits, OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy,
     statement_count,
 };
 use rmcp::RoleServer;
@@ -45,8 +45,8 @@ pub(crate) struct QueryResult {
     /// Each cell is a string, null, `{"hex"}` for bytes, or `{"text"|"hex", "cut": true}`
     /// when it was longer than 4 KiB.
     rows: Vec<Vec<Value>>,
-    /// Each returned row's stored document as relaxed Extended JSON text, cut like a cell;
-    /// absent on engines whose rows carry none.
+    /// Each returned row's stored document as text, cut like a cell: relaxed Extended JSON on
+    /// MongoDB, plain JSON on DynamoDB; absent on engines whose rows carry none.
     #[serde(skip_serializing_if = "Option::is_none")]
     documents: Option<Vec<Value>>,
     row_count: u64,
@@ -61,6 +61,9 @@ pub(crate) struct QueryResult {
     rolled_back: bool,
     /// Who enforced this read-only session: "database", "best_effort" or "unknown".
     read_only_enforcement: &'static str,
+    /// Capacity units the statement consumed; DynamoDB only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumed_capacity: Option<f64>,
     duration_ms: u64,
 }
 
@@ -173,6 +176,7 @@ pub(crate) async fn run_read(
         extra_results: outcome.extra_results,
         rolled_back: outcome.rolled_back,
         read_only_enforcement: enforcement.map_or("unknown", enforcement_name),
+        consumed_capacity: capacity_json(outcome.consumed_capacity),
         duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
     })
 }
@@ -330,6 +334,11 @@ pub(crate) fn one_statement(tool: &str) -> ToolError {
     )
 }
 
+/// The consumed capacity as the plain number a client reads, or none when core reported none.
+pub(crate) fn capacity_json(c: Option<CapacityUnits>) -> Option<f64> {
+    c.map(CapacityUnits::as_f64)
+}
+
 /// A string, null, {"hex"}, or {"text"|"hex", "cut": true} past CELL_CUT.
 pub(crate) fn cell(c: CellRef<'_>) -> Result<Value, ToolError> {
     Ok(match c {
@@ -383,5 +392,15 @@ mod tests {
             cell(CellRef::Bytes(&blob)).unwrap(),
             json!({"hex": "ab".repeat(CELL_CUT / 2), "cut": true})
         );
+    }
+
+    #[test]
+    fn capacity_is_a_plain_number_or_absent() {
+        use dbento_core::CapacityUnits;
+        assert_eq!(
+            capacity_json(Some(CapacityUnits::from_thousandths(2_500))),
+            Some(2.5)
+        );
+        assert_eq!(capacity_json(None), None);
     }
 }

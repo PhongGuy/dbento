@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use dbento_core::MemoryStore;
 use dbento_mcp::{DbentoServer, McpOptions};
+#[cfg(feature = "dynamodb")]
+use dbento_testkit::{DY_SECRET, DY_SECRET_VAR, DynamoDb};
 #[cfg(feature = "mongodb")]
 use dbento_testkit::{MG_SECRET_VAR, MgDb, MgUser};
 use dbento_testkit::{MS_SECRET_VAR, MY_SECRET_VAR, MsDb, MyDb, PgDb, SECRET_VAR, SrDb};
@@ -157,6 +159,16 @@ impl TestServer {
         let password = db.password(user).map(str::to_owned);
         TestServer::start_with(&toml, move |o| {
             o.env_lookup(move |v| (v == RD_SECRET_VAR).then(|| password.clone()).flatten())
+        })
+        .await
+    }
+
+    #[cfg(feature = "dynamodb")]
+    /// Serve a workspace whose connection `dy` is `db`, its secret from the env lookup.
+    pub async fn dynamo(db: &DynamoDb, extra_toml: &str) -> TestServer {
+        let toml = format!("dbento = 1\n{}", db.connection_toml("dy", extra_toml));
+        TestServer::start_with(&toml, |o| {
+            o.env_lookup(|v| (v == DY_SECRET_VAR).then(|| DY_SECRET.to_owned()))
         })
         .await
     }

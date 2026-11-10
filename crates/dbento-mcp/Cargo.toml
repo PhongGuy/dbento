@@ -23,7 +23,7 @@ surrealdb = ["dbento-core/surrealdb"]
 # Forwarded so a default edge to core cannot switch Redis on through feature unification.
 redis = ["dbento-core/redis", "dbento-testkit/redis"]
 # Forwarded so a default edge to core cannot switch DynamoDB on through feature unification.
-dynamodb = ["dbento-core/dynamodb"]
+dynamodb = ["dbento-core/dynamodb", "dbento-testkit/dynamodb"]
 
 [dependencies]
 dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
