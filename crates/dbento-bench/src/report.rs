@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 pub fn unit(case: Case) -> &'static str {
     match case {
         Case::TtfrPg | Case::TtfrSqlite | Case::StreamPg | Case::StreamSqlite => "ms",
-        _ => "MiB/1M",
+        Case::NarrowPg | Case::NarrowSqlite | Case::WidePg | Case::WideSqlite => "MiB/1M",
     }
 }
 
@@ -27,7 +27,12 @@ pub fn target(case: Case) -> f64 {
 pub fn runs(case: Case) -> usize {
     match case {
         Case::TtfrPg | Case::TtfrSqlite => 5,
-        _ => 3,
+        Case::StreamPg
+        | Case::StreamSqlite
+        | Case::NarrowPg
+        | Case::NarrowSqlite
+        | Case::WidePg
+        | Case::WideSqlite => 3,
     }
 }
 
@@ -36,7 +41,7 @@ pub fn check_rows(case: Case, rows: u64) -> Result<()> {
     let (want, exact) = match case {
         Case::TtfrPg | Case::TtfrSqlite => (1, false),
         Case::StreamPg | Case::StreamSqlite => (10_000_000, true),
-        _ => (1_000_000, true),
+        Case::NarrowPg | Case::NarrowSqlite | Case::WidePg | Case::WideSqlite => (1_000_000, true),
     };
     if (exact && rows == want) || (!exact && rows >= want) {
         return Ok(());
