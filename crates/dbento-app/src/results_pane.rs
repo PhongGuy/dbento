@@ -393,7 +393,7 @@ impl ResultsPane {
             stmt: 0,
             selection: Default::default(),
             editing: None,
-            menu_target: menu_target.clone(),
+            menu_target: Rc::clone(&menu_target),
         };
         let table = cx.new(|cx| {
             TableState::new(delegate, window, cx)
@@ -2939,7 +2939,7 @@ impl Render for ResultsPane {
                             (None, None) => d
                                 .child(smooth_scroll::layer(
                                     self.scroll_handle.clone(),
-                                    self.wheel.clone(),
+                                    Rc::clone(&self.wheel),
                                 ))
                                 .child(
                                     DataTable::new(&self.table)

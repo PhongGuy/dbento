@@ -287,11 +287,11 @@ async fn partition_proxy(host: String, port: u16, cut: Arc<AtomicBool>) -> u16 {
     let local = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         while let Ok((client, _)) = listener.accept().await {
-            let (host, cut) = (host.clone(), cut.clone());
+            let (host, cut) = (host.clone(), Arc::clone(&cut));
             tokio::spawn(async move {
                 if let Ok(server) = tokio::net::TcpStream::connect((host.as_str(), port)).await {
                     let ((cr, cw), (sr, sw)) = (client.into_split(), server.into_split());
-                    tokio::join!(pump(cr, sw, cut.clone()), pump(sr, cw, cut));
+                    tokio::join!(pump(cr, sw, Arc::clone(&cut)), pump(sr, cw, cut));
                 }
             });
         }
@@ -303,7 +303,7 @@ async fn partition_proxy(host: String, port: u16, cut: Arc<AtomicBool>) -> u16 {
 async fn a_load_cut_off_by_a_partition_fails_and_the_retry_reconnects() {
     let (db, dir, mut spec) = pg_spec("statement_timeout = \"1s\"").await;
     let cut = Arc::new(AtomicBool::new(false));
-    let local = partition_proxy(db.host().to_owned(), db.port(), cut.clone()).await;
+    let local = partition_proxy(db.host().to_owned(), db.port(), Arc::clone(&cut)).await;
     let direct = format!("host = \"{}\"\nport = {}\n", db.host(), db.port());
     let path = dir.path().join("dbento.toml");
     let toml = std::fs::read_to_string(&path).unwrap();

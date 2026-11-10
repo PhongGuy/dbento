@@ -8,7 +8,8 @@ use gpui_kit::{AppContext as _, TestAppContext};
 use std::sync::Arc;
 
 fn store(cx: &mut TestAppContext, o: &support::Opened) -> Arc<dyn SecretStore> {
-    o.shell.read_with(cx, |s, _| s.services().store.clone())
+    o.shell
+        .read_with(cx, |s, _| Arc::clone(&s.services().store))
 }
 fn key(o: &support::Opened, cx: &mut TestAppContext, name: &str) -> SecretKey {
     let dir = o
@@ -154,7 +155,9 @@ fn test_connection_during_a_rename_finds_the_passphrase_under_the_old_name(
     let pem = |label: &str| format!("-----BEGIN {label}-----\nAAAA\n-----END {label}-----\n");
     std::fs::write(s.dir.path().join("me.crt"), pem("CERTIFICATE")).unwrap();
     std::fs::write(s.dir.path().join("me.key"), pem("ENCRYPTED PRIVATE KEY")).unwrap();
-    let st = s.shell.read_with(cx, |s, _| s.services().store.clone());
+    let st = s
+        .shell
+        .read_with(cx, |s, _| Arc::clone(&s.services().store));
     st.set(
         &SecretKey::key_passphrase(s.dir.path(), "old"),
         &dbento_core::Secret::new("stored-under-old"),

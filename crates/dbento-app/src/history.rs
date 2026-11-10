@@ -34,7 +34,11 @@ impl HistoryLog {
             return;
         }
         lock(&self.queue).extend(entries);
-        let (path, history, queue) = (self.path.clone(), self.history.clone(), self.queue.clone());
+        let (path, history, queue) = (
+            self.path.clone(),
+            Arc::clone(&self.history),
+            Arc::clone(&self.queue),
+        );
         cx.spawn(async move |this, cx| {
             let written = cx
                 .background_spawn(async move { write_queue(&path, &history, &queue) })
@@ -52,7 +56,7 @@ impl HistoryLog {
     /// Up to `limit` entries matching `filter`, newest first, read off the main thread; none
     /// when the file cannot be opened.
     pub fn recent(&self, filter: HistoryFilter, limit: usize, cx: &App) -> Task<Vec<HistoryEntry>> {
-        let (path, history) = (self.path.clone(), self.history.clone());
+        let (path, history) = (self.path.clone(), Arc::clone(&self.history));
         cx.background_executor().spawn(async move {
             let mut slot = lock(&history);
             opened(&path, &mut slot).map_or_else(Vec::new, |h| h.recent(&filter, limit))

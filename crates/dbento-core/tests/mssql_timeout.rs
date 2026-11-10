@@ -140,7 +140,7 @@ async fn proxied(fx: &mut MsFixture, stall: bool) -> Arc<Notify> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = listener.local_addr().unwrap().port();
     let pause = Arc::new(Notify::new());
-    let cut = pause.clone();
+    let cut = Arc::clone(&pause);
     tokio::spawn(async move {
         let (mut client, _) = listener.accept().await.unwrap();
         let mut server = tokio::net::TcpStream::connect((host.as_str(), port))

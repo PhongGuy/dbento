@@ -10,6 +10,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use gpui_kit::{hsla, px};
 use std::path::Path;
+use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 const OK: HistoryOutcome = HistoryOutcome::Ok {
@@ -385,7 +386,7 @@ fn a_write_that_writes_nothing_does_not_notify(cx: &mut TestAppContext) {
     // A directory cannot be opened as the history file, so every write fails.
     let log = cx.new(|_| HistoryLog::new(dir.path().into()));
     let notified = std::rc::Rc::new(std::cell::Cell::new(0));
-    let seen = notified.clone();
+    let seen = Rc::clone(&notified);
     cx.update(|cx| {
         cx.observe(&log, move |_, _| seen.set(seen.get() + 1))
             .detach()
@@ -466,7 +467,7 @@ fn panel_notes(
 ) -> std::rc::Rc<std::cell::Cell<u32>> {
     let panel = shell.read_with(cx, |s, _| s.history_panel().unwrap().clone());
     let notes = std::rc::Rc::new(std::cell::Cell::new(0));
-    let seen = notes.clone();
+    let seen = Rc::clone(&notes);
     cx.update(|cx| {
         cx.observe(&panel, move |_, _| seen.set(seen.get() + 1))
             .detach()

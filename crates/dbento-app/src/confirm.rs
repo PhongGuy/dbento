@@ -374,8 +374,8 @@ pub fn ask_text(
             // Enter reaches the dialog's OK through the single-line input, as does the button.
             // A refused text stays in the dialog with its reason, and the input keeps the keys.
             let send = {
-                let (tx, input, problem) = (tx.clone(), input.clone(), problem.clone());
-                let check = spec.check.clone();
+                let (tx, input, problem) = (tx.clone(), input.clone(), Rc::clone(&problem));
+                let check = Rc::clone(&spec.check);
                 move |window: &mut Window, cx: &mut App| -> bool {
                     let text = input.read(cx).value().trim().to_owned();
                     let says = check(&text);

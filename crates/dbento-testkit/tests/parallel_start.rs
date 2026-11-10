@@ -42,7 +42,7 @@ fn churn(stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
 #[tokio::test]
 async fn twenty_containers_start_in_parallel() {
     let stop = Arc::new(AtomicBool::new(false));
-    let churner = churn(stop.clone());
+    let churner = churn(Arc::clone(&stop));
     let dbs = join_all((0..20).map(|_| pg_container())).await;
     stop.store(true, Ordering::SeqCst);
     churner.join().unwrap();

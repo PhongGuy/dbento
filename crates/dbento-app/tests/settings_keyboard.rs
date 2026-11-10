@@ -23,7 +23,7 @@ fn opened(
         std::fs::write(files.path().join("keymap.json"), text).unwrap();
     }
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let rec = seen.clone();
+    let rec = Rc::clone(&seen);
     cx.update(|cx| {
         cx.set_global(FileOpener(Rc::new(move |p, _| {
             rec.borrow_mut().push(p.to_path_buf())

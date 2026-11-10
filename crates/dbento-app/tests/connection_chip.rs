@@ -6,6 +6,7 @@ use dbento_app::tab_model::SwitchBlocked;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, TestAppContext};
+use std::sync::Arc;
 
 const LITE: &str = "lite \u{b7} sqlite \u{b7} data/app.db";
 const NOPG: &str = "nopg \u{b7} postgres \u{b7} x";
@@ -97,7 +98,7 @@ fn a_switch_cuts_a_running_statement_and_keeps_its_result(cx: &mut TestAppContex
     wait_real(cx, "the statement to start", |cx| {
         m.read_with(cx, |m, _| m.running() && !m.results().is_empty())
     });
-    let ws = m.read_with(cx, |m, _| m.spec().workspace.clone());
+    let ws = m.read_with(cx, |m, _| Arc::clone(&m.spec().workspace));
     let switched = m.update(cx, |m, cx| m.switch_connection("nopg", ws, cx));
     assert!(switched.is_ok());
     m.read_with(cx, |m, _| {
@@ -114,7 +115,7 @@ fn same_unknown_and_browsing_tabs_are_refused(cx: &mut TestAppContext) {
     o.wait_browse(cx, "SELECT *\nFROM main.t\nORDER BY id ASC");
     let m = o.model(cx);
     let tried = |cx: &mut TestAppContext, name: &str| {
-        let ws = m.read_with(cx, |m, _| m.spec().workspace.clone());
+        let ws = m.read_with(cx, |m, _| Arc::clone(&m.spec().workspace));
         m.update(cx, |m, cx| m.switch_connection(name, ws, cx).err())
     };
     assert_eq!(tried(cx, "lite"), Some(SwitchBlocked::Same));
@@ -171,7 +172,7 @@ fn a_kept_sqlite_result_keeps_its_engine_after_a_switch_to_postgres(cx: &mut Tes
     );
     let m = o.model(cx);
     let switch = |cx: &mut TestAppContext, name: &str| {
-        let ws = m.read_with(cx, |m, _| m.spec().workspace.clone());
+        let ws = m.read_with(cx, |m, _| Arc::clone(&m.spec().workspace));
         assert!(
             m.update(cx, |m, cx| m.switch_connection(name, ws, cx))
                 .is_ok()

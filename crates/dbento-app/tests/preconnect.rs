@@ -253,7 +253,7 @@ fn a_cancel_before_the_session_connects_stops_the_run(cx: &mut TestAppContext) {
     let (_db, _dir, mut spec) = rt.block_on(pg_spec(""));
     // The secret lookup waits on this gate, so the connect is still open when Cancel comes.
     let released = Arc::new(AtomicBool::new(false));
-    let (gate, lookup) = (released.clone(), spec.env.clone());
+    let (gate, lookup) = (Arc::clone(&released), Arc::clone(&spec.env));
     spec.env = Arc::new(move |v| {
         while !gate.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(5));

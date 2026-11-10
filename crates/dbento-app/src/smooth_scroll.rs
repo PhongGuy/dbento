@@ -182,7 +182,7 @@ impl Scroller for Entity<EditorState> {
 /// registers a Capture wheel listener before the view's own, so it sees each notch first.
 pub fn layer(scroller: impl Scroller, animator: Rc<RefCell<Animator>>) -> impl IntoElement {
     let step_scroller = scroller.clone();
-    let step_animator = animator.clone();
+    let step_animator = Rc::clone(&animator);
     canvas(
         move |bounds, window, cx| {
             // Follow any offset another scroller set, then write this frame's eased offset.

@@ -726,10 +726,10 @@ impl Shell {
         if std::mem::replace(&mut self.saving, true) {
             return;
         }
-        let file = self.state_file.clone();
+        let file = Arc::clone(&self.state_file);
         cx.spawn(async move |this, cx| {
             while file.pending() {
-                let file = file.clone();
+                let file = Arc::clone(&file);
                 cx.background_spawn(async move { save_state(&file) }).await;
             }
             let _ = this.update(cx, |s, _| s.saving = false);
@@ -1160,8 +1160,8 @@ impl Shell {
         let spec = RunnerSpec {
             workspace: ws,
             connection: conn.name().to_owned(),
-            store: self.services.store.clone(),
-            env: self.services.env.clone(),
+            store: Arc::clone(&self.services.store),
+            env: Arc::clone(&self.services.env),
         };
         let log = self.history_log.clone();
         let model = cx.new(|_| {
@@ -2156,7 +2156,7 @@ impl Shell {
         self.closings
             .retain(|(done, _)| !done.load(Ordering::SeqCst));
         let done = Arc::new(AtomicBool::new(false));
-        let flag = done.clone();
+        let flag = Arc::clone(&done);
         let task = cx.background_spawn(async move {
             closing.await;
             flag.store(true, Ordering::SeqCst);
@@ -2222,7 +2222,7 @@ impl Shell {
             Ok(ws) => {
                 let ws = Arc::new(ws);
                 let services = self.services.clone();
-                let sidebar = cx.new(|cx| Sidebar::new(ws.clone(), services, window, cx));
+                let sidebar = cx.new(|cx| Sidebar::new(Arc::clone(&ws), services, window, cx));
                 self._sidebar_events = Some(cx.subscribe_in(
                     &sidebar,
                     window,
@@ -2292,7 +2292,7 @@ impl Shell {
                 let log = self.history_log.clone();
                 let open = self.history_open;
                 let panel = cx.new(|cx| {
-                    let mut panel = HistoryPanel::new(log, ws.clone(), window, cx);
+                    let mut panel = HistoryPanel::new(log, Arc::clone(&ws), window, cx);
                     panel.set_visible(open, cx);
                     panel
                 });
@@ -2386,7 +2386,7 @@ impl Shell {
                     return;
                 }
                 let model = tab.read(cx).model().clone();
-                let closing = model.update(cx, |m, cx| m.reconnect(ws.clone(), cx));
+                let closing = model.update(cx, |m, cx| m.reconnect(Arc::clone(&ws), cx));
                 shell.keep_closing(closing.wait(), cx);
                 tab.update(cx, |t, cx| t.set_workspace(&ws, cx));
                 cx.notify();
@@ -2412,7 +2412,7 @@ impl Shell {
             return;
         };
         let model = tab.read(cx).model().clone();
-        let switched = model.update(cx, |m, cx| m.switch_connection(name, ws.clone(), cx));
+        let switched = model.update(cx, |m, cx| m.switch_connection(name, Arc::clone(&ws), cx));
         let Ok(closing) = switched else {
             return;
         };
@@ -2453,17 +2453,17 @@ impl Shell {
     ) {
         // One shared value, so every view and every later tab agrees on the same workspace.
         let ws = Arc::new(ws);
-        self.workspace = Some(ws.clone());
+        self.workspace = Some(Arc::clone(&ws));
         let closings = self
             .sidebar
             .as_ref()
-            .map(|s| s.update(cx, |s, cx| s.set_workspace(ws.clone(), cx)))
+            .map(|s| s.update(cx, |s, cx| s.set_workspace(Arc::clone(&ws), cx)))
             .unwrap_or_default();
         for closing in closings {
             self.keep_closing(closing.wait(), cx);
         }
         if let Some(panel) = &self.history_panel {
-            panel.update(cx, |p, cx| p.set_workspace(ws.clone(), cx));
+            panel.update(cx, |p, cx| p.set_workspace(Arc::clone(&ws), cx));
         }
         for tab in &self.tabs {
             tab.update(cx, |t, cx| t.set_workspace(&ws, cx));
@@ -2966,7 +2966,7 @@ impl Shell {
             ConnectionFormEvent::Edited => this.connection_test = None,
         });
         self.connection_form = Some((form.clone(), events));
-        self.form_base = Some(ws.clone());
+        self.form_base = Some(Arc::clone(&ws));
         let shell = cx.weak_entity();
         window.defer(cx, move |window, cx| {
             let first = form.focus_handle(cx);
@@ -3074,7 +3074,7 @@ impl Shell {
         }
         // A Test of the old form must not answer for the rebased one.
         self.connection_test = None;
-        self.form_base = Some(ws.clone());
+        self.form_base = Some(Arc::clone(&ws));
         form.update(cx, |f, cx| f.set_test(TestState::Idle, cx));
         let previous = form.read(cx).previous().map(str::to_owned);
         let loaded = previous.as_deref().and_then(|n| ws.connection_spec(n));
@@ -3148,14 +3148,18 @@ impl Shell {
         // A rename is not applied yet, so stored secrets are still under the old name.
         let renamed = previous.filter(|p| *p != name);
         form.update(cx, |f, cx| f.set_test(TestState::Testing, cx));
-        let (store, env) = (self.services.store.clone(), self.services.env.clone());
+        let (store, env) = (
+            Arc::clone(&self.services.store),
+            Arc::clone(&self.services.env),
+        );
         let attempt = crate::tokio_bridge::spawn(cx, async move {
             let plan = Arc::new(plan);
             let key_passphrase = match typed_passphrase {
                 Some(typed) => Some(typed),
                 None => {
-                    let (plan, name) = (plan.clone(), name.clone());
-                    let (store, env, renamed) = (store.clone(), env.clone(), renamed.clone());
+                    let (plan, name) = (Arc::clone(&plan), name.clone());
+                    let (store, env, renamed) =
+                        (Arc::clone(&store), Arc::clone(&env), renamed.clone());
                     tokio::task::spawn_blocking(move || {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
@@ -3181,7 +3185,7 @@ impl Shell {
             let secret = match typed {
                 Some(typed) => Some(typed),
                 None => {
-                    let (plan, name) = (plan.clone(), name.clone());
+                    let (plan, name) = (Arc::clone(&plan), name.clone());
                     tokio::task::spawn_blocking(move || {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
@@ -3252,7 +3256,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let store = self.services.store.clone();
+        let store = Arc::clone(&self.services.store);
         let stored = cx.background_spawn(async move { store.set(&key, &secret) });
         cx.spawn_in(window, async move |_, cx| {
             if let Err(e) = stored.await {
@@ -3400,7 +3404,7 @@ impl Shell {
         if typed.is_none() && (stays || !before) {
             return;
         }
-        let store = self.services.store.clone();
+        let store = Arc::clone(&self.services.store);
         let done = cx.background_spawn(async move {
             match (before, after) {
                 (true, false) => store.delete(&from)?,
@@ -3435,7 +3439,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let store = self.services.store.clone();
+        let store = Arc::clone(&self.services.store);
         let to = SecretKey::new(from.workspace_dir(), new.clone());
         let moved = cx.background_spawn(async move {
             move_secret(&*store, &from, &to)?;
@@ -3574,7 +3578,7 @@ impl Shell {
 
     // Deletes a stored secret no connection reads any more, off the UI thread.
     fn remove_secret(&mut self, key: SecretKey, window: &mut Window, cx: &mut Context<Self>) {
-        let store = self.services.store.clone();
+        let store = Arc::clone(&self.services.store);
         let removed = cx.background_spawn(async move { store.delete(&key) });
         cx.spawn_in(window, async move |_, cx| {
             if let Err(e) = removed.await {

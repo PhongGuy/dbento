@@ -99,7 +99,7 @@ fn uncapped(cx: &mut TestAppContext, spec: RunnerSpec, sql: &str) -> Vec<Vec<Str
 }
 fn skips(cx: &mut TestAppContext, m: &Entity<TabModel>) -> Rc<RefCell<Vec<u64>>> {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let out = seen.clone();
+    let out = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(m, move |_, e: &BrowseEvent, _| {
             if let BrowseEvent::Skipped { rows } = e {

@@ -6,6 +6,7 @@ use dbento_app::explorer::part_id;
 use dbento_app::schema_tree::RowKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
+use std::sync::Arc;
 
 fn tree(cx: &mut TestAppContext, win: AnyWindowHandle) -> Vec<String> {
     (0usize..)
@@ -31,8 +32,8 @@ fn chinook_expands_and_opens_album(cx: &mut TestAppContext) {
     let files = tempfile::tempdir().unwrap();
     let services = Services {
         paths: AppPaths::in_dir(files.path()),
-        store: spec.store.clone(),
-        env: spec.env.clone(),
+        store: Arc::clone(&spec.store),
+        env: Arc::clone(&spec.env),
         secrets_in_memory: false,
     };
     let (win, shell) = cx
@@ -97,8 +98,8 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
     let files = tempfile::tempdir().unwrap();
     let services = Services {
         paths: AppPaths::in_dir(files.path()),
-        store: spec.store.clone(),
-        env: spec.env.clone(),
+        store: Arc::clone(&spec.store),
+        env: Arc::clone(&spec.env),
         secrets_in_memory: false,
     };
     let (win, shell) = cx

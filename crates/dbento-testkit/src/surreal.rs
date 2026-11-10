@@ -298,7 +298,7 @@ pub async fn surreal_tls() -> (SrDb, String) {
 /// Four containers at a time in this process; each is capped at 2 GiB.
 fn slots() -> Arc<Semaphore> {
     static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    SLOTS.get_or_init(|| Arc::new(Semaphore::new(4))).clone()
+    Arc::clone(SLOTS.get_or_init(|| Arc::new(Semaphore::new(4))))
 }
 
 fn fresh(

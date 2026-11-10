@@ -469,7 +469,9 @@ impl Render for HistoryPanel {
                 .xsmall()
                 .label(filter_label)
                 .dropdown_caret(true)
-                .dropdown_menu(move |menu, _, _| filter_menu(menu, &panel, &names, current.as_deref())),
+                .dropdown_menu(move |menu, _, _| {
+                    filter_menu(menu, &panel, &names, current.as_deref())
+                }),
         );
         let search = ui::search_input("history-search", &self.search, cx);
         let filtered = self.connection.is_some() || !self.search.read(cx).value().trim().is_empty();

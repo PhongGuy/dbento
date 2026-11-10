@@ -75,10 +75,10 @@ async fn recording_proxy(upstream: u16) -> (u16, Arc<Mutex<Vec<[u8; 8]>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let record = seen.clone();
+    let record = Arc::clone(&seen);
     tokio::spawn(async move {
         while let Ok((mut client, _)) = listener.accept().await {
-            let record = record.clone();
+            let record = Arc::clone(&record);
             tokio::spawn(async move {
                 let mut head = [0u8; 8];
                 if client.read_exact(&mut head).await.is_err() {

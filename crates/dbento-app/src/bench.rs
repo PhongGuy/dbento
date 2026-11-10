@@ -57,7 +57,7 @@ pub fn main(config: PathBuf) -> ! {
     // Stays Unreported unless the report is written or an error is printed, so a window
     // closed early still fails and says so.
     let code = Rc::new(Cell::new(BenchExit::Unreported));
-    let exit = code.clone();
+    let exit = Rc::clone(&code);
     gpui_kit::application()
         .with_assets(crate::ui::AppAssets)
         .run(move |cx| {
@@ -70,7 +70,7 @@ pub fn main(config: PathBuf) -> ! {
                 }
             })
             .detach();
-            if let Err(e) = open(config, services, ws_dir, code.clone(), cx) {
+            if let Err(e) = open(config, services, ws_dir, Rc::clone(&code), cx) {
                 eprintln!("dbento-app bench: {e}");
                 code.set(BenchExit::Failed);
                 cx.quit();
@@ -159,7 +159,7 @@ fn open(
             let sql = bench.borrow().config.sql.clone();
             tab.update(cx, |t, cx| t.set_sql(&sql, window, cx));
             model(&tab, cx).update(cx, |m, _| m.set_max_rows(None));
-            arm(window, bench.clone());
+            arm(window, Rc::clone(&bench));
             cx.activate(true);
             Ok(())
         })

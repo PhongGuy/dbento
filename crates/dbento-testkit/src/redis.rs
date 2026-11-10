@@ -443,13 +443,13 @@ pub async fn redis_db() -> RedisDb {
 /// Two Valkey containers at a time in this process.
 fn slots() -> Arc<Semaphore> {
     static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))).clone()
+    Arc::clone(SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))))
 }
 
 /// One handle at a time on a URL server, since they all share its one index.
 fn url_slot() -> Arc<Semaphore> {
     static SLOT: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    SLOT.get_or_init(|| Arc::new(Semaphore::new(1))).clone()
+    Arc::clone(SLOT.get_or_init(|| Arc::new(Semaphore::new(1))))
 }
 
 async fn container() -> RedisDb {

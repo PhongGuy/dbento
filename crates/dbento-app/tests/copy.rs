@@ -9,6 +9,7 @@ use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, Engine, RelationRef};
 use gpui_kit::component::table::TableSelection;
 use gpui_kit::{AppContext as _, TestAppContext};
+use std::sync::Arc;
 
 const SQL: &str = r#"SELECT 1 AS a, 'x' || char(9) || 'y' AS b, NULL AS c, x'00ff' AS d
 UNION ALL SELECT 2, 'say "hi"', 'l1' || char(10) || 'l2', x''"#;
@@ -715,7 +716,7 @@ fn a_kept_postgres_result_keeps_its_engine_after_a_switch_to_sqlite(cx: &mut Tes
     let run_then_switch = |cx: &mut TestAppContext, sql: &str| {
         model.update(cx, |m, cx| m.run(sql.into(), cx));
         support::wait_real(cx, "the run", |cx| model.read_with(cx, |m, _| !m.running()));
-        let switched = model.update(cx, |m, cx| m.switch_connection("lite", ws.clone(), cx));
+        let switched = model.update(cx, |m, cx| m.switch_connection("lite", Arc::clone(&ws), cx));
         assert!(switched.is_ok());
         cx.run_until_parked();
     };
@@ -732,7 +733,7 @@ fn a_kept_postgres_result_keeps_its_engine_after_a_switch_to_sqlite(cx: &mut Tes
     // bytea as its hex text, which an escape literal carries back.
     let want = r"INSERT INTO public.t (n, b, c) VALUES (1, E'x\\y', E'\\x01ff');";
     support::wait_real(cx, "the copy", |cx| clipboard(cx).as_deref() == Some(want));
-    let back = model.update(cx, |m, cx| m.switch_connection("pg", ws.clone(), cx));
+    let back = model.update(cx, |m, cx| m.switch_connection("pg", Arc::clone(&ws), cx));
     assert!(back.is_ok());
     run_then_switch(cx, "SELECT nope FROM t");
     assert_eq!(

@@ -12,6 +12,7 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, Entity, Role, TestAppContext, WindowBounds,
     WindowOptions, point, px, size,
 };
+use std::rc::Rc;
 use std::time::Duration;
 
 struct D {
@@ -308,7 +309,7 @@ fn reset_and_close(cx: &mut TestAppContext) {
         Some(r#"{"future":1,"density":"compact","grid_font":{"size":16}}"#),
     );
     let closes = std::rc::Rc::new(std::cell::Cell::new(0));
-    let seen = closes.clone();
+    let seen = Rc::clone(&closes);
     cx.update(|cx| {
         cx.subscribe(&d.view, move |_, e: &SettingsViewEvent, _| match e {
             SettingsViewEvent::Close => seen.set(seen.get() + 1),

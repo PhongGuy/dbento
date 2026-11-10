@@ -77,7 +77,7 @@ impl SecretStore for FailingSet {
 #[gpui_kit::test]
 fn a_rename_moves_the_secret_and_the_saved_queries(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let (fx, _files, win, shell) = idle_app(cx, store.clone());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
     store
         .set(&SecretKey::new(&dir, "nopg"), &Secret::new("pw"))
@@ -134,7 +134,7 @@ fn rename_and_delete_are_refused_while_a_tab_is_open(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_failed_apply_moves_no_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let (fx, _files, win, shell) = idle_app(cx, store.clone());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
     store
         .set(&SecretKey::new(&dir, "nopg"), &Secret::new("pw"))
@@ -161,7 +161,7 @@ fn a_failed_apply_moves_no_secret(cx: &mut TestAppContext) {
 fn a_keychain_failure_after_apply_is_shown_and_keeps_the_rename(cx: &mut TestAppContext) {
     let inner = dbento_core::MemoryStore::new();
     let store: Arc<dyn SecretStore> = Arc::new(FailingSet(inner));
-    let (fx, _files, win, shell) = idle_app(cx, store.clone());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
     let f = edit_form(cx, win, &shell, "nopg");
     set(cx, win, &f, Field::Name, "pg2");
@@ -210,7 +210,7 @@ fn a_folder_failure_after_apply_is_shown_and_keeps_the_rename(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn delete_asks_then_removes_the_entry_and_secret_but_keeps_queries(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let (fx, _files, win, shell) = idle_app(cx, store.clone());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
     let key = SecretKey::new(&dir, "nopg");
     store.set(&key, &Secret::new("pw")).unwrap();
@@ -307,7 +307,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 #[gpui_kit::test]
 fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let (fx, _files, win, shell) = idle_app(cx, store.clone());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
     let old = SecretKey::new(&dir, "nopg");
     store.set(&old, &Secret::new("pw")).unwrap();
@@ -333,7 +333,7 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_switch_away_from_the_keychain_removes_its_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let (fx, _files, win, shell) = idle_app(cx, store.clone());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let key = SecretKey::new(fx.ws.dir(), "nopg");
     store.set(&key, &Secret::new("pw")).unwrap();
     edit_form(cx, win, &shell, "nopg");
@@ -384,7 +384,7 @@ fn an_env_source_rename_makes_no_keychain_calls(cx: &mut TestAppContext) {
         Default::default(),
     ));
     let mut services = support::services(files.path());
-    services.store = counting.clone();
+    services.store = Arc::<Counting>::clone(&counting);
     let (win, shell) = cx
         .update(|cx| start(services, Some(fx.dir.path().into()), cx))
         .unwrap();

@@ -50,7 +50,7 @@ fn every_connection_is_a_row_in_name_order_and_a_double_click_opens_it(cx: &mut 
     assert!(!support::present(cx, win, connection_id("ghost")));
     let sidebar = shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
     let opened = Rc::new(RefCell::new(Vec::new()));
-    let seen = opened.clone();
+    let seen = Rc::clone(&opened);
     cx.update(|cx| {
         cx.subscribe(&sidebar, move |_, e: &SidebarEvent, _| {
             let SidebarEvent::Open(ix) = e else { return };

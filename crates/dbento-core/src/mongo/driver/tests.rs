@@ -148,7 +148,7 @@ async fn a_cancel_before_the_call_stops_it_and_is_spent_by_that() {
 #[tokio::test]
 async fn a_cancel_during_the_call_drops_it() {
     let cancel = Arc::new(MongoCancel::new());
-    let other = cancel.clone();
+    let other = Arc::clone(&cancel);
     let stop = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(20)).await;
         other.cancel();

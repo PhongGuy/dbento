@@ -43,7 +43,7 @@ fn a_new_mysql_connection_tests_saves_and_keeps_its_password_in_the_keychain(
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let services = Services {
         paths: AppPaths::in_dir(files.path()),
-        store: store.clone(),
+        store: Arc::clone(&store),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
     };

@@ -2,6 +2,7 @@
 //! read-only refusal and the in-process mode conflict, on files the test builds.
 #![cfg(feature = "duckdb")]
 use crate::support;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::support::{
@@ -150,7 +151,7 @@ fn view_definition_on_a_duckdb_table_asks_for_it(cx: &mut TestAppContext) {
     wait_real(cx, "main's table", |cx| tree(cx, o.win) == OPEN);
     let sidebar = o.shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let out = seen.clone();
+    let out = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(&sidebar, move |_, e: &SidebarEvent, _| {
             if let SidebarEvent::ViewDefinition { connection, object } = e {

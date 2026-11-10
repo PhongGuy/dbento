@@ -273,7 +273,7 @@ pub(crate) fn rustls_config(
             format!("no certificates in {}", path.display()),
         ));
     }
-    let verifier = Verifier::new_with_extra_roots(extra, provider.clone())
+    let verifier = Verifier::new_with_extra_roots(extra, Arc::clone(&provider))
         .map_err(|e| tls_error(conn, e.to_string()))?;
     let builder = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()

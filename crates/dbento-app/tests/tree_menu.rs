@@ -9,6 +9,7 @@ use dbento_app::ui::Icons;
 use dbento_core::{Engine, KeyKind, KeyTtl, ObjectRef, RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, TestAppContext};
+use std::rc::Rc;
 
 const T: &str = "CREATE TABLE Album(AlbumId INTEGER PRIMARY KEY, Title TEXT NOT NULL); \
                  INSERT INTO Album(Title) VALUES ('a'), ('b'), ('c'); \
@@ -235,7 +236,7 @@ fn view_definition_on_a_sqlite_table_asks_for_its_create_table(cx: &mut TestAppC
     let o = expanded(cx, T, &MAIN_OPEN);
     let sidebar = o.shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let out = seen.clone();
+    let out = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(&sidebar, move |_, e: &SidebarEvent, _| {
             if let SidebarEvent::ViewDefinition { connection, object } = e {

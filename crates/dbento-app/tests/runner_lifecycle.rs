@@ -200,13 +200,13 @@ async fn a_panic_closes_the_session_it_held() {
         .unwrap();
     let slot: SessionSlot = Arc::new(tokio::sync::Mutex::new(Some(session)));
     let (tx, rx) = async_channel::bounded(4);
-    let held = slot.clone();
+    let held = Arc::clone(&slot);
     guarded(
         async move {
             let _guard = held.lock().await;
             panic!("boom")
         },
-        slot.clone(),
+        Arc::clone(&slot),
         tx,
     )
     .await;

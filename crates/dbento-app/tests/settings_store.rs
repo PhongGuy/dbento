@@ -31,7 +31,7 @@ fn on_disk(path: &Path) -> serde_json::Value {
 }
 fn count_failures(cx: &mut TestAppContext, s: &Entity<SettingsStore>) -> Rc<Cell<u32>> {
     let failures = Rc::new(Cell::new(0));
-    let seen = failures.clone();
+    let seen = Rc::clone(&failures);
     cx.update(|cx| {
         cx.subscribe(s, move |_, e: &SettingsEvent, _| match e {
             SettingsEvent::SaveFailed(_) => seen.set(seen.get() + 1),

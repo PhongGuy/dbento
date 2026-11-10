@@ -1,5 +1,6 @@
 use crate::support;
 use dbento_app::explorer::{connection_id, part_id};
+use std::sync::Arc;
 
 use crate::support::{label_of, opened, present, reload, rewrite, wait_real};
 use dbento_app::schema_tree::NodeKey;
@@ -143,26 +144,21 @@ fn the_history_panel_and_new_tabs_follow_the_reload(cx: &mut TestAppContext) {
     cx.update_window(o.win, |_, w, cx| w.press("ctrl-shift-r", cx))
         .unwrap();
     cx.run_until_parked();
-    let ws = o.shell.read_with(cx, |s, _| s.workspace().unwrap().clone());
+    let ws = o
+        .shell
+        .read_with(cx, |s, _| Arc::clone(s.workspace().unwrap()));
     assert!(ws.connection("aaa").is_some(), "the key reloads too");
     let panel = o
         .shell
         .read_with(cx, |s, _| s.history_panel().cloned().unwrap());
-    let panel_ws = panel.read_with(cx, |p, _| p.workspace().clone());
-    assert!(std::sync::Arc::ptr_eq(&panel_ws, &ws));
+    let panel_ws = panel.read_with(cx, |p, _| Arc::clone(p.workspace()));
+    assert!(Arc::ptr_eq(&panel_ws, &ws));
     support::open_connection_row(cx, o.win, "aaa");
     let spec_ws = o.shell.read_with(cx, |s, cx| {
-        s.tab()
-            .unwrap()
-            .read(cx)
-            .model()
-            .read(cx)
-            .spec()
-            .workspace
-            .clone()
+        Arc::clone(&s.tab().unwrap().read(cx).model().read(cx).spec().workspace)
     });
     assert!(
-        std::sync::Arc::ptr_eq(&spec_ws, &ws),
+        Arc::ptr_eq(&spec_ws, &ws),
         "a new tab runs on the new workspace"
     );
 }

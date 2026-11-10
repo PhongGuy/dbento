@@ -119,8 +119,11 @@ impl SettingsStore {
         let Some(path) = self.save_path().cloned() else {
             return Task::ready(());
         };
-        let (value, generation, written) =
-            (self.settings.clone(), self.generation, self.written.clone());
+        let (value, generation, written) = (
+            self.settings.clone(),
+            self.generation,
+            Arc::clone(&self.written),
+        );
         // Writes serialise on the lock, and one no newer than the last landed write is skipped.
         let job = cx.background_spawn(async move {
             let mut last = written.lock().unwrap_or_else(|e| e.into_inner());
