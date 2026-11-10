@@ -460,6 +460,10 @@ fn find_and_modify(
 // Mongosh's default name joins each `field_value`; a `name` option replaces it in place.
 fn create_index(coll: &str, args: &[Bson]) -> Built {
     let key = as_doc(args.first());
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     let name = key
         .iter()
         .map(|(field, v)| match v {
@@ -520,7 +524,9 @@ fn statement(src: &str, c: &mut Cursor<'_>) -> Result<(Option<String>, MongoOp),
                 continue;
             }
             Kind::Punct(_) => return err(NOT_JS.to_owned(), tok.range.start),
-            _ => return err("expected `;` or a new line".to_owned(), tok.range.start),
+            Kind::Ident | Kind::Str | Kind::Num | Kind::Regex => {
+                return err("expected `;` or a new line".to_owned(), tok.range.start);
+            }
         }
         let Some(name) = c.bump().filter(|t| t.kind == Kind::Ident) else {
             return err("expected a name after `.`".to_owned(), here(c));
@@ -580,7 +586,9 @@ fn modifiers(c: &mut Cursor<'_>, row: &Row, command: &mut Document) -> Result<()
             let at = tok.range.start;
             return match tok.kind {
                 Kind::Punct(b) if !b",;:}])".contains(&b) => err(NOT_JS.to_owned(), at),
-                _ => err("expected `;` or a new line".to_owned(), at),
+                Kind::Ident | Kind::Str | Kind::Num | Kind::Regex | Kind::Punct(_) => {
+                    err("expected `;` or a new line".to_owned(), at)
+                }
             };
         }
         let next = c.bump().filter(|t| t.kind == Kind::Ident);
@@ -610,6 +618,10 @@ fn modifiers(c: &mut Cursor<'_>, row: &Row, command: &mut Document) -> Result<()
 
 // Turns a negative limit into its magnitude, kept in its own type where it fits.
 fn negative_limit(v: &mut Bson) -> bool {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     let abs = match *v {
         Bson::Int32(n) if n < 0 => n
             .checked_abs()

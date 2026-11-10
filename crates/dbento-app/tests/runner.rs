@@ -57,7 +57,26 @@ async fn a_select_connects_lazily_and_streams() {
                 ["a", "b"]
             );
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     assert!(
         matches!(next(&ev).await, Event::Batch { run_id: 1, stmt: 0, batch } if batch.len() == 1)
@@ -69,7 +88,26 @@ async fn a_select_connects_lazily_and_streams() {
             end: StatementEnd::Complete(o),
             ..
         } => assert_eq!(o.rows, 1),
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     assert!(matches!(next(&ev).await, Event::RunDone { run_id: 1 }));
 }
@@ -96,7 +134,24 @@ async fn the_row_cap_truncates() {
                 break;
             }
             Event::StatementDone { end, .. } => panic!("{end:?}"),
-            _ => {}
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => {}
         }
     }
     assert_eq!(rows, 1000);
@@ -113,7 +168,25 @@ async fn a_failure_ends_the_script() {
         match next(&ev).await {
             Event::StatementDone { stmt, end, .. } => done.push((stmt, end)),
             Event::RunDone { run_id: 1 } => break,
-            _ => {}
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => {}
         }
     }
     assert_eq!(done.len(), 2, "{done:?}");
@@ -135,7 +208,25 @@ async fn connect_failure_is_reported_and_retried() {
             Event::ConnectFailed { message } => {
                 assert!(message.starts_with("cannot open the database"), "{message}")
             }
-            other => panic!("{other:?}"),
+            other @ (Event::Connected { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. }) => panic!("{other:?}"),
         }
         assert!(matches!(next(&ev).await, Event::RunDone { run_id } if run_id == id));
     }
@@ -200,7 +291,25 @@ async fn cancel_stops_a_long_statement() {
                 ..
             } => break,
             Event::StatementDone { end, .. } => panic!("{end:?}"),
-            _ => {}
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => {}
         }
     }
 }
@@ -271,7 +380,26 @@ async fn unguarded_update_waits_and_skip_runs_nothing() {
             assert_eq!(kinds, [Unguarded::UpdateWithoutWhere]);
             assert!(sql.contains("UPDATE t"), "{sql}");
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     r.send(Command::Confirm { run_id: 0, stmt: 0 }); // stale: ignored
     r.send(Command::Skip { run_id: 1, stmt: 0 });
@@ -303,7 +431,26 @@ async fn unguarded_update_waits_and_skip_runs_nothing() {
             end: StatementEnd::Complete(o),
             ..
         } => assert_eq!(o.rows_affected, Some(3)),
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     assert_eq!(fx.count("SELECT count(*) FROM t WHERE x = 0"), 3);
 }
@@ -332,7 +479,24 @@ async fn read_only_refuses_without_asking() {
             } => break,
             Event::NeedsConfirm { .. } => panic!("asked on a read-only session"),
             Event::StatementDone { end, .. } => panic!("{end:?}"),
-            _ => {}
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => {}
         }
     }
 }
@@ -361,7 +525,26 @@ async fn a_new_run_abandons_a_waiting_statement() {
         Event::Batch {
             run_id: 2, batch, ..
         } => assert_eq!(batch.cell(0, 0), dbento_core::CellRef::Text("1")),
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -380,7 +563,25 @@ async fn a_missing_keychain_secret_adds_the_hint() {
             );
             assert!(message.contains("DBENTO_SECRET_NOPG"), "{message}");
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -490,7 +691,26 @@ async fn a_new_run_mid_script_runs_no_further_statement() {
                 run_id: 1, stmt: 2, ..
             } => panic!("statement 2 ran"),
             Event::RunDone { run_id: 1 } => break,
-            _ => {}
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => {}
         }
     }
     loop {
@@ -502,7 +722,25 @@ async fn a_new_run_mid_script_runs_no_further_statement() {
                 break;
             }
             Event::RunDone { .. } => panic!("run 2 returned no rows"),
-            _ => {}
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => {}
         }
     }
 }
@@ -569,7 +807,25 @@ fn ends(events: Vec<Event>) -> Vec<StatementEnd> {
         .into_iter()
         .filter_map(|e| match e {
             Event::StatementDone { end, .. } => Some(end),
-            _ => None,
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => None,
         })
         .collect()
 }
@@ -607,7 +863,26 @@ async fn mysql_runs_asks_cancels_and_refuses_editing() {
             Event::NeedsConfirm {
                 run_id: 2, kinds, ..
             } => assert_eq!(kinds, [Unguarded::UpdateWithoutWhere], "{flavor}"),
-            other => panic!("{flavor}: {other:?}"),
+            other @ (Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. }) => panic!("{flavor}: {other:?}"),
         }
         r.send(Command::Skip { run_id: 2, stmt: 0 });
         until_run_done(&ev, 2).await;

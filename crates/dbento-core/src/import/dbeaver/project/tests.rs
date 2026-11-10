@@ -241,7 +241,10 @@ fn malformed_or_non_utf8_files_are_errors_that_never_quote_the_file() {
         match &err {
             DBeaverError::Json { path: p, line, .. } => assert_eq!((p, *line), (&path, 1)),
             DBeaverError::NotUtf8 { path: p } => assert_eq!(p, &path),
-            other => panic!("{rel}: {other:?}"),
+            other @ (DBeaverError::NotAProject { .. }
+            | DBeaverError::EncryptedProject { .. }
+            | DBeaverError::Io { .. }
+            | DBeaverError::Credentials { .. }) => panic!("{rel}: {other:?}"),
         }
         assert!(!err.to_string().contains("fake-pw"), "{err}");
     }

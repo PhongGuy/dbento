@@ -89,7 +89,17 @@ async fn database_refuses_writes_and_unprobeables_and_lets_the_server_fence_the_
         ExecuteError::ReadOnlyViolation { message } => {
             assert!(message.contains("no permissions"), "{message}")
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Database { .. }
+        | ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }
+        | _) => panic!("{other:?}"),
     }
     assert_eq!(
         code_of(failure(&mut s, "CONFIG GET databases").await),

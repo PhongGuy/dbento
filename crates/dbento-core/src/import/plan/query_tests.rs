@@ -28,7 +28,9 @@ fn query_actions(p: &ImportPlan) -> Vec<String> {
             Action::SkipQuery { origin, reason } => {
                 Some(format!("skip {} {}", origin.display(), reason.code()))
             }
-            _ => None,
+            Action::AddConnection { .. }
+            | Action::ConnectionUnchanged { .. }
+            | Action::ConnectionConflict { .. } => None,
         })
         .collect()
 }

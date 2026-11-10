@@ -170,7 +170,18 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
                 .find(|r| r.aria == aria)
                 .and_then(|r| match r.kind {
                     RowKind::Object { detail, .. } => Some(detail),
-                    _ => None,
+                    RowKind::Schema
+                    | RowKind::Kind(_)
+                    | RowKind::Relation(_)
+                    | RowKind::Column { .. }
+                    | RowKind::Group(_)
+                    | RowKind::Loading
+                    | RowKind::Failed { .. }
+                    | RowKind::Truncated
+                    | RowKind::Empty
+                    | RowKind::KeyFolder { .. }
+                    | RowKind::Key(_)
+                    | RowKind::LoadMore => None,
                 })
         })
     };

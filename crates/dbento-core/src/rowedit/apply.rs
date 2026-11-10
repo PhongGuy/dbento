@@ -90,7 +90,16 @@ impl Applied {
     pub async fn commit(self) -> Result<(), ApplyError> {
         self.finish("COMMIT").await.map_err(|e| match e {
             ExecuteError::Database { .. } => ApplyError::CommitFailed(e),
-            other => ApplyError::CommitUnknown(other),
+            other @ (ExecuteError::Timeout
+            | ExecuteError::Cancelled
+            | ExecuteError::ReadOnlyViolation { .. }
+            | ExecuteError::Unsupported { .. }
+            | ExecuteError::TransactionControl { .. }
+            | ExecuteError::SessionClosed
+            | ExecuteError::StoppedAtDrainCap
+            | ExecuteError::Syntax { .. }
+            | ExecuteError::ResultExpired
+            | ExecuteError::SessionEnded { .. }) => ApplyError::CommitUnknown(other),
         })
     }
 
@@ -209,7 +218,16 @@ pub async fn apply_with(
                 failed = true;
                 ChangeOutcome::Failed(match e {
                     ExecuteError::Database { message, .. } => message,
-                    other => other.to_string(),
+                    other @ (ExecuteError::Timeout
+                    | ExecuteError::Cancelled
+                    | ExecuteError::ReadOnlyViolation { .. }
+                    | ExecuteError::Unsupported { .. }
+                    | ExecuteError::TransactionControl { .. }
+                    | ExecuteError::SessionClosed
+                    | ExecuteError::StoppedAtDrainCap
+                    | ExecuteError::Syntax { .. }
+                    | ExecuteError::ResultExpired
+                    | ExecuteError::SessionEnded { .. }) => other.to_string(),
                 })
             }
         });

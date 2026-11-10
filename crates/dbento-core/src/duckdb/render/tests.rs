@@ -141,7 +141,7 @@ fn the_oracle_itself_spells_the_spec_rows() {
     let c = conn();
     let text = |expr: &str| match see(&c, expr).0.unwrap().1 {
         Cell::Text(t) => t,
-        other => panic!("{expr}: {other:?}"),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{expr}: {other:?}"),
     };
     assert_eq!(
         text("170141183460469231731687303715884105727::HUGEINT"),

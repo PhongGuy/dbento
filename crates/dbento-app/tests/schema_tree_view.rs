@@ -680,7 +680,19 @@ fn index_ref(cx: &mut TestAppContext, shell: &Entity<Shell>) -> ObjectRef {
                 .into_iter()
                 .find_map(|r| match r.kind {
                     RowKind::Object { object, .. } if r.aria == INDEX_ROW => Some(object),
-                    _ => None,
+                    RowKind::Schema
+                    | RowKind::Kind(_)
+                    | RowKind::Relation(_)
+                    | RowKind::Column { .. }
+                    | RowKind::Group(_)
+                    | RowKind::Object { .. }
+                    | RowKind::Loading
+                    | RowKind::Failed { .. }
+                    | RowKind::Truncated
+                    | RowKind::Empty
+                    | RowKind::KeyFolder { .. }
+                    | RowKind::Key(_)
+                    | RowKind::LoadMore => None,
                 })
         })
         .expect("the index row")

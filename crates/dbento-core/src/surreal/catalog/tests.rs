@@ -46,7 +46,9 @@ fn structure(fields: Vec<Wire>) -> Wire {
 fn unexpected(e: IntrospectError) -> String {
     match e {
         IntrospectError::Unexpected { message } => message,
-        other => panic!("not Unexpected: {other:?}"),
+        other @ (IntrospectError::Execute(_)
+        | IntrospectError::Missing { .. }
+        | IntrospectError::Unsupported { .. }) => panic!("not Unexpected: {other:?}"),
     }
 }
 fn names(columns: &[ColumnMeta]) -> Vec<&str> {

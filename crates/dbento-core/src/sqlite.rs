@@ -240,7 +240,7 @@ impl Driver for SqliteDriver {
                 let (tx, rx) = std_mpsc::channel();
                 (Some(tx), Some(rx))
             }
-            _ => (None, None),
+            OnTruncate::Drain | OnTruncate::Close => (None, None),
         };
         if script
             .ctl
@@ -1002,6 +1002,10 @@ fn map_error(e: rusqlite::Error) -> ExecuteError {
             message: e.to_string(),
         };
     }
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Error has too many variants to list; the rest share one arm"
+    )]
     match e {
         rusqlite::Error::SqliteFailure(f, msg) => ExecuteError::database(
             f.extended_code.to_string(),
@@ -1018,6 +1022,10 @@ fn map_error(e: rusqlite::Error) -> ExecuteError {
 /// batch text, a suffix of the script, so it is moved into the failing statement's trimmed
 /// range, the text the app records for it.
 fn prepare_error(e: rusqlite::Error, script: &str) -> ExecuteError {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Error has too many variants to list; the rest share one arm"
+    )]
     let at = match &e {
         rusqlite::Error::SqlInputError { sql, offset, .. }
             if *offset >= 0 && script.ends_with(sql.as_str()) =>

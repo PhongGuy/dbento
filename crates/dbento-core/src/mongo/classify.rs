@@ -79,6 +79,10 @@ fn classification(writes: Writes, unguarded: Vec<Unguarded>) -> Classification {
 // A `$`-prefixed key can never name a field, so `$out` or `$merge` anywhere in
 // the pipeline is a stage; a false positive only asks for confirmation.
 fn holds_out_or_merge(value: &Bson) -> bool {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match value {
         Bson::Document(d) => d
             .iter()
@@ -122,6 +126,10 @@ fn empty_filter(statement: &Document) -> bool {
 // The server deletes one document only for a non-zero number; every other
 // `limit` type, however odd, deletes them all.
 fn is_nonzero_number(value: &Bson) -> bool {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match value {
         Bson::Int32(n) => *n != 0,
         Bson::Int64(n) => *n != 0,

@@ -144,7 +144,7 @@ async fn a_big_string_is_one_capped_page() {
     assert_eq!(p.length, Some(BIG_STRING_LEN as u64));
     match p.batch.cell(0, 0) {
         CellRef::Text(t) => assert_eq!(t.len(), 1 << 20),
-        other => panic!("{other:?}"),
+        other @ (CellRef::Null | CellRef::Bytes(_) | _) => panic!("{other:?}"),
     }
 }
 

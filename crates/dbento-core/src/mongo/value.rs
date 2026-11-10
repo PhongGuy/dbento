@@ -117,7 +117,7 @@ fn value_at(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
         Kind::Ident => {
             c.text(tok) == "new" || c.peek_nth(1).is_some_and(|t| t.kind == Kind::Punct(b'('))
         }
-        _ => false,
+        Kind::Str | Kind::Num | Kind::Regex | Kind::Punct(_) => false,
     };
     if depth == MAX_DEPTH && opens_level {
         return Err(ParseError::new(
@@ -130,7 +130,7 @@ fn value_at(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
         Kind::Punct(b',' | b';' | b':' | b'}' | b']' | b')') => {
             return Err(ParseError::new("expected a value".to_owned(), at));
         }
-        _ => {}
+        Kind::Str | Kind::Num | Kind::Regex | Kind::Punct(_) => {}
     }
     c.bump();
     match tok.kind {
@@ -150,7 +150,7 @@ fn value_at(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
         },
         Kind::Punct(b'{') => object(c, depth + 1),
         Kind::Punct(b'[') => array(c, depth + 1),
-        _ => Err(not_js(at)),
+        Kind::Ident | Kind::Punct(_) => Err(not_js(at)),
     }
 }
 
@@ -177,7 +177,9 @@ pub(crate) fn separator(c: &mut Cursor<'_>, close: u8) -> Result<bool, ParseErro
         Kind::Punct(b',') => Ok(false),
         Kind::Punct(b) if b == close => Ok(true),
         Kind::Punct(b) if !b",;:}])".contains(&b) => Err(not_js(tok.range.start)),
-        _ => Err(expected(tok.range.start)),
+        Kind::Ident | Kind::Str | Kind::Num | Kind::Regex | Kind::Punct(_) => {
+            Err(expected(tok.range.start))
+        }
     }
 }
 
@@ -195,7 +197,7 @@ fn object(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
         let key = match key_tok.kind {
             Kind::Ident | Kind::Num => c.text(key_tok).to_owned(),
             Kind::Str => string_value(c.text(key_tok)),
-            _ => {
+            Kind::Regex | Kind::Punct(_) => {
                 return Err(ParseError::new(
                     "expected a key".to_owned(),
                     key_tok.range.start,
@@ -355,6 +357,10 @@ fn helper(name: &str, args: &[Arg<'_>], at: usize) -> Result<Bson, ParseError> {
 
 // An integer-valued number in i64's range.
 fn integral(n: &Bson) -> Option<i64> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Bson has too many variants to list; the rest share one arm"
+    )]
     match *n {
         Bson::Int32(n) => Some(n.into()),
         Bson::Int64(n) => Some(n),

@@ -177,7 +177,7 @@ fn postgres_null_and_default_are_keywords_and_non_editable_columns_are_dropped()
     );
     match &b.changes()[0] {
         Change::Update { set, .. } => assert_eq!(set.len(), 2),
-        other => panic!("{other:?}"),
+        other @ (Change::Insert { .. } | Change::Delete { .. }) => panic!("{other:?}"),
     }
     assert_eq!(
         bound(&b),

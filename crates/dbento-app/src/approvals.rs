@@ -155,7 +155,7 @@ pub fn connect_command(cli: &CliPath, dir: &Path) -> String {
 pub fn connect_command_with(cli: &CliPath, dir: &Path, quoting: Quoting) -> String {
     let program = match cli {
         CliPath::Absolute(path) => quoting.quote(&path.to_string_lossy()),
-        _ => "dbento".to_owned(),
+        CliPath::Bare | CliPath::AppImage => "dbento".to_owned(),
     };
     let dir = quoting.quote(&dir.to_string_lossy());
     format!("{program} --workspace {dir} mcp")
@@ -289,7 +289,7 @@ pub fn answered_elsewhere_notice(verdict: Verdict) -> Notice {
             NoticeKind::Success,
         ),
         Verdict::Denied => ("Already denied in another window.", NoticeKind::Info),
-        _ => ("Already answered in another window.", NoticeKind::Info),
+        Verdict::Unknown | _ => ("Already answered in another window.", NoticeKind::Info),
     };
     Notice {
         text: text.to_owned(),

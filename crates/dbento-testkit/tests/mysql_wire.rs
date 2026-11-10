@@ -122,7 +122,10 @@ async fn kill_query_from_a_side_connection_ends_the_stream_and_keeps_the_connect
         };
         match err {
             mysql_async::Error::Server(e) => assert_eq!(e.code, 1317, "{label}: {e}"),
-            other => panic!("{label}: {other}"),
+            other @ (mysql_async::Error::Driver(_)
+            | mysql_async::Error::Io(_)
+            | mysql_async::Error::Other(_)
+            | mysql_async::Error::Url(_)) => panic!("{label}: {other}"),
         }
         let seven: Option<i64> = conn.query_first("SELECT 7").await.unwrap();
         assert_eq!(seven, Some(7), "{label}");

@@ -16,7 +16,7 @@ fn shown(hex_text: &str) -> String {
     let v = wire(hex_text);
     match cell(&v) {
         Cell::Text(t) => t.into_owned(),
-        other => panic!("{hex_text}: {other:?}"),
+        other @ (Cell::Null | Cell::Number(_) | Cell::Bytes(_)) => panic!("{hex_text}: {other:?}"),
     }
 }
 
@@ -24,7 +24,7 @@ fn number(hex_text: &str) -> String {
     let v = wire(hex_text);
     match cell(&v) {
         Cell::Number(t) => t.into_owned(),
-        other => panic!("{hex_text}: {other:?}"),
+        other @ (Cell::Null | Cell::Text(_) | Cell::Bytes(_)) => panic!("{hex_text}: {other:?}"),
     }
 }
 

@@ -32,7 +32,17 @@ async fn a_reader_is_refused_every_write_before_it_is_sent() {
             ExecuteError::ReadOnlyViolation { message } => {
                 assert_eq!(message, "this statement writes", "{statement}");
             }
-            other => panic!("{statement}: {other:?}"),
+            other @ (ExecuteError::Database { .. }
+            | ExecuteError::Timeout
+            | ExecuteError::Cancelled
+            | ExecuteError::Unsupported { .. }
+            | ExecuteError::TransactionControl { .. }
+            | ExecuteError::SessionClosed
+            | ExecuteError::StoppedAtDrainCap
+            | ExecuteError::Syntax { .. }
+            | ExecuteError::ResultExpired
+            | ExecuteError::SessionEnded { .. }
+            | _) => panic!("{statement}: {other:?}"),
         }
     }
     assert_eq!(fx.db.count("many").await, 10_000);
@@ -87,7 +97,17 @@ async fn a_command_the_gate_cannot_read_is_refused_by_the_server_for_a_reader() 
         ExecuteError::ReadOnlyViolation { message } => {
             assert!(message.contains("not authorized"), "{message}");
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Database { .. }
+        | ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }
+        | _) => panic!("{other:?}"),
     }
     assert_eq!(fx.db.count("many").await, 10_000);
 }

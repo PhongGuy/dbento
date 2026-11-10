@@ -433,7 +433,25 @@ async fn a_run_that_moves_the_search_path_reports_the_schema() {
     let moved = |seen: &[Event]| {
         seen.iter().find_map(|e| match e {
             Event::SettingsChanged { database } => Some(database.clone()),
-            _ => None,
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::StatementDone { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => None,
         })
     };
     r.send(run_cmd(1, "SELECT 1", Some(10)));

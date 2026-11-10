@@ -294,7 +294,11 @@ pub(crate) async fn relation_objects(
             };
             let (columns, referenced) = match kind {
                 ConstraintKind::Check => (Vec::new(), None),
-                _ => key_columns
+                ConstraintKind::PrimaryKey
+                | ConstraintKind::Unique
+                | ConstraintKind::ForeignKey
+                | ConstraintKind::Exclusion
+                | ConstraintKind::Other => key_columns
                     .remove(&(name.clone(), kind == ConstraintKind::ForeignKey))
                     .unwrap_or_default(),
             };
@@ -312,7 +316,7 @@ pub(crate) async fn relation_objects(
         ConstraintKind::Unique => 1,
         ConstraintKind::ForeignKey => 2,
         ConstraintKind::Check => 3,
-        _ => 4,
+        ConstraintKind::Exclusion | ConstraintKind::Other => 4,
     };
     constraints.sort_by(|a, b| (rank(a.kind()), a.name()).cmp(&(rank(b.kind()), b.name())));
 

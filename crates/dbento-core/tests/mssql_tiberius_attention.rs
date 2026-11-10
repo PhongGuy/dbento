@@ -24,7 +24,7 @@ async fn read_out(stream: &mut tiberius::QueryStream<'_>) -> (usize, bool) {
         match item {
             QueryItem::Row(_) => rows += 1,
             QueryItem::Done(d) => acked = d.attention,
-            _ => {}
+            QueryItem::Metadata(_) | QueryItem::Error(_) => {}
         }
     }
     (rows, acked)

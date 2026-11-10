@@ -148,7 +148,9 @@ pub fn read_only_tooltip(engine: Engine) -> &'static str {
         Engine::Sqlite => READ_ONLY_SQLITE_TOOLTIP,
         Engine::Mysql => READ_ONLY_MYSQL_TOOLTIP,
         Engine::Duckdb => READ_ONLY_DUCKDB_TOOLTIP,
-        _ => "Read-only connection.",
+        Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis | _ => {
+            "Read-only connection."
+        }
     }
 }
 
@@ -177,7 +179,9 @@ pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcem
             .to_owned();
         }
         Engine::Surrealdb | Engine::Redis => {}
-        _ => return read_only_tooltip_of(c).to_owned(),
+        Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Mssql | Engine::Duckdb | _ => {
+            return read_only_tooltip_of(c).to_owned();
+        }
     }
     // SurrealDB's level comes from the login's role and Redis's from the user's ACL, which only
     // the session knows.
@@ -303,7 +307,7 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
             c.namespace().unwrap_or_default(),
             c.database().unwrap_or_default()
         ),
-        _ => c.display_target(),
+        Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis | _ => c.display_target(),
     };
     format!(
         "{} \u{b7} {} \u{b7} {target}",
@@ -318,7 +322,7 @@ fn preview_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::MongoShell => "javascript",
         QueryLanguage::RedisCommands => "bash",
-        _ => "sql",
+        QueryLanguage::Sql | QueryLanguage::SurrealQl | _ => "sql",
     }
 }
 
@@ -336,7 +340,7 @@ pub fn editor_language(engine: Engine) -> &'static str {
         QueryLanguage::Sql => "sql",
         QueryLanguage::MongoShell => "javascript",
         QueryLanguage::RedisCommands => "bash",
-        _ => "text",
+        QueryLanguage::SurrealQl | _ => "text",
     }
 }
 

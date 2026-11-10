@@ -436,7 +436,7 @@ pub fn outcome_mark(
     match o {
         HistoryOutcome::Ok { .. } => (Icons::CircleCheck, success),
         HistoryOutcome::Failed { .. } => (Icons::CircleX, danger),
-        _ => (Icons::CircleX, dim),
+        HistoryOutcome::Cancelled | HistoryOutcome::Skipped | _ => (Icons::CircleX, dim),
     }
 }
 

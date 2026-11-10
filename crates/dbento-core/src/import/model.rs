@@ -196,7 +196,7 @@ impl ConnectionDraft {
     fn pg(&self) -> Option<&PgDraft> {
         match &self.kind {
             DraftKind::Postgres(pg) => Some(pg),
-            _ => None,
+            DraftKind::Sqlite { .. } | DraftKind::Mysql(_) => None,
         }
     }
 
@@ -257,7 +257,7 @@ impl ConnectionDraft {
     pub fn path(&self) -> Option<&str> {
         match &self.kind {
             DraftKind::Sqlite { path } => Some(path),
-            _ => None,
+            DraftKind::Postgres(_) | DraftKind::Mysql(_) => None,
         }
     }
 
@@ -528,7 +528,21 @@ impl SkipReason {
     pub fn detail(&self) -> Option<&str> {
         match self {
             SkipReason::UnsupportedDriver(s) | SkipReason::UnknownMacro(s) => Some(s),
-            _ => None,
+            SkipReason::MissingUrl
+            | SkipReason::InvalidUrl
+            | SkipReason::SshTunnel
+            | SkipReason::NoUser
+            | SkipReason::MultiHost
+            | SkipReason::ServiceFile
+            | SkipReason::InMemory
+            | SkipReason::Symlink
+            | SkipReason::OutsideRoot
+            | SkipReason::SourceSkipped
+            | SkipReason::ConnectionConflict
+            | SkipReason::Proxy
+            | SkipReason::CloudWorkspace
+            | SkipReason::EmptyQuery
+            | SkipReason::UnixSocket => None,
         }
     }
 }
@@ -607,7 +621,16 @@ impl WarningKind {
             WarningKind::TlsStricter { from } | WarningKind::TlsWeaker { from } => {
                 Some(from.code())
             }
-            _ => None,
+            WarningKind::PasswordInUrl
+            | WarningKind::CaCertMissing
+            | WarningKind::ClientCertMissing
+            | WarningKind::MachineSpecificPath
+            | WarningKind::FileMissing
+            | WarningKind::NotUtf8
+            | WarningKind::ColorsNotImported
+            | WarningKind::BoundByFolder
+            | WarningKind::KeyMissing
+            | WarningKind::SecretUnreadable => None,
         }
     }
 }

@@ -210,7 +210,11 @@ async fn a_failed_change_stops_the_rest_and_nothing_commits() {
         ChangeOutcome::Failed(m) => {
             assert!(m.contains("invalid input syntax for type integer"), "{m}")
         }
-        other => panic!("{other:?}"),
+        other @ (ChangeOutcome::Applied(_)
+        | ChangeOutcome::Conflict
+        | ChangeOutcome::Ambiguous(_)
+        | ChangeOutcome::NotAttempted
+        | _) => panic!("{other:?}"),
     }
     assert_eq!(outcomes[2], ChangeOutcome::NotAttempted);
     assert_eq!(rows(&fx).await, ORIGINAL);

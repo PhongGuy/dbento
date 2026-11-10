@@ -58,7 +58,9 @@ pub(super) fn conn_actions(p: &ImportPlan) -> Vec<(String, &'static str)> {
             Action::AddConnection { name, .. }
             | Action::ConnectionUnchanged { name, .. }
             | Action::ConnectionConflict { name, .. } => Some((name.clone(), a.code())),
-            _ => None,
+            Action::CreateQuery { .. }
+            | Action::QueryUnchanged { .. }
+            | Action::SkipQuery { .. } => None,
         })
         .collect()
 }

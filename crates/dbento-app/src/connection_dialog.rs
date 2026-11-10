@@ -627,7 +627,7 @@ impl ConnectionForm {
                         };
                     }
                 }
-                _ => {
+                FieldKind::Text | FieldKind::Path | FieldKind::Uri | _ => {
                     let Some((field, _)) = field_of(f.key) else {
                         continue;
                     };
@@ -645,7 +645,17 @@ impl ConnectionForm {
                         Field::Database => (&shown.database, &mut spec.database),
                         Field::User => (&shown.user, &mut spec.user),
                         Field::ReadOnlyUser => (&shown.read_only_user, &mut spec.read_only_user),
-                        _ => continue,
+                        Field::Name
+                        | Field::Port
+                        | Field::Password
+                        | Field::EnvVar
+                        | Field::TlsCa
+                        | Field::TlsCert
+                        | Field::TlsKey
+                        | Field::KeyPassphrase
+                        | Field::AuthLevel
+                        | Field::Timeout
+                        | Field::Folder => continue,
                     };
                     if let Some(v) = changed(field, was) {
                         *key = v;
@@ -695,7 +705,12 @@ impl ConnectionForm {
         let port_default = |fields: &[FormField]| {
             fields.iter().find_map(|f| match f.kind {
                 FieldKind::Port { default } => Some(default.to_string()),
-                _ => None,
+                FieldKind::Text
+                | FieldKind::Path
+                | FieldKind::Secret
+                | FieldKind::Tls
+                | FieldKind::Uri
+                | _ => None,
             })
         };
         if engine == self.loaded.engine {
@@ -984,7 +999,14 @@ impl ConnectionForm {
                 (FieldKind::Path, Some((field, id))) => {
                     let prompt = match self.engine {
                         Engine::Duckdb => "Choose DuckDB file",
-                        _ => "Choose SQLite file",
+                        Engine::Postgres
+                        | Engine::Sqlite
+                        | Engine::Mysql
+                        | Engine::Mssql
+                        | Engine::Mongodb
+                        | Engine::Surrealdb
+                        | Engine::Redis
+                        | _ => "Choose SQLite file",
                     };
                     rows.push(self.file_row(f.label, id, field, prompt, cx));
                 }
@@ -1490,10 +1512,12 @@ fn fields_owned(f: &FormField) -> Vec<Field> {
             Field::TlsKey,
             Field::KeyPassphrase,
         ],
-        _ => field_of(f.key)
-            .map(|(field, _)| field)
-            .into_iter()
-            .collect(),
+        FieldKind::Text | FieldKind::Port { .. } | FieldKind::Path | FieldKind::Uri | _ => {
+            field_of(f.key)
+                .map(|(field, _)| field)
+                .into_iter()
+                .collect()
+        }
     }
 }
 

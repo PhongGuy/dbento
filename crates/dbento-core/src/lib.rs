@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::wildcard_enum_match_arm)]
 
 mod value;
 pub use value::{CellRef, ColumnInfo, ColumnSource, DocumentRef, ResultBatch};

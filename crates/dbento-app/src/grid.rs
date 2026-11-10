@@ -245,7 +245,7 @@ impl ColumnView {
         match sel {
             TableSelection::Cell(r, c) => TableSelection::Cell(r, full(c)),
             TableSelection::Column(c) => TableSelection::Column(full(c)),
-            other => other,
+            other @ (TableSelection::None | TableSelection::Row(_)) => other,
         }
     }
 
@@ -258,7 +258,7 @@ impl ColumnView {
         Some(match sel {
             TableSelection::Cell(r, c) => TableSelection::Cell(r, visible(c)?),
             TableSelection::Column(c) => TableSelection::Column(visible(c)?),
-            other => other,
+            other @ (TableSelection::None | TableSelection::Row(_)) => other,
         })
     }
 
@@ -332,7 +332,7 @@ pub fn loaded_selection(sel: TableSelection, inserted: usize) -> Option<TableSel
     match sel {
         TableSelection::Row(r) => Some(TableSelection::Row(r.checked_sub(inserted)?)),
         TableSelection::Cell(r, c) => Some(TableSelection::Cell(r.checked_sub(inserted)?, c)),
-        other => Some(other),
+        other @ (TableSelection::None | TableSelection::Column(_)) => Some(other),
     }
 }
 

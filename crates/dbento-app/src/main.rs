@@ -4,6 +4,7 @@
 // debug builds keep the console for their logs. Without a console, stdout and stderr
 // writes are silently dropped unless the launcher redirected them.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![warn(clippy::wildcard_enum_match_arm)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

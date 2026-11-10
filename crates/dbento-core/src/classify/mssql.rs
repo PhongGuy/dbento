@@ -156,6 +156,10 @@ fn keyword_unguarded(batch: &str) -> Vec<Unguarded> {
 
 /// The statements an IF, WHILE or bare `BEGIN ... END` runs, or None for any other statement.
 fn body(statement: &Statement) -> Option<Vec<&Statement>> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Statement has too many variants to list; the rest share one arm"
+    )]
     match statement {
         Statement::If(s) => {
             let blocks = std::iter::once(&s.if_block)
@@ -180,6 +184,10 @@ fn writes(statement: &Statement) -> bool {
     if let Some(inner) = body(statement) {
         return inner.into_iter().any(writes);
     }
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Statement has too many variants to list; the rest share one arm"
+    )]
     match statement {
         Statement::Query(query) => body_writes(&query.body) || selects_into(&query.body),
         Statement::Declare { .. }
@@ -196,7 +204,12 @@ fn selects_into(body: &SetExpr) -> bool {
         SetExpr::Select(select) => select.into.is_some(),
         SetExpr::Query(query) => selects_into(&query.body),
         SetExpr::SetOperation { left, right, .. } => selects_into(left) || selects_into(right),
-        _ => false,
+        SetExpr::Values(_)
+        | SetExpr::Insert(_)
+        | SetExpr::Update(_)
+        | SetExpr::Delete(_)
+        | SetExpr::Merge(_)
+        | SetExpr::Table(_) => false,
     }
 }
 
@@ -228,7 +241,11 @@ fn transaction_control(batch: &str) -> bool {
         .filter_map(|t| match t.kind {
             TsqlKind::Word => Some(&batch[t.range]),
             TsqlKind::Punct => Some(if &batch[t.range] == "," { "," } else { "" }),
-            _ => None,
+            TsqlKind::Str
+            | TsqlKind::Ident
+            | TsqlKind::LineComment
+            | TsqlKind::BlockComment
+            | TsqlKind::Space => None,
         })
         .collect();
     let is = |word: &str, any: &[&str]| any.iter().any(|w| w.eq_ignore_ascii_case(word));

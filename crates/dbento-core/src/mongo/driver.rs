@@ -335,7 +335,9 @@ impl Driver for MongoDriver {
             MongoOp::Method { method, .. } if reports_a_count(*method) => {
                 Some(write(script, &statement, classification.writes).await?)
             }
-            _ => return reply_rows(script, &statement, limits, classification.writes).await,
+            MongoOp::Method { .. } | MongoOp::RunCommand(_) => {
+                return reply_rows(script, &statement, limits, classification.writes).await;
+            }
         };
         let stream = MongoStream::finished(
             affected,
@@ -469,7 +471,7 @@ fn shown(op: &MongoOp, mut reply: Document) -> Result<Option<Document>, ExecuteE
     let failure = reply_failure(&reply);
     let failure = match op {
         MongoOp::RunCommand(_) => failure.filter(|f| matches!(f, ExecuteError::Timeout)),
-        _ => failure,
+        MongoOp::Use(_) | MongoOp::Method { .. } => failure,
     };
     if let Some(failure) = failure {
         return Err(failure);
@@ -554,6 +556,10 @@ async fn within<T>(
 // Reads `e.kind`, not `e`, because `Error`'s `Display` dumps the server's reply as hex.
 fn open_error(conn: &ConnectionConfig, e: Error) -> ConnectError {
     let target = conn.display_target();
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ErrorKind has too many variants to list; the rest share one arm"
+    )]
     match &*e.kind {
         ErrorKind::InvalidTlsConfig { .. } => ConnectError::Tls {
             host: target,

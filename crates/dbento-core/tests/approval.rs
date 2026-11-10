@@ -218,7 +218,7 @@ fn of_two_racing_decides_exactly_one_wins_and_its_verdict_is_stored() {
         assert_eq!(won.len(), 1, "{results:?}");
         let (verdict, claim) = match won[0] {
             Decision::Approve => (Verdict::Approved, Claim::Granted),
-            _ => (Verdict::Denied, Claim::Denied),
+            Decision::Deny | _ => (Verdict::Denied, Claim::Denied),
         };
         assert_eq!(store.verdict(&r), verdict);
         assert_eq!(store.claim(r.id()).unwrap(), claim);

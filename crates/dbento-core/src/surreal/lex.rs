@@ -98,7 +98,15 @@ impl Tok {
                 name,
                 quoted: false,
             } => Some(name),
-            _ => None,
+            Kind::Ident { .. }
+            | Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script
+            | Kind::PathSep
+            | Kind::DotDot
+            | Kind::Punct(_) => None,
         }
     }
 
@@ -106,7 +114,14 @@ impl Tok {
     pub(crate) fn name(&self) -> Option<&str> {
         match &self.kind {
             Kind::Ident { name, .. } => Some(name),
-            _ => None,
+            Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script
+            | Kind::PathSep
+            | Kind::DotDot
+            | Kind::Punct(_) => None,
         }
     }
 
@@ -151,7 +166,7 @@ impl Head {
             Self::Args(depth) if tok.is_punct('(') => Self::Args(depth + 1),
             Self::Args(_) => self,
             _ if tok.is_word("function") && !on_path(prev) => Self::Named,
-            _ => Self::Idle,
+            Self::Idle | Self::Named | Self::Closed => Self::Idle,
         }
     }
 }
@@ -178,7 +193,12 @@ impl Position {
             }
             Kind::Punct(')' | ']' | '}') => Self::AfterValue,
             Kind::Punct(_) => Self::ExpectValue,
-            _ => Self::AfterValue,
+            Kind::Ident { .. }
+            | Kind::Str { .. }
+            | Kind::Num
+            | Kind::Param
+            | Kind::Regex
+            | Kind::Script => Self::AfterValue,
         }
     }
 

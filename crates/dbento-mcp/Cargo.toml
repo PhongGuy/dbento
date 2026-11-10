@@ -9,6 +9,8 @@ autotests = false
 
 [lints]
 workspace = true
+# wildcard_enum_match_arm stays off here: every flagged arm matches another crate's
+# #[non_exhaustive] enum, so named variants would still end in a wildcard.
 
 [features]
 default = ["duckdb", "mongodb", "surrealdb", "redis"]

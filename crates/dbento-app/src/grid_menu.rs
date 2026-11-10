@@ -56,7 +56,7 @@ pub fn menu_sections(m: &TabModel, stmt: usize, target: GridTarget, cx: &App) ->
     let browse = stmt == 0 && m.browse_result();
     let header = match target {
         GridTarget::Header(col) => data_col(col),
-        _ => None,
+        GridTarget::Cell(..) | GridTarget::Below => None,
     };
     if let Some(data) = header
         && let Some(entries) = column_entries(m, stmt, data)
@@ -69,7 +69,7 @@ pub fn menu_sections(m: &TabModel, stmt: usize, target: GridTarget, cx: &App) ->
     if browse {
         let entries = match target {
             GridTarget::Cell(row, col) => menu_entries(m, Some(m.grid_row(row)), data_col(col), cx),
-            _ => {
+            GridTarget::Header(_) | GridTarget::Below => {
                 let mut all = menu_entries(m, None, None, cx);
                 all.retain(|e| e.id == "grid-menu-add-row");
                 all

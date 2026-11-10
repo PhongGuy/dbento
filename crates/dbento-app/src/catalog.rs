@@ -263,7 +263,12 @@ async fn load(
                 Asked::Keys(s.scan_keys(&key_scan(*db, filter, after.as_ref())).await)
             }
             CatalogQuery::CommandDocs => Asked::Docs(s.command_docs().await),
-            q => Asked::Listing(ask(s, q).await),
+            q @ (CatalogQuery::Schemas
+            | CatalogQuery::Relations { .. }
+            | CatalogQuery::Columns { .. }
+            | CatalogQuery::Count { .. }
+            | CatalogQuery::RelationObjects { .. }
+            | CatalogQuery::SchemaObjects { .. }) => Asked::Listing(ask(s, q).await),
         }
     };
     let asked = AssertUnwindSafe(work).catch_unwind();
@@ -337,7 +342,10 @@ fn definition_message(e: DefinitionError) -> String {
         DefinitionError::Missing { .. } => {
             format!("{e}; refresh the explorer to see the current objects")
         }
-        e => e.to_string(),
+        e @ (DefinitionError::Execute(_)
+        | DefinitionError::Unexpected { .. }
+        | DefinitionError::Unsupported { .. }
+        | _) => e.to_string(),
     }
 }
 
@@ -399,7 +407,7 @@ async fn count(s: &mut Session, rel: &RelationRef) -> Result<u64, IntrospectErro
         if n.is_none() && !batch.is_empty() && batch.column_count() > 0 {
             n = match batch.cell(0, 0) {
                 CellRef::Text(t) => t.parse().ok(),
-                _ => None,
+                CellRef::Null | CellRef::Bytes(_) | _ => None,
             };
         }
     }

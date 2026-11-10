@@ -40,7 +40,7 @@ pub(crate) fn lex_to(engine: Engine, sql: &str, upto: usize) -> Option<Vec<Tok>>
     match engine {
         Engine::Mongodb | Engine::Surrealdb | Engine::Redis => return None,
         Engine::Mssql => return mssql_toks(sql, upto),
-        _ => {}
+        Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Duckdb => {}
     }
     let mut toks = Vec::new();
     let mut i = 0;
@@ -256,7 +256,9 @@ fn word_or_prefixed(b: &[u8], i: usize, engine: Engine) -> Option<(Kind, usize)>
     let prefix = match engine {
         Engine::Postgres | Engine::Duckdb => &[&b"e"[..], b"b", b"x", b"n"][..],
         Engine::Mysql => &[&b"b"[..], b"x", b"n"][..],
-        _ => &[&b"x"[..]][..],
+        Engine::Sqlite | Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis => {
+            &[&b"x"[..]][..]
+        }
     };
     if next == Some(b'\'') && prefix.contains(&&word[..]) {
         if engine == Engine::Mysql {
@@ -279,7 +281,9 @@ fn is_op_byte(c: u8, engine: Engine) -> bool {
     let claimed: &[u8] = match engine {
         Engine::Postgres | Engine::Duckdb => b"'\"(),;._$[]",
         Engine::Mysql => b"'\"(),;._$`[]#",
-        _ => b"'\"(),;._$`[",
+        Engine::Sqlite | Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis => {
+            b"'\"(),;._$`["
+        }
     };
     c.is_ascii_punctuation() && !claimed.contains(&c)
 }
@@ -297,7 +301,11 @@ fn op_run(b: &[u8], i: usize, engine: Engine) -> usize {
             Engine::Mysql => {
                 c == b'?' || (c == b'@' && (is_word_char(next) || b"@'\"`".contains(&next)))
             }
-            _ => c == b'?' || (matches!(c, b':' | b'@') && is_word_char(next)),
+            Engine::Sqlite
+            | Engine::Mssql
+            | Engine::Mongodb
+            | Engine::Surrealdb
+            | Engine::Redis => c == b'?' || (matches!(c, b':' | b'@') && is_word_char(next)),
         };
         if !is_op_byte(c, engine) || comment || param {
             break;

@@ -576,6 +576,10 @@ impl Workspace {
     pub fn open(dir: impl AsRef<Path>) -> Result<Workspace, OpenError> {
         let dir = dir.as_ref();
         let file = dir.join("dbento.toml");
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "ErrorKind has too many variants to list; the rest share one arm"
+        )]
         let text = std::fs::read_to_string(&file).map_err(|e| match e.kind() {
             ErrorKind::NotFound => OpenError::NotFound {
                 start: dir.to_path_buf(),
@@ -728,6 +732,10 @@ impl Workspace {
         let mut found = Vec::new();
         let walk =
             std::fs::canonicalize(&root).and_then(|real| collect_queries(&root, &real, &mut found));
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "ErrorKind has too many variants to list; the rest share one arm"
+        )]
         walk.or_else(|e| match e.kind() {
             ErrorKind::NotFound => Ok(()),
             _ => Err(OpenError::Io {
@@ -884,6 +892,10 @@ impl Workspace {
             }
         }
         let file = self.dir.join(rel);
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "ErrorKind has too many variants to list; the rest share one arm"
+        )]
         let resolve = |p: &Path| {
             std::fs::canonicalize(p).map_err(|e| match e.kind() {
                 ErrorKind::NotFound => outside(),
@@ -1048,7 +1060,11 @@ fn find_password(value: &toml::Value, prefix: &str) -> Option<String> {
             }
         }),
         toml::Value::Array(a) => a.iter().find_map(|v| find_password(v, prefix)),
-        _ => None,
+        toml::Value::String(_)
+        | toml::Value::Integer(_)
+        | toml::Value::Float(_)
+        | toml::Value::Boolean(_)
+        | toml::Value::Datetime(_) => None,
     }
 }
 
@@ -1290,7 +1306,12 @@ impl ConnectionConfig {
                 config.port = Some(raw.port.unwrap_or(match engine {
                     Engine::Mysql => 3306,
                     Engine::Mssql => 1433,
-                    _ => 5432,
+                    Engine::Postgres
+                    | Engine::Sqlite
+                    | Engine::Duckdb
+                    | Engine::Mongodb
+                    | Engine::Surrealdb
+                    | Engine::Redis => 5432,
                 }));
                 config.secret_source = secret_source(raw.secret).map_err(invalid)?;
                 // SQL Server verifies on every host: its `off` is not plaintext, so the

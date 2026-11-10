@@ -27,7 +27,14 @@ fn rel_names(data: &CatalogData) -> Vec<(String, RelationKind)> {
             .iter()
             .map(|r| (r.name().to_owned(), r.kind()))
             .collect(),
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Definition(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
 }
 
@@ -74,7 +81,14 @@ async fn loads_each_level_in_request_order() {
         CatalogData::Schemas(s) => {
             assert_eq!(s.iter().map(|x| x.name()).collect::<Vec<_>>(), ["main"])
         }
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Relations(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Definition(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
     let second = reply(&rx).await;
     assert_eq!(
@@ -91,7 +105,14 @@ async fn loads_each_level_in_request_order() {
             let got: Vec<_> = c.iter().map(|c| (c.name(), c.primary_key())).collect();
             assert_eq!(got, [("a", Some(1)), ("b", None)]);
         }
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Relations(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Definition(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
     tokio::time::timeout(Duration::from_secs(5), r.close().wait())
         .await
@@ -356,7 +377,14 @@ async fn first_index(
             assert_eq!(names, ["t_b"], "the relation has exactly its one index");
             o.indexes()[0].object_ref()
         }
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Relations(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Definition(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
 }
 
@@ -377,7 +405,14 @@ async fn objects_and_definitions_load_in_request_order() {
         CatalogData::SchemaObjects(s) => {
             assert!(s.types().is_empty() && s.routines().is_empty() && !s.truncated())
         }
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Relations(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::Definition(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
     r.load(
         2,
@@ -392,13 +427,27 @@ async fn objects_and_definitions_load_in_request_order() {
             assert_eq!(d.text(), "CREATE INDEX t_b ON t(b);");
             assert!(!d.truncated() && !d.composed());
         }
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Relations(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
     let view = ObjectRef::relation(RelationRef::new("main", "v"));
     r.load(2, CatalogQuery::Definition { object: view });
     match reply(&rx).await.result.unwrap() {
         CatalogData::Definition(d) => assert_eq!(d.text(), "CREATE VIEW v AS SELECT a FROM t;"),
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Relations(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
 }
 
@@ -448,7 +497,14 @@ async fn a_killed_postgres_session_is_replaced_after_a_definition_load() {
                 d.text()
             )
         }
-        other => panic!("{other:?}"),
+        other @ (CatalogData::Schemas(_)
+        | CatalogData::Relations(_)
+        | CatalogData::Columns(_)
+        | CatalogData::Count(_)
+        | CatalogData::RelationObjects(_)
+        | CatalogData::SchemaObjects(_)
+        | CatalogData::Keys(_)
+        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
     }
     db.scalar("SELECT pg_terminate_backend(pid)::text FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()")
         .await;

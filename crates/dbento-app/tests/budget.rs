@@ -161,6 +161,27 @@ async fn a_held_batch_past_the_budget_parks_and_stops_on_the_pull() {
                 },
             ..
         } => {}
-        other => panic!("the held batch was sent or not weighed: {other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => {
+            panic!("the held batch was sent or not weighed: {other:?}")
+        }
     }
 }
