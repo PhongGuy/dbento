@@ -142,3 +142,60 @@ fn an_endpoint_is_handed_over_as_its_normalised_origin() {
     }
     assert_eq!(endpoint_origin("not a url"), None);
 }
+
+use std::time::Duration as Wait;
+
+use crate::Secret;
+use crate::session::ConnectError;
+
+#[test]
+fn settings_resolve_the_region_credentials_and_endpoint_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dbento.toml"), "dbento = 1\n\
+        [connections.a]\nengine = \"dynamodb\"\nregion = \"eu-west-1\"\nendpoint = \"http://LOCALHOST:5000/\"\n\
+        access_key_id = \"AKIDA\"\nsecret = \"keychain\"\n\
+        [connections.b]\nengine = \"dynamodb\"\n").unwrap();
+    let ws = crate::workspace::Workspace::open(dir.path()).unwrap();
+    let no_env = |_: &str| None;
+    let a = ClientSettings::from_connection(
+        ws.connection("a").unwrap(),
+        Some(&Secret::new("s")),
+        Some(Wait::from_secs(5)),
+        true,
+        no_env,
+    )
+    .unwrap();
+    assert_eq!(
+        (a.region.as_str(), a.endpoint.as_deref()),
+        ("eu-west-1", Some("http://localhost:5000"))
+    );
+    assert_eq!(
+        (
+            a.credentials.access_key_id.as_str(),
+            a.operation_timeout,
+            a.read_only
+        ),
+        ("AKIDA", Some(Wait::from_secs(5)), true)
+    );
+    assert_eq!(a.connect_timeout, CONNECT_TIMEOUT);
+    match ClientSettings::from_connection(ws.connection("b").unwrap(), None, None, false, no_env) {
+        Err(ConnectError::Open { message }) => assert!(message.contains("AWS_REGION"), "{message}"),
+        other => panic!("{:?}", other.err()),
+    }
+    let env = |k: &str| match k {
+        "AWS_REGION" => Some("us-east-1".to_owned()),
+        "AWS_ACCESS_KEY_ID" => Some("AKIDENV".to_owned()),
+        "AWS_SECRET_ACCESS_KEY" => Some("envsecret".to_owned()),
+        _ => None,
+    };
+    let b = ClientSettings::from_connection(ws.connection("b").unwrap(), None, None, false, env)
+        .unwrap();
+    assert_eq!(
+        (
+            b.region.as_str(),
+            b.credentials.access_key_id.as_str(),
+            b.endpoint
+        ),
+        ("us-east-1", "AKIDENV", None)
+    );
+}

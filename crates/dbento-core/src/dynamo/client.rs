@@ -15,9 +15,12 @@ use aws_sdk_dynamodb::operation::scan::{ScanError, ScanOutput};
 use aws_sdk_dynamodb::types::ReturnConsumedCapacity;
 use aws_smithy_http_client::tls::{self, rustls_provider::CryptoMode};
 
-use super::creds::AwsCredentials;
+use super::creds::{AwsCredentials, resolve_credentials, resolve_region};
 use super::ops::{DynamoOp, allowed};
 use super::statement::Kind;
+use crate::secrets::Secret;
+use crate::session::ConnectError;
+use crate::workspace::ConnectionConfig;
 
 /// How long opening a TCP connection may take before the call fails.
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,6 +33,36 @@ pub(crate) struct ClientSettings {
     pub(crate) connect_timeout: Duration,
     pub(crate) operation_timeout: Option<Duration>,
     pub(crate) read_only: bool,
+}
+
+impl ClientSettings {
+    /// Region, credentials and endpoint origin of `conn`; `env` stands in for the process environment.
+    pub(crate) fn from_connection(
+        conn: &ConnectionConfig,
+        secret: Option<&Secret>,
+        timeout: Option<Duration>,
+        read_only: bool,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<ClientSettings, ConnectError> {
+        let open = |message: String| ConnectError::Open { message };
+        let region = resolve_region(conn, &env).map_err(open)?;
+        let credentials = resolve_credentials(conn, secret, &env).map_err(open)?;
+        let endpoint = match conn.endpoint() {
+            Some(text) => Some(
+                endpoint_origin(text)
+                    .ok_or_else(|| open(format!("endpoint `{text}` is not a URL with a host")))?,
+            ),
+            None => None,
+        };
+        Ok(ClientSettings {
+            region,
+            endpoint,
+            credentials,
+            connect_timeout: CONNECT_TIMEOUT,
+            operation_timeout: timeout,
+            read_only,
+        })
+    }
 }
 
 /// A call the allowlist refused before sending, or the SDK's own failure (boxed: it runs to
