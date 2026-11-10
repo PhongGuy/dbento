@@ -28,6 +28,7 @@ use super::{ATTEMPT_LABEL, NEXT_ATTEMPT, engine, remove_labelled, retry_start, s
 pub const DY_SECRET_VAR: &str = "DBENTO_TEST_DY_SECRET";
 /// The access key and secret every handle signs with; Moto accepts any pair.
 pub const DY_ACCESS_KEY: &str = "AKIDDBENTOTEST";
+/// The secret key paired with `DY_ACCESS_KEY`; set it in `DY_SECRET_VAR` for a connection.
 pub const DY_SECRET: &str = "dbento-moto-secret";
 /// The gate image's tag.
 pub const MOTO_TAG: &str = "5.2.5";
@@ -56,6 +57,8 @@ pub const REGIONS: [&str; 16] = [
 const URL_VAR: &str = "DBENTO_DYNAMO_URL";
 const MOTO_PORT: u16 = 5000;
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
+/// BatchWriteItem calls per chunk before a seed that keeps coming back unprocessed gives up.
+const SEED_ATTEMPTS: u32 = 10;
 
 /// Where the DynamoDB tests get their server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,17 +168,26 @@ impl DynamoDb {
     /// that order, which is the order Moto lists them in.
     async fn seed(&self) {
         let c = &self.client;
-        let listed = c
-            .list_tables()
-            .send()
-            .await
-            .unwrap_or_else(|e| panic!("cannot list the Moto tables: {e:?}"));
-        for table in listed.table_names() {
-            c.delete_table()
-                .table_name(table)
+        // ListTables answers at most 100 names a page, so follow its paging to the end.
+        let mut start = None;
+        loop {
+            let listed = c
+                .list_tables()
+                .set_exclusive_start_table_name(start)
                 .send()
                 .await
-                .unwrap_or_else(|e| panic!("cannot drop {table}: {e:?}"));
+                .unwrap_or_else(|e| panic!("cannot list the Moto tables: {e:?}"));
+            for table in listed.table_names() {
+                c.delete_table()
+                    .table_name(table)
+                    .send()
+                    .await
+                    .unwrap_or_else(|e| panic!("cannot drop {table}: {e:?}"));
+            }
+            start = listed.last_evaluated_table_name;
+            if start.is_none() {
+                break;
+            }
         }
         c.create_table()
             .table_name("h")
@@ -233,7 +245,7 @@ impl DynamoDb {
     }
 
     /// Writes the `ORDERS` items in batches of 25, the BatchWriteItem maximum, resending
-    /// anything the server leaves unprocessed.
+    /// anything the server leaves unprocessed a bounded number of times.
     async fn fill_orders(&self) {
         let pad = "x".repeat(10_000);
         let items: Vec<WriteRequest> = (0..ORDERS)
@@ -258,7 +270,16 @@ impl DynamoDb {
             .collect();
         for chunk in items.chunks(25) {
             let mut pending = HashMap::from([("orders".to_owned(), chunk.to_vec())]);
-            while !pending.is_empty() {
+            for attempt in 1.. {
+                if pending.is_empty() {
+                    break;
+                }
+                if attempt > SEED_ATTEMPTS {
+                    panic!("Moto left orders items unprocessed after {SEED_ATTEMPTS} attempts");
+                }
+                if attempt > 1 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
                 let out = self
                     .client
                     .batch_write_item()
@@ -455,11 +476,12 @@ async fn container() -> (String, ContainerAsync<GenericImage>, OwnedSemaphorePer
     (format!("http://127.0.0.1:{port}"), c, permit)
 }
 
-/// Polls `GET /moto-api/` every 100 ms until it answers 200, for up to a minute.
+/// Polls `GET /moto-api/` every 100 ms until it answers 200, for up to a minute; a probe that
+/// stalls on connect or read is cut off at the same deadline.
 async fn wait_ready(port: u16) {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     while tokio::time::Instant::now() < deadline {
-        if answers_200(port).await {
+        if let Ok(true) = tokio::time::timeout_at(deadline, answers_200(port)).await {
             return;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
