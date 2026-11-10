@@ -426,7 +426,10 @@ impl ResultsPane {
                     // The gutter header selects column 0, which copies nothing, so it marks nothing.
                     let sel = match table.read(cx).selection() {
                         TableSelection::Column(0) => TableSelection::None,
-                        other => other,
+                        other @ (TableSelection::None
+                        | TableSelection::Row(_)
+                        | TableSelection::Column(_)
+                        | TableSelection::Cell(..)) => other,
                     };
                     this.table.update(cx, |t, cx| {
                         t.delegate_mut().selection = sel;
@@ -446,7 +449,7 @@ impl ResultsPane {
                 }
                 // The clear X follows whether there is text.
                 InputEvent::Change => cx.notify(),
-                _ => {}
+                InputEvent::Focus | InputEvent::Blur => {}
             }
         });
         let applied = cx.subscribe_in(&model, window, |this, _, e: &BrowseEvent, window, cx| {
@@ -622,7 +625,9 @@ impl ResultsPane {
         self.table.update(cx, |t, cx| match t.selection() {
             TableSelection::Cell(r, _) if r == row => {}
             TableSelection::Cell(_, col) => t.set_selected_cell(row, col, cx),
-            _ => t.set_selected_row(row, cx),
+            TableSelection::None | TableSelection::Row(_) | TableSelection::Column(_) => {
+                t.set_selected_row(row, cx)
+            }
         });
     }
 
@@ -630,7 +635,7 @@ impl ResultsPane {
     fn grid_row_selected(&self, cx: &App) -> Option<usize> {
         match self.table.read(cx).selection() {
             TableSelection::Row(r) | TableSelection::Cell(r, _) => Some(r),
-            _ => None,
+            TableSelection::None | TableSelection::Column(_) => None,
         }
     }
 
@@ -770,7 +775,7 @@ impl ResultsPane {
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) -> bool {
         let row = match self.table.read(cx).selection() {
             TableSelection::Row(r) | TableSelection::Cell(r, _) => r,
-            _ => return false,
+            TableSelection::None | TableSelection::Column(_) => return false,
         };
         self.model.update(cx, |m, cx| {
             let at = m.grid_row(row);
@@ -788,7 +793,7 @@ impl ResultsPane {
         let (row, col) = match self.selection(cx) {
             TableSelection::Row(r) => (r, 1),
             TableSelection::Cell(r, c) => (r, c),
-            _ => return None,
+            TableSelection::None | TableSelection::Column(_) => return None,
         };
         let live = match m.grid_row(row) {
             GridRow::Loaded(r) => r < m.results()[0].store.rows(),
@@ -860,6 +865,10 @@ impl ResultsPane {
     /// or row is selected. The kit escalates a click on the selected cell to its row, so a
     /// selection of the editing row itself leaves the editor open.
     fn follow_edit(&mut self, event: &TableEvent, window: &mut Window, cx: &mut Context<Self>) {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "TableEvent has too many variants to list; the rest share one arm"
+        )]
         match *event {
             // The kit's events carry visible columns; the editor counts every column.
             TableEvent::DoubleClickedCell(row, col) => {
@@ -1530,7 +1539,7 @@ impl ResultsPane {
         }
         let target = match target.grid {
             GridTarget::Cell(row, col) => Some((row, col)),
-            _ => None,
+            GridTarget::Header(_) | GridTarget::Below => None,
         };
         let at = target.map(|(row, _)| self.model.read(cx).grid_row(row));
         let col = target.and_then(|(_, col)| data_col(col));
@@ -1875,7 +1884,7 @@ impl ResultsPane {
         }
         let row = match staged::grid_row(row, old) {
             GridRow::Inserted(ix) if ix >= new => 0,
-            at => at.table_row(new),
+            at @ (GridRow::Inserted(_) | GridRow::Loaded(_)) => at.table_row(new),
         };
         self.record
             .update(cx, |f, cx| f.show(stmt, row, window, cx));
@@ -2502,7 +2511,7 @@ impl Render for ResultsPane {
             let text = match mark {
                 ResultMark::Waiting => "waiting for confirmation".to_owned(),
                 ResultMark::Paused(n) => paused_label(n),
-                _ => summary(r),
+                ResultMark::Rows(_) | ResultMark::Changed(_) | ResultMark::Failed => summary(r),
             };
             let tip: SharedString = match first_line(&r.sql) {
                 Some(sql) => format!("{text}\n{sql}").into(),
@@ -2575,7 +2584,7 @@ impl Render for ResultsPane {
         let failed = body == ResultBody::Failed;
         let dml = match &body {
             ResultBody::Dml(text) => Some(text.clone()),
-            _ => None,
+            ResultBody::Grid | ResultBody::Failed => None,
         };
         // The empty text never covers rows the user is inserting into an empty table.
         let filter = m.browse().and_then(|b| b.browse().filter.clone());

@@ -146,7 +146,7 @@ impl DefinitionPanel {
     pub fn text(&self) -> Option<&str> {
         match &self.state {
             State::Ready { definition, .. } => Some(definition.text()),
-            _ => None,
+            State::Empty | State::Loading | State::Failed(_) => None,
         }
     }
 
@@ -154,7 +154,7 @@ impl DefinitionPanel {
     pub fn editor(&self) -> Option<&Entity<EditorState>> {
         match &self.state {
             State::Ready { editor, .. } => Some(editor),
-            _ => None,
+            State::Empty | State::Loading | State::Failed(_) => None,
         }
     }
 }
@@ -258,7 +258,7 @@ impl Render for DefinitionPanel {
         let note = match &self.state {
             State::Ready { definition, .. } => definition_note(definition)
                 .map(|n| label("definition-note", n).text_xs().text_color(dim)),
-            _ => None,
+            State::Empty | State::Loading | State::Failed(_) => None,
         };
         let body: AnyElement = match &self.state {
             State::Empty => div().into_any_element(),

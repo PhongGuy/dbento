@@ -307,7 +307,13 @@ impl CatalogTree {
     pub fn is_expanded(&self, key: &NodeKey) -> bool {
         match key {
             NodeKey::Kind { .. } => !self.collapsed_kinds.contains(key),
-            _ => self.expanded.contains(key),
+            NodeKey::Connection(_)
+            | NodeKey::Schema { .. }
+            | NodeKey::Relation { .. }
+            | NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::Objects(_)
+            | NodeKey::KeyFolder { .. } => self.expanded.contains(key),
         }
     }
 
@@ -331,7 +337,10 @@ impl CatalogTree {
                 return None;
             }
             NodeKey::Objects(_) => return None,
-            _ => {}
+            NodeKey::Connection(_)
+            | NodeKey::Schema { .. }
+            | NodeKey::Kind { .. }
+            | NodeKey::Relation { .. } => {}
         }
         if self.expanded.remove(key) {
             return None;
@@ -356,7 +365,11 @@ impl CatalogTree {
                 self.columns.get(&(conn.clone(), rel.clone())),
                 Some(Load::Loading | Load::Ready(_))
             ),
-            _ => false,
+            NodeKey::Kind { .. }
+            | NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::Objects(_)
+            | NodeKey::KeyFolder { .. } => false,
         };
         if absent_or_failed {
             self.start(key)
@@ -457,10 +470,20 @@ impl CatalogTree {
                     {
                         Some(self.begin(&conn.clone(), schema_objects_query(schema)))
                     }
-                    _ => None,
+                    NodeKey::Connection(_)
+                    | NodeKey::Schema { .. }
+                    | NodeKey::Kind { .. }
+                    | NodeKey::Relation { .. }
+                    | NodeKey::RelationGroup { .. }
+                    | NodeKey::SchemaGroup { .. }
+                    | NodeKey::Objects(_)
+                    | NodeKey::KeyFolder { .. } => None,
                 };
             }
-            _ => false,
+            NodeKey::Kind { .. }
+            | NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::KeyFolder { .. } => false,
         };
         if failed { self.start(key) } else { None }
     }
@@ -481,7 +504,12 @@ impl CatalogTree {
                     self.schema_objects.remove(&k);
                 }
             }
-            _ => {}
+            NodeKey::Connection(_)
+            | NodeKey::Kind { .. }
+            | NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::Objects(_)
+            | NodeKey::KeyFolder { .. } => {}
         }
     }
 
@@ -499,7 +527,13 @@ impl CatalogTree {
                 NodeKey::Schema { conn, schema } if self.key_db(conn, schema).is_none() => {
                     Some((conn.clone(), schema_objects_query(schema)))
                 }
-                _ => None,
+                NodeKey::Connection(_)
+                | NodeKey::Schema { .. }
+                | NodeKey::Kind { .. }
+                | NodeKey::RelationGroup { .. }
+                | NodeKey::SchemaGroup { .. }
+                | NodeKey::Objects(_)
+                | NodeKey::KeyFolder { .. } => None,
             })
             .collect();
         queries
@@ -539,10 +573,18 @@ impl CatalogTree {
                 match group {
                     ObjectGroup::Types => o.types().len(),
                     ObjectGroup::Routines => o.routines().len(),
-                    _ => 0,
+                    ObjectGroup::Keys
+                    | ObjectGroup::Indexes
+                    | ObjectGroup::Checks
+                    | ObjectGroup::Triggers => 0,
                 }
             }
-            _ => 0,
+            NodeKey::Connection(_)
+            | NodeKey::Schema { .. }
+            | NodeKey::Kind { .. }
+            | NodeKey::Relation { .. }
+            | NodeKey::Objects(_)
+            | NodeKey::KeyFolder { .. } => 0,
         }
     }
 
@@ -567,7 +609,11 @@ impl CatalogTree {
                 ),
             },
             NodeKey::Relation { conn, rel } => (conn, CatalogQuery::Columns { rel: rel.clone() }),
-            _ => return None,
+            NodeKey::Kind { .. }
+            | NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::Objects(_)
+            | NodeKey::KeyFolder { .. } => return None,
         };
         Some(self.begin(&conn.clone(), query))
     }
@@ -650,35 +696,70 @@ impl CatalogTree {
             CatalogQuery::Schemas => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Schemas(s) => Some(s),
-                    _ => None,
+                    CatalogData::Relations(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_) => None,
                 });
                 self.schemas.insert(conn, load);
             }
             CatalogQuery::Relations { schema } => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Relations(r) => Some(r),
-                    _ => None,
+                    CatalogData::Schemas(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_) => None,
                 });
                 self.relations.insert((conn, schema), load);
             }
             CatalogQuery::Columns { rel } => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Columns(c) => Some(c),
-                    _ => None,
+                    CatalogData::Schemas(_)
+                    | CatalogData::Relations(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_) => None,
                 });
                 self.columns.insert((conn, rel), load);
             }
             CatalogQuery::RelationObjects { rel } => {
                 let load = load_of(result, |d| match d {
                     CatalogData::RelationObjects(o) => Some(o),
-                    _ => None,
+                    CatalogData::Schemas(_)
+                    | CatalogData::Relations(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_) => None,
                 });
                 self.relation_objects.insert((conn, rel), load);
             }
             CatalogQuery::SchemaObjects { schema } => {
                 let load = load_of(result, |d| match d {
                     CatalogData::SchemaObjects(o) => Some(o),
-                    _ => None,
+                    CatalogData::Schemas(_)
+                    | CatalogData::Relations(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_) => None,
                 });
                 self.schema_objects.insert((conn, schema), load);
             }
@@ -688,7 +769,14 @@ impl CatalogTree {
             CatalogQuery::CommandDocs => {
                 let load = load_of(result, |d| match d {
                     CatalogData::CommandDocs(d) => Some(d),
-                    _ => None,
+                    CatalogData::Schemas(_)
+                    | CatalogData::Relations(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_) => None,
                 });
                 self.command_docs.insert(conn, load);
             }
@@ -717,7 +805,14 @@ impl CatalogTree {
                     next: b.next,
                     more: More::Idle,
                 }),
-                _ => None,
+                CatalogData::Schemas(_)
+                | CatalogData::Relations(_)
+                | CatalogData::Columns(_)
+                | CatalogData::Count(_)
+                | CatalogData::RelationObjects(_)
+                | CatalogData::SchemaObjects(_)
+                | CatalogData::Definition(_)
+                | CatalogData::CommandDocs(_) => None,
             });
             self.keys.insert(k, load);
             return;
@@ -1096,7 +1191,7 @@ impl CatalogTree {
             More::Idle if listing.next.is_some() && show_status => {
                 out.push(status(RowKind::LoadMore, "Load more".into(), "more"));
             }
-            _ => {}
+            More::Idle | More::Loading => {}
         }
         out
     }
@@ -1538,7 +1633,7 @@ fn relation_entries(o: &RelationObjects, group: ObjectGroup) -> Vec<Entry> {
                 let detail = match t.state() {
                     TriggerState::Disabled => "disabled",
                     TriggerState::ReplicaOnly => "replica only",
-                    _ => "",
+                    TriggerState::Enabled | _ => "",
                 };
                 (t.name().to_owned(), detail.to_owned(), t.object_ref())
             })
@@ -1559,7 +1654,7 @@ fn schema_entries(o: &SchemaObjects, group: ObjectGroup) -> Vec<Entry> {
                     TypeKind::Domain => "domain",
                     TypeKind::Composite => "composite",
                     TypeKind::Range => "range",
-                    _ => "type",
+                    TypeKind::Other | _ => "type",
                 };
                 (t.name().to_owned(), detail.to_owned(), t.object_ref())
             })
@@ -1571,13 +1666,15 @@ fn schema_entries(o: &SchemaObjects, group: ObjectGroup) -> Vec<Entry> {
                 let detail = match r.kind() {
                     RoutineKind::Procedure => "procedure",
                     RoutineKind::Aggregate => "aggregate",
-                    _ => r.returns().unwrap_or_default(),
+                    RoutineKind::Function | _ => r.returns().unwrap_or_default(),
                 };
                 let label = format!("{}({})", r.name(), r.arguments());
                 (label, detail.to_owned(), r.object_ref())
             })
             .collect(),
-        _ => Vec::new(),
+        ObjectGroup::Keys | ObjectGroup::Indexes | ObjectGroup::Checks | ObjectGroup::Triggers => {
+            Vec::new()
+        }
     }
 }
 
@@ -1610,7 +1707,7 @@ fn constraint_entry(c: &ConstraintInfo) -> Entry {
         | ConstraintKind::Unique
         | ConstraintKind::ForeignKey
         | ConstraintKind::Check => words.to_lowercase(),
-        _ => "constraint".to_owned(),
+        ConstraintKind::Other | _ => "constraint".to_owned(),
     };
     (label, detail, c.object_ref())
 }
@@ -1623,7 +1720,7 @@ pub fn constraint_words(kind: ConstraintKind) -> &'static str {
         ConstraintKind::ForeignKey => "FOREIGN KEY",
         ConstraintKind::Check => "CHECK",
         ConstraintKind::Exclusion => "EXCLUDE",
-        _ => "CONSTRAINT",
+        ConstraintKind::Other | _ => "CONSTRAINT",
     }
 }
 
@@ -1660,7 +1757,7 @@ pub fn kind_label(kind: RelationKind) -> &'static str {
         RelationKind::View => "views",
         RelationKind::MaterializedView => "materialized views",
         RelationKind::ForeignTable => "foreign tables",
-        _ => "other",
+        RelationKind::Other | _ => "other",
     }
 }
 
@@ -1696,7 +1793,7 @@ pub fn group_title(kind: RelationKind) -> &'static str {
         RelationKind::View => "Views",
         RelationKind::MaterializedView => "Materialized views",
         RelationKind::ForeignTable => "Foreign tables",
-        _ => "Other",
+        RelationKind::Other | _ => "Other",
     }
 }
 
@@ -1797,7 +1894,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
                 _ if mongo => false,
                 RelationKind::View | RelationKind::MaterializedView => true,
                 RelationKind::Table => engine.capabilities().table_definition,
-                _ => false,
+                RelationKind::ForeignTable | RelationKind::Other | _ => false,
             }
             .then_some(view_definition),
         )
@@ -1872,7 +1969,13 @@ pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
             &format!("db.getSiblingDB({}).", json_string(rel.schema())),
             1,
         ),
-        _ => select,
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Redis
+        | _ => select,
     }
 }
 

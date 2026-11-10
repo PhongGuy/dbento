@@ -30,7 +30,26 @@ async fn a_sqlite_explain_plans_without_asking_or_running() {
             result: Ok(out),
             ..
         } => assert!(out.raw.contains("SCAN t"), "{}", out.raw),
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     assert!(matches!(
         next_event(&ev).await,
@@ -73,7 +92,26 @@ async fn a_writing_analyze_on_a_writable_postgres_session_asks_first() {
             assert_eq!(kinds, [Unguarded::DeleteWithoutWhere]);
             assert_eq!(sql, "DELETE FROM t");
         }
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     r.send(Command::Skip { run_id: 1, stmt: 0 });
     assert!(matches!(
@@ -113,7 +151,26 @@ async fn a_writing_analyze_on_a_writable_postgres_session_asks_first() {
             result: Ok(out),
             ..
         } => assert!(out.plan.unwrap().analyzed),
-        other => panic!("{other:?}"),
+        other @ (Event::Connected { .. }
+        | Event::ConnectFailed { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
     assert!(matches!(
         next_event(&ev).await,

@@ -26,7 +26,7 @@ pub fn header_text(
             KeyKind::Hash => ("field", "fields"),
             KeyKind::List => ("element", "elements"),
             KeyKind::Stream => ("entry", "entries"),
-            _ => ("member", "members"),
+            KeyKind::Set | KeyKind::SortedSet | KeyKind::Other(_) | _ => ("member", "members"),
         };
         parts.push(format!("{n} {}", if n == 1 { one } else { many }));
     }

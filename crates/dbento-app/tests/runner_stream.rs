@@ -364,7 +364,25 @@ fn done_elapsed(seen: &[Event]) -> Duration {
     seen.iter()
         .find_map(|e| match e {
             Event::StatementDone { elapsed, .. } => Some(*elapsed),
-            _ => None,
+            Event::Connected { .. }
+            | Event::ConnectFailed { .. }
+            | Event::Executing { .. }
+            | Event::StatementStarted { .. }
+            | Event::NeedsConfirm { .. }
+            | Event::Planned { .. }
+            | Event::Batch { .. }
+            | Event::Paused { .. }
+            | Event::ParkedAtCap { .. }
+            | Event::ParkExpired { .. }
+            | Event::ParkReleased { .. }
+            | Event::RunDone { .. }
+            | Event::Stopped { .. }
+            | Event::SettingsChanged { .. }
+            | Event::SettingsLost { .. }
+            | Event::Disconnected { .. }
+            | Event::Target { .. }
+            | Event::Settling { .. }
+            | Event::SettleFailed { .. } => None,
         })
         .unwrap()
 }

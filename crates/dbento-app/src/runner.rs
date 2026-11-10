@@ -431,7 +431,15 @@ async fn run(
             } => (run_id, Work::Script(sql, limits)),
             Command::Explain { run_id, request } => (run_id, Work::Explain(request)),
             Command::Close => break,
-            _ => {
+            Command::Confirm { .. }
+            | Command::Skip { .. }
+            | Command::Pull { .. }
+            | Command::Fetch { .. }
+            | Command::Stop { .. }
+            | Command::Connect
+            | Command::Target { .. }
+            | Command::SourceColumns { .. }
+            | Command::ReadKey { .. } => {
                 next = idle(&inbox, &mut session, &mut lost_settings, &events).await; // a Confirm, Skip, Pull or Fetch nobody waits for
                 continue;
             }
@@ -586,7 +594,13 @@ pub fn database_label(engine: Engine, name: &str) -> String {
     let kind = match engine {
         Engine::Postgres => "schema",
         Engine::Surrealdb => "ns/db",
-        _ => "db",
+        Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis
+        | _ => "db",
     };
     format!("{kind}: {name}")
 }
@@ -794,7 +808,15 @@ impl Ctx<'_> {
                 {
                     return Some(c);
                 }
-                _ => {}
+                Command::Confirm { .. }
+                | Command::Skip { .. }
+                | Command::Pull { .. }
+                | Command::Fetch { .. }
+                | Command::Stop { .. }
+                | Command::Connect
+                | Command::Target { .. }
+                | Command::SourceColumns { .. }
+                | Command::ReadKey { .. } => {}
             }
         }
     }
@@ -1063,7 +1085,15 @@ fn cut_by(command: Command, run_id: u64) -> Option<Flow> {
         }
         Command::Close => Some(Flow::Cut(StopReason::Closed, Some(command))),
         Command::Stop { run_id: r } if r == run_id => Some(Flow::Cut(StopReason::User, None)),
-        _ => None,
+        Command::Confirm { .. }
+        | Command::Skip { .. }
+        | Command::Pull { .. }
+        | Command::Fetch { .. }
+        | Command::Stop { .. }
+        | Command::Connect
+        | Command::Target { .. }
+        | Command::SourceColumns { .. }
+        | Command::ReadKey { .. } => None,
     }
 }
 
@@ -1287,7 +1317,17 @@ async fn at_cap(
             ))),
         },
         // wait_fetch returns only this run's Stop, a Run or a Close besides a Fetch.
-        c => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
+        c @ (Command::Run { .. }
+        | Command::Explain { .. }
+        | Command::Confirm { .. }
+        | Command::Skip { .. }
+        | Command::Pull { .. }
+        | Command::Stop { .. }
+        | Command::Close
+        | Command::Connect
+        | Command::Target { .. }
+        | Command::SourceColumns { .. }
+        | Command::ReadKey { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
     }
 }
 
@@ -1340,7 +1380,12 @@ fn after_park(e: &ExecuteError) -> AfterPark {
         {
             AfterPark::Lost
         }
-        _ => AfterPark::Failed,
+        ExecuteError::Database { .. }
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::Syntax { .. }
+        | _ => AfterPark::Failed,
     }
 }
 

@@ -3554,7 +3554,7 @@ impl Shell {
         let plan = match form {
             None => match self.write_edit(&edit, window, cx) {
                 Written::Done(plan) => *plan,
-                _ => return,
+                Written::Failed | Written::Unchanged => return,
             },
             Some(form) => match plan_and_write(&ws, &edit) {
                 Ok(plan) => plan,
@@ -4540,7 +4540,7 @@ impl Shell {
             };
             match state {
                 GrantState::Expired if !d.tentative => d.tentative = true,
-                state => {
+                state @ (GrantState::Waiting | GrantState::Ran | GrantState::Expired | _) => {
                     d.decided.outcome = Outcome::Granted(state);
                     d.tentative = false;
                 }
@@ -4598,7 +4598,9 @@ fn gap_handle() -> ResizeHandleRenderer {
     let kit = resize_handle_appearance();
     Rc::new(move |handle, window, cx| match handle.state() {
         ResizeHandleState::Idle => Some(div().flex_none().w(px(1.)).h_full().into_any_element()),
-        _ => kit(handle, window, cx),
+        ResizeHandleState::Hovered | ResizeHandleState::Pressed | ResizeHandleState::Dragging => {
+            kit(handle, window, cx)
+        }
     })
 }
 

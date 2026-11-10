@@ -25,7 +25,7 @@ impl BenchExit {
     pub fn code(self) -> i32 {
         match self {
             BenchExit::Reported => 0,
-            _ => 2,
+            BenchExit::Unreported | BenchExit::Failed => 2,
         }
     }
 
