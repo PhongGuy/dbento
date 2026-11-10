@@ -34,11 +34,11 @@ pub(crate) fn lex(engine: Engine, sql: &str) -> Option<Vec<Tok>> {
 }
 
 /// The tokens of `sql` that start before byte `upto`, so text past them need not lex;
-/// None when one of those tokens is unterminated, or on MongoDB, SurrealDB and Redis, which are
-/// not SQL, so the formatter leaves their text alone.
+/// None when one of those tokens is unterminated, or on MongoDB, SurrealDB, Redis and DynamoDB,
+/// whose languages the formatter does not know, so it leaves their text alone.
 pub(crate) fn lex_to(engine: Engine, sql: &str, upto: usize) -> Option<Vec<Tok>> {
     match engine {
-        Engine::Mongodb | Engine::Surrealdb | Engine::Redis => return None,
+        Engine::Mongodb | Engine::Surrealdb | Engine::Redis | Engine::Dynamodb => return None,
         Engine::Mssql => return mssql_toks(sql, upto),
         Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Duckdb => {}
     }
@@ -256,9 +256,12 @@ fn word_or_prefixed(b: &[u8], i: usize, engine: Engine) -> Option<(Kind, usize)>
     let prefix = match engine {
         Engine::Postgres | Engine::Duckdb => &[&b"e"[..], b"b", b"x", b"n"][..],
         Engine::Mysql => &[&b"b"[..], b"x", b"n"][..],
-        Engine::Sqlite | Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis => {
-            &[&b"x"[..]][..]
-        }
+        Engine::Sqlite
+        | Engine::Mssql
+        | Engine::Mongodb
+        | Engine::Surrealdb
+        | Engine::Redis
+        | Engine::Dynamodb => &[&b"x"[..]][..],
     };
     if next == Some(b'\'') && prefix.contains(&&word[..]) {
         if engine == Engine::Mysql {
@@ -281,9 +284,12 @@ fn is_op_byte(c: u8, engine: Engine) -> bool {
     let claimed: &[u8] = match engine {
         Engine::Postgres | Engine::Duckdb => b"'\"(),;._$[]",
         Engine::Mysql => b"'\"(),;._$`[]#",
-        Engine::Sqlite | Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis => {
-            b"'\"(),;._$`["
-        }
+        Engine::Sqlite
+        | Engine::Mssql
+        | Engine::Mongodb
+        | Engine::Surrealdb
+        | Engine::Redis
+        | Engine::Dynamodb => b"'\"(),;._$`[",
     };
     c.is_ascii_punctuation() && !claimed.contains(&c)
 }
@@ -305,7 +311,8 @@ fn op_run(b: &[u8], i: usize, engine: Engine) -> usize {
             | Engine::Mssql
             | Engine::Mongodb
             | Engine::Surrealdb
-            | Engine::Redis => c == b'?' || (matches!(c, b':' | b'@') && is_word_char(next)),
+            | Engine::Redis
+            | Engine::Dynamodb => c == b'?' || (matches!(c, b':' | b'@') && is_word_char(next)),
         };
         if !is_op_byte(c, engine) || comment || param {
             break;

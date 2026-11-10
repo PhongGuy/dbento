@@ -754,6 +754,9 @@ pub async fn connect(
         Engine::Redis => Err(ConnectError::Unsupported {
             reason: "Redis is not available in this build".to_owned(),
         }),
+        Engine::Dynamodb => Err(ConnectError::Unsupported {
+            reason: "DynamoDB is not available in this build".to_owned(),
+        }),
     }
 }
 
@@ -768,7 +771,7 @@ pub enum ReadOnlyEnforcement {
     /// SQL Server without read_only_user: Dbento's fence and refusals, with known holes; MongoDB
     /// with any other user, where Dbento refuses every statement it cannot prove reads; and
     /// SurrealDB's fence for root OWNER, EDITOR or anonymous, where stored code can reach what
-    /// the fence cannot undo.
+    /// the fence cannot undo; and DynamoDB, where only IAM, out of Dbento's sight, refuses writes.
     BestEffort,
 }
 
@@ -786,6 +789,13 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
             "Redis has no read-only session: the ACL check runs once at connect, so a later ACL \
              SETUSER, from this session or another, can widen the user mid-session. Dbento's own \
              refusals follow the command table it read at connect.",
+        ),
+        Engine::Dynamodb => Some(
+            "DynamoDB has no read-only session. Dbento sends only reads in a read-only session, \
+             but it cannot see IAM, so anyone holding these keys can still write with other \
+             tools. For a reader the server enforces, grant only dynamodb:ListTables, \
+             DescribeTable, Scan, Query, GetItem, BatchGetItem and dynamodb:PartiQLSelect, \
+             scoped to the tables.",
         ),
         Engine::Postgres
         | Engine::Sqlite

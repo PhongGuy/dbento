@@ -118,6 +118,10 @@ pub fn connection_form(engine: Engine) -> ConnectionForm {
         Engine::Mongodb => mongodb_form(),
         Engine::Surrealdb => surrealdb_form(),
         Engine::Redis => redis_form(),
+        Engine::Dynamodb => ConnectionForm {
+            sections: Vec::new(),
+            read_only_help: None,
+        },
     }
 }
 
