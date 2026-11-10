@@ -170,6 +170,10 @@ fn the_aws_crates_resolve_once_at_their_pins_without_aws_config() {
         named(&packages, "aws-smithy-http-client"),
         ["aws-smithy-http-client v1.5.2"]
     );
+    assert_eq!(
+        named(&packages, "aws-smithy-runtime-api"),
+        ["aws-smithy-runtime-api v1.21.0"]
+    );
     assert!(
         named(&packages, "aws-config").is_empty(),
         "{:?}",

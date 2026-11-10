@@ -2504,6 +2504,8 @@ dependencies = [
  "apple-native-keyring-store",
  "aws-sdk-dynamodb",
  "aws-smithy-http-client",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "base64 0.23.1",
  "bson",
  "cbc 0.2.1",
