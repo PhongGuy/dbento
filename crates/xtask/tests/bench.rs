@@ -39,11 +39,9 @@ fn a_bench_error_exits_2_never_1() {
 #[cfg(unix)]
 fn a_failed_release_build_exits_2_not_cargos_101() {
     // A stand-in cargo that fails every command the way a broken build does.
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let cargo = dir.path().join("cargo");
-    std::fs::write(&cargo, "#!/bin/sh\nexit 101\n").unwrap();
-    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::fake_exe::write_executable(&cargo, "#!/bin/sh\nexit 101\n");
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["bench", "--only", "ttfr_pg"])
         .env("CARGO", &cargo)

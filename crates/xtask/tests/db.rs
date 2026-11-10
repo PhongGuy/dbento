@@ -101,13 +101,12 @@ fn removal_takes_the_containers_volumes_with_them() {
 #[cfg(unix)]
 #[test]
 fn a_failed_up_removes_the_containers_it_started() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("calls.log");
     let script = dir.path().join("fake-runtime");
-    std::fs::write(
+    crate::fake_exe::write_executable(
         &script,
-        format!(
+        &format!(
             "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n\
              run*dbento-pg-15*) echo boom >&2; exit 1 ;;\n\
              run*) echo fakeid ;;\n\
@@ -116,9 +115,7 @@ fn a_failed_up_removes_the_containers_it_started() {
              esac\nexit 0\n",
             log.display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let err = up(script.to_str().unwrap(), &[14, 15], &[]).unwrap_err();
     assert!(format!("{err:#}").contains("boom"), "{err:#}");
     let calls = std::fs::read_to_string(&log).unwrap();

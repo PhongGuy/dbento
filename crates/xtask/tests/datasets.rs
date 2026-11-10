@@ -125,14 +125,11 @@ fn a_planted_part_symlink_is_removed_without_touching_its_target() {
 
 /// A stand-in container runtime: `-c` (create database) succeeds, the psql load fails.
 fn fake_runtime(dir: &std::path::Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-podman");
-    std::fs::write(
+    crate::fake_exe::write_executable(
         &path,
         "#!/bin/sh\ncase \" $* \" in *\" -c \"*) exit 0;; esac\ncat >/dev/null\nexit 3\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     path
 }
 
