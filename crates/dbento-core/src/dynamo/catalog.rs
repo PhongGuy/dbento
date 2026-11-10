@@ -152,14 +152,6 @@ pub(crate) async fn columns(
         .map_err(|_| ExecuteError::Timeout)?
         .map_err(execute_error)?;
     let key_names = keys.key_names();
-    let declared = key_names.iter().zip(1..).map(|(name, position)| {
-        let type_name = keys
-            .types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| "unknown".to_owned());
-        ColumnMeta::new(name, type_name, false, Some(position), None)
-    });
 
     #[derive(Default)]
     struct Seen {
@@ -188,7 +180,22 @@ pub(crate) async fn columns(
         let types: Vec<_> = types.into_iter().map(|(t, _)| t).collect();
         ColumnMeta::new(name, types.join(" | "), nullable, None, None).mark_inferred()
     });
-    Ok(declared.chain(sampled).collect())
+    Ok(key_columns(keys).into_iter().chain(sampled).collect())
+}
+
+/// The key attributes as declared, hash then range, with their declared types.
+pub(crate) fn key_columns(keys: &TableKeys) -> Vec<ColumnMeta> {
+    let declared = keys.key_names().into_iter().zip(1..);
+    declared
+        .map(|(name, position)| {
+            let type_name = keys
+                .types
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_owned());
+            ColumnMeta::new(name, type_name, false, Some(position), None)
+        })
+        .collect()
 }
 
 /// The table's GSIs and LSIs as indexes, the kind in `method`.

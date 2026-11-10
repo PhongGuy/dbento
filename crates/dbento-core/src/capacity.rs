@@ -9,6 +9,11 @@ use std::fmt;
 pub struct CapacityUnits(u64);
 
 impl CapacityUnits {
+    /// A value from thousandths of a unit, for shells and tests that build one directly.
+    pub fn from_thousandths(thousandths: u64) -> Self {
+        Self(thousandths)
+    }
+
     /// The units as a float, for a shell that charts or compares them.
     pub fn as_f64(self) -> f64 {
         self.0 as f64 / 1000.0

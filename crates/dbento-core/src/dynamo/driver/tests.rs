@@ -4,6 +4,7 @@ use super::*;
 use crate::dynamo::replay::{
     Replay, Reply, SECRET, TARGET, aws_error, described, orders, page, tables, test_settings,
 };
+use crate::introspect::RelationRef;
 use crate::session::{
     ConnectError, Driver, ExecuteError, Flavor, Limits, OnTruncate, ReadOnlyEnforcement,
     ServerInfo, StreamItem, Writes,
@@ -278,4 +279,70 @@ async fn a_close_cut_ends_the_session() {
         Some(Err(ExecuteError::SessionClosed))
     ));
     assert!(matches!(s.settle().await, Err(ExecuteError::SessionClosed)));
+}
+
+#[tokio::test]
+async fn key_columns_come_from_one_describe_and_never_scan() {
+    let replay = Replay::new(vec![ping(), Reply::ok(described(orders()))]);
+    let mut s = session(&replay, false, false).await;
+    let rel = RelationRef::new("eu-west-1", "orders");
+    for _ in 0..2 {
+        let got: Vec<(String, String, Option<u16>, bool)> = s
+            .key_columns(&rel)
+            .await
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let (name, ty) = (c.name().to_owned(), c.type_name().to_owned());
+                (name, ty, c.primary_key(), c.inferred())
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("pk".to_owned(), "S".to_owned(), Some(1), false),
+                ("sk".to_owned(), "N".to_owned(), Some(2), false)
+            ]
+        );
+    }
+    let targets: Vec<String> = replay.seen().into_iter().map(|s| s.target).collect();
+    assert_eq!(
+        targets,
+        ["ListTables", "DescribeTable"],
+        "the second call is cached"
+    );
+}
+
+#[tokio::test]
+async fn keys_and_columns_of_another_region_or_a_missing_table_are_empty() {
+    let missing = || {
+        Reply::error(
+            400,
+            aws_error("ResourceNotFoundException", "Requested resource not found"),
+        )
+    };
+    let replay = Replay::new(vec![ping(), missing(), missing()]);
+    let mut s = session(&replay, false, false).await;
+    let elsewhere = RelationRef::new("us-east-1", "orders");
+    assert!(s.key_columns(&elsewhere).await.unwrap().is_empty());
+    assert!(s.columns(&elsewhere).await.unwrap().is_empty());
+    assert!(
+        s.relation_objects(&elsewhere)
+            .await
+            .unwrap()
+            .indexes()
+            .is_empty()
+    );
+    let gone = RelationRef::new("eu-west-1", "gone");
+    assert!(s.key_columns(&gone).await.unwrap().is_empty());
+    assert!(s.columns(&gone).await.unwrap().is_empty());
+    let lookups = replay
+        .seen()
+        .into_iter()
+        .filter(|s| s.target == "DescribeTable")
+        .count();
+    assert_eq!(
+        lookups, 2,
+        "another region asks nothing; a missing table is not cached"
+    );
 }

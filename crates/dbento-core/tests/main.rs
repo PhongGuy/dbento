@@ -30,6 +30,7 @@ mod dynamo_catalog;
 mod dynamo_crate;
 mod dynamo_engine;
 mod dynamo_session;
+mod dynamo_shell_seams;
 mod edit;
 mod edit_apply;
 mod edit_folders;

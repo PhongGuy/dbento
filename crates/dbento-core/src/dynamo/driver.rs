@@ -134,6 +134,19 @@ impl DynamoSession {
         }
     }
 
+    /// The table's declared key attributes from `DescribeTable` alone; none for an unknown
+    /// schema or table.
+    pub(crate) async fn key_columns(
+        &mut self,
+        rel: &RelationRef,
+    ) -> Result<Vec<ColumnMeta>, IntrospectError> {
+        Ok(self
+            .table_keys(rel)
+            .await?
+            .map(|keys| catalog::key_columns(&keys))
+            .unwrap_or_default())
+    }
+
     async fn table_keys(
         &self,
         rel: &RelationRef,

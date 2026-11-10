@@ -769,7 +769,7 @@ pub async fn connect(
         }),
         #[cfg(feature = "dynamodb")]
         Engine::Dynamodb => {
-            let d = DynamoSession::connect(params).await?;
+            let d = Box::pin(DynamoSession::connect(params)).await?;
             let level = d.read_only_level(read_only);
             Ok(Session {
                 inner: SessionInner::Dynamodb(d),
@@ -1078,7 +1078,7 @@ impl Session {
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.relations(schema).await,
             #[cfg(feature = "dynamodb")]
-            SessionInner::Dynamodb(d) => d.relations(schema).await,
+            SessionInner::Dynamodb(d) => Box::pin(d.relations(schema)).await,
         }
     }
 
@@ -1098,7 +1098,36 @@ impl Session {
             #[cfg(feature = "redis")]
             SessionInner::Redis(d) => d.columns(rel).await,
             #[cfg(feature = "dynamodb")]
-            SessionInner::Dynamodb(d) => d.columns(rel).await,
+            SessionInner::Dynamodb(d) => Box::pin(d.columns(rel)).await,
+        }
+    }
+
+    /// The relation's declared key attributes, hash then range, from DynamoDB's DescribeTable
+    /// (cached per session; no Scan, so no capacity); empty for another region or an unknown
+    /// table. Every other engine: `IntrospectError::Unsupported { what: "key columns" }`.
+    #[cfg_attr(not(feature = "dynamodb"), allow(unused_variables))]
+    pub async fn key_columns(
+        &mut self,
+        rel: &RelationRef,
+    ) -> Result<Vec<ColumnMeta>, IntrospectError> {
+        let unsupported = Err(IntrospectError::Unsupported {
+            what: "key columns",
+        });
+        match &mut self.inner {
+            SessionInner::Sqlite(_)
+            | SessionInner::Postgres(_)
+            | SessionInner::Mysql(_)
+            | SessionInner::Mssql(_) => unsupported,
+            #[cfg(feature = "duckdb")]
+            SessionInner::Duckdb(_) => unsupported,
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => unsupported,
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => unsupported,
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => unsupported,
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(d) => Box::pin(d.key_columns(rel)).await,
         }
     }
 
@@ -1192,7 +1221,7 @@ impl Session {
             #[cfg(feature = "redis")]
             SessionInner::Redis(_) => Err(IntrospectError::Unsupported { what: NO_TABLES }),
             #[cfg(feature = "dynamodb")]
-            SessionInner::Dynamodb(d) => d.relation_objects(rel).await,
+            SessionInner::Dynamodb(d) => Box::pin(d.relation_objects(rel)).await,
         }
     }
 
