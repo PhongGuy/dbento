@@ -347,12 +347,13 @@ async fn first_index(
     let got = reply(rx).await;
     assert_eq!(
         (got.generation, &got.query),
-        (1, &CatalogQuery::RelationObjects { rel: rel.clone() })
+        (1, &CatalogQuery::RelationObjects { rel: rel.clone() }),
+        "the reply answers the relation-objects load"
     );
     match got.result.unwrap() {
         CatalogData::RelationObjects(o) => {
             let names: Vec<_> = o.indexes().iter().map(|i| i.name()).collect();
-            assert_eq!(names, ["t_b"]);
+            assert_eq!(names, ["t_b"], "the relation has exactly its one index");
             o.indexes()[0].object_ref()
         }
         other => panic!("{other:?}"),

@@ -40,7 +40,10 @@ fn opened(
     })
     .unwrap();
     cx.run_until_parked();
-    assert!(present(cx, win, "settings-dialog"));
+    assert!(
+        present(cx, win, "settings-dialog"),
+        "the settings dialog opens"
+    );
     (files, win, seen)
 }
 

@@ -152,10 +152,15 @@ fn a_key_answers_skip(cx: &mut TestAppContext, key: &str) {
     cx.update_window(o.win, |_, w, cx| w.press(key, cx))
         .unwrap();
     o.idle(cx);
-    assert_eq!(o.fx.count("SELECT count(*) FROM t WHERE x = 0"), 0);
+    assert_eq!(
+        o.fx.count("SELECT count(*) FROM t WHERE x = 0"),
+        0,
+        "the declined update changed no row"
+    );
     assert_eq!(
         label_of(cx, o.win, ("statement-result", 0usize)).as_deref(),
-        Some("skipped")
+        Some("skipped"),
+        "the declined statement shows as skipped"
     );
 }
 #[gpui_kit::test]

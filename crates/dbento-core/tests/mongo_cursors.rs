@@ -322,7 +322,11 @@ async fn check_documents(s: &mut dbento_core::Session, text: &str) -> (usize, us
     while let Some(batch) = stream.next_batch().await.unwrap() {
         batches += 1;
         for r in 0..batch.len() {
-            assert_eq!(batch.cell(r, 0), CellRef::Text(&rows.to_string()));
+            assert_eq!(
+                batch.cell(r, 0),
+                CellRef::Text(&rows.to_string()),
+                "rows arrive in _id order"
+            );
             let shell = batch
                 .document(r)
                 .expect("a document per row")
@@ -333,9 +337,16 @@ async fn check_documents(s: &mut dbento_core::Session, text: &str) -> (usize, us
             );
             rows += 1;
         }
-        assert!(batch.document(batch.len()).is_none());
+        assert!(
+            batch.document(batch.len()).is_none(),
+            "a batch has no document past its rows"
+        );
     }
-    assert_eq!(stream.outcome().unwrap().rows, rows as u64);
+    assert_eq!(
+        stream.outcome().unwrap().rows,
+        rows as u64,
+        "the outcome counts every streamed row"
+    );
     (rows, batches)
 }
 

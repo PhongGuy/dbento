@@ -48,8 +48,14 @@ fn second(cx: &mut TestAppContext, fx: &Fx, table: &str) -> Entity<TabModel> {
 
 /// Stages `name = 'z'` on row 1 of `writer`'s `t`, saves and commits; returns the banner.
 fn commit_one(cx: &mut TestAppContext, writer: &Entity<TabModel>) -> Option<String> {
-    assert!(writer.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
-    assert!(writer.update(cx, |m, cx| m.save(cx)));
+    assert!(
+        writer.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "the writer stages its cell"
+    );
+    assert!(
+        writer.update(cx, |m, cx| m.save(cx)),
+        "the writer's save starts"
+    );
     wait_prompt(cx, writer);
     writer.update(cx, |m, cx| m.commit(cx));
     wait_idle(cx, writer);

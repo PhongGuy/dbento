@@ -24,7 +24,8 @@ fn interrupt(child: &Child) {
             .args(["-INT", &child.id().to_string()])
             .status()
             .unwrap()
-            .success()
+            .success(),
+        "kill delivers SIGINT"
     );
 }
 

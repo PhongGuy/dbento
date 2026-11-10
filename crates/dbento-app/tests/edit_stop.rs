@@ -289,8 +289,11 @@ fn at_failing_commit(
     wait_real(cx, "an editable browse", |cx| {
         m.read_with(cx, |m, _| m.editable() && !m.running())
     });
-    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "999", cx)));
-    assert!(m.update(cx, |m, cx| m.save(cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "999", cx)),
+        "the cell stages"
+    );
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
     wait_prompt(cx, &m);
     (m, db)
 }

@@ -392,7 +392,10 @@ pub(crate) const MAX_BATCH_BYTES: usize = 8 << 20;
 /// and SQLite's `SQLITE_MAX_LENGTH` is 1,000,000,000.
 pub(crate) const MAX_CELL_BYTES: usize = i32::MAX as usize;
 // A column arena holds at most one batch plus one value, so `u32` offsets always fit.
-const _: () = assert!(MAX_BATCH_BYTES + MAX_CELL_BYTES <= u32::MAX as usize);
+const _: () = assert!(
+    MAX_BATCH_BYTES + MAX_CELL_BYTES <= u32::MAX as usize,
+    "a batch plus one cell fits u32 offsets"
+);
 
 /// An arena length as a `u32` end offset; the cap above makes the panic unreachable.
 #[allow(clippy::expect_used)] // the const assert above proves every arena length fits
@@ -460,7 +463,11 @@ impl BatchBuilder {
         number: impl Fn(usize) -> bool,
         document: Option<&[u8]>,
     ) -> Option<ResultBatch> {
-        debug_assert_eq!(row.len(), self.columns.len());
+        debug_assert_eq!(
+            row.len(),
+            self.columns.len(),
+            "a row has one cell per column"
+        );
         let cells: usize = row
             .iter()
             .map(|c| match c {
@@ -493,7 +500,10 @@ impl BatchBuilder {
         }
         self.rows += 1;
         // A row without its document would hand every later row its neighbour's.
-        debug_assert!(self.document_ends.is_empty() || self.document_ends.len() == self.rows);
+        debug_assert!(
+            self.document_ends.is_empty() || self.document_ends.len() == self.rows,
+            "a document batch has one document per row"
+        );
         self.data_bytes += size;
         self.total += size as u64;
         closed

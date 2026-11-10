@@ -43,7 +43,11 @@ fn type_text(cx: &mut TestAppContext, o: &Opened, text: &str) {
 }
 fn add(cx: &mut TestAppContext, o: &Opened) {
     let m = o.model(cx);
-    assert_eq!(m.update(cx, |m, cx| m.add_row(cx)), Some(0));
+    assert_eq!(
+        m.update(cx, |m, cx| m.add_row(cx)),
+        Some(0),
+        "the new row is row 0"
+    );
     cx.run_until_parked();
 }
 

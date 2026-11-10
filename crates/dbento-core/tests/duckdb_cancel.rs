@@ -31,7 +31,7 @@ async fn select_one_works(s: &mut Session) {
         .await
         .remove(0)
         .unwrap();
-    assert_eq!(r.rows, vec![vec![text("1")]]);
+    assert_eq!(r.rows, vec![vec![text("1")]], "SELECT 1 returns one");
 }
 
 #[tokio::test]

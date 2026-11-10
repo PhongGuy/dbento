@@ -75,10 +75,13 @@ fn started_on(cx: &mut TestAppContext, extra: &str) -> Started {
             )
         })
         .unwrap();
-    assert!(present(cx, win, "connection-list"));
+    assert!(
+        present(cx, win, "connection-list"),
+        "the connection list shows"
+    );
     cx.update_window(win, |_, w, cx| w.press("ctrl-shift-h", cx))
         .unwrap();
-    assert!(present(cx, win, "history-panel"));
+    assert!(present(cx, win, "history-panel"), "the history panel shows");
     (fx, files, win, shell)
 }
 fn rows(cx: &mut TestAppContext, win: AnyWindowHandle) -> Vec<String> {

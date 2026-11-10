@@ -22,6 +22,7 @@ clone_on_ref_ptr = "warn"
 # Off: hundreds of arms match #[non_exhaustive] enums from another crate, where a wildcard arm
 # is required, so per-site allows would bury the matches.
 wildcard_enum_match_arm = "allow"
+missing_assert_message = "warn"
 
 [workspace.dependencies]
 log = "0.4.34"

@@ -25,7 +25,10 @@ fn restart(cx: &mut TestAppContext, o: &Opened) -> (AnyWindowHandle, Entity<Shel
             )
         })
         .unwrap();
-    assert!(present(cx, win, "connection-list"));
+    assert!(
+        present(cx, win, "connection-list"),
+        "the connection list shows"
+    );
     (win, shell)
 }
 

@@ -431,7 +431,10 @@ fn menu_open(cx: &mut TestAppContext) -> support::Opened {
     cx.update_window(o.win, |_, w, cx| w.right_click("cell-1-0", cx))
         .unwrap();
     cx.run_until_parked();
-    assert!(support::present(cx, o.win, "grid-menu-copy-csv"));
+    assert!(
+        support::present(cx, o.win, "grid-menu-copy-csv"),
+        "the grid menu offers copy as CSV"
+    );
     o
 }
 

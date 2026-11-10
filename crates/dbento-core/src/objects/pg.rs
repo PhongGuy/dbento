@@ -15,7 +15,10 @@ use super::{
 /// The definition cut passed to SQL `left()`, which counts chars: one char past the cap brings
 /// any over-cap text in over it in bytes.
 const CAP_CHARS: i32 = {
-    assert!(DEFINITION_CAP < i32::MAX as usize);
+    assert!(
+        DEFINITION_CAP < i32::MAX as usize,
+        "the cap plus one fits an i32"
+    );
     (DEFINITION_CAP + 1) as i32
 };
 

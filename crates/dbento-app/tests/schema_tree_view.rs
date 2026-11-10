@@ -38,8 +38,11 @@ fn started(
     let (win, shell) = cx
         .update(|cx| start(services(files.path()), Some(fx.dir.path().into()), cx))
         .unwrap();
-    assert!(present(cx, win, "schema-tree"));
-    assert!(present(cx, win, "connection-list"));
+    assert!(present(cx, win, "schema-tree"), "the schema tree shows");
+    assert!(
+        present(cx, win, "connection-list"),
+        "the connection list shows"
+    );
     (fx, files, win, shell)
 }
 fn click(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) {

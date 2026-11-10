@@ -3653,7 +3653,8 @@ impl Shell {
                 .iter()
                 .filter(|t| t.read(cx).model().read(cx).events().is_some())
                 .count()
-                <= PRECONNECT_CAP
+                <= PRECONNECT_CAP,
+            "a restored session connects at most PRECONNECT_CAP tabs"
         );
         self.restoring = false;
         if !refused {

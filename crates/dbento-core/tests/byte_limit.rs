@@ -24,12 +24,14 @@ async fn bounds_hold(s: &mut Session, hundreds: &str) {
     let bytes = Some(TruncatedBy::Bytes);
     assert_eq!(
         shape(s, hundreds, limits(None, Some(1000))).await,
-        (10, 10, true, bytes)
+        (10, 10, true, bytes),
+        "a 1,000-byte budget keeps ten rows"
     );
     // 1,000 bytes are under 1,050, so an eleventh row joins: the budget plus at most one row.
     assert_eq!(
         shape(s, hundreds, limits(None, Some(1050))).await,
-        (11, 11, true, bytes)
+        (11, 11, true, bytes),
+        "a budget may overshoot by one row"
     );
     assert_eq!(
         shape(s, hundreds, limits(Some(10), Some(1000))).await,
@@ -38,16 +40,19 @@ async fn bounds_hold(s: &mut Session, hundreds: &str) {
     );
     assert_eq!(
         shape(s, hundreds, limits(Some(5), None)).await,
-        (5, 5, true, Some(TruncatedBy::Rows))
+        (5, 5, true, Some(TruncatedBy::Rows)),
+        "a five-row bound keeps five rows"
     );
     // Reaching the budget on the last row truncates nothing.
     assert_eq!(
         shape(s, hundreds, limits(None, Some(10_000))).await,
-        (100, 100, false, None)
+        (100, 100, false, None),
+        "a budget reached on the last row truncates nothing"
     );
     assert_eq!(
         shape(s, hundreds, limits(None, None)).await,
-        (100, 100, false, None)
+        (100, 100, false, None),
+        "no bound keeps every row"
     );
 }
 
@@ -55,10 +60,11 @@ async fn close_ends_the_session(s: &mut Session, hundreds: &str) {
     let mut l = limits(None, Some(1000));
     l.on_truncate = OnTruncate::Close;
     let r = run(s, &format!("{hundreds}; SELECT 2"), l).await;
-    assert_eq!(r.len(), 2);
+    assert_eq!(r.len(), 2, "both statements report");
     assert_eq!(
         r[0].as_ref().unwrap().outcome.truncated_by,
-        Some(TruncatedBy::Bytes)
+        Some(TruncatedBy::Bytes),
+        "the first statement stops at the byte budget"
     );
     assert!(
         matches!(r[1], Err(ExecuteError::SessionClosed)),

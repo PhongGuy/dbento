@@ -46,7 +46,10 @@ fn press(cx: &mut TestAppContext, o: &Opened, key: &str) {
 }
 fn staged(cx: &mut TestAppContext, o: &Opened) {
     let m = o.model(cx);
-    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "the cell stages"
+    );
 }
 
 #[gpui_kit::test]

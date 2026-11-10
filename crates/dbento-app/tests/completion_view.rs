@@ -198,7 +198,11 @@ fn both_relations(cx: &mut TestAppContext, o: &Opened) {
     });
     place(cx, o, "SELECT * FROM ", 14);
     typed(cx, o, "A");
-    assert_eq!(menu(cx, o), ["Album", "Artist"]);
+    assert_eq!(
+        menu(cx, o),
+        ["Album", "Artist"],
+        "completion offers the relations starting with A"
+    );
 }
 
 #[gpui_kit::test]

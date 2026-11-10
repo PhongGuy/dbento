@@ -48,7 +48,8 @@ async fn check(s: &mut Session, schema: &str) {
     let star = columns(s, "SELECT * FROM t").await;
     assert_eq!(
         s.source_columns(&t, &star).await.unwrap(),
-        names(&[Some("a"), Some("b")])
+        names(&[Some("a"), Some("b")]),
+        "a star select maps every column to its source"
     );
     let other = RelationRef::new(schema, "u");
     assert_eq!(

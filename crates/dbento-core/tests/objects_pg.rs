@@ -106,7 +106,10 @@ async fn round_trip(fx: &PgFixture, object: &ObjectRef, drop: &str) -> Definitio
         .await
         .unwrap_or_else(|e| panic!("replaying {:?}: {e}", before.text()));
     let after = definition(fx, object).await.unwrap();
-    assert_eq!(after, before);
+    assert_eq!(
+        after, before,
+        "the replayed definition matches the original"
+    );
     before
 }
 
