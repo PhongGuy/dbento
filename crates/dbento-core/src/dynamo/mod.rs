@@ -3,4 +3,6 @@
 pub(crate) mod classify;
 pub(crate) mod lex;
 pub(crate) mod ops;
+#[cfg(feature = "dynamodb")]
+pub(crate) mod render;
 pub(crate) mod statement;
