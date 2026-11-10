@@ -166,6 +166,7 @@ fn open(
         .map_err(|e| e.to_string())?
 }
 
+#[allow(clippy::expect_used)] // the bench opens its connection before driving any frame
 fn tab(shell: &Entity<Shell>, cx: &App) -> Entity<QueryTab> {
     shell.read(cx).tab().expect("a connection is open").clone()
 }

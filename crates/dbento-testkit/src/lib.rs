@@ -2,6 +2,9 @@
 //! database, on its own container or on the server a URL variable names. Never depends on
 //! dbento-core.
 
+// A harness that cannot start its server has nothing to report but the panic.
+#![allow(clippy::expect_used)]
+
 use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};

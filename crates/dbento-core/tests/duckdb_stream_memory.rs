@@ -1,7 +1,7 @@
 #![cfg(all(feature = "duckdb", target_os = "linux"))]
 // Test helpers may panic on a broken fixture too; clippy's in-tests exemption covers only
 // #[test] functions, not the helpers they call.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod support;
 use dbento_core::{Limits, SessionOptions};
 use support::duckdb_fixture;

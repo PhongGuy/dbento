@@ -16,6 +16,7 @@ license = "MIT OR Apache-2.0"
 [workspace.lints.clippy]
 ref_option = "warn"
 unwrap_used = "warn"
+expect_used = "warn"
 
 [workspace.dependencies]
 log = "0.4.34"

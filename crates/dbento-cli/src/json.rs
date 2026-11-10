@@ -60,6 +60,7 @@ impl<W: Write> JsonSink<W> {
     }
 }
 
+#[allow(clippy::expect_used)] // a str has no unserializable value
 fn quote(s: &str) -> String {
     serde_json::to_string(s).expect("a str always serializes")
 }

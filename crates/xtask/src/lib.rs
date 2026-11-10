@@ -1,5 +1,8 @@
 //! Repository automation for dbento, run as `cargo xtask`.
 
+// A developer tool, where a failed invariant is best reported as the panic itself.
+#![allow(clippy::expect_used)]
+
 use std::path::PathBuf;
 use std::process::Command;
 

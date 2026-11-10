@@ -276,6 +276,7 @@ pub fn plan(
             }
             OnConflict::Skip => c.name().to_owned(),
             OnConflict::Rename if !taken(c.name()) => c.name().to_owned(),
+            #[allow(clippy::expect_used)] // finitely many names are taken, so one is free
             OnConflict::Rename => (2..)
                 .map(|i| format!("{}-{i}", c.name()))
                 .find(|n| !taken(n) && !reserved.contains(n.as_str()))
@@ -310,6 +311,7 @@ pub fn plan(
     let new_text = if added.is_empty() {
         None
     } else {
+        #[allow(clippy::expect_used)] // plain strings and tables, which TOML can always hold
         let tables = toml::to_string(&RootToml { connections: added })
             .expect("draft tables always serialize");
         // A CRLF file stays CRLF, so the append never mixes line endings.

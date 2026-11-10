@@ -242,17 +242,20 @@ async fn load(
     session: &mut Option<(Session, Duration)>,
     query: &CatalogQuery,
 ) -> Result<CatalogData, String> {
-    if session.is_none() {
-        let mut limit = CATALOG_TIMEOUT;
-        let s = runner::open(spec, |c| {
-            let options = catalog_options(c.statement_timeout());
-            limit = options.statement_timeout.unwrap_or(CATALOG_TIMEOUT);
-            options
-        })
-        .await?;
-        *session = Some((s, limit + CATALOG_GRACE));
-    }
-    let (s, deadline) = session.as_mut().expect("opened above");
+    let (s, deadline) = match session {
+        Some(open) => open,
+        None => {
+            let mut limit = CATALOG_TIMEOUT;
+            let s = runner::open(spec, |c| {
+                let options = catalog_options(c.statement_timeout());
+                limit = options.statement_timeout.unwrap_or(CATALOG_TIMEOUT);
+                options
+            })
+            .await?;
+            session.insert((s, limit + CATALOG_GRACE))
+        }
+    };
+    let deadline = *deadline;
     let work = async {
         match query {
             CatalogQuery::Definition { object } => Asked::Definition(s.definition(object).await),
@@ -264,9 +267,10 @@ async fn load(
         }
     };
     let asked = AssertUnwindSafe(work).catch_unwind();
-    let Ok(answer) = tokio::time::timeout(*deadline, asked).await else {
-        let (s, deadline) = session.take().expect("opened above");
-        abandon(s);
+    let Ok(answer) = tokio::time::timeout(deadline, asked).await else {
+        if let Some((s, _)) = session.take() {
+            abandon(s);
+        }
         return Err(format!(
             "the catalog load got no answer within {}s; the connection may be lost",
             deadline.as_secs()

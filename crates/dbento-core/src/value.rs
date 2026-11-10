@@ -395,6 +395,7 @@ pub(crate) const MAX_CELL_BYTES: usize = i32::MAX as usize;
 const _: () = assert!(MAX_BATCH_BYTES + MAX_CELL_BYTES <= u32::MAX as usize);
 
 /// An arena length as a `u32` end offset; the cap above makes the panic unreachable.
+#[allow(clippy::expect_used)] // the const assert above proves every arena length fits
 fn end_offset(len: usize) -> u32 {
     u32::try_from(len).expect("a column arena grew past 4 GiB")
 }

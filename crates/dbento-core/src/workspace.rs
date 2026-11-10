@@ -814,6 +814,7 @@ impl Workspace {
     pub fn write_query(&self, rel: &Path, text: &str) -> Result<SavedQuery, QueryFileError> {
         use std::io::Write as _;
         let file = self.confine(rel, true)?;
+        #[allow(clippy::expect_used)] // confine joins `rel` below the workspace directory
         let parent = file.parent().expect("a confined path has a parent");
         let io = |path: &Path, e: std::io::Error| QueryFileError::Io {
             path: self.shown(path),
@@ -903,10 +904,16 @@ impl Workspace {
             }
         };
         // Below `literal`, which exists, so the walk stops at `literal` at the latest.
-        let mut ancestor = file.parent().expect("a joined path has a parent");
-        while std::fs::symlink_metadata(ancestor).is_err() {
-            ancestor = ancestor.parent().expect("queries/ exists");
-        }
+        let mut below = file.as_path();
+        let ancestor = loop {
+            let Some(parent) = below.parent() else {
+                return Err(outside());
+            };
+            if std::fs::symlink_metadata(parent).is_ok() {
+                break parent;
+            }
+            below = parent;
+        };
         if !resolve(ancestor)?.starts_with(&root) {
             return Err(outside());
         }
