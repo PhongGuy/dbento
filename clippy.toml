@@ -1,3 +1,6 @@
 # ExecuteError::Database carries eight engine fields (144 bytes, 152 inside ApplyError) and is
 # matched by field across every crate, so it stays unboxed; the default 128 flags it everywhere.
 large-error-threshold = 160
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+avoid-breaking-exported-api = false

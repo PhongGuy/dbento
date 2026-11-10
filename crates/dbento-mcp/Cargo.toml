@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 autotests = false
 
+[lints]
+workspace = true
+
 [features]
 default = ["duckdb", "mongodb", "surrealdb", "redis"]
 # Forwarded so a default edge to core cannot switch DuckDB on through feature unification.

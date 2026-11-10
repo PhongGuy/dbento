@@ -8,6 +8,9 @@ rust-version.workspace = true
 license.workspace = true
 autotests = false
 
+[lints]
+workspace = true
+
 [dependencies]
 dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
 anyhow.workspace = true

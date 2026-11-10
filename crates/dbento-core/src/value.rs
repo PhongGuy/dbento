@@ -159,7 +159,7 @@ pub struct DocumentRef<'a> {
 
 impl DocumentRef<'_> {
     /// Mongosh syntax; one field per line when `pretty`.
-    pub fn to_shell(&self, pretty: bool) -> String {
+    pub fn to_shell(self, pretty: bool) -> String {
         #[cfg(feature = "mongodb")]
         {
             self.rendered(|document| {
@@ -178,7 +178,7 @@ impl DocumentRef<'_> {
     }
 
     /// Extended JSON in field order; `canonical` keeps every type, relaxed reads as plain JSON.
-    pub fn to_extended_json(&self, canonical: bool) -> String {
+    pub fn to_extended_json(self, canonical: bool) -> String {
         #[cfg(feature = "mongodb")]
         {
             self.rendered(|document| render::extended_json(document, canonical))
