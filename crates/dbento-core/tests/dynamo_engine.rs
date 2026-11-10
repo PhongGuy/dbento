@@ -1,9 +1,10 @@
 //! The DynamoDB engine as the workspace and dialect layers see it, before any server.
 use dbento_core::{
-    ConnectError, Engine, ExplainError, ExplainMode, FormatOptions, OpenError, QueryLanguage,
-    ReadOnlyEnforcement, SecretSource, SessionOptions, Workspace, connect, default_schema,
-    explain_request, explain_text, format_sql, line_comment_starts, quote_ident, quote_literal,
-    read_only_residual, single_source, statement_count, statement_ranges,
+    ConnectError, ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions,
+    OpenError, QueryLanguage, ReadOnlyEnforcement, SecretSource, SessionOptions, Workspace,
+    connect, default_schema, explain_request, explain_text, format_sql, line_comment_starts,
+    plan_edit, quote_ident, quote_literal, read_only_residual, single_source, statement_count,
+    statement_ranges,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -325,4 +326,26 @@ fn an_endpoint_is_https_or_loopback_http_with_no_user_path_or_query() {
         assert!(m.contains("`endpoint`"), "{bad}: {m}");
         assert!(!m.contains("hunter2"), "{bad}: {m}");
     }
+}
+
+#[test]
+fn a_dynamodb_entry_round_trips_through_a_save() {
+    let (_dir, ws) = open("dbento = 1\n");
+    let mut spec = ConnectionSpec::new(Engine::Dynamodb);
+    spec.region = Some("eu-west-1".into());
+    spec.endpoint = Some("http://127.0.0.1:5000".into());
+    spec.access_key_id = Some("AKIDTEST".into());
+    spec.secret = Some(SecretSource::Env("ORDERS_SECRET".into()));
+    spec.consistent_read = Some(true);
+    spec.read_only = Some(true);
+    let edit = Edit::PutConnection {
+        previous: None,
+        name: "orders".into(),
+        spec: spec.clone(),
+    };
+    let text = plan_edit(&ws, &edit).unwrap().new_text().to_owned();
+    assert!(text.contains("engine = \"dynamodb\""), "{text}");
+    assert!(text.contains("region = \"eu-west-1\""), "{text}");
+    assert!(text.contains("consistent_read = true"), "{text}");
+    assert_eq!(open(&text).1.connection_spec("orders"), Some(spec));
 }

@@ -1034,6 +1034,10 @@ impl Workspace {
         spec.uri = raw.uri;
         spec.namespace = raw.namespace;
         spec.auth_level = raw.auth_level.as_deref().and_then(AuthLevel::parse);
+        spec.region = raw.region;
+        spec.endpoint = raw.endpoint;
+        spec.access_key_id = raw.access_key_id;
+        spec.consistent_read = raw.consistent_read;
         Some(spec)
     }
 }
