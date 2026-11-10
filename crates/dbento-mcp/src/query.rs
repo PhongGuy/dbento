@@ -150,7 +150,12 @@ pub(crate) async fn run_read(
         None => None,
         Some(TruncatedBy::Rows) => Some(Bound::Rows),
         Some(TruncatedBy::Bytes) => Some(Bound::Bytes),
-        Some(_) => return Err(ToolError::new("internal", "an unknown truncation bound")),
+        Some(_) => {
+            return Err(ToolError::new(
+                "internal",
+                "an unknown truncation bound".to_owned(),
+            ));
+        }
     };
     Ok(QueryResult {
         columns: columns
@@ -237,10 +242,9 @@ async fn collect(
             );
         }
     }
-    let mut outcome = stream
-        .outcome()
-        .cloned()
-        .ok_or_else(|| ToolError::new("internal", "the result ended without an outcome"))?;
+    let mut outcome = stream.outcome().cloned().ok_or_else(|| {
+        ToolError::new("internal", "the result ended without an outcome".to_owned())
+    })?;
     let columns = stream.columns().to_vec();
     drop(stream);
     // A cut under Close ended the session, so nothing is left to read.
@@ -339,7 +343,7 @@ pub(crate) fn cell(c: CellRef<'_>) -> Result<Value, ToolError> {
         _ => {
             return Err(ToolError::new(
                 "internal",
-                "a cell kind this server does not know",
+                "a cell kind this server does not know".to_owned(),
             ));
         }
     })

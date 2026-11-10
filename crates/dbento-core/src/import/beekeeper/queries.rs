@@ -20,10 +20,10 @@ pub(crate) fn collect(app_db: &Path, queries: Vec<RawQuery>, set: &mut ImportSet
             continue;
         };
         if q.title_not_utf8 {
-            set.warn(&origin, WarningKind::NotUtf8);
+            set.warn(origin.clone(), WarningKind::NotUtf8);
         }
         if std::str::from_utf8(&text).is_err() {
-            set.warn(&origin, WarningKind::NotUtf8);
+            set.warn(origin.clone(), WarningKind::NotUtf8);
         }
         let mut relative: PathBuf = q.folder.iter().map(|f| segment(f)).collect();
         relative.push(file_name(&q.title));

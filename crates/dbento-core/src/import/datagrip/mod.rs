@@ -100,20 +100,20 @@ pub fn read_datagrip(folder: &Path, opts: &DataGripOptions) -> Result<ImportSet,
                     None => None,
                 };
                 set.add_connection(ImportedConnection::new(
-                    &src.uuid,
-                    &src.name,
+                    src.uuid.clone(),
+                    src.name.clone(),
                     name,
                     mapped.draft.with_folder(folder).with_color(color),
                 ));
                 for w in warnings {
-                    set.warn(&src.name, w);
+                    set.warn(src.name.clone(), w);
                 }
                 if ok_uuid {
                     imported.insert(src.uuid.clone());
                 }
             }
             Err(reason) => {
-                set.skip(ItemKind::DataSource, &src.name, reason);
+                set.skip(ItemKind::DataSource, src.name.clone(), reason);
                 if ok_uuid {
                     skipped.insert(src.uuid.clone());
                 }
@@ -122,7 +122,7 @@ pub fn read_datagrip(folder: &Path, opts: &DataGripOptions) -> Result<ImportSet,
     }
     // Object (table and schema) colours have no place in `dbento.toml`.
     if project.has_object_colors {
-        set.warn("project", WarningKind::ColorsNotImported);
+        set.warn("project".to_owned(), WarningKind::ColorsNotImported);
     }
     queries::collect(&project, &opts.config_dirs, &imported, &skipped, &mut set)?;
     Ok(set)

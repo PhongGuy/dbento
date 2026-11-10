@@ -9,14 +9,19 @@ const ORDERS: &str = "dbento = 1\n[connections.orders]\nengine = \"postgres\"\nh
 
 fn read_only_pg(name: &str, host: &str) -> ImportedConnection {
     let draft = ConnectionDraft::postgres(pg_fields(host), true);
-    ImportedConnection::new(format!("ro-{name}"), name, name, draft)
+    ImportedConnection::new(
+        format!("ro-{name}"),
+        name.to_owned(),
+        name.to_owned(),
+        draft,
+    )
 }
 
 fn sqlite(name: &str, path: &str) -> ImportedConnection {
     ImportedConnection::new(
         format!("id-{name}"),
         format!("{name}.db"),
-        name,
+        name.to_owned(),
         ConnectionDraft::sqlite(path.to_owned(), false),
     )
 }
@@ -124,7 +129,10 @@ fn port_5432_and_no_port_are_the_same_server() {
     fields.port = Some(5432);
     let draft = ConnectionDraft::postgres(fields, false);
     let set = set_of(vec![ImportedConnection::new(
-        "p", "orders", "orders", draft,
+        "p".to_owned(),
+        "orders".to_owned(),
+        "orders".to_owned(),
+        draft,
     )]);
     let p = plan(ws.path(), &set, OnConflict::Skip).unwrap();
     assert_eq!(conn_actions(&p), [("orders".to_owned(), "unchanged")]);
@@ -209,7 +217,10 @@ fn a_connection_filed_in_another_folder_is_still_unchanged() {
     let draft = ConnectionDraft::postgres(pg_fields("db.example"), false)
         .with_folder(Some("Theirs".parse().unwrap()));
     let set = set_of(vec![ImportedConnection::new(
-        "u1", "orders", "orders", draft,
+        "u1".to_owned(),
+        "orders".to_owned(),
+        "orders".to_owned(),
+        draft,
     )]);
     let p = plan(ws.path(), &set, OnConflict::Skip).unwrap();
     assert_eq!(conn_actions(&p), [("orders".to_owned(), "unchanged")]);
@@ -232,7 +243,12 @@ fn my_fields(port: Option<u16>, database: Option<&str>) -> MysqlDraft {
 
 fn mysql(name: &str, port: Option<u16>) -> ImportedConnection {
     let draft = ConnectionDraft::mysql(my_fields(port, Some("orders")), false);
-    ImportedConnection::new(format!("my-{name}"), name, name, draft)
+    ImportedConnection::new(
+        format!("my-{name}"),
+        name.to_owned(),
+        name.to_owned(),
+        draft,
+    )
 }
 
 #[test]
@@ -276,7 +292,12 @@ fn mysql_matches_on_port_3306_and_never_matches_a_postgres_twin() {
 fn a_mysql_draft_is_written_as_engine_mysql_and_reopens() {
     let ws = ws_with(None);
     let draft = ConnectionDraft::mysql(my_fields(Some(3306), None), false);
-    let set = set_of(vec![ImportedConnection::new("m", "Shop", "shop", draft)]);
+    let set = set_of(vec![ImportedConnection::new(
+        "m".to_owned(),
+        "Shop".to_owned(),
+        "shop".to_owned(),
+        draft,
+    )]);
     plan(ws.path(), &set, OnConflict::Skip)
         .unwrap()
         .apply()

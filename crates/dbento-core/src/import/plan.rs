@@ -284,7 +284,7 @@ pub fn plan(
         };
         if c.draft().engine() == Engine::Sqlite && relative.is_none() {
             warnings.push(Warning::new(
-                c.source_name(),
+                c.source_name().to_owned(),
                 WarningKind::MachineSpecificPath,
             ));
         }
@@ -396,7 +396,7 @@ fn plan_queries(
             let path = Path::new("queries").join(rel);
             if folder.is_some() {
                 warnings.push(Warning::new(
-                    path.to_string_lossy(),
+                    path.to_string_lossy().into_owned(),
                     WarningKind::BoundByFolder,
                 ));
             }

@@ -49,7 +49,8 @@ pub(crate) async fn run(
             "not_explainable",
             "`explain` plans one SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE, MERGE or \
              REPLACE statement, given without EXPLAIN, its options or a leading block comment; \
-             ANALYZE is never run",
+             ANALYZE is never run"
+                .to_owned(),
         ),
     })?;
     let plan = run_read(server, &found, &sql, None, context).await?;

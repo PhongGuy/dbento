@@ -145,13 +145,13 @@ pub(crate) async fn serve(
                 let _ = reply.send(s.catalog(ask).await);
             }
             Request::Close { done } => {
-                s.rpc.close("the session was closed");
+                s.rpc.close("the session was closed".to_owned());
                 let _ = done.send(s.owed.take().map_or(Ok(()), Err));
                 return;
             }
         }
     }
-    s.rpc.close("the session was dropped");
+    s.rpc.close("the session was dropped".to_owned());
 }
 
 /// What no caller has heard yet: a statement's error, then the one that closed the session.
@@ -258,7 +258,7 @@ impl Served {
 
     fn close_quietly(&mut self, why: &str) {
         self.quiet = true;
-        self.rpc.close(why);
+        self.rpc.close(why.to_owned());
     }
 
     // The first caller hears why the session ended, and any later one that it did.
@@ -591,7 +591,7 @@ impl Served {
             frame = run.frames.next() => frame,
             () = self.cancel.past_bound(run.id) => {
                 let why = "the server did not stop the statement";
-                self.rpc.close(why);
+                self.rpc.close(why.to_owned());
                 Frame::Closed(why.to_owned())
             }
         }
@@ -691,7 +691,8 @@ impl Served {
     fn heard(&self, error: ExecuteError) -> ExecuteError {
         if error.closes_session() {
             self.told.store(true, Ordering::Relaxed);
-            self.rpc.close("the login's session on the server expired");
+            self.rpc
+                .close("the login's session on the server expired".to_owned());
         }
         error
     }

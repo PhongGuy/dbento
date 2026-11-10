@@ -14,8 +14,8 @@ pub struct ImportSecrets {
 }
 
 impl ImportSecrets {
-    pub(crate) fn insert(&mut self, source_id: impl Into<String>, secret: Secret) {
-        self.by_id.insert(source_id.into(), secret);
+    pub(crate) fn insert(&mut self, source_id: String, secret: Secret) {
+        self.by_id.insert(source_id, secret);
     }
 
     /// The secret saved for the source connection `source_id`, if any.

@@ -15,11 +15,8 @@ pub struct Hop {
 
 impl Hop {
     /// The hop to `relation` filtered by `filter`.
-    pub fn new(relation: RelationRef, filter: impl Into<String>) -> Self {
-        Hop {
-            relation,
-            filter: filter.into(),
-        }
+    pub fn new(relation: RelationRef, filter: String) -> Self {
+        Hop { relation, filter }
     }
 }
 

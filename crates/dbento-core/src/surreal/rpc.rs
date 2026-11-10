@@ -397,8 +397,8 @@ impl Rpc {
     }
 
     /// Ends the socket; every open stream and call then reports `reason`.
-    pub(crate) fn close(&self, reason: impl Into<String>) {
-        let _ = self.commands.send(Command::Close(reason.into()));
+    pub(crate) fn close(&self, reason: String) {
+        let _ = self.commands.send(Command::Close(reason));
     }
 }
 

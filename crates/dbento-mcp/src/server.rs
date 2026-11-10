@@ -56,7 +56,8 @@ fn keyspace_has_no_tables(found: &Found) -> Result<(), ToolError> {
     Err(ToolError::new(
         "unsupported",
         "this connection keeps keys, not tables: list them with `query` and \
-         `SCAN 0 MATCH <pattern> COUNT 100`, then `TYPE <key>`",
+         `SCAN 0 MATCH <pattern> COUNT 100`, then `TYPE <key>`"
+            .to_owned(),
     ))
 }
 
@@ -234,7 +235,10 @@ impl DbentoServer {
         match tokio::task::spawn_blocking(move || Workspace::open(&root)).await {
             Ok(Ok(workspace)) => Ok(workspace),
             Ok(Err(e)) => Err(ToolError::from_open(&e)),
-            Err(_) => Err(ToolError::new("internal", "reading the workspace failed")),
+            Err(_) => Err(ToolError::new(
+                "internal",
+                "reading the workspace failed".to_owned(),
+            )),
         }
     }
 
@@ -281,7 +285,7 @@ impl DbentoServer {
                 .map_err(|e| ToolError::from_secret(&e))
         })
         .await
-        .map_err(|_| ToolError::new("internal", "resolving the secret failed"))??;
+        .map_err(|_| ToolError::new("internal", "resolving the secret failed".to_owned()))??;
         let mut options = SessionOptions::default();
         options.key_passphrase = key_passphrase;
         options.force_read_only = force_read_only;

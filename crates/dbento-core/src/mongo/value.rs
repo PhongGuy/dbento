@@ -42,16 +42,13 @@ pub(crate) struct ParseError {
 }
 
 impl ParseError {
-    pub(crate) fn new(message: impl Into<String>, at: usize) -> Self {
-        Self {
-            message: message.into(),
-            at,
-        }
+    pub(crate) fn new(message: String, at: usize) -> Self {
+        Self { message, at }
     }
 }
 
 fn not_js(at: usize) -> ParseError {
-    ParseError::new(NOT_JS, at)
+    ParseError::new(NOT_JS.to_owned(), at)
 }
 
 /// A read position over one statement's tokens, which carry absolute ranges into `src`.
@@ -107,7 +104,10 @@ pub(crate) fn value(c: &mut Cursor<'_>) -> Result<Bson, ParseError> {
 
 fn value_at(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
     let Some(tok) = c.peek() else {
-        return Err(ParseError::new("expected a value", c.end_offset()));
+        return Err(ParseError::new(
+            "expected a value".to_owned(),
+            c.end_offset(),
+        ));
     };
     let at = tok.range.start;
     // Objects, arrays and helper calls each open a level, so the limit bounds the recursion
@@ -120,12 +120,15 @@ fn value_at(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
         _ => false,
     };
     if depth == MAX_DEPTH && opens_level {
-        return Err(ParseError::new("nested deeper than 100 levels", at));
+        return Err(ParseError::new(
+            "nested deeper than 100 levels".to_owned(),
+            at,
+        ));
     }
     match tok.kind {
         Kind::Ident => return ident(c, depth),
         Kind::Punct(b',' | b';' | b':' | b'}' | b']' | b')') => {
-            return Err(ParseError::new("expected a value", at));
+            return Err(ParseError::new("expected a value".to_owned(), at));
         }
         _ => {}
     }
@@ -187,12 +190,17 @@ fn object(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
             return Ok(Bson::Document(doc));
         }
         let Some(key_tok) = c.peek() else {
-            return Err(ParseError::new("expected a key", c.end_offset()));
+            return Err(ParseError::new("expected a key".to_owned(), c.end_offset()));
         };
         let key = match key_tok.kind {
             Kind::Ident | Kind::Num => c.text(key_tok).to_owned(),
             Kind::Str => string_value(c.text(key_tok)),
-            _ => return Err(ParseError::new("expected a key", key_tok.range.start)),
+            _ => {
+                return Err(ParseError::new(
+                    "expected a key".to_owned(),
+                    key_tok.range.start,
+                ));
+            }
         };
         c.bump();
         match c.peek() {
@@ -205,7 +213,7 @@ fn object(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
             }
             t => {
                 let at = t.map_or(c.end_offset(), |t| t.range.start);
-                return Err(ParseError::new("expected `:`", at));
+                return Err(ParseError::new("expected `:`".to_owned(), at));
             }
         }
         doc.insert(key, value_at(c, depth)?);
@@ -231,7 +239,10 @@ fn array(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
 // `true`, `false`, `null`, `new Date(..)` or a known helper called with parentheses.
 fn ident(c: &mut Cursor<'_>, depth: usize) -> Result<Bson, ParseError> {
     let Some(tok) = c.bump() else {
-        return Err(ParseError::new("expected a value", c.end_offset()));
+        return Err(ParseError::new(
+            "expected a value".to_owned(),
+            c.end_offset(),
+        ));
     };
     let called = |c: &Cursor<'_>, n| c.peek_nth(n).is_some_and(|t| t.kind == Kind::Punct(b'('));
     match c.text(tok) {
@@ -440,7 +451,7 @@ fn regex(pattern: &str, flags: &str, at: usize) -> Result<Bson, ParseError> {
     }
     let mut sorted: Vec<char> = flags.chars().collect();
     sorted.sort_unstable();
-    let nul = || ParseError::new("regex pattern holds a NUL byte", at);
+    let nul = || ParseError::new("regex pattern holds a NUL byte".to_owned(), at);
     let pattern = CString::try_from(pattern).map_err(|_| nul())?;
     let options = CString::try_from(sorted.into_iter().collect::<String>()).map_err(|_| nul())?;
     Ok(Bson::RegularExpression(Regex { pattern, options }))

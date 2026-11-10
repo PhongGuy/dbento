@@ -25,7 +25,12 @@ pub(super) fn pg_fields(host: &str) -> PgDraft {
 /// A writable Postgres draft `name` for `app@host/orders`, with source id `id-<name>-<host>`.
 pub(super) fn pg(name: &str, host: &str) -> ImportedConnection {
     let draft = ConnectionDraft::postgres(pg_fields(host), false);
-    ImportedConnection::new(format!("id-{name}-{host}"), name, name, draft)
+    ImportedConnection::new(
+        format!("id-{name}-{host}"),
+        name.to_owned(),
+        name.to_owned(),
+        draft,
+    )
 }
 
 pub(super) fn set_of(connections: Vec<ImportedConnection>) -> ImportSet {
@@ -75,9 +80,9 @@ fn new_tables_follow_the_old_text_byte_for_byte() {
         .insert("search_path".to_owned(), "sales".to_owned());
     let draft = ConnectionDraft::postgres(fields, true);
     let set = set_of(vec![ImportedConnection::new(
-        "u1",
-        "Orders DB",
-        "orders-db",
+        "u1".to_owned(),
+        "Orders DB".to_owned(),
+        "orders-db".to_owned(),
         draft,
     )]);
     let p = plan(ws.path(), &set, OnConflict::Skip).unwrap();
@@ -106,11 +111,16 @@ fn a_missing_file_and_folder_are_created_from_the_init_template() {
         ..pg_fields("localhost")
     };
     let set = set_of(vec![
-        ImportedConnection::new("u1", "app.db", "lite", lite),
         ImportedConnection::new(
-            "u2",
-            "Local",
-            "local-pg",
+            "u1".to_owned(),
+            "app.db".to_owned(),
+            "lite".to_owned(),
+            lite,
+        ),
+        ImportedConnection::new(
+            "u2".to_owned(),
+            "Local".to_owned(),
+            "local-pg".to_owned(),
             ConnectionDraft::postgres(fields, false),
         ),
     ]);
@@ -296,7 +306,12 @@ fn a_bad_draft_is_reported_as_itself_not_as_an_inline_table() {
         .settings
         .insert("password".to_owned(), "x".to_owned());
     let draft = ConnectionDraft::postgres(fields, false);
-    let set = set_of(vec![ImportedConnection::new("u1", "A", "a", draft)]);
+    let set = set_of(vec![ImportedConnection::new(
+        "u1".to_owned(),
+        "A".to_owned(),
+        "a".to_owned(),
+        draft,
+    )]);
     let err = plan(ws.path(), &set, OnConflict::Skip).unwrap_err();
     assert!(matches!(err, PlanError::Workspace(_)), "{err:?}");
     assert_eq!(toml_text(ws.path()), OLD);
@@ -308,9 +323,9 @@ fn a_draft_folder_is_written_and_reopens_as_that_folder() {
     let draft = ConnectionDraft::postgres(pg_fields("db.example"), true)
         .with_folder(Some("Prod/EU".parse().unwrap()));
     let set = set_of(vec![ImportedConnection::new(
-        "u1",
-        "Orders DB",
-        "orders-db",
+        "u1".to_owned(),
+        "Orders DB".to_owned(),
+        "orders-db".to_owned(),
         draft,
     )]);
     plan(ws.path(), &set, OnConflict::Skip)
@@ -341,7 +356,12 @@ fn odd_folder_names_survive_toml_escaping_through_apply() {
         let ws = ws_with(Some(OLD));
         let draft = ConnectionDraft::postgres(pg_fields("db.example"), true)
             .with_folder(Some(folder.parse().unwrap()));
-        let set = set_of(vec![ImportedConnection::new("u1", "Odd", "odd", draft)]);
+        let set = set_of(vec![ImportedConnection::new(
+            "u1".to_owned(),
+            "Odd".to_owned(),
+            "odd".to_owned(),
+            draft,
+        )]);
         plan(ws.path(), &set, OnConflict::Skip)
             .unwrap()
             .apply()
@@ -383,7 +403,12 @@ fn a_draft_colour_is_written_and_reopens_as_that_colour() {
     let ws = ws_with(None);
     let draft =
         ConnectionDraft::postgres(pg_fields("db.example"), false).with_color(Some(Color::Red));
-    let set = set_of(vec![ImportedConnection::new("u1", "X", "x", draft)]);
+    let set = set_of(vec![ImportedConnection::new(
+        "u1".to_owned(),
+        "X".to_owned(),
+        "x".to_owned(),
+        draft,
+    )]);
     plan(ws.path(), &set, OnConflict::Skip)
         .unwrap()
         .apply()
@@ -415,7 +440,12 @@ fn a_red_draft_of_an_uncoloured_existing_server_is_unchanged_and_not_retagged() 
     let ws = ws_with(Some(old));
     let draft =
         ConnectionDraft::postgres(pg_fields("db.example"), false).with_color(Some(Color::Red));
-    let set = set_of(vec![ImportedConnection::new("u1", "X", "x", draft)]);
+    let set = set_of(vec![ImportedConnection::new(
+        "u1".to_owned(),
+        "X".to_owned(),
+        "x".to_owned(),
+        draft,
+    )]);
     let p = plan(ws.path(), &set, OnConflict::Skip).unwrap();
     assert_eq!(conn_actions(&p), [("x".to_owned(), "unchanged")]);
     p.apply().unwrap();
@@ -429,7 +459,12 @@ fn a_skipped_name_clash_keeps_the_existing_colour() {
     let ws = ws_with(Some(old));
     let draft =
         ConnectionDraft::postgres(pg_fields("db.example"), false).with_color(Some(Color::Red));
-    let set = set_of(vec![ImportedConnection::new("u1", "X", "x", draft)]);
+    let set = set_of(vec![ImportedConnection::new(
+        "u1".to_owned(),
+        "X".to_owned(),
+        "x".to_owned(),
+        draft,
+    )]);
     let p = plan(ws.path(), &set, OnConflict::Skip).unwrap();
     assert_eq!(conn_actions(&p), [("x".to_owned(), "conflict")]);
     p.apply().unwrap();

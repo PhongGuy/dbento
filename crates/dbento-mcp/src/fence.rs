@@ -64,9 +64,8 @@ pub(crate) async fn caught(
     // The panic payload may quote a secret, so the client only ever sees a fixed message.
     match AssertUnwindSafe(call).catch_unwind().await {
         Ok(result) => result,
-        Err(_) => {
-            ToolError::new("internal", "the tool failed unexpectedly").into_call_tool_result()
-        }
+        Err(_) => ToolError::new("internal", "the tool failed unexpectedly".to_owned())
+            .into_call_tool_result(),
     }
 }
 
