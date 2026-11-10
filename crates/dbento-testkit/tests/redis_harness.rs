@@ -39,6 +39,10 @@ async fn the_seed_holds_every_kind() {
     let ttl = db.int(&["PTTL", "ttl"]).await;
     assert!(ttl > 0 && ttl <= 3_600_000, "{ttl}");
     assert_eq!(db.int(&["PTTL", "str"]).await, -1);
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
     match db.cmd_raw(&[b"GET", BINARY_KEY]).await {
         redis::Value::BulkString(v) => assert_eq!(v, BINARY_VALUE),
         other => panic!("{other:?}"),

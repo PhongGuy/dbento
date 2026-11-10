@@ -185,6 +185,10 @@ impl MsDb {
             .await
             .expect("scalar query failed")?;
         let cell = row.into_iter().next()?;
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "ColumnData has too many variants to list; the rest share one arm"
+        )]
         match cell {
             ColumnData::String(v) => v.map(|s| s.into_owned()),
             ColumnData::U8(v) => v.map(|n| n.to_string()),

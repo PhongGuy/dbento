@@ -148,7 +148,9 @@ impl MgDb {
     pub fn connection_toml(&self, name: &str, user: MgUser, extra: &str) -> String {
         let secret = match user {
             MgUser::Anonymous => String::new(),
-            _ => format!("secret = {{ env = \"{MG_SECRET_VAR}\" }}\n"),
+            MgUser::Root | MgUser::Reader | MgUser::Writer => {
+                format!("secret = {{ env = \"{MG_SECRET_VAR}\" }}\n")
+            }
         };
         format!(
             "[connections.{name}]\nengine = \"mongodb\"\nuri = \"{}\"\n{secret}{extra}\n",

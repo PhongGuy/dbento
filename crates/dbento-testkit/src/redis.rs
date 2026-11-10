@@ -223,6 +223,10 @@ impl RedisDb {
 
     /// The integer reply of `args`; panics on any other reply.
     pub async fn int(&self, args: &[&str]) -> i64 {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         match self.cmd(args).await {
             Value::Int(n) => n,
             other => panic!("{args:?} gave {other:?}, not an integer"),
@@ -231,6 +235,10 @@ impl RedisDb {
 
     /// The text of a bulk, simple, verbatim or OK reply; `None` for Nil; panics on any other.
     pub async fn text(&self, args: &[&str]) -> Option<String> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
         match self.cmd(args).await {
             Value::BulkString(b) => Some(String::from_utf8_lossy(&b).into_owned()),
             Value::SimpleString(s) | Value::VerbatimString { text: s, .. } => Some(s),
