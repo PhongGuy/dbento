@@ -216,6 +216,30 @@ async fn a_failed_key_lookup_still_runs_the_statement() {
 }
 
 #[tokio::test]
+async fn a_failed_key_lookup_is_asked_again_by_the_next_statement() {
+    let item = json!({ "pk": { "S": "a" }, "b": { "S": "v" } });
+    let t = json!({ "TableName": "t", "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+                    "AttributeDefinitions": [{ "AttributeName": "pk", "AttributeType": "S" }] });
+    let replay = Replay::new(vec![
+        ping(),
+        Reply::error(400, aws_error("AccessDeniedException", "no DescribeTable")),
+        Reply::ok(page(std::slice::from_ref(&item), None, None)),
+        Reply::ok(described(t)),
+        Reply::ok(page(&[item], None, None)),
+    ]);
+    let mut s = session(&replay, false, false).await;
+    run(&mut s, "SELECT * FROM \"t\"; SELECT * FROM \"t\"")
+        .await
+        .unwrap();
+    let lookups = replay
+        .seen()
+        .into_iter()
+        .filter(|s| s.target == "DescribeTable")
+        .count();
+    assert_eq!(lookups, 2, "the failed lookup must not be cached");
+}
+
+#[tokio::test]
 async fn a_cancel_before_execute_sends_nothing_and_settle_spends_it() {
     let replay = Replay::new(vec![ping(), Reply::ok(page(&[], None, None))]);
     let mut s = session(&replay, false, false).await;

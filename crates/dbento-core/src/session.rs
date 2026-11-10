@@ -467,8 +467,9 @@ pub enum ExecuteError {
 impl ExecuteError {
     /// The error's text for a session on `engine`: MySQL's drain-cap stop warns that a
     /// non-transactional write may be kept, SQL Server's and SurrealDB's that finished statements
-    /// keep their writes, and MongoDB's timeout and cancel that a write has no transaction to
-    /// undo it; everything else is the `Display` text.
+    /// keep their writes, MongoDB's timeout and cancel that a write has no transaction to undo
+    /// it, and DynamoDB's timeout that an unanswered write may have been applied; everything else
+    /// is the `Display` text.
     pub fn message_for(&self, engine: Engine) -> String {
         match (self, engine) {
             (ExecuteError::StoppedAtDrainCap, Engine::Mysql) => {
@@ -1601,9 +1602,9 @@ impl ResultStream<'_> {
             StreamInner::Mongodb(s) => MongoDriver::next_event(s).await,
             #[cfg(feature = "redis")]
             StreamInner::Redis(s) => RedisSession::next_event(s).await,
-            #[cfg(feature = "dynamodb")]
             // Pinned on the heap: the SDK's send future nests deep enough to overflow the
             // layout query depth of any caller that holds this future inline.
+            #[cfg(feature = "dynamodb")]
             StreamInner::Dynamodb(s) => Box::pin(DynamoSession::next_event(s)).await,
         };
         let item = match item {

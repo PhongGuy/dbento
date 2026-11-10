@@ -224,6 +224,10 @@ fn write_list(out: &mut String, items: &[Value], mut each: impl FnMut(&mut Strin
 }
 
 /// A typed value as compact plain JSON, with numbers verbatim where JSON can spell them.
+#[allow(
+    dead_code,
+    reason = "only the tests render a lone value; cells render whole items"
+)]
 pub(crate) fn plain_json(typed: &Value) -> String {
     let mut out = String::new();
     write_plain(&mut out, typed);

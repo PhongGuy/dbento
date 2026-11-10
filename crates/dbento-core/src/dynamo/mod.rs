@@ -1,5 +1,6 @@
 //! DynamoDB: PartiQL scripts, their classification, item rendering and credentials.
-#![allow(dead_code)] // the DynamoDB driver is the only caller of most of this
+// Without the driver, most of this has no caller.
+#![cfg_attr(not(feature = "dynamodb"), allow(dead_code))]
 #[cfg(feature = "dynamodb")]
 pub(crate) mod catalog;
 pub(crate) mod classify;

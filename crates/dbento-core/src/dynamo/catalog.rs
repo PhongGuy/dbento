@@ -82,7 +82,7 @@ pub(crate) async fn describe(
         .map(|(name, kind, schema)| {
             let (hash, range) = key_of(schema);
             let attrs = hash.into_iter().chain(range).collect();
-            (name.unwrap_or_default().to_owned(), kind, attrs)
+            (name.unwrap_or("unknown").to_owned(), kind, attrs)
         })
         .collect();
     Ok(Some(TableKeys {
@@ -153,7 +153,11 @@ pub(crate) async fn columns(
         .map_err(execute_error)?;
     let key_names = keys.key_names();
     let declared = key_names.iter().zip(1..).map(|(name, position)| {
-        let type_name = keys.types.get(name).cloned().unwrap_or_default();
+        let type_name = keys
+            .types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_owned());
         ColumnMeta::new(name, type_name, false, Some(position), None)
     });
 

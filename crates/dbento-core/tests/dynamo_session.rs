@@ -38,7 +38,7 @@ async fn select_star_puts_the_keys_first_and_moto_reports_no_capacity() {
         .map(|(n, t)| (n.as_str(), t.as_str()))
         .collect();
     assert_eq!(first, [("pk", "S"), ("sk", "N")]);
-    // Moto ignores ReturnConsumedCapacity; real DynamoDB's sums are Task 3's replay tests.
+    // Moto ignores ReturnConsumedCapacity; real DynamoDB's sums are pinned by the replay tests.
     assert_eq!(got.outcome.consumed_capacity, None);
 }
 

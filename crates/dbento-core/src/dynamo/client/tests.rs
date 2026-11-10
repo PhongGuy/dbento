@@ -1,9 +1,13 @@
+use std::time::Duration as Wait;
+
 use serde_json::json;
 
 use super::*;
+use crate::Secret;
 use crate::dynamo::ops::DynamoOp;
 use crate::dynamo::replay::{Replay, Reply, aws_error, page, scanned, tables};
 use crate::dynamo::statement::Kind;
+use crate::session::ConnectError;
 
 fn req(kind: Kind, text: &str) -> StatementRequest<'_> {
     StatementRequest {
@@ -141,12 +145,12 @@ fn an_endpoint_is_handed_over_as_its_normalised_origin() {
         );
     }
     assert_eq!(endpoint_origin("not a url"), None);
+    assert_eq!(
+        endpoint_origin("file:///x"),
+        None,
+        "an opaque origin has no endpoint"
+    );
 }
-
-use std::time::Duration as Wait;
-
-use crate::Secret;
-use crate::session::ConnectError;
 
 #[test]
 fn settings_resolve_the_region_credentials_and_endpoint_origin() {
