@@ -10,7 +10,7 @@ PREFIX :=
 LOCKED :=
 
 .DEFAULT_GOAL := install
-.PHONY: install uninstall demo advisories check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test package clean workflows-lint screenshots
+.PHONY: install uninstall demo advisories check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test each-feature package clean workflows-lint screenshots
 
 install:
 	CARGO="$(CARGO)" JOBS="$(JOBS)" DBENTO_PREFIX="$(PREFIX)" scripts/install.sh install
@@ -40,6 +40,14 @@ lint:
 
 test:
 	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(LOCKED) --workspace
+
+# Each engine feature alone (the powerset rebuilds DuckDB per combination), warnings fatal so
+# code one feature needs stays gated on it; clippy then covers the tests at no features.
+# Hack takes no $(LOCKED): dropping dev-dependencies rewrites the lock, and hack restores it.
+FEATURE_CRATES := -p dbento-core -p dbento-cli -p dbento-mcp
+each-feature:
+	RUSTFLAGS=-Dwarnings $(CARGO) hack check --each-feature --no-dev-deps $(FEATURE_CRATES)
+	$(CARGO) clippy $(LOCKED) --no-default-features --all-targets $(FEATURE_CRATES) -- -Dwarnings
 
 # The pilot package sits outside the workspace because its host crate is private, so CI never builds it.
 PILOT := --manifest-path tools/dbento-pilot/Cargo.toml
