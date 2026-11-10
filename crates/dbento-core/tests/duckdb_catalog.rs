@@ -142,7 +142,7 @@ async fn stored_sql(s: &mut Session, sql: &str) -> String {
         .remove(0)
     {
         Cell::Text(t) => t,
-        other => panic!("{other:?}"),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{other:?}"),
     }
 }
 

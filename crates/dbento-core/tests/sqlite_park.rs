@@ -30,7 +30,9 @@ async fn values(stream: &mut ResultStream<'_>) -> Vec<i64> {
         for r in 0..b.len() {
             match b.cell(r, 0) {
                 CellRef::Text(t) => out.push(t.parse().unwrap()),
-                other => panic!("unexpected cell {other:?}"),
+                other @ (CellRef::Null | CellRef::Bytes(_) | _) => {
+                    panic!("unexpected cell {other:?}")
+                }
             }
         }
     }

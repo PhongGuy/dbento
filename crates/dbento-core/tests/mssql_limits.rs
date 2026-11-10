@@ -35,7 +35,9 @@ async fn texts(stream: &mut ResultStream<'_>) -> Vec<String> {
         for r in 0..b.len() {
             match b.cell(r, 0) {
                 dbento_core::CellRef::Text(t) => out.push(t.to_owned()),
-                other => panic!("{other:?}"),
+                other @ (dbento_core::CellRef::Null | dbento_core::CellRef::Bytes(_) | _) => {
+                    panic!("{other:?}")
+                }
             }
         }
     }

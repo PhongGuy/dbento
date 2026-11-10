@@ -38,7 +38,7 @@ async fn outside_block(s: &mut Session) -> String {
     .unwrap();
     match &r.rows[0][0] {
         Cell::Text(t) => t.clone(),
-        other => panic!("{other:?}"),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{other:?}"),
     }
 }
 async fn count_in(s: &mut Session) -> Vec<Vec<Cell>> {

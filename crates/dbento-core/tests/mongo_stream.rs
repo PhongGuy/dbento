@@ -41,7 +41,7 @@ async fn ids(stream: &mut ResultStream<'_>) -> Vec<String> {
         for r in 0..b.len() {
             match b.cell(r, 0) {
                 CellRef::Text(t) => out.push(t.to_owned()),
-                other => panic!("{other:?}"),
+                other @ (CellRef::Null | CellRef::Bytes(_) | _) => panic!("{other:?}"),
             }
         }
     }
@@ -260,7 +260,17 @@ async fn a_parked_cursor_killed_on_the_server_says_to_run_again() {
                 Some("the cursor expired; run the query again")
             );
         }
-        other => panic!("{other:?}"),
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }
+        | _) => panic!("{other:?}"),
     }
 }
 
