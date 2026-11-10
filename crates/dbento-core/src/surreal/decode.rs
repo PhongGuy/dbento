@@ -157,16 +157,14 @@ fn skip(frame: &[u8], at: &mut usize) -> Option<()> {
     Some(())
 }
 
-fn failure(message: impl Into<String>) -> DecodeFailure {
-    DecodeFailure {
-        message: message.into(),
-    }
+fn failure(message: String) -> DecodeFailure {
+    DecodeFailure { message }
 }
 
 // The reader's own depth counter holds the nesting bound, so recursion cannot reach the stack.
 fn value(r: &mut SliceReader<'_>, left: &mut usize) -> Result<Wire, DecodeFailure> {
     if !r.step_in() {
-        return Err(failure("nesting exceeds the bound"));
+        return Err(failure("nesting exceeds the bound".to_owned()));
     }
     let out = item(r, left);
     r.step_out();
@@ -177,7 +175,7 @@ fn value(r: &mut SliceReader<'_>, left: &mut usize) -> Result<Wire, DecodeFailur
 fn item(r: &mut SliceReader<'_>, left: &mut usize) -> Result<Wire, DecodeFailure> {
     *left = left
         .checked_sub(1)
-        .ok_or_else(|| failure("too many values in the reply"))?;
+        .ok_or_else(|| failure("too many values in the reply".to_owned()))?;
     let byte = peek(r)?;
     match byte >> 5 {
         major::UNSIGNED => Ok(Wire::Int(u64::decode(r)?.into())),
@@ -239,7 +237,7 @@ fn peek(r: &mut SliceReader<'_>) -> Result<u8, DecodeFailure> {
         Ok(buf) => buf.as_ref().first().copied(),
         Err(never) => match never {},
     }
-    .ok_or_else(|| failure("the reply ends early"))
+    .ok_or_else(|| failure("the reply ends early".to_owned()))
 }
 
 fn remaining(r: &mut SliceReader<'_>) -> usize {
@@ -256,7 +254,7 @@ fn declared_length(
     bytes_per_item: usize,
     r: &mut SliceReader<'_>,
 ) -> Result<usize, DecodeFailure> {
-    let len = len.ok_or_else(|| failure("an indefinite length is not accepted"))?;
+    let len = len.ok_or_else(|| failure("an indefinite length is not accepted".to_owned()))?;
     if len.saturating_mul(bytes_per_item) > remaining(r) {
         return Err(failure(format!(
             "declared length {len} is past the end of the reply"

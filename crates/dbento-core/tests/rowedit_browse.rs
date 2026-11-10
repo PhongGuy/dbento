@@ -187,12 +187,16 @@ fn assert_filters(t: &EditTarget) {
             "{filter}"
         );
     }
-    assert!(browse_sql(t, &browse(Some("id <> 0 OR 'a;b' = 'a;b'"), None)).is_ok());
+    assert!(
+        browse_sql(t, &browse(Some("id <> 0 OR 'a;b' = 'a;b'"), None)).is_ok(),
+        "a quoted semicolon is not a second statement"
+    );
     assert_eq!(
         browse_sql(t, &browse(None, Some(("nope", false)))),
         Err(BrowseError::UnknownSort {
             column: "nope".to_owned()
-        })
+        }),
+        "an unknown sort column is refused"
     );
 }
 

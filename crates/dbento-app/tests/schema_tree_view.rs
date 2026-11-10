@@ -38,8 +38,11 @@ fn started(
     let (win, shell) = cx
         .update(|cx| start(services(files.path()), Some(fx.dir.path().into()), cx))
         .unwrap();
-    assert!(present(cx, win, "schema-tree"));
-    assert!(present(cx, win, "connection-list"));
+    assert!(present(cx, win, "schema-tree"), "the schema tree shows");
+    assert!(
+        present(cx, win, "connection-list"),
+        "the connection list shows"
+    );
     (fx, files, win, shell)
 }
 fn click(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) {
@@ -408,7 +411,7 @@ fn count_events(
 ) -> std::rc::Rc<std::cell::Cell<usize>> {
     let sidebar = shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
     let count = std::rc::Rc::new(std::cell::Cell::new(0));
-    let seen = count.clone();
+    let seen = Rc::clone(&count);
     cx.update(|cx| {
         cx.subscribe(&sidebar, move |_, e, _| {
             if matches(e) {
@@ -693,7 +696,7 @@ fn view_requests(
 ) -> Rc<RefCell<Vec<(String, ObjectRef)>>> {
     let sidebar = shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let out = seen.clone();
+    let out = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(&sidebar, move |_, e: &SidebarEvent, _| {
             if let SidebarEvent::ViewDefinition { connection, object } = e {
@@ -760,7 +763,7 @@ fn a_definition_reply_leaves_the_sidebar_as_an_event(cx: &mut TestAppContext) {
     let object = index_ref(cx, &shell);
     let sidebar = shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
     let got: Rc<RefCell<Vec<Result<Definition, String>>>> = Rc::default();
-    let out = got.clone();
+    let out = Rc::clone(&got);
     let want = object.clone();
     cx.update(|cx| {
         cx.subscribe(&sidebar, move |_, e: &SidebarEvent, _| {

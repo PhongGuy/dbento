@@ -79,7 +79,7 @@ pub(crate) fn parse_script(src: &str) -> Vec<Result<MongoStatement, SyntaxError>
                 range: range.clone(),
             };
             if let Some(e) = piece.error {
-                return Err(failed(ParseError::new(e.message, e.at)));
+                return Err(failed(ParseError::new(e.message.to_owned(), e.at)));
             }
             let (db, op) =
                 statement(src, &mut Cursor::new(src, &toks[piece.toks])).map_err(failed)?;
@@ -476,7 +476,7 @@ fn create_index(coll: &str, args: &[Bson]) -> Built {
     Ok(doc! { "createIndexes": coll, "indexes": [index] })
 }
 
-fn err<T>(message: impl Into<String>, at: usize) -> Result<T, ParseError> {
+fn err<T>(message: String, at: usize) -> Result<T, ParseError> {
     Err(ParseError::new(message, at))
 }
 
@@ -493,32 +493,37 @@ fn statement(src: &str, c: &mut Cursor<'_>) -> Result<(Option<String>, MongoOp),
     match first.filter(|t| t.kind == Kind::Ident).map(|t| c.text(t)) {
         Some("use") => return use_name(src, c).map(|name| (None, MongoOp::Use(name))),
         Some("db") if c.at_end() || is_punct(c.peek(), b'.') || is_punct(c.peek(), b'[') => {}
-        _ => return err(NOT_JS, first.map_or(c.end_offset(), |t| t.range.start)),
+        _ => {
+            return err(
+                NOT_JS.to_owned(),
+                first.map_or(c.end_offset(), |t| t.range.start),
+            );
+        }
     }
     // Accessors name the collection until a `.name(` call, which is the method.
     let (mut db, mut segments, mut leading) = (None, Vec::<String>::new(), true);
     let (name_tok, args) = loop {
         let Some(tok) = c.bump() else {
-            return err("expected a method call", c.end_offset());
+            return err("expected a method call".to_owned(), c.end_offset());
         };
         match tok.kind {
             Kind::Punct(b'.') => {}
             Kind::Punct(b'[') => {
                 let Some(key) = c.bump().filter(|t| t.kind == Kind::Str) else {
-                    return err(NOT_JS, here(c));
+                    return err(NOT_JS.to_owned(), here(c));
                 };
                 if !is_punct(c.bump(), b']') {
-                    return err("expected `]`", here(c));
+                    return err("expected `]`".to_owned(), here(c));
                 }
                 segments.push(string_value(c.text(key)));
                 leading = false;
                 continue;
             }
-            Kind::Punct(_) => return err(NOT_JS, tok.range.start),
-            _ => return err("expected `;` or a new line", tok.range.start),
+            Kind::Punct(_) => return err(NOT_JS.to_owned(), tok.range.start),
+            _ => return err("expected `;` or a new line".to_owned(), tok.range.start),
         }
         let Some(name) = c.bump().filter(|t| t.kind == Kind::Ident) else {
-            return err("expected a name after `.`", here(c));
+            return err("expected a name after `.`".to_owned(), here(c));
         };
         if !is_punct(c.peek(), b'(') {
             segments.push(c.text(name).to_owned());
@@ -574,13 +579,13 @@ fn modifiers(c: &mut Cursor<'_>, row: &Row, command: &mut Document) -> Result<()
         if tok.kind != Kind::Punct(b'.') {
             let at = tok.range.start;
             return match tok.kind {
-                Kind::Punct(b) if !b",;:}])".contains(&b) => err(NOT_JS, at),
-                _ => err("expected `;` or a new line", at),
+                Kind::Punct(b) if !b",;:}])".contains(&b) => err(NOT_JS.to_owned(), at),
+                _ => err("expected `;` or a new line".to_owned(), at),
             };
         }
         let next = c.bump().filter(|t| t.kind == Kind::Ident);
         let Some(next) = next else {
-            return err("expected a name after `.`", here(c));
+            return err("expected a name after `.`".to_owned(), here(c));
         };
         let modifier = MODIFIERS.iter().find(|(m, _)| *m == c.text(next));
         let (Some(&(key, kind)), Some(MongoMethod::Find), true) =
@@ -620,7 +625,7 @@ fn negative_limit(v: &mut Bson) -> bool {
 // The name runs to the piece's last token, so `use my-db` takes the whole `my-db`.
 fn use_name(src: &str, c: &mut Cursor<'_>) -> Result<String, ParseError> {
     let Some(start) = c.peek().map(|t| t.range.start) else {
-        return err("`use` needs a database name", c.end_offset());
+        return err("`use` needs a database name".to_owned(), c.end_offset());
     };
     let name = &src[start..c.end_offset()];
     if name.contains(|ch: char| ch.is_whitespace() || "/\\.\"$".contains(ch)) {

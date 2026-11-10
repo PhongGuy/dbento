@@ -53,7 +53,10 @@ fn drain(cx: &mut TestAppContext, m: &Entity<TabModel>) -> Vec<Continuation> {
             return used;
         }
         used.push(next.expect("an expired browse continues"));
-        assert!(m.update(cx, |m, cx| m.continue_browse(cx)));
+        assert!(
+            m.update(cx, |m, cx| m.continue_browse(cx)),
+            "the browse continues"
+        );
         assert!(used.len() < 10, "the browse never completed");
     }
 }
@@ -91,15 +94,18 @@ fn uncapped(cx: &mut TestAppContext, spec: RunnerSpec, sql: &str) -> Vec<Vec<Str
         m.run(sql.to_owned(), cx)
     });
     ended(cx, &m);
-    assert!(m.read_with(cx, |m, _| matches!(
-        m.results()[0].store.end(),
-        Some(StatementEnd::Complete(_))
-    )));
+    assert!(
+        m.read_with(cx, |m, _| matches!(
+            m.results()[0].store.end(),
+            Some(StatementEnd::Complete(_))
+        )),
+        "the browse ends complete"
+    );
     rows_of(cx, &m)
 }
 fn skips(cx: &mut TestAppContext, m: &Entity<TabModel>) -> Rc<RefCell<Vec<u64>>> {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let out = seen.clone();
+    let out = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(m, move |_, e: &BrowseEvent, _| {
             if let BrowseEvent::Skipped { rows } = e {

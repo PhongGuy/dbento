@@ -17,10 +17,10 @@ pub struct EditColumn {
 }
 
 impl EditColumn {
-    pub(crate) fn new(meta: ColumnMeta, cast_type: impl Into<String>, editable: bool) -> Self {
+    pub(crate) fn new(meta: ColumnMeta, cast_type: String, editable: bool) -> Self {
         Self {
             meta,
-            cast_type: cast_type.into(),
+            cast_type,
             editable,
         }
     }

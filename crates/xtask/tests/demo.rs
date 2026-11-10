@@ -18,7 +18,7 @@ fn built_copy(tmp: &Path) -> PathBuf {
         .arg(&dir)
         .status()
         .unwrap();
-    assert!(status.success());
+    assert!(status.success(), "the example workspace copies");
     xtask::demo::build_db(&dir.join("seed.sql"), &dir.join("shop.sqlite")).unwrap();
     dir
 }

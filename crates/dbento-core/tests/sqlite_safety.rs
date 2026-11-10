@@ -1,5 +1,6 @@
 use crate::support::{LONG, MANY, run, sqlite_fixture, text};
 use dbento_core::{ExecuteError, Limits, OnTruncate, SessionOptions};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Fails a test that would otherwise hang on a query that is never interrupted.
@@ -210,7 +211,7 @@ async fn a_cancel_racing_short_statements_only_ever_cancels() {
     let handle = s.cancel_handle();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let canceller = std::thread::spawn({
-        let stop = stop.clone();
+        let stop = Arc::clone(&stop);
         move || {
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 handle.cancel();

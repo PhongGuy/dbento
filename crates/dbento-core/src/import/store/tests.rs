@@ -22,7 +22,12 @@ fn pg_with(name: &str, host: &str, secret: SecretSetting) -> ImportedConnection 
         settings: BTreeMap::new(),
     };
     let draft = ConnectionDraft::postgres(pg, false);
-    ImportedConnection::new(format!("id-{name}-{host}"), name, name, draft)
+    ImportedConnection::new(
+        format!("id-{name}-{host}"),
+        name.to_owned(),
+        name.to_owned(),
+        draft,
+    )
 }
 
 fn pg(name: &str, host: &str) -> ImportedConnection {
@@ -53,7 +58,7 @@ fn existing(pairs: &[(&str, &str)]) -> tempfile::TempDir {
 fn secrets(pairs: &[(&str, &str)]) -> ImportSecrets {
     let mut s = ImportSecrets::default();
     for (id, pw) in pairs {
-        s.insert(*id, Secret::new(*pw));
+        s.insert((*id).to_owned(), Secret::new(*pw));
     }
     s
 }
@@ -221,9 +226,9 @@ fn sqlite_and_secret_none_connections_are_left_out() {
     let ws = tempfile::TempDir::new().unwrap();
     let path = ws.path().join("x.db").to_string_lossy().into_owned();
     let lite = ImportedConnection::new(
-        "id-lite",
-        "lite",
-        "lite",
+        "id-lite".to_owned(),
+        "lite".to_owned(),
+        "lite".to_owned(),
         ConnectionDraft::sqlite(path, false),
     );
     let set = set_of(vec![lite, pg_with("open", "db.open", SecretSetting::None)]);

@@ -2,6 +2,7 @@
 use crate::support;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::support::{edit_target, fixture, init_tokio, spec, wait_real};
 use dbento_app::browse::{BrowseEvent, BrowseState, EditBlock};
@@ -20,7 +21,7 @@ fn model(cx: &mut TestAppContext, fx: &support::Fx) -> Entity<TabModel> {
 }
 fn record(cx: &mut TestAppContext, m: &Entity<TabModel>) -> Rc<RefCell<Vec<String>>> {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let sink = seen.clone();
+    let sink = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(m, move |_, e: &BrowseEvent, _| {
             let line = match e {
@@ -106,7 +107,7 @@ fn a_reconnect_before_the_target_lands_still_browses(cx: &mut TestAppContext) {
     let fx = fixture(T, "");
     let m = model(cx, &fx);
     let ev = record(cx, &m);
-    let ws = fx.ws.clone();
+    let ws = Arc::clone(&fx.ws);
     m.update(cx, |m, cx| {
         m.load_target(RelationRef::new("main", "t"), cx);
         let _closing = m.reconnect(ws, cx);

@@ -801,10 +801,10 @@ impl Sidebar {
         } = request;
         if !self.catalogs.contains_key(&conn) {
             let spec = RunnerSpec {
-                workspace: self.workspace.clone(),
+                workspace: Arc::clone(&self.workspace),
                 connection: conn.clone(),
-                store: self.services.store.clone(),
-                env: self.services.env.clone(),
+                store: Arc::clone(&self.services.store),
+                env: Arc::clone(&self.services.env),
             };
             let runner = spawn_catalog(&tokio_bridge::handle(cx), spec);
             self.catalogs_started += 1;
@@ -1292,7 +1292,7 @@ impl Sidebar {
     }
 
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let rows = self.rows.clone();
+        let rows = Rc::clone(&self.rows);
         rows[range.start.min(rows.len())..range.end.min(rows.len())]
             .iter()
             .map(|row| match row {
@@ -1403,7 +1403,7 @@ impl Sidebar {
             theme.sidebar,
             theme.border,
         );
-        let ws = self.workspace.clone();
+        let ws = Arc::clone(&self.workspace);
         let base = Self::row_base(row.depth, guide, settings::active_metrics(cx).tree_row)
             .cursor_pointer();
         let lead = || div().w(px(LEAD)).flex_none().flex().justify_center();
@@ -2175,7 +2175,7 @@ fn explorer_menu(menu: PopupMenu, weak: &WeakEntity<Sidebar>, cx: &mut App) -> P
     };
     let (target, ws) = {
         let s = sidebar.read(cx);
-        (s.menu_target.clone(), s.workspace.clone())
+        (s.menu_target.clone(), Arc::clone(&s.workspace))
     };
     let emit = |event: SidebarEvent| {
         let weak = weak.clone();

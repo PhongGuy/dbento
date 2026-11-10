@@ -38,7 +38,10 @@ fn click(cx: &mut TestAppContext, o: &Opened, id: &'static str) {
 }
 fn stage_z(cx: &mut TestAppContext, o: &Opened) {
     let m = o.model(cx);
-    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "row 0 stages"
+    );
     cx.run_until_parked();
 }
 fn staged(cx: &mut TestAppContext, o: &Opened) -> Option<EditValue> {
@@ -136,7 +139,10 @@ fn undoing_to_nothing_staged_clears_the_rejection_banner(cx: &mut TestAppContext
 /// Stages a second cell, so one undo leaves the first staged.
 fn stage_two(cx: &mut TestAppContext, o: &Opened) {
     let m = o.model(cx);
-    assert!(m.update(cx, |m, cx| m.stage_cell(1, 1, "y", cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(1, 1, "y", cx)),
+        "row 1 stages"
+    );
     cx.run_until_parked();
 }
 

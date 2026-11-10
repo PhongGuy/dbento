@@ -1,5 +1,8 @@
 //! Its own test binary: twenty containers start at once while other sockets churn through the
 //! ephemeral port range, the way a full suite's connections do.
+// Test helpers may panic on a broken fixture too; clippy's in-tests exemption covers only
+// #[test] functions, not the helpers they call.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,7 +42,7 @@ fn churn(stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
 #[tokio::test]
 async fn twenty_containers_start_in_parallel() {
     let stop = Arc::new(AtomicBool::new(false));
-    let churner = churn(stop.clone());
+    let churner = churn(Arc::clone(&stop));
     let dbs = join_all((0..20).map(|_| pg_container())).await;
     stop.store(true, Ordering::SeqCst);
     churner.join().unwrap();

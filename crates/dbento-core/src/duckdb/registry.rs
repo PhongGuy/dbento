@@ -46,6 +46,7 @@ pub(crate) struct Lease {
 
 impl Lease {
     /// The session's own connection to the shared instance.
+    #[allow(clippy::expect_used)] // only Drop takes the connection out
     pub(crate) fn conn(&self) -> &Connection {
         self.conn
             .as_ref()

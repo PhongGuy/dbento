@@ -216,10 +216,11 @@ async fn unsent(statement: &str) {
     let mut s = fx.session(Writer, SessionOptions::default()).await;
     match run(&mut s, statement, Limits::default()).await.remove(0) {
         Err(ExecuteError::Database { code, detail, .. }) => {
-            assert_eq!(code, "driver");
+            assert_eq!(code, "driver", "the driver, not the server, fails");
             assert_eq!(
                 detail.as_deref(),
-                Some("the command could not be encoded, so nothing was sent")
+                Some("the command could not be encoded, so nothing was sent"),
+                "the error says nothing was sent"
             );
         }
         other => panic!("{:?}", other.map(|r| r.outcome)),

@@ -558,7 +558,7 @@ impl TableDelegate for ResultsDelegate {
         });
         let model = self.model.clone();
         let column = name.clone();
-        let menu_target = self.menu_target.clone();
+        let menu_target = Rc::clone(&self.menu_target);
         head.id(("result-col", data))
             // A right-click on the header aims the pane's menu at the whole column.
             .on_mouse_down(MouseButton::Right, move |_, _, _| {
@@ -617,7 +617,7 @@ impl TableDelegate for ResultsDelegate {
         // menu; it runs before the kit's td handler, which stops propagation.
         // Targets and the editor count every column, hidden ones included.
         let full = self.data(col_ix, cx).map_or(0, |d| d + 1);
-        let menu_target = self.menu_target.clone();
+        let menu_target = Rc::clone(&self.menu_target);
         let target = cell_layer().on_mouse_down(MouseButton::Right, move |_, _, _| {
             menu_target.set(GridTarget::Cell(row_ix, full));
         });

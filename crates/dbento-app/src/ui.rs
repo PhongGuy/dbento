@@ -212,7 +212,7 @@ pub fn chip(
     label: impl Into<SharedString>,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
-    let label = label.into();
+    let label: SharedString = label.into();
     chip_base(cx)
         .id(id)
         .aria_label(label.clone())
@@ -451,7 +451,7 @@ fn segmented_row(
     let last = labels.len().saturating_sub(1);
     let options = labels.into_iter().enumerate().map(|(ix, (option, label))| {
         let colors = segment_colors(ix == selected, cx);
-        let on_select = on_select.clone();
+        let on_select = Rc::clone(&on_select);
         div()
             .id(option)
             .flex()
@@ -475,7 +475,7 @@ fn segmented_row(
             .test_support()
             .child(label)
     });
-    let on_key = on_select.clone();
+    let on_key = Rc::clone(&on_select);
     div()
         .id(id)
         .test_support()

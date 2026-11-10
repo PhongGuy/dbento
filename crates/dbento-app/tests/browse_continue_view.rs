@@ -20,7 +20,10 @@ fn expired_big(cx: &mut TestAppContext, sort: Option<&str>) -> Opened {
         m.read_with(cx, |m, _| m.parked_at_cap().is_some())
     });
     if let Some(column) = sort {
-        assert!(m.update(cx, |m, cx| m.cycle_sort(column, cx)));
+        assert!(
+            m.update(cx, |m, cx| m.cycle_sort(column, cx)),
+            "the sort cycles"
+        );
         wait_real(cx, "the sorted park", |cx| {
             m.read_with(cx, |m, _| {
                 m.parked_at_cap().is_some()

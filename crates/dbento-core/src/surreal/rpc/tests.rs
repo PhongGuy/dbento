@@ -235,7 +235,7 @@ fn a_call_level_stream_error_is_refused_and_removes_the_route() {
 fn frames_on(routes: &mut HashMap<i64, Route>, id: i64, gauge: &Arc<Gauge>) -> Frames {
     Frames {
         rx: stream(routes, id),
-        gauge: gauge.clone(),
+        gauge: Arc::clone(gauge),
         closed: Arc::default(),
     }
 }

@@ -7,6 +7,7 @@ use dbento_app::tab_model::{CapView, Expiry, TabModel};
 use dbento_core::{History, HistoryEntry, HistoryFilter, HistoryOutcome};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const LONG_PARK: Duration = Duration::from_secs(30);
@@ -150,7 +151,7 @@ fn reconnecting_over_a_capped_result_ends_it_truncated(cx: &mut TestAppContext) 
     let (fx, dir) = (fixture("", ""), tempfile::tempdir().unwrap());
     let (m, path) = capped(cx, &fx, dir.path(), LONG_PARK);
     park(cx, &m);
-    let ws = fx.ws.clone();
+    let ws = Arc::clone(&fx.ws);
     let _closing = m.update(cx, |m, cx| m.reconnect(ws, cx));
     m.read_with(cx, |m, _| {
         let end = m.results()[0].store.end();

@@ -21,8 +21,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt as _};
 
 use super::types::{render, wire_type};
 use super::{
-    ATTENTION_BOUND, CONNECT_TIMEOUT, MssqlCancel, Stop, connect_error, database_error,
-    product_version, stream_error,
+    ATTENTION_BOUND, CONNECT_TIMEOUT, MssqlCancel, Stop, StreamError, connect_error,
+    database_error, product_version, stream_error,
 };
 use crate::classify::mssql::{mssql_changes_settings, mssql_classification, mssql_single_query};
 use crate::introspect::{quote_ident, quote_literal};
@@ -532,10 +532,8 @@ async fn capped<T: Found>(
 /// A tiberius error mid-response: a server error belongs to the statement, anything else
 /// loses the client.
 fn read_error(e: tiberius::error::Error, reader: bool) -> Result<ExecuteError, Lost> {
-    match stream_error(&e, reader) {
-        (err, false) => Ok(err),
-        (err, true) => Err(Lost(err)),
-    }
+    let StreamError { error, closes } = stream_error(&e, reader);
+    if closes { Err(Lost(error)) } else { Ok(error) }
 }
 
 /// One send of the script: a batch's trimmed text, its classification, and whether its first

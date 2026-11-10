@@ -1,6 +1,7 @@
 #![cfg(feature = "duckdb")]
 //! Cancel and statement timeout on DuckDB sessions: an interrupt reaches only the statement
 //! it was meant for, and who fired it decides between `Cancelled` and `Timeout`.
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::support::{duckdb_fixture, run, text};
@@ -30,7 +31,7 @@ async fn select_one_works(s: &mut Session) {
         .await
         .remove(0)
         .unwrap();
-    assert_eq!(r.rows, vec![vec![text("1")]]);
+    assert_eq!(r.rows, vec![vec![text("1")]], "SELECT 1 returns one");
 }
 
 #[tokio::test]
@@ -121,7 +122,7 @@ async fn a_cancel_racing_short_statements_only_ever_cancels() {
     let handle = s.cancel_handle();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let canceller = std::thread::spawn({
-        let stop = stop.clone();
+        let stop = Arc::clone(&stop);
         move || {
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 handle.cancel();

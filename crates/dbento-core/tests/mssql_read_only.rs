@@ -235,7 +235,7 @@ async fn cut_then_close(mut s: Session, sql: &str) -> Result<(), ExecuteError> {
         let mut script = s.script(sql);
         let p = script.next().await.unwrap().unwrap();
         let ran = collect(p, closing_at(2)).await.unwrap();
-        assert!(ran.outcome.truncated);
+        assert!(ran.outcome.truncated, "the result is cut at its limit");
     }
     s.close().await
 }

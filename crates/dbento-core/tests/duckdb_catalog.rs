@@ -17,7 +17,7 @@ const SETUP: &str = "CREATE SCHEMA s2; \
 
 async fn relation_names(s: &mut Session, schema: &str) -> Vec<(String, RelationKind)> {
     let list = s.relations(schema).await.unwrap();
-    assert!(!list.truncated());
+    assert!(!list.truncated(), "the listing is complete");
     list.items()
         .iter()
         .map(|r| (r.name().to_owned(), r.kind()))

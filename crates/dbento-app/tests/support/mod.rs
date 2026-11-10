@@ -128,7 +128,7 @@ impl Fx {
 }
 pub fn spec(fx: &Fx, conn: &str) -> RunnerSpec {
     RunnerSpec {
-        workspace: fx.ws.clone(),
+        workspace: Arc::clone(&fx.ws),
         connection: conn.into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),

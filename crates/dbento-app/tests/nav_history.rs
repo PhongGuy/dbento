@@ -14,7 +14,7 @@ const A1: &str = "SELECT *\nFROM main.a\nWHERE (\nid = '1'\n)\nORDER BY id ASC";
 const B_A1: &str = "SELECT *\nFROM main.b\nWHERE (\na_id = '1'\n)\nORDER BY id ASC";
 
 fn hop(f: &str) -> Hop {
-    Hop::new(RelationRef::new("main", "a"), f)
+    Hop::new(RelationRef::new("main", "a"), f.to_owned())
 }
 fn follow(cx: &mut TestAppContext, o: &Opened, rel: &str, filter: &str, sql: &str) {
     let (shell, rel, filter) = (

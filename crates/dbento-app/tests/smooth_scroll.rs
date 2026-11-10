@@ -29,7 +29,7 @@ struct Probe {
 
 impl Render for Probe {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let cover = self.reached_cover.clone();
+        let cover = Rc::clone(&self.reached_cover);
         div()
             .id("probe")
             .size_full()
@@ -150,7 +150,7 @@ fn eased_takes(cx: &mut TestAppContext, g: &Grid, delta: ScrollDelta) -> bool {
     let pane = g.probe.read_with(cx, |p, _| p.pane.clone());
     let notified = Rc::new(Cell::new(0u32));
     let _sub = cx.update(|cx| {
-        let notified = notified.clone();
+        let notified = Rc::clone(&notified);
         cx.observe(&pane, move |_, _| notified.set(notified.get() + 1))
     });
     wheel(cx, g, delta);

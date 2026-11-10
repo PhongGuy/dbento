@@ -25,7 +25,7 @@ fn edit_and_new_connection_open_the_dialog(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_menu_rename_moves_the_secret_and_the_saved_queries(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let s = started_with(cx, &format!("{TREE}{PG}"), store.clone());
+    let s = started_with(cx, &format!("{TREE}{PG}"), Arc::clone(&store));
     let dir = s
         .shell
         .read_with(cx, |sh, _| sh.workspace().unwrap().dir().to_path_buf());
@@ -104,7 +104,7 @@ fn a_swatch_recolours_the_connection(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_menu_delete_asks_then_removes_the_entry_and_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
-    let s = started_with(cx, &format!("{TREE}{PG}"), store.clone());
+    let s = started_with(cx, &format!("{TREE}{PG}"), Arc::clone(&store));
     let dir = s
         .shell
         .read_with(cx, |sh, _| sh.workspace().unwrap().dir().to_path_buf());
@@ -224,7 +224,11 @@ fn a_menu_rename_without_a_keychain_secret_makes_no_keychain_calls(cx: &mut Test
         Default::default(),
     ));
     let kc = PG.replace("connections.pg", "connections.kc");
-    let s = started_with(cx, &format!("{TREE}{env_pg}{kc}"), counting.clone());
+    let s = started_with(
+        cx,
+        &format!("{TREE}{env_pg}{kc}"),
+        Arc::<Counting>::clone(&counting),
+    );
     let before = counting.calls();
     for (old, new) in [("top", "top2"), ("pg", "pg2")] {
         right_click(cx, &s, connection_id(old));

@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 autotests = false
 
+[lints]
+workspace = true
+
 [dependencies]
 mysql_async.workspace = true
 rusqlite.workspace = true

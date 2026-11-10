@@ -17,12 +17,21 @@ const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); \
 /// Rows 0 and 1 (ids 1, 2) staged, id 1 deleted elsewhere, and the save rejected.
 fn rejected(cx: &mut TestAppContext, fx: &Fx) -> Entity<TabModel> {
     let m = ready(cx, fx, "t");
-    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
-    assert!(m.update(cx, |m, cx| m.stage_cell(1, 1, "y", cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "row 0 stages"
+    );
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(1, 1, "y", cx)),
+        "row 1 stages"
+    );
     exec(fx, "DELETE FROM t WHERE id = 1");
-    assert!(m.update(cx, |m, cx| m.save(cx)));
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
     wait_idle(cx, &m);
-    assert!(m.read_with(cx, |m, _| m.edit_banner().is_some()));
+    assert!(
+        m.read_with(cx, |m, _| m.edit_banner().is_some()),
+        "the conflict shows a banner"
+    );
     m
 }
 

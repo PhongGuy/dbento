@@ -1,4 +1,5 @@
 use crate::support;
+use std::sync::Arc;
 
 use crate::support::{LONG, label_of, opened, present, reload, rewrite, wait_real};
 use dbento_app::app::AppPaths;
@@ -217,7 +218,7 @@ fn reconnect_cuts_a_running_statement_and_the_new_session_runs(cx: &mut TestAppC
     wait_real(cx, "the statement to start", |cx| {
         model.read_with(cx, |m, _| m.running() && !m.results().is_empty())
     });
-    let ws = o.fx.ws.clone();
+    let ws = Arc::clone(&o.fx.ws);
     let closing = model.update(cx, |m, cx| m.reconnect(ws, cx));
     assert!(!model.read_with(cx, |m, _| m.running()), "the old run ends");
     let path = AppPaths::in_dir(o.files.path()).history;

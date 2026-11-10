@@ -316,7 +316,11 @@ pub fn unfence(text: &str) -> (String, Value) {
         .to_owned();
     let rest: Vec<&str> = lines.collect();
     let (close, body) = rest.split_last().expect("a closing tag");
-    assert_eq!(*close, format!("</untrusted-data-{nonce}>"));
+    assert_eq!(
+        *close,
+        format!("</untrusted-data-{nonce}>"),
+        "the closing tag carries the opening nonce"
+    );
     (
         nonce,
         serde_json::from_str(&body.join("\n")).expect("JSON inside the fence"),

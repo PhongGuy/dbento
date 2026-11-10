@@ -26,7 +26,9 @@ fn explain(
     mode: ExplainMode,
 ) {
     let req = explain_request(Engine::Sqlite, sql, mode).unwrap();
-    m.update(cx, |m, cx| assert!(m.request_explain(req, start, cx)));
+    m.update(cx, |m, cx| {
+        assert!(m.request_explain(req, start, cx), "the explain starts")
+    });
     wait_real(cx, "the plan", |cx| m.read_with(cx, |m, _| !m.running()));
 }
 

@@ -317,7 +317,7 @@ impl Rpc {
         let (commands, rx) = mpsc::unbounded_channel();
         let gauge = Arc::new(Gauge::default());
         let closed = Arc::new(Mutex::new(None));
-        tokio::spawn(run(socket, rx, gauge.clone(), closed.clone()));
+        tokio::spawn(run(socket, rx, Arc::clone(&gauge), Arc::clone(&closed)));
         Rpc {
             commands,
             next_id: Arc::new(AtomicI64::new(1)),
@@ -385,8 +385,8 @@ impl Rpc {
         let _ = self.commands.send(Command::Stream { id, bytes, frames });
         Frames {
             rx,
-            gauge: self.gauge.clone(),
-            closed: self.closed.clone(),
+            gauge: Arc::clone(&self.gauge),
+            closed: Arc::clone(&self.closed),
         }
     }
 
@@ -397,8 +397,8 @@ impl Rpc {
     }
 
     /// Ends the socket; every open stream and call then reports `reason`.
-    pub(crate) fn close(&self, reason: impl Into<String>) {
-        let _ = self.commands.send(Command::Close(reason.into()));
+    pub(crate) fn close(&self, reason: String) {
+        let _ = self.commands.send(Command::Close(reason));
     }
 }
 

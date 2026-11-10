@@ -41,7 +41,7 @@ impl Parked {
         parks()
             .entry(file.clone())
             .or_default()
-            .push(signal.clone());
+            .push(Arc::clone(&signal));
         Parked { file, signal }
     }
 

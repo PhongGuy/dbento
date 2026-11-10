@@ -8,6 +8,9 @@ license.workspace = true
 publish = false
 autotests = false
 
+[lints]
+workspace = true
+
 [dependencies]
 testcontainers-modules.workspace = true
 tokio-postgres.workspace = true

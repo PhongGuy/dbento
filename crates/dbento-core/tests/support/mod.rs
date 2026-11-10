@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+use std::sync::Arc;
+
 use dbento_core::{
     Applied, ApplyError, CellRef, Change, ChangeOutcome, ConnectError, ConnectionConfig, EditBatch,
     EditTarget, EditValue, ExecuteError, Limits, Outcome, Pending, RelationRef, RowKey, Secret,
@@ -795,9 +797,9 @@ pub async fn sr_proxied(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = listener.local_addr().unwrap().port();
     let (host, port) = (db.host().to_owned(), db.port());
-    let frozen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut tasks = tokio::task::JoinSet::new();
-    let thaw = frozen.clone();
+    let thaw = Arc::clone(&frozen);
     tasks.spawn(async move {
         let (client, _) = listener.accept().await.unwrap();
         let server = tokio::net::TcpStream::connect((host.as_str(), port))
@@ -806,7 +808,7 @@ pub async fn sr_proxied(
         let (client_read, client_write) = client.into_split();
         let (server_read, server_write) = server.into_split();
         tokio::join!(
-            relay(client_read, server_write, thaw.clone()),
+            relay(client_read, server_write, Arc::clone(&thaw)),
             relay(server_read, client_write, thaw),
         );
     });

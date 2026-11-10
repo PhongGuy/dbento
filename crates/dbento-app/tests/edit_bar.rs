@@ -17,7 +17,10 @@ fn t(cx: &mut TestAppContext) -> Opened {
 }
 fn stage_z(cx: &mut TestAppContext, o: &Opened) {
     let m = o.model(cx);
-    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "the cell stages"
+    );
     cx.run_until_parked();
 }
 fn click(cx: &mut TestAppContext, o: &Opened, id: &'static str) {

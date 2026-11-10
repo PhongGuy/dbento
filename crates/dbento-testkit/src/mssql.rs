@@ -300,7 +300,7 @@ pub async fn mssql_tls() -> (MsDb, String) {
 /// One SQL Server container at a time in this process; each takes 3 GB.
 fn slots() -> Arc<Semaphore> {
     static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    SLOTS.get_or_init(|| Arc::new(Semaphore::new(1))).clone()
+    Arc::clone(SLOTS.get_or_init(|| Arc::new(Semaphore::new(1))))
 }
 
 /// Copies the certificate, its key and an mssql.conf naming them in before first start, so

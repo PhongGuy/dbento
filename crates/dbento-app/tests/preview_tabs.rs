@@ -27,7 +27,7 @@ fn follow(cx: &mut TestAppContext, o: &Opened, rel: &str, filter: &str, rows: u6
             shell.update(cx, |s, cx| s.open_filtered("lite", &rel, filter, w, cx))
         })
         .unwrap();
-    assert!(opened);
+    assert!(opened, "the filtered table opens");
     let m = o.model(cx);
     wait_real(cx, "the followed rows", |cx| {
         m.read_with(cx, |m, _| {

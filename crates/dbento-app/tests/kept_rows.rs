@@ -12,7 +12,10 @@ const T: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, status TEXT); \
                  INSERT INTO t VALUES (1, 'pending'), (2, 'pending'), (3, 'pending'), (4, 'done');";
 
 fn filtered(cx: &mut TestAppContext, m: &Entity<TabModel>, filter: &str) {
-    assert!(m.update(cx, |m, cx| m.apply_filter(filter, cx)));
+    assert!(
+        m.update(cx, |m, cx| m.apply_filter(filter, cx)),
+        "the filter applies"
+    );
     wait_real(cx, "the filtered run", |cx| {
         m.read_with(cx, |m, _| {
             !m.running()
@@ -25,7 +28,7 @@ fn filtered(cx: &mut TestAppContext, m: &Entity<TabModel>, filter: &str) {
 /// Saves, commits, and waits for the commit's re-run to end or park.
 fn commit(cx: &mut TestAppContext, m: &Entity<TabModel>) {
     let before = m.read_with(cx, |m, _| m.run_id());
-    assert!(m.update(cx, |m, cx| m.save(cx)));
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
     wait_prompt(cx, m);
     m.update(cx, |m, cx| m.commit(cx));
     wait_idle(cx, m);

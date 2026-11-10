@@ -109,7 +109,7 @@ impl Driver for SurrealDriver {
             let rpc = Rpc::open(conn, params.key_passphrase, call_bound).await?;
             let logged = login(&rpc, conn, params.secret, params.read_only).await;
             if logged.is_err() {
-                rpc.close("connect failed");
+                rpc.close("connect failed".to_owned());
             }
             logged.map(|logged| (rpc, logged))
         })

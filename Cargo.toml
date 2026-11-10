@@ -10,6 +10,21 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 
+# The Rust rules as lints, so CI enforces them; every crate opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+ref_option = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+wildcard_imports = "warn"
+clone_on_ref_ptr = "warn"
+# Off: hundreds of arms match #[non_exhaustive] enums from another crate, where a wildcard arm
+# is required, so per-site allows would bury the matches.
+wildcard_enum_match_arm = "allow"
+missing_assert_message = "warn"
+
 [workspace.dependencies]
 log = "0.4.34"
 roxmltree = "0.21.1"

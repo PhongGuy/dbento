@@ -454,7 +454,7 @@ async fn wait_primary(port: u16) {
 /// Two MongoDB containers at a time in this process; each takes 1 GB.
 fn slots() -> Arc<Semaphore> {
     static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))).clone()
+    Arc::clone(SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))))
 }
 
 async fn container() -> MgDb {

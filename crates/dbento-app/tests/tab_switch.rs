@@ -50,7 +50,7 @@ fn three(cx: &mut TestAppContext) -> Opened {
     let o = opened(cx, "", "", 0);
     click(cx, &o, "tab-new");
     click(cx, &o, "tab-new");
-    assert_eq!(active(cx, &o), Some(2));
+    assert_eq!(active(cx, &o), Some(2), "the third tab is active");
     o
 }
 fn editor_focused(cx: &mut TestAppContext, o: &Opened) -> bool {

@@ -266,7 +266,7 @@ async fn full(ev: &async_channel::Receiver<Event>) {
     }
     // The runner stays blocked in its send; the pause only lets it get there.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(ev.is_full());
+    assert!(ev.is_full(), "the runner stays blocked on the full channel");
 }
 
 #[tokio::test(flavor = "multi_thread")]

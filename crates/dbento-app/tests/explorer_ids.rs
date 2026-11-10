@@ -3,6 +3,7 @@ use crate::support::{TREE, click_id, label_of, present, reload, started};
 use dbento_app::explorer::{connection_id, folder_id, part_id, shown_depth};
 use dbento_core::FolderPath;
 use gpui_kit::TestAppContext;
+use std::rc::Rc;
 
 fn path(p: &str) -> FolderPath {
     p.parse().unwrap()
@@ -88,7 +89,7 @@ fn the_shell_redraws_when_the_explorer_changes(cx: &mut TestAppContext) {
         .shell
         .read_with(cx, |sh, _| sh.sidebar().cloned().unwrap());
     let seen = std::rc::Rc::new(std::cell::Cell::new(0));
-    let count = seen.clone();
+    let count = Rc::clone(&seen);
     let _watch = cx.update(|cx| cx.observe(&s.shell, move |_, _| count.set(count.get() + 1)));
     sidebar.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();

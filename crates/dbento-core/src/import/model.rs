@@ -46,11 +46,11 @@ impl ImportSet {
         self.queries.push(q);
     }
 
-    pub(crate) fn skip(&mut self, kind: ItemKind, subject: impl Into<String>, reason: SkipReason) {
+    pub(crate) fn skip(&mut self, kind: ItemKind, subject: String, reason: SkipReason) {
         self.skipped.push(Skipped::new(kind, subject, reason));
     }
 
-    pub(crate) fn warn(&mut self, subject: impl Into<String>, kind: WarningKind) {
+    pub(crate) fn warn(&mut self, subject: String, kind: WarningKind) {
         self.warnings.push(Warning::new(subject, kind));
     }
 }
@@ -67,15 +67,15 @@ pub struct ImportedConnection {
 
 impl ImportedConnection {
     pub(crate) fn new(
-        source_id: impl Into<String>,
-        source_name: impl Into<String>,
-        name: impl Into<String>,
+        source_id: String,
+        source_name: String,
+        name: String,
         draft: ConnectionDraft,
     ) -> Self {
         ImportedConnection {
-            source_id: source_id.into(),
-            source_name: source_name.into(),
-            name: name.into(),
+            source_id,
+            source_name,
+            name,
             draft,
         }
     }
@@ -392,10 +392,10 @@ pub struct Skipped {
 }
 
 impl Skipped {
-    pub(crate) fn new(kind: ItemKind, subject: impl Into<String>, reason: SkipReason) -> Self {
+    pub(crate) fn new(kind: ItemKind, subject: String, reason: SkipReason) -> Self {
         Skipped {
             kind,
-            subject: subject.into(),
+            subject,
             reason,
         }
     }
@@ -425,11 +425,8 @@ pub struct Warning {
 }
 
 impl Warning {
-    pub(crate) fn new(subject: impl Into<String>, kind: WarningKind) -> Self {
-        Warning {
-            subject: subject.into(),
-            kind,
-        }
+    pub(crate) fn new(subject: String, kind: WarningKind) -> Self {
+        Warning { subject, kind }
     }
 
     /// The item the warning is about.

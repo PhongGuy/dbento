@@ -352,7 +352,10 @@ fn kept_ids(
     m: &gpui_kit::Entity<dbento_app::tab_model::TabModel>,
     clause: &str,
 ) -> Vec<String> {
-    assert!(m.update(cx, |m, cx| m.apply_filter(clause, cx)));
+    assert!(
+        m.update(cx, |m, cx| m.apply_filter(clause, cx)),
+        "the filter applies"
+    );
     wait_real(cx, clause, |cx| {
         m.read_with(cx, |m, _| {
             !m.running()

@@ -116,7 +116,7 @@ fn a_reconnect_during_the_stop_still_saves(cx: &mut TestAppContext) {
     assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "w", cx)));
     m.update(cx, |m, cx| {
         assert!(m.save(cx));
-        let ws = m.spec().workspace.clone();
+        let ws = Arc::clone(&m.spec().workspace);
         let _old = m.reconnect(ws, cx);
     });
     wait_prompt(cx, &m);
@@ -289,8 +289,11 @@ fn at_failing_commit(
     wait_real(cx, "an editable browse", |cx| {
         m.read_with(cx, |m, _| m.editable() && !m.running())
     });
-    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "999", cx)));
-    assert!(m.update(cx, |m, cx| m.save(cx)));
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "999", cx)),
+        "the cell stages"
+    );
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
     wait_prompt(cx, &m);
     (m, db)
 }

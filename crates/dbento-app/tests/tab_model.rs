@@ -5,6 +5,7 @@ use dbento_app::runner::{Event, SETTINGS_LOST, StatementEnd};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, ExecuteError};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
+use std::sync::Arc;
 
 fn model(cx: &mut TestAppContext, fx: &support::Fx) -> Entity<TabModel> {
     init_tokio(cx);
@@ -372,7 +373,7 @@ fn a_switched_connection_does_not_inherit_lost_settings(cx: &mut TestAppContext)
         m.apply(Event::SettingsChanged { database: None })
     });
     drop(m.update(cx, |m, cx| m.disconnect(cx)));
-    let ws = fx.ws.clone();
+    let ws = Arc::clone(&fx.ws);
     let switched = m.update(cx, |m, cx| m.switch_connection("lite2", ws, cx));
     drop(switched.expect("lite2 is another connection"));
     run_to_end(cx, &m, "SELECT 2");

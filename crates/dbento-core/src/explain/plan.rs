@@ -54,10 +54,8 @@ pub struct PlanParseError {
 }
 
 impl PlanParseError {
-    fn new(message: impl Into<String>) -> PlanParseError {
-        PlanParseError {
-            message: message.into(),
-        }
+    fn new(message: String) -> PlanParseError {
+        PlanParseError { message }
     }
 }
 
@@ -135,10 +133,10 @@ impl Plan {
         let first = top
             .into_iter()
             .next()
-            .ok_or_else(|| PlanParseError::new("the plan output is an empty array"))?;
+            .ok_or_else(|| PlanParseError::new("the plan output is an empty array".to_owned()))?;
         let root = first
             .plan
-            .ok_or_else(|| PlanParseError::new("the plan output has no Plan object"))?;
+            .ok_or_else(|| PlanParseError::new("the plan output has no Plan object".to_owned()))?;
         let mut nodes = Vec::new();
         flatten(root, None, 0, &mut nodes)?;
         settle_self_time(&mut nodes);
@@ -263,7 +261,7 @@ fn flatten(
         _ => None,
     };
     let node_type = text(take("Node Type"))
-        .ok_or_else(|| PlanParseError::new("a plan node has no string Node Type"))?;
+        .ok_or_else(|| PlanParseError::new("a plan node has no string Node Type".to_owned()))?;
     let mut node = PlanNode::bare(parent, depth, node_type);
     node.relation = text(take("Relation Name"));
     node.index = text(take("Index Name"));

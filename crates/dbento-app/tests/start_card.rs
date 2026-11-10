@@ -10,7 +10,10 @@ fn no_tab(cx: &mut TestAppContext) -> Opened {
     cx.update_window(o.win, |_, w, cx| w.press("ctrl-w", cx))
         .unwrap();
     cx.run_until_parked();
-    assert!(o.shell.read_with(cx, |s, _| s.tab().is_none()));
+    assert!(
+        o.shell.read_with(cx, |s, _| s.tab().is_none()),
+        "no tab is open at start"
+    );
     o
 }
 

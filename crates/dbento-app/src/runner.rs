@@ -318,7 +318,7 @@ pub fn spawn_tuned(
     let (commands, inbox) = async_channel::unbounded();
     let (outbox, events) = async_channel::bounded(tuning.events_capacity);
     let slot = SessionSlot::default();
-    let body = run(spec, tuning, inbox, outbox.clone(), slot.clone());
+    let body = run(spec, tuning, inbox, outbox.clone(), Arc::clone(&slot));
     handle.spawn(guarded(body, slot, outbox));
     Runner { commands, events }
 }
@@ -681,9 +681,9 @@ pub(crate) struct Resolved {
 pub(crate) async fn resolve(spec: &RunnerSpec) -> Result<Resolved, String> {
     let missing = || format!("no connection `{}` in dbento.toml", spec.connection);
     let (ws, store, env, name) = (
-        spec.workspace.clone(),
-        spec.store.clone(),
-        spec.env.clone(),
+        Arc::clone(&spec.workspace),
+        Arc::clone(&spec.store),
+        Arc::clone(&spec.env),
         spec.connection.clone(),
     );
     tokio::task::spawn_blocking(move || {

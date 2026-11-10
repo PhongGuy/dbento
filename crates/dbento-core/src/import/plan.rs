@@ -276,6 +276,7 @@ pub fn plan(
             }
             OnConflict::Skip => c.name().to_owned(),
             OnConflict::Rename if !taken(c.name()) => c.name().to_owned(),
+            #[allow(clippy::expect_used)] // finitely many names are taken, so one is free
             OnConflict::Rename => (2..)
                 .map(|i| format!("{}-{i}", c.name()))
                 .find(|n| !taken(n) && !reserved.contains(n.as_str()))
@@ -283,7 +284,7 @@ pub fn plan(
         };
         if c.draft().engine() == Engine::Sqlite && relative.is_none() {
             warnings.push(Warning::new(
-                c.source_name(),
+                c.source_name().to_owned(),
                 WarningKind::MachineSpecificPath,
             ));
         }
@@ -310,6 +311,7 @@ pub fn plan(
     let new_text = if added.is_empty() {
         None
     } else {
+        #[allow(clippy::expect_used)] // plain strings and tables, which TOML can always hold
         let tables = toml::to_string(&RootToml { connections: added })
             .expect("draft tables always serialize");
         // A CRLF file stays CRLF, so the append never mixes line endings.
@@ -394,7 +396,7 @@ fn plan_queries(
             let path = Path::new("queries").join(rel);
             if folder.is_some() {
                 warnings.push(Warning::new(
-                    path.to_string_lossy(),
+                    path.to_string_lossy().into_owned(),
                     WarningKind::BoundByFolder,
                 ));
             }
@@ -593,10 +595,10 @@ impl ImportPlan {
             None if self.writes.is_empty() => return Ok(Applied { written }),
             None => String::new(),
         };
-        let io = |path: &Path, e: std::io::Error, written: &Vec<PathBuf>| ApplyError::Io {
+        let io = |path: &Path, e: std::io::Error, written: &[PathBuf]| ApplyError::Io {
             path: path.to_path_buf(),
             message: e.to_string(),
-            written: written.clone(),
+            written: written.to_vec(),
         };
         std::fs::create_dir_all(&self.dir).map_err(|e| io(&self.dir, e, &written))?;
 

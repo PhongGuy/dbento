@@ -442,7 +442,10 @@ fn lose_with(
     let s = started(cx, TOML);
     let r = file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 1);
     tick(cx);
-    assert!(present(cx, s.win, "approval-dialog"));
+    assert!(
+        present(cx, s.win, "approval-dialog"),
+        "the approval dialog opens"
+    );
     ApprovalStore::open(&AppPaths::in_dir(s.files.path()).approvals)
         .unwrap()
         .decide(r.id(), winner)

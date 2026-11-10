@@ -46,6 +46,7 @@ pub fn approval_id(workspace: &Path, connection: &str, sql: &str) -> String {
         sql: &'a str,
     }
     let workspace = workspace.to_string_lossy();
+    #[allow(clippy::expect_used)] // a struct of strings has no unserializable value
     let json = serde_json::to_string(&Binding {
         v: VERSION,
         workspace: &workspace,

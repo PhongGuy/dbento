@@ -366,7 +366,7 @@ fn filter_menu(
     menu: PopupMenu,
     panel: &WeakEntity<HistoryPanel>,
     names: &[Option<String>],
-    current: &Option<String>,
+    current: Option<&str>,
 ) -> PopupMenu {
     names.iter().enumerate().fold(menu, |menu, (n, name)| {
         let label: SharedString = name.as_deref().unwrap_or(ALL_CONNECTIONS).to_owned().into();
@@ -381,7 +381,7 @@ fn filter_menu(
                 .aria_label(label.clone())
                 .test_support()
         })
-        .checked(name == current)
+        .checked(name.as_deref() == current)
         .on_click(move |_, _, cx| {
             let _ = panel.update(cx, |p, cx| p.set_connection_filter(pick.clone(), cx));
         });
@@ -469,7 +469,9 @@ impl Render for HistoryPanel {
                 .xsmall()
                 .label(filter_label)
                 .dropdown_caret(true)
-                .dropdown_menu(move |menu, _, _| filter_menu(menu, &panel, &names, &current)),
+                .dropdown_menu(move |menu, _, _| {
+                    filter_menu(menu, &panel, &names, current.as_deref())
+                }),
         );
         let search = ui::search_input("history-search", &self.search, cx);
         let filtered = self.connection.is_some() || !self.search.read(cx).value().trim().is_empty();

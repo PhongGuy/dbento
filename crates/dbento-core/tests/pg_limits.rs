@@ -307,7 +307,11 @@ async fn truncate_last(s: &mut dbento_core::Session, sql: &str) -> Duration {
     let ran = collect(script.next().await.unwrap().unwrap(), limits)
         .await
         .unwrap();
-    assert_eq!((ran.outcome.rows, ran.outcome.truncated), (1, true));
+    assert_eq!(
+        (ran.outcome.rows, ran.outcome.truncated),
+        (1, true),
+        "one row, then truncated"
+    );
     let started = Instant::now();
     assert!(
         script.next().await.is_none(),
@@ -890,7 +894,10 @@ async fn drop_with_rows_unread(fx: &PgFixture, opts: SessionOptions, sql: &str) 
         let mut script = s.script(sql);
         let p = script.next().await.unwrap().unwrap();
         let mut stream = p.execute(Limits::default()).await.unwrap();
-        assert!(stream.next_batch().await.unwrap().is_some());
+        assert!(
+            stream.next_batch().await.unwrap().is_some(),
+            "a first batch arrives"
+        );
     }
     drop(s);
     Instant::now()

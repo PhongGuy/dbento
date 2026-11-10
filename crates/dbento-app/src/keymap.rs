@@ -930,9 +930,10 @@ fn apply(keymap: ActiveKeymap, cx: &mut App) {
 /// still rejects is dropped rather than panicking; a dropped table row fails
 /// `bind_registers_exactly_the_bindings_table`.
 fn key_binding(row: &Row, cx: &App) -> Option<KeyBinding> {
-    let context = row
-        .context
-        .map(|c| Rc::new(KeyBindingContextPredicate::parse(c).expect("binding context")));
+    let context = match row.context {
+        Some(c) => Some(Rc::new(KeyBindingContextPredicate::parse(c).ok()?)),
+        None => None,
+    };
     KeyBinding::load(&row.keys, (row.action)(), context, false, None, cx).ok()
 }
 

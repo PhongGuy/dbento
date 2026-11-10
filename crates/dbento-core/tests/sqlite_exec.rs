@@ -177,12 +177,18 @@ async fn drop_after_first_batch(s: &mut dbento_core::Session, limits: Limits) {
     let mut script = s.script(FAILING_WRITE);
     let pending = script.next().await.unwrap().unwrap();
     let mut stream = pending.execute(limits).await.unwrap();
-    assert!(stream.next_batch().await.unwrap().is_some());
+    assert!(
+        stream.next_batch().await.unwrap().is_some(),
+        "a first batch arrives"
+    );
 }
 
 fn assert_failed_commit(r: Result<(), ExecuteError>) {
     match r {
-        Err(ExecuteError::Database { code, .. }) => assert_eq!(code, "787"),
+        Err(ExecuteError::Database { code, .. }) => assert_eq!(
+            code, "787",
+            "the commit fails with SQLITE_CONSTRAINT_FOREIGNKEY"
+        ),
         other => panic!("{other:?}"),
     }
 }

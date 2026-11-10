@@ -23,10 +23,10 @@ pub(crate) struct ToolError {
 
 impl ToolError {
     /// A failure with `code` and `message` and no SQLSTATE.
-    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: String) -> Self {
         ToolError {
             code,
-            message: message.into(),
+            message,
             sqlstate: None,
             error_number: None,
             class: None,
@@ -60,7 +60,7 @@ impl ToolError {
         match e {
             ConnectError::NotFound { .. } => ToolError::new(
                 "no_connection",
-                "the connection's database file does not exist",
+                "the connection's database file does not exist".to_owned(),
             ),
             _ => ToolError::new("connect", e.to_string()),
         }

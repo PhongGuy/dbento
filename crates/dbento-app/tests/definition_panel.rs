@@ -49,7 +49,7 @@ fn events(
     panel: &Entity<DefinitionPanel>,
 ) -> Rc<RefCell<Vec<DefinitionPanelEvent>>> {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let out = seen.clone();
+    let out = Rc::clone(&seen);
     cx.update(|cx| {
         cx.subscribe(panel, move |_, e: &DefinitionPanelEvent, _| {
             out.borrow_mut().push(e.clone())

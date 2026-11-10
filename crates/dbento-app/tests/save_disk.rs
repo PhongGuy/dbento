@@ -22,7 +22,11 @@ fn open_file(cx: &mut TestAppContext, o: &Opened) -> PathBuf {
     cx.run_until_parked();
     wait_real(cx, "the list", |cx| palette_rows(cx, o.win).len() == 1);
     palette_pick(cx, o.win, "queries/lite/a.sql");
-    assert_eq!(sql(cx, o), "SELECT 1");
+    assert_eq!(
+        sql(cx, o),
+        "SELECT 1",
+        "the saved query opens with its text"
+    );
     file
 }
 /// Types `text` as the active tab's SQL and presses Ctrl+S in its editor.
@@ -49,8 +53,14 @@ fn asked(cx: &mut TestAppContext, o: &Opened) {
     wait_real(cx, "the conflict question", |cx| {
         present(cx, o.win, "save-conflict-cancel")
     });
-    assert!(present(cx, o.win, "save-conflict-reload"));
-    assert!(present(cx, o.win, "save-conflict-overwrite"));
+    assert!(
+        present(cx, o.win, "save-conflict-reload"),
+        "the conflict offers reload"
+    );
+    assert!(
+        present(cx, o.win, "save-conflict-overwrite"),
+        "the conflict offers overwrite"
+    );
 }
 fn changed_on_disk(cx: &mut TestAppContext) -> (Opened, PathBuf) {
     let o = opened(cx, "", "", 0);

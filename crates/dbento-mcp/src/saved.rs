@@ -186,7 +186,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, ToolError> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|_| ToolError::new("internal", "reading the queries folder failed"))?
+        .map_err(|_| ToolError::new("internal", "reading the queries folder failed".to_owned()))?
 }
 
 fn outside(path: &str) -> ToolError {
@@ -208,6 +208,6 @@ fn no_query(path: &str) -> ToolError {
 fn unreadable() -> ToolError {
     ToolError::new(
         "query_file",
-        "the workspace's queries/ folder cannot be read",
+        "the workspace's queries/ folder cannot be read".to_owned(),
     )
 }

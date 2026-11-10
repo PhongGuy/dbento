@@ -234,7 +234,7 @@ fn slots(flavor: MyFlavor) -> Arc<Semaphore> {
         MyFlavor::Mysql => &MYSQL,
         MyFlavor::Mariadb => &MARIADB,
     };
-    cell.get_or_init(|| Arc::new(Semaphore::new(2))).clone()
+    Arc::clone(cell.get_or_init(|| Arc::new(Semaphore::new(2))))
 }
 
 /// A fresh container of `flavor`, URL variables ignored, serving TLS with a "localhost"

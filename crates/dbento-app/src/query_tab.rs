@@ -553,7 +553,7 @@ impl QueryTab {
         let open_table = cx.subscribe(&results, |_, _, e: &OpenTable, cx| {
             cx.emit(QueryTabEvent::OpenTable(e.0.clone()));
         });
-        let workspace = model.read(cx).spec().workspace.clone();
+        let workspace = Arc::clone(&model.read(cx).spec().workspace);
         QueryTab {
             workspace,
             completion,
@@ -854,7 +854,7 @@ impl QueryTab {
     /// Takes `ws`'s config for display and recomputes the state against the runner's workspace
     /// (`model.spec().workspace`), whose config becomes `session_conn`.
     pub fn set_workspace(&mut self, ws: &Arc<Workspace>, cx: &mut Context<Self>) {
-        self.workspace = ws.clone();
+        self.workspace = Arc::clone(ws);
         let spec = self.model.read(cx).spec();
         if let Some(session) = spec.workspace.connection(&spec.connection) {
             self.session_conn = session.clone();

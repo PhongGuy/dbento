@@ -286,7 +286,7 @@ impl Render for DefinitionPanel {
                 .flex_1()
                 .min_h_0()
                 .relative()
-                .child(smooth_scroll::layer(editor.clone(), wheel.clone()))
+                .child(smooth_scroll::layer(editor.clone(), Rc::clone(wheel)))
                 .child(Editor::new(editor).readonly(true).bordered(false).h_full())
                 .into_any_element(),
         };

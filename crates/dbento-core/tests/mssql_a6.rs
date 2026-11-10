@@ -89,7 +89,7 @@ async fn not_refused(s: &mut Session, sql: &str) {
 async fn nothing_reported(s: &mut Session, r: &Results) {
     let verdict =
         |x: &Result<Ran, ExecuteError>| matches!(x, Err(ExecuteError::ReadOnlyViolation { .. }));
-    assert!(!r.iter().any(verdict));
+    assert!(!r.iter().any(verdict), "no read-only verdict is reported");
     s.settle().await.unwrap();
 }
 

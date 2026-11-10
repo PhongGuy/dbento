@@ -102,27 +102,32 @@ pub fn read_beekeeper(
     let mut used = HashSet::new();
     for c in &raw.connections {
         if c.name_not_utf8 {
-            set.warn(&c.name, WarningKind::NotUtf8);
+            set.warn(c.name.clone(), WarningKind::NotUtf8);
         }
         let mapped = match map::map_connection(c, &ctx) {
             Ok(mapped) => mapped,
             Err(reason) => {
-                set.skip(ItemKind::DataSource, &c.name, reason);
+                set.skip(ItemKind::DataSource, c.name.clone(), reason);
                 continue;
             }
         };
         let id = c.id.to_string();
         let name = assign_name(&base_name(&c.name), &mut used);
-        set.add_connection(ImportedConnection::new(&id, &c.name, name, mapped.draft));
+        set.add_connection(ImportedConnection::new(
+            id.clone(),
+            c.name.clone(),
+            name,
+            mapped.draft,
+        ));
         for w in mapped.warnings {
-            set.warn(&c.name, w);
+            set.warn(c.name.clone(), w);
         }
         // Decrypt only a password the connection will keep.
         let cipher = c.password.as_ref().filter(|p| !p.as_str().is_empty());
         if let (true, Some(key), Some(cipher)) = (mapped.keep_secret, &key, cipher) {
             match crypto::decrypt_string(key, cipher.as_str()) {
                 Some(secret) => secrets.insert(id, secret),
-                None => set.warn(&c.name, WarningKind::SecretUnreadable),
+                None => set.warn(c.name.clone(), WarningKind::SecretUnreadable),
             }
         }
     }

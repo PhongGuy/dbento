@@ -4,7 +4,7 @@ use crate::{ColumnMeta, Engine, RelationRef};
 
 fn col(name: &str, cast: &str, editable: bool, default: Option<&str>) -> EditColumn {
     let meta = ColumnMeta::new(name, cast, true, None, default.map(str::to_owned));
-    EditColumn::new(meta, cast, editable)
+    EditColumn::new(meta, cast.to_owned(), editable)
 }
 
 fn strings(v: &[&str]) -> Vec<String> {

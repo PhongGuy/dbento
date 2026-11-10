@@ -92,13 +92,13 @@ pub fn read_dbeaver(folder: &Path, opts: &DBeaverOptions) -> Result<DBeaverRead,
             Ok(mapped) => {
                 let name = assign_name(&base_name(&raw.name), &mut used);
                 set.add_connection(ImportedConnection::new(
-                    &raw.id,
-                    &raw.name,
+                    raw.id.clone(),
+                    raw.name.clone(),
                     name,
                     mapped.draft,
                 ));
                 for w in mapped.warnings {
-                    set.warn(&raw.name, w);
+                    set.warn(raw.name.clone(), w);
                 }
                 if mapped.keep_secret
                     && opts.secrets
@@ -108,7 +108,7 @@ pub fn read_dbeaver(folder: &Path, opts: &DBeaverOptions) -> Result<DBeaverRead,
                 }
                 imported.insert(raw.id);
             }
-            Err(reason) => set.skip(ItemKind::DataSource, &raw.name, reason),
+            Err(reason) => set.skip(ItemKind::DataSource, raw.name, reason),
         }
     }
     scripts::collect(&project.root, &project.bindings, &imported, &mut set)?;

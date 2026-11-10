@@ -60,13 +60,14 @@ pub(crate) async fn run(
     if classification.transaction_control {
         return Err(ToolError::new(
             "transaction_control",
-            "`execute` runs one statement in its own transaction; transaction control is refused",
+            "`execute` runs one statement in its own transaction; transaction control is refused"
+                .to_owned(),
         ));
     }
     if classification.writes == Writes::No {
         return Err(ToolError::new(
             "not_a_write",
-            "the statement only reads; run it with the `query` tool",
+            "the statement only reads; run it with the `query` tool".to_owned(),
         ));
     }
     let Some(dir) = server.approvals().map(PathBuf::from) else {
@@ -170,7 +171,7 @@ async fn run_once(session: &mut Session, sql: &str) -> Result<Outcome, ToolError
     stream
         .outcome()
         .cloned()
-        .ok_or_else(|| ToolError::new("internal", "the result ended without an outcome"))
+        .ok_or_else(|| ToolError::new("internal", "the result ended without an outcome".to_owned()))
 }
 
 /// Prepares the statement in a forced read-only session for its classification only.
@@ -207,6 +208,6 @@ fn unavailable(detail: &str) -> ToolError {
     eprintln!("dbento mcp: approvals are unavailable: {detail}");
     ToolError::new(
         "approvals_unavailable",
-        "approvals are unavailable; the Dbento state folder cannot be used",
+        "approvals are unavailable; the Dbento state folder cannot be used".to_owned(),
     )
 }
