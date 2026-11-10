@@ -13,6 +13,7 @@ mod datasets;
 mod db;
 mod demo;
 mod dependencies;
+mod fake_exe;
 mod icons;
 mod install;
 mod notices;

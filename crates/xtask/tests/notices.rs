@@ -2,7 +2,6 @@
 #![cfg(unix)]
 
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -35,8 +34,7 @@ impl Fake {
     fn new() -> Fake {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("cargo");
-        std::fs::write(&script, FAKE).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::fake_exe::write_executable(&script, FAKE);
         Fake { dir }
     }
 
