@@ -159,6 +159,24 @@ fn the_redis_crate_resolves_once_at_its_pin() {
     assert_eq!(named(&packages(), "redis"), ["redis v1.8.1"]);
 }
 
+#[test]
+fn the_aws_crates_resolve_once_at_their_pins_without_aws_config() {
+    let packages = packages();
+    assert_eq!(
+        named(&packages, "aws-sdk-dynamodb"),
+        ["aws-sdk-dynamodb v1.138.0"]
+    );
+    assert_eq!(
+        named(&packages, "aws-smithy-http-client"),
+        ["aws-smithy-http-client v1.5.2"]
+    );
+    assert!(
+        named(&packages, "aws-config").is_empty(),
+        "{:?}",
+        named(&packages, "aws-config")
+    );
+}
+
 // The pilot is a separate workspace that the root patch does not reach, so it must
 // repeat every vendored crate's patch or it silently builds the unpatched release.
 #[test]

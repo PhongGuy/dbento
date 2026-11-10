@@ -13,7 +13,7 @@ workspace = true
 # #[non_exhaustive] enum, so named variants would still end in a wildcard.
 
 [features]
-default = ["duckdb", "mongodb", "surrealdb", "redis"]
+default = ["duckdb", "mongodb", "surrealdb", "redis", "dynamodb"]
 # Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
 duckdb = ["dbento-core/duckdb", "dbento-testkit/duckdb"]
 # Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
@@ -22,6 +22,8 @@ mongodb = ["dbento-core/mongodb", "dbento-testkit/mongodb"]
 surrealdb = ["dbento-core/surrealdb"]
 # Forwarded so a default edge to core cannot switch Redis on through feature unification.
 redis = ["dbento-core/redis", "dbento-testkit/redis"]
+# Forwarded so a default edge to core cannot switch DynamoDB on through feature unification.
+dynamodb = ["dbento-core/dynamodb"]
 
 [dependencies]
 dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }

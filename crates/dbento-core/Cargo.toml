@@ -48,6 +48,8 @@ mongodb = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
+aws-sdk-dynamodb = { workspace = true, optional = true }
+aws-smithy-http-client = { workspace = true, optional = true }
 cbor4ii = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 keyring-core = { workspace = true, optional = true }
@@ -65,7 +67,7 @@ apple-native-keyring-store = { workspace = true, optional = true }
 windows-native-keyring-store = { workspace = true, optional = true }
 
 [features]
-default = ["keychain", "duckdb", "mongodb", "surrealdb", "redis"]
+default = ["keychain", "duckdb", "mongodb", "surrealdb", "redis", "dynamodb"]
 # The DuckDB engine; it bundles libduckdb, so a build without it skips that C++ compile.
 duckdb = ["dep:duckdb"]
 # The MongoDB engine: the mongodb driver and bson.
@@ -74,6 +76,8 @@ mongodb = ["dep:mongodb", "dep:bson", "dbento-testkit/mongodb"]
 surrealdb = ["dep:tokio-tungstenite", "dep:cbor4ii", "dep:half", "tokio/macros"]
 # The Redis and Valkey engine: redis-rs over tokio and rustls.
 redis = ["dep:redis", "dbento-testkit/redis"]
+# The DynamoDB engine: the AWS SDK over ring rustls, without aws-config.
+dynamodb = ["dep:aws-sdk-dynamodb", "dep:aws-smithy-http-client"]
 # The platform keychain as a SecretStore.
 keychain = [
     "dep:keyring-core",
