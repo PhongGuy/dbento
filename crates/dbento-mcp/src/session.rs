@@ -93,7 +93,7 @@ static REDIS: LazyLock<String> = LazyLock::new(|| {
 static DYNAMODB: LazyLock<String> = LazyLock::new(|| {
     format!(
         "Dbento sends only reads on this connection and refuses every statement it reads as a \
-         write or cannot classify; DynamoDB has no read-only session. {}",
+         write or cannot classify. {}",
         read_only_residual(Engine::Dynamodb).unwrap_or_default()
     )
 });
