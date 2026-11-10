@@ -161,8 +161,8 @@ pub(crate) enum DocFormat {
     #[default]
     Bson,
     /// Typed DynamoDB JSON, such as `{"pk":{"S":"a"}}`.
-    #[cfg_attr(not(feature = "dynamodb"), allow(dead_code))]
     // only the DynamoDB driver builds it
+    #[cfg_attr(not(feature = "dynamodb"), allow(dead_code))]
     DynamoJson,
 }
 
