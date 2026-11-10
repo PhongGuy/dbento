@@ -11,7 +11,7 @@ use tokio::sync::watch;
 
 use super::client::{DynamoClient, StatementRequest};
 use super::columns::{self, ColumnModel, Item};
-use super::errors::execute_error;
+use super::errors::{execute_error, stale_token};
 use super::statement::Kind;
 use crate::capacity::CapacityUnits;
 use crate::session::{
@@ -162,9 +162,25 @@ impl DynamoStream {
         Ok((columns, stream))
     }
 
+    /// One fetch under the statement timeout, which spans all its pages, and the cancel handle,
+    /// which drops the request in flight.
+    async fn fetch(&mut self) -> Result<(), ExecuteError> {
+        let shared = Arc::clone(&self.shared);
+        let pages = self.fetch_pages();
+        let bounded = async {
+            match shared.timeout {
+                Some(timeout) => tokio::time::timeout(timeout, pages)
+                    .await
+                    .unwrap_or(Err(ExecuteError::Timeout)),
+                None => pages.await,
+            }
+        };
+        shared.cancel.guard(bounded).await?
+    }
+
     /// Requests pages, starting at the held token, until the buffer holds the row after the
     /// limit, reaches the byte bound, or the token runs out. Pages without items are followed.
-    async fn fetch(&mut self) -> Result<(), ExecuteError> {
+    async fn fetch_pages(&mut self) -> Result<(), ExecuteError> {
         let byte_bound = self.limits.max_bytes.map_or(self.shared.batch_cap, |b| {
             usize::try_from(b).map_or(self.shared.batch_cap, |b| b.min(self.shared.batch_cap))
         });
@@ -176,11 +192,12 @@ impl DynamoStream {
                 next_token: self.next_token.as_deref(),
                 consistent_read: self.request.consistent_read,
             };
-            let page = self
-                .client
-                .execute_statement(request)
-                .await
-                .map_err(execute_error)?;
+            // A continuation's ValidationException most likely means the token went stale.
+            let continued = request.next_token.is_some();
+            let page = self.client.execute_statement(request).await.map_err(|e| {
+                let error = execute_error(e);
+                if continued { stale_token(error) } else { error }
+            })?;
             if let Some(units) = page.consumed_capacity.and_then(|c| c.capacity_units) {
                 let units = CapacityUnits::from_units(units);
                 self.capacity = Some(self.capacity.map_or(units, |sum| sum.saturating_add(units)));
@@ -192,7 +209,9 @@ impl DynamoStream {
             self.next_token = page.next_token;
             let held = self.delivered + self.buffer.len() as u64;
             let rows_proved = self.limits.max_rows.is_some_and(|r| held > r);
-            if self.next_token.is_none() || rows_proved || bytes >= byte_bound {
+            // The byte stop needs a held item, or a zero byte limit would end on an empty page.
+            let bytes_reached = bytes >= byte_bound && !self.buffer.is_empty();
+            if self.next_token.is_none() || rows_proved || bytes_reached {
                 return Ok(());
             }
         }
@@ -309,3 +328,6 @@ fn value_size(value: &AttributeValue) -> usize {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod deadline_tests;

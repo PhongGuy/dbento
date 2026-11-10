@@ -269,3 +269,22 @@ async fn a_write_without_returning_has_no_columns_but_returning_rows_do() {
     );
     assert_eq!(drain(&mut s).await.0, ["p0"]);
 }
+
+#[tokio::test]
+async fn a_zero_byte_limit_follows_leading_empty_pages_to_the_row_that_proves_the_cut() {
+    let replay = Replay::new(vec![
+        Reply::ok(page(&[], Some("t1"), None)),
+        Reply::ok(page(&[], Some("t2"), None)),
+        Reply::ok(page(&items(0..1), None, None)),
+    ]);
+    let zero_bytes = Limits {
+        max_rows: None,
+        max_bytes: Some(0),
+        on_truncate: OnTruncate::Drain,
+    };
+    let (_, mut s) = open(&replay, zero_bytes).await;
+    let (pks, o) = drain(&mut s).await;
+    assert!(pks.is_empty(), "no row fits in zero bytes");
+    assert_eq!(o.truncated_by, Some(TruncatedBy::Bytes));
+    assert_eq!(replay.seen().len(), 3);
+}
