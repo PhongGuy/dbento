@@ -14,6 +14,7 @@ license = "MIT OR Apache-2.0"
 [workspace.lints.rust]
 
 [workspace.lints.clippy]
+ref_option = "warn"
 
 [workspace.dependencies]
 log = "0.4.34"

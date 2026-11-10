@@ -155,13 +155,13 @@ pub fn packager_config(
         &mut config,
         "macos",
         "signingIdentity",
-        &signing.macos_identity,
+        signing.macos_identity.as_deref(),
     )?;
     add_setting(
         &mut config,
         "windows",
         "signCommand",
-        &signing.windows_sign_command,
+        signing.windows_sign_command.as_deref(),
     )?;
     Ok(Value::Object(config))
 }
@@ -172,7 +172,7 @@ fn add_setting(
     config: &mut Map<String, Value>,
     section: &str,
     key: &str,
-    value: &Option<String>,
+    value: Option<&str>,
 ) -> anyhow::Result<()> {
     let Some(value) = value else { return Ok(()) };
     let entry = config
@@ -183,7 +183,7 @@ fn add_setting(
             "[package.metadata.packager] {section} is not a table, so {section}.{key} cannot be set"
         );
     };
-    object.insert(key.into(), value.clone().into());
+    object.insert(key.into(), value.into());
     Ok(())
 }
 
