@@ -16,3 +16,5 @@ pub(crate) mod render;
 #[cfg(feature = "dynamodb")]
 pub(crate) mod replay;
 pub(crate) mod statement;
+#[cfg(feature = "dynamodb")]
+pub(crate) mod stream;
