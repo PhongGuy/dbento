@@ -62,6 +62,13 @@ fn a_connection_row_is_found_by_its_kind_and_name() {
     assert_eq!(connection_a11y_id("toggle-lite"), "connection[toggle-lite]");
 }
 
+/// A slash needs no brackets: gpui-pilot's id rule brackets only names holding a hyphen.
+#[test]
+fn a_child_connection_keeps_its_slash_in_the_id() {
+    assert_eq!(connection_a11y_id("srv/app"), "connection-srv/app");
+    assert_eq!(connection_a11y_id("my-srv/app"), "connection[my-srv/app]");
+}
+
 fn assert_roles(cx: &mut gpui_kit::TestAppContext, win: AnyWindowHandle, ids: &[&'static str]) {
     for id in ids {
         let role = cx
