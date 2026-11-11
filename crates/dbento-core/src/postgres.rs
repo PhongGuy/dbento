@@ -1362,6 +1362,11 @@ FROM pg_catalog.pg_settings s WHERE s.name = 'search_path'";
 const SCHEMAS_SQL: &str = "SELECT nspname::text FROM pg_catalog.pg_namespace \
 WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' ORDER BY nspname";
 
+/// The databases a session could open: no templates and none that refuse connections, with
+/// the server's own `postgres` after the rest.
+const DATABASES_SQL: &str = "SELECT datname::text FROM pg_catalog.pg_database \
+WHERE NOT datistemplate AND datallowconn ORDER BY datname = 'postgres', datname";
+
 /// `$1` is the schema, `$2` is `RELATION_CAP + 1`.
 const RELATIONS_SQL: &str = "SELECT c.relname::text, c.relkind::text \
 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
@@ -1418,6 +1423,12 @@ impl PgDriver {
         let now = cell::<Option<String>>(row, 0).ok()??;
         let opened = cell::<Option<String>>(row, 1).ok()?;
         (Some(&now) != opened.as_ref()).then_some(now)
+    }
+
+    /// The server's databases this login could open, `postgres` last; see DATABASES_SQL.
+    pub(crate) async fn databases(&mut self) -> Result<Vec<String>, IntrospectError> {
+        let rows = self.catalog(DATABASES_SQL, &[]).await?;
+        rows.iter().map(|r| cell::<String>(r, 0)).collect()
     }
 
     /// Runs one fixed catalog query after settling what earlier statements owe. A read-only
