@@ -1062,6 +1062,30 @@ impl Session {
         }
     }
 
+    /// The server's databases this login can open, the server's own after the rest: on
+    /// Postgres no templates and none that refuse connections (`postgres` last), on MySQL and
+    /// MariaDB the schemas, on SQL Server the online ones it can enter (`master`, `tempdb`,
+    /// `model`, `msdb` last). `Unsupported` on the engines with no such list.
+    pub async fn databases(&mut self) -> Result<Vec<String>, IntrospectError> {
+        let unsupported = || IntrospectError::Unsupported { what: "databases" };
+        match &mut self.inner {
+            SessionInner::Sqlite(_) => Err(unsupported()),
+            SessionInner::Postgres(d) => d.databases().await,
+            SessionInner::Mysql(d) => crate::mysql::catalog::databases(d).await,
+            SessionInner::Mssql(d) => crate::mssql::catalog::databases(d).await,
+            #[cfg(feature = "duckdb")]
+            SessionInner::Duckdb(_) => Err(unsupported()),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Err(unsupported()),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Err(unsupported()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Err(unsupported()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Err(unsupported()),
+        }
+    }
+
     /// Tables and views of `schema` in name order, at most RELATION_CAP; empty for an unknown schema.
     pub async fn relations(&mut self, schema: &str) -> Result<RelationList, IntrospectError> {
         match &mut self.inner {
