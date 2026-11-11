@@ -34,6 +34,8 @@ pub struct Shown {
     pub color: Option<Color>,
     /// Whether the connection is tagged production.
     pub production: bool,
+    /// Whether the name no longer resolves in its workspace, or the workspace will not open.
+    pub unknown: bool,
     /// How many requests were pending when it was read, itself included.
     pub queued: usize,
 }
@@ -44,16 +46,19 @@ pub fn next_pending(dir: &Path) -> Option<Shown> {
     let pending = ApprovalStore::open(dir).ok()?.pending();
     let queued = pending.len();
     let request = pending.into_iter().next()?;
-    // The tag comes from the request's own workspace; any failure shows it untagged.
+    // The tag comes from the request's own workspace; a name it cannot resolve, or a workspace
+    // that will not open, fails closed and reads as production.
     let tag = Workspace::open(request.workspace()).ok().and_then(|ws| {
         ws.connection(request.connection())
             .map(|c| (c.effective_color(), c.is_production()))
     });
-    let (color, production) = tag.unwrap_or((None, false));
+    let unknown = tag.is_none();
+    let (color, production) = tag.unwrap_or((None, true));
     Some(Shown {
         request,
         color,
         production,
+        unknown,
         queued,
     })
 }
@@ -363,7 +368,7 @@ pub fn ask_approval(shown: Shown, window: &mut Window, cx: &mut App) -> Asked {
     let queue: Option<SharedString> =
         (shown.queued > 1).then(|| format!("1 of {}", shown.queued).into());
     let danger = approve_is_danger(shown.production, r.unguarded());
-    let (color, production) = (shown.color, shown.production);
+    let (color, production, unknown) = (shown.color, shown.production, shown.unknown);
     window.defer(cx, move |window, cx| {
         window.open_dialog(cx, move |dialog, window, cx| {
             if !focused.replace(true) {
@@ -393,12 +398,21 @@ pub fn ask_approval(shown: Shown, window: &mut Window, cx: &mut App) -> Asked {
                     .child(label)
             };
             let chip = production.then(|| {
-                h_flex().child(
-                    ui::production_chip(cx)
-                        .id("approval-production")
-                        .aria_label("Production")
-                        .test_support(),
-                )
+                h_flex()
+                    .gap_1()
+                    .child(
+                        ui::production_chip(cx)
+                            .id("approval-production")
+                            .aria_label("Production")
+                            .test_support(),
+                    )
+                    .children(unknown.then(|| {
+                        ui::chip_base(cx)
+                            .id("approval-unknown")
+                            .aria_label("Unknown connection")
+                            .test_support()
+                            .child("Unknown connection")
+                    }))
             });
             let dot = color.map(|c| {
                 div()

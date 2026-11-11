@@ -5,10 +5,12 @@ use crate::support::{Started, click_id, label_of, present, started, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::approvals::{
     APPROVAL_POLL, answered_elsewhere_notice, approve_is_danger, approved_notice, class_label,
-    headline, pending_count,
+    headline, next_pending, pending_count,
 };
 use dbento_app::confirm::DIALOG_TOP;
-use dbento_core::{ApprovalRequest, ApprovalStore, Claim, Decision, Unguarded, Verdict, Writes};
+use dbento_core::{
+    ApprovalRequest, ApprovalStore, Claim, Color, Decision, Unguarded, Verdict, Writes,
+};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
 
@@ -191,6 +193,11 @@ fn requests_queue_oldest_first_and_show_one_at_a_time(cx: &mut TestAppContext) {
 fn a_request_for_another_workspace_shows_its_folder_name(cx: &mut TestAppContext) {
     let s = started(cx, TOML);
     let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(
+        elsewhere.path().join("dbento.toml"),
+        "dbento = 1\n[connections.far]\nengine = \"sqlite\"\npath = \"f.db\"\n",
+    )
+    .unwrap();
     let r = ApprovalRequest::new(elsewhere.path(), "far", "DROP TABLE x", Writes::Yes, vec![]);
     store(&s).request(&r).unwrap();
     tick(cx);
@@ -559,5 +566,62 @@ fn a_redis_headline_names_the_command() {
     assert_eq!(
         headline("cache", "config set maxmemory 1mb"),
         "cache \u{B7} CONFIG"
+    );
+}
+
+/// The dialog's view of one request for `conn` in the workspace at `ws`.
+fn shown_for(ws: &std::path::Path, conn: &str) -> dbento_app::approvals::Shown {
+    let approvals = tempfile::tempdir().unwrap();
+    let r = ApprovalRequest::new(ws, conn, "DELETE FROM t", Writes::Yes, vec![]);
+    ApprovalStore::open(approvals.path())
+        .unwrap()
+        .request(&r)
+        .unwrap();
+    next_pending(approvals.path()).expect("one pending request")
+}
+
+#[test]
+fn a_name_that_no_longer_resolves_reads_as_production() {
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::write(
+        ws.path().join("dbento.toml"),
+        "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ncolor = \"green\"\ndatabases = [\"a\"]\n",
+    )
+    .unwrap();
+    let child = shown_for(ws.path(), "pg/a");
+    assert_eq!(
+        (child.color, child.production, child.unknown),
+        (Some(Color::Green), false, false)
+    );
+    for gone in ["pg/b", "pg/my.db", "nope"] {
+        let s = shown_for(ws.path(), gone);
+        assert_eq!(
+            (s.color, s.production, s.unknown),
+            (None, true, true),
+            "{gone}"
+        );
+    }
+}
+
+#[test]
+fn a_workspace_that_cannot_open_reads_as_production() {
+    let gone = tempfile::tempdir().unwrap();
+    let s = shown_for(gone.path(), "pg");
+    assert_eq!((s.color, s.production, s.unknown), (None, true, true));
+}
+
+#[gpui_kit::test]
+fn an_unknown_connection_shows_production_and_says_so(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "calm/x", "DELETE FROM t WHERE id = 1", vec![], 1);
+    tick(cx);
+    assert!(present(cx, s.win, "approval-dialog"));
+    assert!(
+        present(cx, s.win, "approval-production"),
+        "an unresolved name is production"
+    );
+    assert_eq!(
+        label_of(cx, s.win, "approval-unknown").as_deref(),
+        Some("Unknown connection")
     );
 }
