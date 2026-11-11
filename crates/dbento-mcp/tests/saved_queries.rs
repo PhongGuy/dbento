@@ -305,3 +305,34 @@ async fn a_listed_partiql_query_can_be_read() {
         json!({"path": "queries/lite/orders.partiql", "connection": "lite", "sql": partiql, "truncated": false})
     );
 }
+
+#[tokio::test]
+async fn a_parents_database_folders_bind_to_its_children() {
+    let toml = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"db.invalid\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = [\"booking\"]\n";
+    let server = TestServer::start(toml).await;
+    for rel in [
+        "queries/stayzy/q.sql",
+        "queries/stayzy/booking/q.sql",
+        "queries/stayzy/reports/q.sql",
+    ] {
+        let path = server.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "select 1").unwrap();
+    }
+    let list = server.ok("list_saved_queries", json!({})).await;
+    assert_eq!(
+        list["queries"],
+        json!([
+            {"path": "queries/stayzy/booking/q.sql", "connection": "stayzy/booking"},
+            {"path": "queries/stayzy/q.sql", "connection": "stayzy"},
+            {"path": "queries/stayzy/reports/q.sql", "connection": null},
+        ])
+    );
+    let read = server
+        .ok(
+            "read_saved_query",
+            json!({"path": "queries/stayzy/booking/q.sql"}),
+        )
+        .await;
+    assert_eq!(read["connection"], "stayzy/booking");
+}

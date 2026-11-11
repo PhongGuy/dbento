@@ -492,3 +492,67 @@ mod secrets {
         assert_eq!(secret_env_var(child.secret_owner()), "DBENTO_SECRET_STAYZY");
     }
 }
+
+mod binding {
+    use std::path::Path;
+
+    use super::open;
+
+    const TOML: &str = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = [\"booking\", \"user_db\"]\n[connections.wide]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = \"all\"\n[connections.plain]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n";
+
+    #[test]
+    fn the_first_folder_names_the_connection_and_a_parents_second_its_database() {
+        let (_d, ws) = open(TOML);
+        for (rel, want) in [
+            ("queries/stayzy/q.sql", Some("stayzy")),
+            ("queries/stayzy/booking/q.sql", Some("stayzy/booking")),
+            ("queries/stayzy/booking/deep/q.sql", Some("stayzy/booking")),
+            ("queries/stayzy/reports/q.sql", None),
+            ("queries/stayzy/Booking/q.sql", None),
+            ("queries/wide/reports/q.sql", Some("wide/reports")),
+            ("queries/wide/my.db/q.sql", None),
+            ("queries/plain/q.sql", Some("plain")),
+            ("queries/plain/sub/q.sql", Some("plain")),
+            ("queries/nope/q.sql", None),
+            ("queries/q.sql", None),
+            ("other/plain/q.sql", None),
+        ] {
+            assert_eq!(
+                ws.bound_connection(Path::new(rel)).as_deref(),
+                want,
+                "{rel}"
+            );
+        }
+    }
+
+    #[test]
+    fn saved_queries_bind_by_the_same_rule() {
+        let (_d, ws) = open(TOML);
+        for rel in [
+            "queries/stayzy/q.sql",
+            "queries/stayzy/booking/q.sql",
+            "queries/stayzy/reports/q.sql",
+        ] {
+            let saved = ws.write_query(Path::new(rel), "select 1").unwrap();
+            assert_eq!(
+                saved.connection(),
+                ws.bound_connection(Path::new(rel)).as_deref(),
+                "{rel}"
+            );
+        }
+        let bound: Vec<Option<String>> = ws
+            .saved_queries()
+            .unwrap()
+            .iter()
+            .map(|q| q.connection().map(str::to_owned))
+            .collect();
+        assert_eq!(
+            bound,
+            [
+                Some("stayzy/booking".to_owned()),
+                Some("stayzy".to_owned()),
+                None
+            ]
+        );
+    }
+}

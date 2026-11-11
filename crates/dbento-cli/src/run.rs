@@ -5,7 +5,7 @@ use std::path::Path;
 
 use dbento_core::{Engine, QueryLanguage, Workspace};
 
-/// The connection whose `queries/<conn>/` folder holds `file`, judged by where the path the
+/// The connection `file` binds to by core's saved-query rule, judged by where the path the
 /// user gave lies. Only the parent folder is resolved, so a symlink elsewhere cannot decide.
 pub(crate) fn bound_connection(ws: &Workspace, file: &Path) -> anyhow::Result<Option<String>> {
     let parent = match file.parent() {
@@ -15,10 +15,22 @@ pub(crate) fn bound_connection(ws: &Workspace, file: &Path) -> anyhow::Result<Op
     let parent = parent
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", file.display()))?;
+    // Find the connection folder by its real path, so a linked folder still binds, then hand
+    // the path below it to core's rule as if it lay under `queries/<conn>/`.
+    let Some(name) = file.file_name() else {
+        return Ok(None);
+    };
     for conn in ws.connections() {
         let folder = ws.dir().join("queries").join(conn.name());
-        if folder.canonicalize().is_ok_and(|f| parent.starts_with(f)) {
-            return Ok(Some(conn.name().to_owned()));
+        let Ok(folder) = folder.canonicalize() else {
+            continue;
+        };
+        if let Ok(below) = parent.strip_prefix(&folder) {
+            let rel = Path::new("queries")
+                .join(conn.name())
+                .join(below)
+                .join(name);
+            return Ok(ws.bound_connection(&rel));
         }
     }
     Ok(None)
@@ -73,5 +85,51 @@ mod tests {
         assert!(e.contains("Redis commands") && e.contains(".redis"), "{e}");
         let e = language_mismatch(Path::new("q.PartiQL"), Engine::Postgres).unwrap();
         assert!(e.contains("PartiQL") && e.contains(".partiql"), "{e}");
+    }
+
+    const PARENT: &str = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = [\"booking\"]\n[connections.plain]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n";
+
+    fn workspace(toml: &str) -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        (dir, ws)
+    }
+
+    #[test]
+    fn a_file_binds_by_the_shared_rule_from_its_real_folder() {
+        let (dir, ws) = workspace(PARENT);
+        for (rel, want) in [
+            ("queries/stayzy/q.sql", Some("stayzy")),
+            ("queries/stayzy/booking/q.sql", Some("stayzy/booking")),
+            ("queries/stayzy/reports/q.sql", None),
+            ("queries/plain/sub/q.sql", Some("plain")),
+            ("loose.sql", None),
+        ] {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "select 1").unwrap();
+            assert_eq!(
+                bound_connection(&ws, &path).unwrap().as_deref(),
+                want,
+                "{rel}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_connection_folder_still_binds() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("booking")).unwrap();
+        std::fs::write(outside.path().join("booking/q.sql"), "select 1").unwrap();
+        let (dir, ws) = workspace(PARENT);
+        std::fs::create_dir(dir.path().join("queries")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("queries/stayzy")).unwrap();
+        let file = dir.path().join("queries/stayzy/booking/q.sql");
+        assert_eq!(
+            bound_connection(&ws, &file).unwrap().as_deref(),
+            Some("stayzy/booking")
+        );
     }
 }

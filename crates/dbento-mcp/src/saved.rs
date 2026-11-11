@@ -7,7 +7,7 @@
 //! `.redis` or `.partiql`, and queries of connections the server does not expose.
 
 use std::io::ErrorKind;
-use std::path::{Component, Path};
+use std::path::Path;
 
 use dbento_core::{QueryFileError, Workspace};
 use schemars::JsonSchema;
@@ -104,8 +104,7 @@ pub(crate) async fn read(server: &DbentoServer, args: ReadArgs) -> Result<SavedT
     if !is_query {
         return Err(outside(&args.path));
     }
-    // The first folder binds a connection only when the workspace configures one by that name.
-    let connection = bound_connection(&ws, &rel);
+    let connection = ws.bound_connection(&rel);
     if connection.as_deref().is_some_and(|c| !server.exposed(c)) {
         return Err(no_query(&args.path));
     }
@@ -158,19 +157,7 @@ fn target_connection(ws: &Workspace, rel: &Path) -> Option<String> {
     let root = std::fs::canonicalize(ws.dir().join("queries")).ok()?;
     let real = std::fs::canonicalize(ws.dir().join(rel)).ok()?;
     let below = real.strip_prefix(&root).ok()?;
-    bound_connection(ws, &Path::new("queries").join(below))
-}
-
-/// The configured connection named by the first folder below `queries/`, as core binds it.
-fn bound_connection(ws: &Workspace, rel: &Path) -> Option<String> {
-    let parts: Vec<Component> = rel.components().collect();
-    match parts.as_slice() {
-        [Component::Normal(q), Component::Normal(folder), _, ..] if *q == "queries" => folder
-            .to_str()
-            .filter(|name| ws.connection(name).is_some())
-            .map(str::to_owned),
-        _ => None,
-    }
+    ws.bound_connection(&Path::new("queries").join(below))
 }
 
 /// The path with `/` between its parts on every platform.

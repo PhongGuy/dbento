@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 /// The database engine a connection talks to.
@@ -1048,18 +1048,43 @@ impl Workspace {
         path.strip_prefix(&self.dir).unwrap_or(path).to_path_buf()
     }
 
-    /// Binds a path relative to the workspace: the first folder under `queries/` names
-    /// the connection when one is configured by that name.
+    /// Binds a path relative to the workspace by the `bound_connection` rule.
     fn bind(&self, path: PathBuf) -> SavedQuery {
-        // A file directly in queries/ has no folder, so it binds to nothing.
-        let mut parts = path.components().skip(1);
-        let connection = match (parts.next(), parts.next()) {
-            (Some(folder), Some(_)) => folder.as_os_str().to_str(),
-            _ => None,
-        }
-        .filter(|name| self.connection(name).is_some())
-        .map(str::to_owned);
+        let connection = self.bound_connection(&path);
         SavedQuery { path, connection }
+    }
+
+    /// The connection a saved query at `rel` (workspace-relative, under `queries/`) runs on.
+    ///
+    /// The first folder names a declared connection. Under a parent with `databases`, a file
+    /// directly in its folder binds the parent and a second folder must name one of its
+    /// children; a folder that resolves to no child binds nothing rather than the parent.
+    pub fn bound_connection(&self, rel: &Path) -> Option<String> {
+        let parts = rel
+            .components()
+            .map(|c| match c {
+                Component::Normal(part) => part.to_str(),
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => None,
+            })
+            .collect::<Option<Vec<&str>>>()?;
+        let [queries, first, rest @ ..] = parts.as_slice() else {
+            return None;
+        };
+        if *queries != "queries" || rest.is_empty() {
+            return None;
+        }
+        let parent = self.declared(first)?;
+        match rest {
+            [_file] => Some((*first).to_owned()),
+            [database, ..] if parent.databases().is_some() => {
+                let child = format!("{first}/{database}");
+                self.resolve(&child).is_ok().then_some(child)
+            }
+            _ => Some((*first).to_owned()),
+        }
     }
 
     /// The canonical workspace directory.
