@@ -87,7 +87,7 @@ fn report_read_only(cx: &mut TestAppContext, o: &support::Opened) {
     wait_real(cx, "lite connected", |cx| {
         m.read_with(cx, |m, _| m.read_only().is_some())
     });
-    let conn = o.fx.ws.connection("lite").unwrap().clone();
+    let conn = o.fx.ws.declared("lite").unwrap().clone();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

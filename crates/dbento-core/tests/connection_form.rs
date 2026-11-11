@@ -140,7 +140,7 @@ fn a_port_left_out_is_the_descriptor_default() {
         });
         assert_eq!(default, Some(want), "{engine:?}");
         let ws = parses(engine, &lines(&fields, true)).unwrap();
-        assert_eq!(ws.connection("c").unwrap().port(), Some(want), "{engine:?}");
+        assert_eq!(ws.declared("c").unwrap().port(), Some(want), "{engine:?}");
     }
 }
 

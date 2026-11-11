@@ -1,6 +1,7 @@
 //! A query tab: the SQL editor over the results pane, Run and Cancel, the production chip,
 //! the read-only badge and the confirmation for unguarded writes.
 
+use std::borrow::Cow;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -632,7 +633,11 @@ impl QueryTab {
     /// provider, then schedules the draft (its connection changed).
     pub fn follow_connection(&mut self, cx: &mut Context<Self>) {
         let spec = self.model.read(cx).spec();
-        let Some(c) = spec.workspace.connection(&spec.connection).cloned() else {
+        let Some(c) = spec
+            .workspace
+            .connection(&spec.connection)
+            .map(Cow::into_owned)
+        else {
             return;
         };
         if let Some(sidebar) = self.sidebar.clone() {
@@ -875,7 +880,7 @@ impl QueryTab {
         self.workspace = Arc::clone(ws);
         let spec = self.model.read(cx).spec();
         if let Some(session) = spec.workspace.connection(&spec.connection) {
-            self.session_conn = session.clone();
+            self.session_conn = session.into_owned();
         }
         // A gone connection keeps its last display config, so the title and colour stay.
         self.state = match ws.connection(self.session_conn.name()) {
@@ -888,7 +893,7 @@ impl QueryTab {
                         still_read_write: c.read_only() && !self.session_conn.read_only(),
                     }
                 };
-                self.conn = c.clone();
+                self.conn = c.into_owned();
                 state
             }
         };

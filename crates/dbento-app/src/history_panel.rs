@@ -219,9 +219,12 @@ impl HistoryPanel {
                 let entry = &self.rows[ix];
                 let conn = self.workspace.connection(entry.connection());
                 // A connection since removed lexes as Postgres, the stricter of the two.
-                let engine = conn.map_or(Engine::Postgres, |c| c.engine());
+                let engine = conn.as_ref().map_or(Engine::Postgres, |c| c.engine());
                 let sql = one_line(engine, entry.sql());
-                let tag = conn.and_then(|c| c.effective_color());
+                // A name that no longer resolves fails closed: its dot reads as production.
+                let tag = conn.map_or(Tag::Unknown, |c| {
+                    c.effective_color().map_or(Tag::None, Tag::Color)
+                });
                 let detail = format!(
                     "{} \u{b7} {} \u{b7} {}",
                     entry.connection(),
@@ -346,18 +349,27 @@ pub fn one_line(engine: Engine, sql: &str) -> String {
         .to_string()
 }
 
+// A row's connection tag: its colour, none, or a name the workspace no longer resolves.
+#[derive(Clone, Copy)]
+enum Tag {
+    Color(Color),
+    None,
+    Unknown,
+}
+
 // The connection's tag before the SQL; an untagged row keeps the 8 px slot so the SQL aligns.
-fn tag_dot(ix: usize, tag: Option<Color>) -> AnyElement {
+fn tag_dot(ix: usize, tag: Tag) -> AnyElement {
     let dot = div().size(px(8.)).flex_none().rounded_full();
-    match tag {
-        Some(c) => dot
-            .id(("history-dot", ix))
-            .aria_label(color_name(c))
-            .test_support()
-            .bg(tag_color(c))
-            .into_any_element(),
-        None => dot.into_any_element(),
-    }
+    let (label, color) = match tag {
+        Tag::Color(c) => (color_name(c), c),
+        Tag::Unknown => ("unknown", Color::Red),
+        Tag::None => return dot.into_any_element(),
+    };
+    dot.id(("history-dot", ix))
+        .aria_label(label)
+        .test_support()
+        .bg(tag_color(color))
+        .into_any_element()
 }
 
 // The filter menu: "all connections" at 0, then each connection in workspace order, the

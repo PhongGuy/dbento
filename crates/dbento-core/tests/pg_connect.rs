@@ -105,7 +105,7 @@ async fn an_unreachable_server_names_the_target() {
     let ws = Workspace::open(dir.path()).unwrap();
     let err = connect(
         &ws,
-        ws.connection("pg").unwrap(),
+        ws.declared("pg").unwrap(),
         None,
         SessionOptions::default(),
     )
@@ -136,7 +136,7 @@ async fn an_out_of_range_timeout_option_fails_before_any_io() {
             Duration::from_secs(5),
             connect(
                 &ws,
-                ws.connection("pg").unwrap(),
+                ws.declared("pg").unwrap(),
                 Some(Secret::new("p")),
                 opts,
             ),
@@ -168,7 +168,7 @@ async fn a_host_that_drops_packets_times_out_naming_host_and_port() {
         Duration::from_secs(30),
         connect(
             &ws,
-            ws.connection("pg").unwrap(),
+            ws.declared("pg").unwrap(),
             Some(Secret::new("hunter2-secret")),
             SessionOptions::default(),
         ),
@@ -210,7 +210,7 @@ async fn a_server_that_accepts_but_never_answers_the_startup_times_out() {
         Duration::from_secs(30),
         connect(
             &ws,
-            ws.connection("pg").unwrap(),
+            ws.declared("pg").unwrap(),
             Some(Secret::new("p")),
             SessionOptions::default(),
         ),

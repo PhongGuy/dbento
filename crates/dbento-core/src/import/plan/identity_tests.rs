@@ -118,8 +118,8 @@ fn a_read_only_source_never_matches_a_writable_connection() {
     assert_eq!(conn_actions(&p), [("orders-2".to_owned(), "add")]);
     p.apply().unwrap();
     let opened = Workspace::open(ws.path()).unwrap();
-    assert!(opened.connection("orders-2").unwrap().read_only());
-    assert!(!opened.connection("orders").unwrap().read_only());
+    assert!(opened.declared("orders-2").unwrap().read_only());
+    assert!(!opened.declared("orders").unwrap().read_only());
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn a_mysql_draft_is_written_as_engine_mysql_and_reopens() {
         "{text}"
     );
     let opened = Workspace::open(ws.path()).unwrap();
-    let c = opened.connection("shop").unwrap();
+    let c = opened.declared("shop").unwrap();
     assert_eq!(
         (c.engine(), c.port(), c.database()),
         (Engine::Mysql, Some(3306), None)

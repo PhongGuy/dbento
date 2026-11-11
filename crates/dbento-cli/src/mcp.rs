@@ -11,7 +11,10 @@ use crate::{Exit, open_workspace, secret};
 
 #[derive(clap::Args)]
 pub(crate) struct McpArgs {
-    /// Expose only this connection; repeat for several. Without it every connection is served.
+    /// Expose only this connection; repeat for several. A parent with `databases` also exposes
+    /// every database it defines: adding `databases = "all"` widens this to every database its
+    /// login can reach, and their results are untrusted input. Without it every connection is
+    /// served.
     #[arg(long = "connection", value_name = "NAME")]
     pub connections: Vec<String>,
     /// The statement timeout for every call, in seconds; a connection's shorter timeout wins.

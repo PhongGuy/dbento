@@ -1,7 +1,7 @@
 //! Storing the secrets of imported connections in the keychain after `apply`.
 
 use super::plan::Imported;
-use crate::{Secret, SecretKey, SecretSource, SecretStore, Workspace, secret_env_var};
+use crate::{Secret, SecretSource, SecretStore, Workspace, secret_env_var};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
@@ -136,14 +136,16 @@ pub fn store_secrets(
 
     let mut outcomes = Vec::new();
     for i in imported {
-        let Some(conn) = ws.connection(i.name()) else {
+        let Some(conn) = ws.declared(i.name()) else {
             continue;
         };
         if !conn.engine().capabilities().password || *conn.secret_source() != SecretSource::Keychain
         {
             continue;
         }
-        let key = SecretKey::for_connection(&ws, conn);
+        let Some(key) = ws.secret_target(i.name()) else {
+            continue;
+        };
         let secret = secrets.get(i.source_id());
         let set = |s: &Secret| match store.set(&key, s) {
             Ok(()) => SecretOutcome::Stored,

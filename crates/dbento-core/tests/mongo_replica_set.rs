@@ -25,7 +25,7 @@ async fn session(
     let toml = format!("dbento = 1\n[connections.set]\nengine = \"mongodb\"\nuri = \"{uri}\"\n");
     std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("set").unwrap();
+    let conn = ws.declared("set").unwrap();
     let session = connect(&ws, conn, None, o).await.unwrap();
     (dir, session)
 }

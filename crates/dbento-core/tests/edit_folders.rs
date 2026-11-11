@@ -461,10 +461,7 @@ fn a_folder_edit_applies_and_reopens() {
         .apply()
         .unwrap();
     let back = Workspace::open(d.path()).unwrap();
-    assert_eq!(
-        back.connection("prod").unwrap().folder(),
-        Some(&path("a b"))
-    );
+    assert_eq!(back.declared("prod").unwrap().folder(), Some(&path("a b")));
     assert!(back.folders().iter().all(|f| f.path().as_str() != "team"));
 }
 
@@ -477,8 +474,8 @@ fn zero_width_characters_in_hand_written_paths_load_as_one_folder() {
     let paths: Vec<&str> = w.folders().iter().map(|f| f.path().as_str()).collect();
     assert_eq!(paths, ["team", "team/sub"]);
     assert_eq!(own_color(&w, "team"), Some(Some(Color::Blue)));
-    assert_eq!(w.connection("a").unwrap().folder(), Some(&path("team")));
-    assert_eq!(w.connection("b").unwrap().folder(), Some(&path("team/sub")));
+    assert_eq!(w.declared("a").unwrap().folder(), Some(&path("team")));
+    assert_eq!(w.declared("b").unwrap().folder(), Some(&path("team/sub")));
     assert_eq!(w.connection_spec("a").unwrap().folder, Some(path("team")));
 }
 

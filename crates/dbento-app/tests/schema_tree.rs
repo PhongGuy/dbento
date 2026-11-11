@@ -1402,7 +1402,7 @@ fn surrealdb_selects_name_the_table_alone_and_switch_database_only_when_needed()
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let sr = ws.connection("sr").unwrap();
+    let sr = ws.declared("sr").unwrap();
     assert_eq!(
         select_sql(Engine::Surrealdb, &RelationRef::new("main", "t")),
         "SELECT * FROM `t`"
@@ -1417,7 +1417,7 @@ fn surrealdb_selects_name_the_table_alone_and_switch_database_only_when_needed()
     );
     assert_eq!(
         select_text(
-            ws.connection("lite").unwrap(),
+            ws.declared("lite").unwrap(),
             &RelationRef::new("main", "Album")
         ),
         "SELECT *\nFROM main.Album"
@@ -1433,7 +1433,7 @@ fn mongodb_opens_a_collection_with_find_and_names_another_database() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let mg = ws.connection("mg").unwrap();
+    let mg = ws.declared("mg").unwrap();
     assert_eq!(
         select_sql(Engine::Mongodb, &RelationRef::new("shop", "orders")),
         "db.getCollection(\"orders\").find()"

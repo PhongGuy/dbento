@@ -68,7 +68,7 @@ async fn an_unreachable_server_is_named() {
     let toml = format!("dbento = 1\n[connections.c]\nengine = \"mongodb\"\nuri = \"{uri}\"\n");
     std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("c").unwrap();
+    let conn = ws.declared("c").unwrap();
     let at = Instant::now();
     match connect(&ws, conn, None, SessionOptions::default()).await {
         Err(ConnectError::Open { message }) => {
@@ -86,7 +86,7 @@ async fn a_missing_ca_file_is_a_tls_error_named_from_the_workspace() {
     let toml = format!("dbento = 1\n[connections.c]\nengine = \"mongodb\"\nuri = \"{uri}\"\n");
     std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("c").unwrap();
+    let conn = ws.declared("c").unwrap();
     match connect(&ws, conn, None, SessionOptions::default()).await {
         Err(ConnectError::Tls { message, .. }) => {
             let want = dir.path().join("certs/none.pem");

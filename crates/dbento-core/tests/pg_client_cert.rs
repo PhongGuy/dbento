@@ -80,7 +80,7 @@ async fn try_connect(
 ) -> Result<dbento_core::Session, ConnectError> {
     connect(
         ws,
-        ws.connection(name).unwrap(),
+        ws.declared(name).unwrap(),
         None,
         with_passphrase(passphrase),
     )

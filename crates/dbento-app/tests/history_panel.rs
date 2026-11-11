@@ -520,3 +520,57 @@ fn a_hidden_panel_runs_no_refresh_timer(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(notes.get(), after_show + 1);
 }
+
+#[gpui_kit::test]
+fn a_row_whose_connection_is_gone_is_tagged_unknown(cx: &mut TestAppContext) {
+    let (fx, _files, win, _) = started(cx);
+    wait_rows(
+        cx,
+        win,
+        &["DELETE FROM t WHERE x = 1", "SELECT 2 FROM pg", "SELECT 1"],
+    );
+    assert!(
+        !present(cx, win, ("history-dot", 1usize)),
+        "nopg still resolves and is untagged"
+    );
+    std::fs::write(
+        fx.dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n",
+    )
+    .unwrap();
+    support::reload(cx, win);
+    assert_eq!(
+        label_of(cx, win, ("history-dot", 1usize)).as_deref(),
+        Some("unknown"),
+        "nopg no longer resolves, so it is tagged as production"
+    );
+}
+
+#[gpui_kit::test]
+fn a_filter_on_a_child_lasts_while_the_child_resolves(cx: &mut TestAppContext) {
+    let (fx, _files, win, shell) = started(cx);
+    let panel = shell.read_with(cx, |s, _| s.history_panel().unwrap().clone());
+    let filter = |cx: &mut TestAppContext| {
+        panel.read_with(cx, |p, _| p.connection_filter().map(str::to_owned))
+    };
+    // `more` lands inside `[connections.nopg]`, so nopg becomes a parent of `nopg/x`.
+    support::rewrite(&fx, "", "databases = [\"x\"]\n");
+    support::reload(cx, win);
+    panel.update(cx, |p, cx| {
+        p.set_connection_filter(Some("nopg/x".into()), cx)
+    });
+    cx.run_until_parked();
+    support::reload(cx, win);
+    assert_eq!(
+        filter(cx).as_deref(),
+        Some("nopg/x"),
+        "a reload keeps a filter on a child that resolves"
+    );
+    support::rewrite(&fx, "", "");
+    support::reload(cx, win);
+    assert_eq!(
+        filter(cx),
+        None,
+        "once nopg has no databases the child is gone and the filter resets"
+    );
+}

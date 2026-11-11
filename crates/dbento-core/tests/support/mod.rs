@@ -39,7 +39,7 @@ pub fn sqlite_fixture(setup: &str, extra_toml: &str) -> Fixture {
 
 impl Fixture {
     pub async fn session(&self, opts: SessionOptions) -> Session {
-        let conn = self.ws.connection("lite").unwrap();
+        let conn = self.ws.declared("lite").unwrap();
         connect(&self.ws, conn, None, opts).await.unwrap()
     }
     /// A scalar from the database file through a separate read-write connection.
@@ -70,7 +70,7 @@ impl Fixture {
         changes: Vec<Change>,
     ) -> Result<Applied, ApplyError> {
         let batch = EditBatch::new(target.clone(), changes).unwrap();
-        apply(&self.ws, self.ws.connection("lite").unwrap(), None, batch).await
+        apply(&self.ws, self.ws.declared("lite").unwrap(), None, batch).await
     }
     /// Every row of `sql` through a Dbento session, as the grid would hold it.
     pub async fn rows(&self, sql: &str) -> Vec<Vec<Cell>> {
@@ -105,7 +105,7 @@ pub async fn pg_fixture(extra_toml: &str) -> PgFixture {
 
 impl PgFixture {
     pub fn conn(&self) -> &ConnectionConfig {
-        self.ws.connection("pg").unwrap()
+        self.ws.declared("pg").unwrap()
     }
     pub fn secret(&self) -> Secret {
         Secret::new(self.db.password())
@@ -280,7 +280,7 @@ pub async fn my_fixtures(extra_toml: &str) -> Vec<(String, MyFixture)> {
 
 impl MyFixture {
     pub fn conn(&self) -> &ConnectionConfig {
-        self.ws.connection("my").unwrap()
+        self.ws.declared("my").unwrap()
     }
     pub fn secret(&self) -> Secret {
         Secret::new(self.db.password())
@@ -406,7 +406,7 @@ impl DuckFixture {
         name: &str,
         opts: SessionOptions,
     ) -> Result<Session, ConnectError> {
-        connect(&self.ws, self.ws.connection(name).unwrap(), None, opts).await
+        connect(&self.ws, self.ws.declared(name).unwrap(), None, opts).await
     }
     pub async fn session(&self, opts: SessionOptions) -> Session {
         self.try_session_of("duck", opts).await.unwrap()
@@ -448,7 +448,7 @@ pub async fn ms_off() -> MsFixture {
 
 impl MsFixture {
     pub fn conn(&self) -> &ConnectionConfig {
-        self.ws.connection("ms").unwrap()
+        self.ws.declared("ms").unwrap()
     }
     pub fn secret(&self) -> Secret {
         Secret::new(self.db.password())
@@ -500,7 +500,7 @@ pub async fn mg(extra_toml: &str) -> MgFixture {
 #[cfg(feature = "mongodb")]
 impl MgFixture {
     pub fn conn(&self, user: MgUser) -> &ConnectionConfig {
-        self.ws.connection(mg_name(user)).unwrap()
+        self.ws.declared(mg_name(user)).unwrap()
     }
     pub async fn session(&self, user: MgUser, opts: SessionOptions) -> Session {
         let secret = self.db.password(user).map(Secret::new);
@@ -579,7 +579,7 @@ pub async fn dy(extra_toml: &str) -> DyFixture {
 #[cfg(feature = "dynamodb")]
 impl DyFixture {
     pub fn conn(&self) -> &ConnectionConfig {
-        self.ws.connection("moto").unwrap()
+        self.ws.declared("moto").unwrap()
     }
     pub async fn session(&self, opts: SessionOptions) -> Session {
         let secret = Some(Secret::new(dbento_testkit::DY_SECRET));
@@ -636,7 +636,7 @@ pub async fn rd(extra_toml: &str) -> RdFixture {
 #[cfg(feature = "redis")]
 impl RdFixture {
     pub fn conn(&self, user: dbento_testkit::RdUser) -> &ConnectionConfig {
-        self.ws.connection(rd_name(user)).unwrap()
+        self.ws.declared(rd_name(user)).unwrap()
     }
     pub async fn session(&self, user: dbento_testkit::RdUser, opts: SessionOptions) -> Session {
         let secret = self.db.password(user).map(Secret::new);
@@ -664,7 +664,7 @@ impl RdFixture {
         let ws = Workspace::open(dir.path()).unwrap();
         connect(
             &ws,
-            ws.connection("adhoc").unwrap(),
+            ws.declared("adhoc").unwrap(),
             Some(Secret::new(password)),
             opts,
         )
@@ -771,7 +771,7 @@ pub async fn sr_try(
     )
     .unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("sr").unwrap();
+    let conn = ws.declared("sr").unwrap();
     let secret = login.map(|_| Secret::new(db.password()));
     connect(&ws, conn, secret, opts).await
 }
@@ -861,7 +861,7 @@ pub async fn sr_proxied(
     )
     .unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("sr").unwrap();
+    let conn = ws.declared("sr").unwrap();
     let secret = Some(Secret::new(db.password()));
     let session = connect(&ws, conn, secret, opts).await.unwrap();
     (session, SrPipe { tasks, frozen })

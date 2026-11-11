@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod cli_chinook;
+mod cli_derived;
 mod cli_duckdb;
 mod cli_dynamo;
 mod cli_formats;

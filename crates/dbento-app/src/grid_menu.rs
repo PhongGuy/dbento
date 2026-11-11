@@ -325,7 +325,7 @@ pub(crate) fn sql_source(m: &TabModel, stmt: usize) -> Option<(Engine, RelationR
     let schema = (result.epoch == m.epoch())
         .then(|| m.spec().workspace.connection(&m.spec().connection))
         .flatten()
-        .and_then(|conn| default_schema(engine, conn));
+        .and_then(|conn| default_schema(engine, &conn));
     Some((
         engine,
         single_source(engine, &result.sql, schema.as_deref())?,

@@ -149,7 +149,7 @@ async fn a_missing_target_fails_connect_and_creates_nothing() {
         )
         .unwrap();
         let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-        let conn = ws.connection("sr").unwrap();
+        let conn = ws.declared("sr").unwrap();
         let secret = Some(dbento_core::Secret::new(db.password()));
         let message =
             open_message(dbento_core::connect(&ws, conn, secret, SessionOptions::default()).await);
@@ -166,7 +166,7 @@ async fn a_missing_target_fails_connect_and_creates_nothing() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("sr").unwrap();
+    let conn = ws.declared("sr").unwrap();
     let secret = Some(dbento_core::Secret::new(db.password()));
     let message =
         open_message(dbento_core::connect(&ws, conn, secret, SessionOptions::default()).await);

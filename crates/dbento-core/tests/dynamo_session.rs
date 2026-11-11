@@ -142,7 +142,7 @@ async fn an_unknown_region_or_a_missing_secret_is_open() {
     let ws = Workspace::open(dir.path()).unwrap();
     match connect(
         &ws,
-        ws.connection("far").unwrap(),
+        ws.declared("far").unwrap(),
         Some(Secret::new(DY_SECRET)),
         SessionOptions::default(),
     )

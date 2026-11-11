@@ -94,7 +94,7 @@ async fn duckdb_shows_its_schema_tree_and_runs_a_query() {
 async fn a_file_held_read_write_by_another_process_says_so() {
     let ws = workspace();
     let w = dbento_core::Workspace::open(ws.path()).unwrap();
-    let conn = w.connection("duck").unwrap();
+    let conn = w.declared("duck").unwrap();
     // This test process holds the file read-write, so the app is the second process.
     let held = dbento_core::connect(&w, conn, None, Default::default())
         .await

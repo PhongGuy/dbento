@@ -139,7 +139,7 @@ fn a_read_only_duckdb_tab_shows_the_duckdb_badge(cx: &mut TestAppContext) {
         Some(READ_ONLY_DUCKDB_TOOLTIP)
     );
     assert_eq!(
-        connection_tooltip(o.fx.ws.connection("duck").unwrap()),
+        connection_tooltip(o.fx.ws.declared("duck").unwrap()),
         "duckdb \u{b7} data/app.duckdb \u{b7} Double-click to open a query tab"
     );
 }

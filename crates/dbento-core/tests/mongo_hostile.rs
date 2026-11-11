@@ -97,7 +97,7 @@ async fn session_on(hostile: RawDocumentBuf) -> (Session, tempfile::TempDir) {
     let toml = format!("dbento = 1\n[connections.c]\nengine = \"mongodb\"\nuri = \"{uri}\"\n");
     std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("c").unwrap();
+    let conn = ws.declared("c").unwrap();
     let session = connect(&ws, conn, None, SessionOptions::default())
         .await
         .unwrap();

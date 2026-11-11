@@ -15,7 +15,7 @@ const SLOW: &str = "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM
 
 async fn exec(ws: &Path, sql: &str) {
     let w = dbento_core::Workspace::open(ws).unwrap();
-    let conn = w.connection("lite").unwrap();
+    let conn = w.declared("lite").unwrap();
     let mut s = dbento_core::connect(&w, conn, None, Default::default())
         .await
         .unwrap();

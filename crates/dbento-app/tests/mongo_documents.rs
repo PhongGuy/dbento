@@ -16,7 +16,7 @@ async fn store(db: &MgDb, text: &str) -> ResultStore {
     );
     std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
     let ws = Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("mg").unwrap();
+    let conn = ws.declared("mg").unwrap();
     let secret = Secret::new(db.password(MgUser::Writer).unwrap());
     let mut s = dbento_core::connect(&ws, conn, Some(secret), SessionOptions::default())
         .await

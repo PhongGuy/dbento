@@ -40,7 +40,7 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 fn stored(ws: &Path, store: &MemoryStore, name: &str) -> Option<String> {
     let ws = Workspace::open(ws).unwrap();
-    let key = SecretKey::for_connection(&ws, ws.connection(name).unwrap());
+    let key = SecretKey::for_connection(&ws, ws.declared(name).unwrap());
     store.get(&key).unwrap().map(|s| s.expose().to_owned())
 }
 

@@ -5,7 +5,8 @@
 
 use crate::folder::{FolderPath, WorkspaceItem, visible};
 use crate::workspace::{
-    AuthLevel, Color, Engine, OpenError, SecretSource, TlsMode, Workspace, color_word, valid_name,
+    AuthLevel, Color, Databases, Engine, OpenError, SecretSource, TlsMode, Workspace, color_word,
+    valid_name,
 };
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,8 @@ pub struct ConnectionSpec {
     pub tls_key: Option<String>,
     /// `read_only_user` (SQL Server).
     pub read_only_user: Option<String>,
+    /// `databases` (Postgres and SQL Server parents).
+    pub databases: Option<Databases>,
     /// `secret` (Postgres and MySQL).
     pub secret: Option<SecretSource>,
     /// `read_only`.
@@ -78,6 +81,7 @@ impl ConnectionSpec {
             tls_cert: None,
             tls_key: None,
             read_only_user: None,
+            databases: None,
             secret: None,
             read_only: None,
             color: None,
@@ -94,7 +98,7 @@ impl ConnectionSpec {
     }
 
     /// Every key in the order a new entry writes them, with its TOML value when present.
-    fn values(&self) -> [(&'static str, Option<Value>); 23] {
+    fn values(&self) -> [(&'static str, Option<Value>); 24] {
         let engine = self.engine.name();
         let tls = |t: &TlsMode| match t {
             TlsMode::Verify => "verify",
@@ -110,6 +114,10 @@ impl ConnectionSpec {
             }
         };
         let text = |s: &Option<String>| s.as_deref().map(Value::from);
+        let databases = |d: &Databases| match d {
+            Databases::All => Value::from("all"),
+            Databases::Listed(names) => Value::Array(names.iter().map(String::as_str).collect()),
+        };
         [
             ("engine", Some(Value::from(engine))),
             ("uri", text(&self.uri)),
@@ -117,6 +125,7 @@ impl ConnectionSpec {
             ("host", text(&self.host)),
             ("port", self.port.map(|p| Value::from(i64::from(p)))),
             ("database", text(&self.database)),
+            ("databases", self.databases.as_ref().map(databases)),
             ("namespace", text(&self.namespace)),
             ("user", text(&self.user)),
             ("auth_level", self.auth_level.map(|l| Value::from(l.name()))),
@@ -414,11 +423,11 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
                 return Err(EditError::InvalidName { name: name.clone() });
             }
             if let Some(prev) = previous
-                && ws.connection(prev).is_none()
+                && ws.declared(prev).is_none()
             {
                 return Err(EditError::NotFound { name: prev.clone() });
             }
-            if previous.as_deref() != Some(name) && ws.connection(name).is_some() {
+            if previous.as_deref() != Some(name) && ws.declared(name).is_some() {
                 return Err(EditError::NameTaken { name: name.clone() });
             }
             match previous {
@@ -449,7 +458,7 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
             }
         }
         Edit::DeleteConnection { name } => {
-            if ws.connection(name).is_none() {
+            if ws.declared(name).is_none() {
                 return Err(EditError::NotFound { name: name.clone() });
             }
             entry_table(&mut doc, name)?;
@@ -503,7 +512,7 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
             to,
         } => {
             let conn = ws
-                .connection(name)
+                .declared(name)
                 .ok_or_else(|| EditError::NotFound { name: name.clone() })?;
             if conn.folder() == to.as_ref() {
                 unchanged = true;
@@ -844,6 +853,9 @@ fn update_entry(
     // Session settings are Postgres-only; inline, sub-table and dotted forms are all one key here.
     if new.engine != Engine::Postgres {
         entry.remove("settings");
+    }
+    if !matches!(new.engine, Engine::Postgres | Engine::Mssql) {
+        entry.remove("databases");
     }
     Ok(())
 }

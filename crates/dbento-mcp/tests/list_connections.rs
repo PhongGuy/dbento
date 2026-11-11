@@ -64,9 +64,9 @@ async fn lists_every_connection_with_engine_flags_and_folder() {
     assert_eq!(
         by_name(&list),
         vec![
-            json!({"name": "dev", "engine": "postgres", "language": "SQL", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": false, "folder": null}),
-            json!({"name": "lite", "engine": "sqlite", "language": "SQL", "read_only": true, "read_only_enforcement": "database", "session": ENFORCED, "production": false, "folder": null}),
-            json!({"name": "shop", "engine": "postgres", "language": "SQL", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": true, "folder": "Prod/EU"}),
+            json!({"name": "dev", "engine": "postgres", "language": "SQL", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": false, "folder": null, "parent": null, "databases": null}),
+            json!({"name": "lite", "engine": "sqlite", "language": "SQL", "read_only": true, "read_only_enforcement": "database", "session": ENFORCED, "production": false, "folder": null, "parent": null, "databases": null}),
+            json!({"name": "shop", "engine": "postgres", "language": "SQL", "read_only": false, "read_only_enforcement": "database", "session": POSTGRES, "production": true, "folder": "Prod/EU", "parent": null, "databases": null}),
         ]
     );
 }

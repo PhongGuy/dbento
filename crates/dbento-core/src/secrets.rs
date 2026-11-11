@@ -57,6 +57,22 @@ pub struct SecretKey {
     slot: Slot,
 }
 
+// Keychain writes take their key only from these targets, so a name that is not written in
+// dbento.toml (a derived child, a typo) can never create or remove a keychain entry.
+impl Workspace {
+    /// The keychain entry of declared connection `name`'s password; None for any other name.
+    pub fn secret_target(&self, name: &str) -> Option<SecretKey> {
+        self.declared(name)
+            .map(|c| SecretKey::for_connection(self, c))
+    }
+
+    /// As `secret_target`, for the `tls_key` passphrase.
+    pub fn key_passphrase_target(&self, name: &str) -> Option<SecretKey> {
+        self.declared(name)
+            .map(|c| SecretKey::key_passphrase_for(self, c))
+    }
+}
+
 impl SecretKey {
     /// The password key for `connection` in the workspace at `workspace_dir`.
     pub fn new(workspace_dir: impl Into<PathBuf>, connection: impl Into<String>) -> Self {
@@ -69,7 +85,7 @@ impl SecretKey {
 
     /// The password key for a connection of an opened workspace.
     pub fn for_connection(ws: &Workspace, conn: &ConnectionConfig) -> Self {
-        SecretKey::new(ws.dir(), conn.name())
+        SecretKey::new(ws.dir(), conn.secret_owner())
     }
 
     /// The key of the `tls_key` passphrase for `connection` in the workspace at `workspace_dir`.
@@ -85,7 +101,7 @@ impl SecretKey {
 
     /// The key of the `tls_key` passphrase for a connection of an opened workspace.
     pub fn key_passphrase_for(ws: &Workspace, conn: &ConnectionConfig) -> Self {
-        SecretKey::key_passphrase(ws.dir(), conn.name())
+        SecretKey::key_passphrase(ws.dir(), conn.secret_owner())
     }
 
     /// The same secret for the connection renamed to `connection`.
@@ -294,8 +310,8 @@ pub fn move_secret(
     Ok(true)
 }
 
-/// The secret for a connection: keychain first, then `DBENTO_SECRET_<NAME>`, or only the
-/// variable a connection names with `secret = { env = ... }`.
+/// The secret for a connection, keyed by its `secret_owner`: keychain first, then
+/// `DBENTO_SECRET_<OWNER>`, or only the variable a connection names with `secret = { env = ... }`.
 ///
 /// SQLite and `secret = "none"` connections resolve to `None` without touching the store. Only
 /// an absent or `Unavailable` keychain falls through to the environment; a failing one is an error.
@@ -323,7 +339,7 @@ pub fn resolve_secret(
                 Ok(None) | Err(SecretError::Unavailable { .. }) => {}
                 Err(e) => return Err(e),
             }
-            Ok(env(&secret_env_var(conn.name())).map(Secret::new))
+            Ok(env(&secret_env_var(conn.secret_owner())).map(Secret::new))
         }
     }
 }
@@ -340,7 +356,7 @@ pub fn secret_hint(
     {
         return None;
     }
-    let name = conn.name();
+    let name = conn.secret_owner();
     let variable = secret_env_var(name);
     let mut hint = format!(
         "no secret was found for '{name}': run `dbento secret set {name}` or set {variable}"
@@ -354,7 +370,7 @@ pub fn secret_hint(
 }
 
 /// The passphrase for a connection's encrypted `tls_key`: keychain first, then
-/// `DBENTO_KEY_PASSPHRASE_<NAME>`.
+/// `DBENTO_KEY_PASSPHRASE_<OWNER>`.
 ///
 /// Neither is consulted unless the key file is an encrypted PKCS#8 PEM, so a plain key never
 /// prompts a keychain; an unreadable key resolves to `None` and fails at connect, naming the
@@ -373,7 +389,7 @@ pub fn resolve_key_passphrase(
         Ok(None) | Err(SecretError::Unavailable { .. }) => {}
         Err(e) => return Err(e),
     }
-    Ok(env(&key_passphrase_env_var(conn.name())).map(Secret::new))
+    Ok(env(&key_passphrase_env_var(conn.secret_owner())).map(Secret::new))
 }
 
 /// Whether the connection's `tls_key` file reads as an encrypted PKCS#8 PEM, so it needs a

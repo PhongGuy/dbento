@@ -26,7 +26,7 @@ const MY: &str =
 fn a_mysql_connection_parses_with_its_defaults() {
     let (_dir, ws) = ws_with(MY);
     let ws = ws.unwrap();
-    let c = ws.connection("my").unwrap();
+    let c = ws.declared("my").unwrap();
     assert_eq!((c.engine(), c.engine().name()), (Engine::Mysql, "mysql"));
     assert_eq!(
         (c.host(), c.port(), c.user(), c.database()),
@@ -43,7 +43,7 @@ fn mariadb_is_an_alias_and_a_local_host_defaults_to_plaintext() {
         "dbento = 1\n[connections.m]\nengine = \"mariadb\"\nhost = \"127.0.0.1\"\nport = 3307\nuser = \"u\"\ndatabase = \"shop\"\n",
     );
     let ws = ws.unwrap();
-    let c = ws.connection("m").unwrap();
+    let c = ws.declared("m").unwrap();
     assert_eq!((c.engine(), c.tls()), (Engine::Mysql, Some(TlsMode::Off)));
     assert_eq!(c.display_target(), "u@127.0.0.1:3307/shop");
     assert_eq!(ws.connection_spec("m").unwrap().engine, Engine::Mysql);
@@ -88,7 +88,7 @@ fn capabilities_are_static_per_engine() {
 fn a_mysql_keychain_connection_gets_the_secret_hint() {
     let (_dir, ws) = ws_with(MY);
     let ws = ws.unwrap();
-    let hint = secret_hint(&ws, ws.connection("my").unwrap(), &MemoryStore::new()).unwrap();
+    let hint = secret_hint(&ws, ws.declared("my").unwrap(), &MemoryStore::new()).unwrap();
     assert!(
         hint.contains("dbento secret set my") && hint.contains("DBENTO_SECRET_MY"),
         "{hint}"
@@ -142,7 +142,7 @@ fn the_default_schema_is_the_connections_database_on_mysql() {
     ));
     let ws = ws.unwrap();
     let at = |name: &str| {
-        let c = ws.connection(name).unwrap();
+        let c = ws.declared(name).unwrap();
         default_schema(c.engine(), c)
     };
     assert_eq!(at("my"), None);

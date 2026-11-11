@@ -21,7 +21,7 @@ fn the_badge_says_best_effort_and_the_residual_at_every_level() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let c = ws.connection("dy").unwrap();
+    let c = ws.declared("dy").unwrap();
     let residual = read_only_residual(Engine::Dynamodb).expect("DynamoDB states a residual");
     let want = format!("{READ_ONLY_DYNAMODB_TOOLTIP} {residual}");
     for level in [None, Some(ReadOnlyEnforcement::BestEffort)] {

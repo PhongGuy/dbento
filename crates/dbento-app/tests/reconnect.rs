@@ -52,7 +52,7 @@ fn a_session_change_shows_the_chip_and_keeps_the_old_settings(cx: &mut TestAppCo
     let old = model.read_with(cx, |m, _| {
         m.spec()
             .workspace
-            .connection("lite")
+            .declared("lite")
             .unwrap()
             .statement_timeout()
     });

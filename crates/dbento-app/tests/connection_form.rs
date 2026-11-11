@@ -3,7 +3,7 @@ use crate::support;
 use crate::support::{label_of, present};
 use dbento_app::connection_dialog::{ConnectionForm, Field};
 use dbento_core::{
-    AuthLevel, Color, ConnectionSpec, Engine, SecretSource, TlsMode, connection_form,
+    AuthLevel, Color, ConnectionSpec, Databases, Engine, SecretSource, TlsMode, connection_form,
 };
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
@@ -923,4 +923,20 @@ fn leaving_redis_for_mongodb_drops_its_keys_and_coming_back_restores_them(cx: &m
     );
     radio(cx, win, "conn-engine", 7);
     assert_eq!(edit(cx, &f), Ok(("cache".into(), rd())));
+}
+
+#[gpui_kit::test]
+fn an_edit_keeps_a_parents_databases(cx: &mut TestAppContext) {
+    let listed = Databases::Listed(vec!["a".into(), "b".into()]);
+    let mut spec = nopg();
+    spec.databases = Some(listed.clone());
+    let (win, f) = open(cx, Some(("nopg", spec)));
+    set(cx, win, &f, Field::User, "me");
+    let (_, edited) = edit(cx, &f).unwrap();
+    assert_eq!(
+        edited.databases,
+        Some(listed),
+        "the form has no control for it and keeps it"
+    );
+    assert_eq!(edited.user.as_deref(), Some("me"));
 }

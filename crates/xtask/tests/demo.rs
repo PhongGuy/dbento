@@ -76,10 +76,10 @@ fn the_demo_workspace_opens_with_its_colours_and_saved_queries() {
     let dir = built_copy(tmp.path());
     let ws = Workspace::open(&dir).unwrap();
 
-    let shop = ws.connection("shop").unwrap();
+    let shop = ws.declared("shop").unwrap();
     assert!(!shop.read_only());
     assert_eq!(shop.effective_color(), Some(Color::Teal));
-    let prod = ws.connection("shop-prod").unwrap();
+    let prod = ws.declared("shop-prod").unwrap();
     assert!(prod.read_only());
     assert_eq!(prod.effective_color(), Some(Color::Red));
     assert_eq!(prod.sqlite_path(), shop.sqlite_path());
@@ -149,7 +149,7 @@ fn the_script_copies_the_demo_fresh_and_prints_the_launch_line() {
     assert!(!base.join("workspace/stale.sql").exists());
     assert!(base.join("state").is_dir());
     let ws = Workspace::open(base.join("workspace")).unwrap();
-    assert!(ws.connection("shop-prod").unwrap().read_only());
+    assert!(ws.declared("shop-prod").unwrap().read_only());
     let db = rusqlite::Connection::open(base.join("workspace/shop.sqlite")).unwrap();
     assert_eq!(count(&db, "events"), 200_000);
 }

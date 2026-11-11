@@ -25,7 +25,7 @@ const DUCK: &str = "engine = \"duckdb\"\npath = \"data/a.duckdb\"\n";
 fn a_duckdb_connection_is_a_file_resolved_against_the_workspace() {
     let (_dir, ws) = ws_with(&format!("{DUCK}read_only = true\ncolor = \"red\"\n"));
     let ws = ws.unwrap();
-    let c = ws.connection("duck").unwrap();
+    let c = ws.declared("duck").unwrap();
     assert_eq!(c.engine(), Engine::Duckdb);
     assert_eq!(Engine::Duckdb.name(), "duckdb");
     assert!(c.read_only());
@@ -42,7 +42,7 @@ fn a_duckdb_connection_is_a_file_resolved_against_the_workspace() {
 fn sqlite_keeps_its_path_under_both_accessors() {
     let (_dir, ws) = ws_with("engine = \"sqlite\"\npath = \"a.db\"\n");
     let ws = ws.unwrap();
-    let c = ws.connection("duck").unwrap();
+    let c = ws.declared("duck").unwrap();
     assert_eq!(c.sqlite_path(), Some(ws.dir().join("a.db").as_path()));
     assert_eq!(c.file_path(), c.sqlite_path());
 }
@@ -84,9 +84,9 @@ fn same_session_compares_the_resolved_file() {
     ));
     let ws = ws.unwrap();
     let (a, b, c) = (
-        ws.connection("duck").unwrap(),
-        ws.connection("b").unwrap(),
-        ws.connection("c").unwrap(),
+        ws.declared("duck").unwrap(),
+        ws.declared("b").unwrap(),
+        ws.declared("c").unwrap(),
     );
     assert!(a.same_session(b));
     assert!(!a.same_session(c));
@@ -126,7 +126,7 @@ fn duckdb_text_uses_the_postgres_dialect_rules() {
     assert_eq!(quote_ident(Engine::Duckdb, "Users"), "\"Users\"");
     let (_dir, ws) = ws_with(DUCK);
     let ws = ws.unwrap();
-    let c = ws.connection("duck").unwrap();
+    let c = ws.declared("duck").unwrap();
     assert_eq!(default_schema(Engine::Duckdb, c), Some("main".to_owned()));
 }
 
@@ -136,7 +136,7 @@ async fn without_the_feature_a_duckdb_connection_is_unsupported() {
     use dbento_core::{ConnectError, SessionOptions, connect};
     let (_dir, ws) = ws_with(DUCK);
     let ws = ws.unwrap();
-    let c = ws.connection("duck").unwrap();
+    let c = ws.declared("duck").unwrap();
     match connect(&ws, c, None, SessionOptions::default()).await {
         Err(ConnectError::Unsupported { reason }) => {
             assert_eq!(reason, "DuckDB is not available in this build");

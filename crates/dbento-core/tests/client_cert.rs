@@ -22,7 +22,7 @@ fn cert_and_key_resolve_against_the_workspace() {
         "{PG}tls_cert = \"certs/me.crt\"\ntls_key = \"certs/me.key\"\n"
     ));
     let ws = ws.unwrap();
-    let conn = ws.connection("p").unwrap();
+    let conn = ws.declared("p").unwrap();
     // The workspace root is canonical, and a temp dir may sit behind a symlink (macOS /var).
     let root = fs::canonicalize(dir.path()).unwrap();
     assert_eq!(conn.tls_cert(), Some(root.join("certs/me.crt").as_path()));
@@ -92,7 +92,7 @@ fn no_env(_: &str) -> Option<String> {
 fn an_unencrypted_key_or_no_key_never_asks_the_store() {
     let (_d, ws) = cert_ws(PLAIN);
     for name in ["p", "bare"] {
-        let conn = ws.connection(name).unwrap();
+        let conn = ws.declared(name).unwrap();
         let found = resolve_key_passphrase(&ws, conn, &Refusing, &no_env).unwrap();
         assert!(found.is_none(), "{name}");
     }
@@ -101,7 +101,7 @@ fn an_unencrypted_key_or_no_key_never_asks_the_store() {
 #[test]
 fn an_encrypted_key_reads_its_own_keychain_slot_then_the_environment() {
     let (_d, ws) = cert_ws(ENCRYPTED);
-    let conn = ws.connection("p").unwrap();
+    let conn = ws.declared("p").unwrap();
     let store = MemoryStore::new();
     // The password's slot is not the passphrase's.
     store
@@ -167,7 +167,7 @@ fn an_edit_writes_reads_back_and_removes_the_ca() {
     assert!(plan.new_text().contains("tls_ca = \"other/ca.pem\"\n"));
     let after = plan.workspace();
     assert_eq!(after.connection_spec("p").unwrap(), spec);
-    let conn = after.connection("p").unwrap();
+    let conn = after.declared("p").unwrap();
     assert_eq!(
         conn.tls_ca(),
         Some(after.dir().join("other/ca.pem").as_path())

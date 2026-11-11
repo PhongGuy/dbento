@@ -194,7 +194,7 @@ async fn a_lost_idle_connection_disconnects_without_a_run_and_the_next_run_recon
 #[tokio::test(flavor = "multi_thread")]
 async fn a_panic_closes_the_session_it_held() {
     let fx = fixture("", "");
-    let conn = fx.ws.connection("lite").unwrap();
+    let conn = fx.ws.declared("lite").unwrap();
     let session = dbento_core::connect(&fx.ws, conn, None, Default::default())
         .await
         .unwrap();

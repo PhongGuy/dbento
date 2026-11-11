@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use dbento_core::{Color, Workspace};
+use dbento_core::{Color, ConnectionConfig, Databases, Workspace};
 use serde::Serialize;
 
 /// How a run ended; the highest code wins when several things went wrong.
@@ -163,18 +163,27 @@ fn color_name(c: Color) -> &'static str {
 }
 
 fn connections(ws: &Workspace, format: ListFormat) -> anyhow::Result<()> {
-    let rows: Vec<ConnectionRow> = ws
-        .connections()
-        .iter()
-        .map(|c| ConnectionRow {
-            name: c.name().to_owned(),
-            engine: c.engine().name(),
-            target: c.display_target(),
-            read_only: c.read_only(),
-            color: c.effective_color().map(color_name),
-            folder: c.folder().map(ToString::to_string),
-        })
-        .collect();
+    let row = |c: &ConnectionConfig| ConnectionRow {
+        name: c.name().to_owned(),
+        engine: c.engine().name(),
+        target: c.display_target(),
+        read_only: c.read_only(),
+        color: c.effective_color().map(color_name),
+        folder: c.folder().map(ToString::to_string),
+    };
+    // Each listed child follows its parent; an `all` parent's children are unknown until
+    // the server is asked, so only the parent is listed.
+    let mut rows = Vec::new();
+    for c in ws.connections() {
+        rows.push(row(c));
+        if let Some(Databases::Listed(dbs)) = c.databases() {
+            for db in dbs {
+                if let Some(child) = ws.connection(&format!("{}/{db}", c.name())) {
+                    rows.push(row(&child));
+                }
+            }
+        }
+    }
     match format {
         ListFormat::Json => println!(
             "{}",
@@ -221,10 +230,8 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
         }
         Command::Query { conn, sql, exec } => {
             let ws = open_workspace(cli.workspace.as_deref())?;
-            let config = ws
-                .connection(&conn)
-                .ok_or_else(|| anyhow::anyhow!("no connection named {conn:?} in dbento.toml"))?;
-            return exec::execute(&ws, config, &sql, &exec).await;
+            let config = ws.resolve(&conn).map_err(|e| anyhow::anyhow!("{e}"))?;
+            return exec::execute(&ws, &config, &sql, &exec).await;
         }
         Command::Run { file, conn, exec } => {
             let ws = open_workspace(cli.workspace.as_deref())?;
@@ -239,14 +246,12 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
                     )
                 })?,
             };
-            let config = ws
-                .connection(&name)
-                .ok_or_else(|| anyhow::anyhow!("no connection named {name:?} in dbento.toml"))?;
+            let config = ws.resolve(&name).map_err(|e| anyhow::anyhow!("{e}"))?;
             // A file of another language would only reach the server to fail confusingly.
             if let Some(why) = run::language_mismatch(&file, config.engine()) {
                 anyhow::bail!(why);
             }
-            return exec::execute(&ws, config, &sql, &exec).await;
+            return exec::execute(&ws, &config, &sql, &exec).await;
         }
         Command::Import {
             source: ImportSource::Datagrip(args),

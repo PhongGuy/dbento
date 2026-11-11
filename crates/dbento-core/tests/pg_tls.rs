@@ -33,7 +33,7 @@ async fn verify_with_tls_ca_connects_and_cancels_over_tls() {
     let (db, _dir, ws) = tls_workspace(Some("ca.pem")).await;
     let mut s = connect(
         &ws,
-        ws.connection("pg").unwrap(),
+        ws.declared("pg").unwrap(),
         Some(Secret::new(db.password())),
         SessionOptions::default(),
     )
@@ -119,7 +119,7 @@ async fn a_cancel_on_a_tls_session_opens_with_an_ssl_request() {
     let ws = Workspace::open(dir.path()).unwrap();
     let mut s = connect(
         &ws,
-        ws.connection("pg").unwrap(),
+        ws.declared("pg").unwrap(),
         Some(Secret::new(db.password())),
         SessionOptions::default(),
     )
@@ -153,7 +153,7 @@ async fn an_unknown_issuer_is_a_tls_error_naming_the_host() {
     let (db, _dir, ws) = tls_workspace(None).await;
     let err = connect(
         &ws,
-        ws.connection("pg").unwrap(),
+        ws.declared("pg").unwrap(),
         Some(Secret::new(db.password())),
         SessionOptions::default(),
     )
@@ -193,7 +193,7 @@ async fn an_unreadable_tls_ca_is_a_tls_error() {
     let ws = Workspace::open(dir.path()).unwrap();
     let err = connect(
         &ws,
-        ws.connection("pg").unwrap(),
+        ws.declared("pg").unwrap(),
         None,
         SessionOptions::default(),
     )
@@ -225,7 +225,7 @@ async fn a_tls_ca_file_without_certificates_is_a_tls_error() {
             Duration::from_secs(20),
             connect(
                 &ws,
-                ws.connection("pg").unwrap(),
+                ws.declared("pg").unwrap(),
                 Some(Secret::new("p")),
                 SessionOptions::default(),
             ),

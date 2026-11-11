@@ -372,7 +372,7 @@ fn a_postgres_insert_with_backslashes_round_trips() {
     rt.block_on(async {
         let (db, _dir, spec) = support::pg_spec("").await;
         let original = r"a\b\\c\'d'e\n";
-        let conn = spec.workspace.connection("pg").unwrap();
+        let conn = spec.workspace.declared("pg").unwrap();
         let secret = dbento_core::Secret::new(db.password());
         let mut session =
             dbento_core::connect(&spec.workspace, conn, Some(secret), Default::default())

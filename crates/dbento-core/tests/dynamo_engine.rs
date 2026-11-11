@@ -34,7 +34,7 @@ const DY: &str = "dbento = 1\n[connections.orders]\nengine = \"dynamodb\"\nregio
 #[test]
 fn a_dynamodb_entry_opens_with_its_keys() {
     let (_d, ws) = open(DY);
-    let c = ws.connection("orders").unwrap();
+    let c = ws.declared("orders").unwrap();
     assert_eq!(
         (c.engine(), c.engine().name()),
         (Engine::Dynamodb, "dynamodb")
@@ -64,7 +64,7 @@ fn a_dynamodb_entry_opens_with_its_keys() {
 #[test]
 fn a_bare_entry_takes_everything_from_the_environment() {
     let (_d, ws) = open("dbento = 1\n[connections.orders]\nengine = \"dynamo\"\n");
-    let c = ws.connection("orders").unwrap();
+    let c = ws.declared("orders").unwrap();
     assert_eq!(c.engine(), Engine::Dynamodb);
     assert_eq!(
         (
@@ -79,10 +79,7 @@ fn a_bare_entry_takes_everything_from_the_environment() {
     assert_eq!(c.display_target(), "(region from environment)");
     assert_eq!(default_schema(Engine::Dynamodb, c), None);
     let (_d, ws) = open(&format!("{HEAD}region = \"us-east-1\"\n"));
-    assert_eq!(
-        ws.connection("orders").unwrap().display_target(),
-        "us-east-1"
-    );
+    assert_eq!(ws.declared("orders").unwrap().display_target(), "us-east-1");
 }
 
 #[test]
@@ -90,12 +87,12 @@ fn an_access_key_takes_its_secret_from_the_keychain_or_a_variable_but_never_none
     let key = format!("{HEAD}access_key_id = \"AKIDTEST\"\n");
     let (_d, ws) = open(&key);
     assert_eq!(
-        ws.connection("orders").unwrap().secret_source(),
+        ws.declared("orders").unwrap().secret_source(),
         &SecretSource::Keychain
     );
     let (_d, ws) = open(&format!("{key}secret = {{ env = \"ORDERS_SECRET\" }}\n"));
     assert_eq!(
-        ws.connection("orders").unwrap().secret_source(),
+        ws.declared("orders").unwrap().secret_source(),
         &SecretSource::Env("ORDERS_SECRET".into())
     );
     let m = invalid(&format!("{key}secret = \"none\"\n"));
@@ -182,7 +179,7 @@ fn the_dynamodb_keys_are_refused_on_every_other_engine() {
 #[test]
 fn a_changed_region_endpoint_key_or_consistency_is_a_different_session() {
     let (_a, a) = open(DY);
-    let a = a.connection("orders").unwrap();
+    let a = a.declared("orders").unwrap();
     assert!(a.same_session(a));
     for (from, to) in [
         ("eu-west-1", "us-east-1"),
@@ -191,7 +188,7 @@ fn a_changed_region_endpoint_key_or_consistency_is_a_different_session() {
         ("consistent_read = true", "consistent_read = false"),
     ] {
         let (_b, b) = open(&DY.replace(from, to));
-        assert!(!a.same_session(b.connection("orders").unwrap()), "{from}");
+        assert!(!a.same_session(b.declared("orders").unwrap()), "{from}");
     }
 }
 
@@ -259,7 +256,7 @@ async fn connect_without_a_server_is_open_naming_the_endpoint() {
     let (_d, ws) = open(&DY.replace("http://127.0.0.1:5000", "http://127.0.0.1:9"));
     match connect(
         &ws,
-        ws.connection("orders").unwrap(),
+        ws.declared("orders").unwrap(),
         Some(dbento_core::Secret::new("s")),
         SessionOptions::default(),
     )
@@ -279,7 +276,7 @@ async fn connect_refuses_dynamodb_without_the_feature() {
     let (_d, ws) = open(DY);
     match connect(
         &ws,
-        ws.connection("orders").unwrap(),
+        ws.declared("orders").unwrap(),
         None,
         SessionOptions::default(),
     )
@@ -315,11 +312,7 @@ fn an_endpoint_is_https_or_loopback_http_with_no_user_path_or_query() {
         "HTTP://LOCALHOST:5000",
     ] {
         let (_d, ws) = open(&format!("{HEAD}endpoint = \"{ok}\"\n"));
-        assert_eq!(
-            ws.connection("orders").unwrap().endpoint(),
-            Some(ok),
-            "{ok}"
-        );
+        assert_eq!(ws.declared("orders").unwrap().endpoint(), Some(ok), "{ok}");
     }
     for plain in [
         "http://dynamo.internal:8000",

@@ -96,7 +96,7 @@ async fn a_server_that_never_answers_times_out_naming_the_target() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("dead").unwrap();
+    let conn = ws.declared("dead").unwrap();
     let started = std::time::Instant::now();
     match connect(&ws, conn, Some(Secret::new("x")), SessionOptions::default()).await {
         Err(ConnectError::Open { message }) => assert_eq!(

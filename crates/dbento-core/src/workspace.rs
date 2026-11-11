@@ -6,10 +6,11 @@ use crate::edit::ConnectionSpec;
 use crate::folder::{FolderPath, parse_written};
 use crate::session::{Capabilities, QueryLanguage, ReadOnlyEnforcement};
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 /// The database engine a connection talks to.
@@ -317,6 +318,38 @@ pub enum InitError {
     },
 }
 
+/// Why a connection name does not resolve to a declared connection or a child of one.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    /// Neither the name nor its `parent/` part is declared in `dbento.toml`.
+    #[error("no connection named {name:?} in dbento.toml")]
+    NotFound {
+        /// The whole name asked for.
+        name: String,
+    },
+    /// The parent is declared but has no `databases` key.
+    #[error("connection {parent:?} sets no `databases`, so it has no child connections")]
+    NotAParent {
+        /// The declared connection named before the slash.
+        parent: String,
+    },
+    /// The parent lists its databases and this one is not among them.
+    #[error("{database:?} is not in the `databases` list of connection {parent:?}")]
+    NotListed {
+        /// The parent connection.
+        parent: String,
+        /// The database named after the slash.
+        database: String,
+    },
+    /// The part after the slash is not a valid connection name.
+    #[error("database name {database:?} must match [A-Za-z0-9_-]+ to be used as a connection")]
+    InvalidDatabase {
+        /// The database named after the slash.
+        database: String,
+    },
+}
+
 /// The largest saved query `Workspace::read_query` loads, in bytes.
 pub const MAX_QUERY_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -360,7 +393,8 @@ impl SavedQuery {
         &self.path
     }
 
-    /// The connection whose name is the first folder under `queries/`, if configured.
+    /// The connection the file's folder under `queries/` binds, if any: the first folder names
+    /// it, and a database folder under a parent's folder binds that child `parent/database`.
     pub fn connection(&self) -> Option<&str> {
         self.connection.as_deref()
     }
@@ -441,6 +475,16 @@ impl Folder {
     }
 }
 
+/// The databases a Postgres or SQL Server parent exposes as child connections.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Databases {
+    /// Every database the server lists, written `databases = "all"`.
+    All,
+    /// Only these, in the order written.
+    Listed(Vec<String>),
+}
+
 /// One configured connection. Holds no secret.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -465,6 +509,8 @@ pub struct ConnectionConfig {
     tls_key: Option<PathBuf>,
     settings: BTreeMap<String, String>,
     read_only_user: Option<String>,
+    databases: Option<Databases>,
+    parent: Option<String>,
     uri: Option<String>,
     namespace: Option<String>,
     auth_level: Option<AuthLevel>,
@@ -509,6 +555,7 @@ struct RawConnection {
     tls_key: Option<String>,
     settings: Option<BTreeMap<String, String>>,
     read_only_user: Option<String>,
+    databases: Option<RawDatabases>,
     read_only: Option<bool>,
     color: Option<String>,
     folder: Option<String>,
@@ -527,6 +574,46 @@ struct RawConnection {
 enum RawSecret {
     Word(String),
     Env(RawEnv),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawDatabases {
+    Word(String),
+    List(Vec<String>),
+}
+
+// A parent's `databases`: the word "all" or a non-empty list of distinct database names.
+// SQL Server compares names case-insensitively, so it also refuses a pair differing in case.
+fn databases(raw: RawDatabases, engine: Engine) -> Result<Databases, String> {
+    let names = match raw {
+        RawDatabases::Word(w) if w == "all" => return Ok(Databases::All),
+        RawDatabases::Word(_) => {
+            return Err("`databases` must be \"all\" or a list of database names".to_owned());
+        }
+        RawDatabases::List(names) => names,
+    };
+    if names.is_empty() {
+        return Err("`databases` lists no database; use \"all\" or name at least one".to_owned());
+    }
+    for (i, name) in names.iter().enumerate() {
+        if !valid_name(name) {
+            return Err(format!(
+                "`databases` entry `{name}` must match [A-Za-z0-9_-]+"
+            ));
+        }
+        for earlier in &names[..i] {
+            if earlier == name {
+                return Err(format!("`databases` lists `{name}` twice"));
+            }
+            if engine == Engine::Mssql && earlier.eq_ignore_ascii_case(name) {
+                return Err(format!(
+                    "`databases` lists `{earlier}` and `{name}`, which SQL Server treats as one database"
+                ));
+            }
+        }
+    }
+    Ok(Databases::Listed(names))
 }
 
 // Its own struct because `deny_unknown_fields` is ignored on an untagged struct variant.
@@ -962,18 +1049,43 @@ impl Workspace {
         path.strip_prefix(&self.dir).unwrap_or(path).to_path_buf()
     }
 
-    /// Binds a path relative to the workspace: the first folder under `queries/` names
-    /// the connection when one is configured by that name.
+    /// Binds a path relative to the workspace by the `bound_connection` rule.
     fn bind(&self, path: PathBuf) -> SavedQuery {
-        // A file directly in queries/ has no folder, so it binds to nothing.
-        let mut parts = path.components().skip(1);
-        let connection = match (parts.next(), parts.next()) {
-            (Some(folder), Some(_)) => folder.as_os_str().to_str(),
-            _ => None,
-        }
-        .filter(|name| self.connection(name).is_some())
-        .map(str::to_owned);
+        let connection = self.bound_connection(&path);
         SavedQuery { path, connection }
+    }
+
+    /// The connection a saved query at `rel` (workspace-relative, under `queries/`) runs on.
+    ///
+    /// The first folder names a declared connection. Under a parent with `databases`, a file
+    /// directly in its folder binds the parent and a second folder must name one of its
+    /// children; a folder that resolves to no child binds nothing rather than the parent.
+    pub fn bound_connection(&self, rel: &Path) -> Option<String> {
+        let parts = rel
+            .components()
+            .map(|c| match c {
+                Component::Normal(part) => part.to_str(),
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => None,
+            })
+            .collect::<Option<Vec<&str>>>()?;
+        let [queries, first, rest @ ..] = parts.as_slice() else {
+            return None;
+        };
+        if *queries != "queries" || rest.is_empty() {
+            return None;
+        }
+        let parent = self.declared(first)?;
+        match rest {
+            [_file] => Some((*first).to_owned()),
+            [database, ..] if parent.databases().is_some() => {
+                let child = format!("{first}/{database}");
+                self.resolve(&child).is_ok().then_some(child)
+            }
+            _ => Some((*first).to_owned()),
+        }
     }
 
     /// The canonical workspace directory.
@@ -991,8 +1103,47 @@ impl Workspace {
         &self.folders
     }
 
-    /// The connection with this name, if configured.
-    pub fn connection(&self, name: &str) -> Option<&ConnectionConfig> {
+    /// The connection with this name, declared or derived; `resolve` says why one is missing.
+    pub fn connection(&self, name: &str) -> Option<Cow<'_, ConnectionConfig>> {
+        self.resolve(name).ok()
+    }
+
+    /// A declared connection borrowed, or `parent/database` derived from a parent's `databases`.
+    ///
+    /// Purely syntactic: `databases = "all"` accepts any valid name without asking the server.
+    pub fn resolve(&self, name: &str) -> Result<Cow<'_, ConnectionConfig>, ResolveError> {
+        let not_found = || ResolveError::NotFound {
+            name: name.to_owned(),
+        };
+        let Some((parent, database)) = name.split_once('/') else {
+            return self.declared(name).map(Cow::Borrowed).ok_or_else(not_found);
+        };
+        let config = self.declared(parent).ok_or_else(not_found)?;
+        let listed = match config.databases() {
+            None => {
+                return Err(ResolveError::NotAParent {
+                    parent: parent.to_owned(),
+                });
+            }
+            Some(Databases::All) => None,
+            Some(Databases::Listed(names)) => Some(names),
+        };
+        if !valid_name(database) {
+            return Err(ResolveError::InvalidDatabase {
+                database: database.to_owned(),
+            });
+        }
+        if listed.is_some_and(|names| !names.iter().any(|n| n == database)) {
+            return Err(ResolveError::NotListed {
+                parent: parent.to_owned(),
+                database: database.to_owned(),
+            });
+        }
+        Ok(Cow::Owned(config.child(database)))
+    }
+
+    /// A connection written in dbento.toml; what edits, keychain writes and `queries/` moves act on.
+    pub fn declared(&self, name: &str) -> Option<&ConnectionConfig> {
         self.connections.iter().find(|c| c.name == name)
     }
 
@@ -1022,6 +1173,11 @@ impl Workspace {
         spec.tls_cert = raw.tls_cert;
         spec.tls_key = raw.tls_key;
         spec.read_only_user = raw.read_only_user;
+        // The source text already loaded, so any word here is "all".
+        spec.databases = raw.databases.map(|d| match d {
+            RawDatabases::Word(_) => Databases::All,
+            RawDatabases::List(names) => Databases::Listed(names),
+        });
         spec.secret = raw.secret.map(|s| match s {
             RawSecret::Env(e) => SecretSource::Env(e.env),
             RawSecret::Word(w) if w == "keychain" => SecretSource::Keychain,
@@ -1249,6 +1405,8 @@ impl ConnectionConfig {
             tls_key: None,
             settings: BTreeMap::new(),
             read_only_user: None,
+            databases: None,
+            parent: None,
             uri: None,
             namespace: None,
             auth_level: None,
@@ -1294,6 +1452,32 @@ impl ConnectionConfig {
                 if present {
                     return Err(invalid(format!(
                         "`{key}` is a dynamodb key, not valid for {}",
+                        engine.name()
+                    )));
+                }
+            }
+        }
+
+        // Ahead of the per-engine rules, so its message wins over a "postgres key" one.
+        if let Some(raw_databases) = raw.databases {
+            match engine {
+                Engine::Postgres | Engine::Mssql => {
+                    config.databases = Some(databases(raw_databases, engine).map_err(invalid)?);
+                }
+                Engine::Mysql => {
+                    return Err(invalid(
+                        "`databases` is not valid for mysql: leave `database` empty to browse every database as a schema"
+                            .to_owned(),
+                    ));
+                }
+                Engine::Sqlite
+                | Engine::Duckdb
+                | Engine::Mongodb
+                | Engine::Surrealdb
+                | Engine::Redis
+                | Engine::Dynamodb => {
+                    return Err(invalid(format!(
+                        "`databases` is a postgres and mssql key, not valid for {}",
                         engine.name()
                     )));
                 }
@@ -1849,6 +2033,33 @@ impl ConnectionConfig {
     /// Client private key: the workspace directory joined with `tls_key`.
     pub fn tls_key(&self) -> Option<&Path> {
         self.tls_key.as_deref()
+    }
+
+    /// The parent's name on a derived child; `None` on a connection written in dbento.toml.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    /// The connection whose secret, keychain entries and hints this one uses: the parent on a
+    /// derived child, else itself.
+    pub fn secret_owner(&self) -> &str {
+        self.parent.as_deref().unwrap_or(&self.name)
+    }
+
+    // The parent pointed at another database: everything else, secret source included, is shared.
+    fn child(&self, database: &str) -> ConnectionConfig {
+        ConnectionConfig {
+            name: format!("{}/{database}", self.name),
+            database: Some(database.to_owned()),
+            databases: None,
+            parent: Some(self.name.clone()),
+            ..self.clone()
+        }
+    }
+
+    /// The databases this parent exposes as children; `None` when it declares none.
+    pub fn databases(&self) -> Option<&Databases> {
+        self.databases.as_ref()
     }
 
     /// The SQL Server reader user that read-only work impersonates; `None` on other engines.

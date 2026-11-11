@@ -702,14 +702,14 @@ pub(crate) async fn resolve(spec: &RunnerSpec) -> Result<Resolved, String> {
     );
     tokio::task::spawn_blocking(move || {
         ws.connection(&name).map(|conn| {
-            let secret = resolve_secret(&ws, conn, &*store, &|v| env(v))?;
-            let key_passphrase = resolve_key_passphrase(&ws, conn, &*store, &|v| env(v))?;
+            let secret = resolve_secret(&ws, &conn, &*store, &|v| env(v))?;
+            let key_passphrase = resolve_key_passphrase(&ws, &conn, &*store, &|v| env(v))?;
             let hint = match secret {
-                None => secret_hint(&ws, conn, &*store),
+                None => secret_hint(&ws, &conn, &*store),
                 Some(_) => None,
             };
             Ok::<_, SecretError>(Resolved {
-                conn: conn.clone(),
+                conn: conn.into_owned(),
                 secret,
                 key_passphrase,
                 hint,

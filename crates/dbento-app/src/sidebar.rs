@@ -750,7 +750,7 @@ impl Sidebar {
             .keys()
             .filter(|name| {
                 let (was, now) = (old.connection(name), self.workspace.connection(name));
-                !matches!((was, now), (Some(a), Some(b)) if a.same_session(b))
+                !matches!((was, now), (Some(a), Some(b)) if a.same_session(&b))
             })
             .cloned()
             .collect();
@@ -1259,9 +1259,10 @@ impl Sidebar {
                 (WorkspaceItem::Folder(p), WorkspaceItem::Folder(q)) => {
                     q.parent().as_ref() == Some(p)
                 }
-                (WorkspaceItem::Folder(p), WorkspaceItem::Connection(c)) => {
-                    self.workspace.connection(c).and_then(|c| c.folder()) == Some(p)
-                }
+                (WorkspaceItem::Folder(p), WorkspaceItem::Connection(c)) => self
+                    .workspace
+                    .connection(c)
+                    .is_some_and(|c| c.folder() == Some(p)),
                 _ => false,
             },
             (SidebarRow::Explorer(r), SidebarRow::Catalog(..)) => {
@@ -2279,7 +2280,7 @@ fn explorer_menu(menu: PopupMenu, weak: &WeakEntity<Sidebar>, cx: &mut App) -> P
         let Some(conn) = ws.connection(&t.connection) else {
             return menu;
         };
-        return catalog_menu(menu, *t, conn, weak, cx);
+        return catalog_menu(menu, *t, &conn, weak, cx);
     }
     // Every row leads with its glyph; only New connection and Reload carry a key chip.
     let label =

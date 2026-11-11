@@ -162,7 +162,7 @@ fn settings_resolve_the_region_credentials_and_endpoint_origin() {
     let ws = crate::workspace::Workspace::open(dir.path()).unwrap();
     let no_env = |_: &str| None;
     let a = ClientSettings::from_connection(
-        ws.connection("a").unwrap(),
+        ws.declared("a").unwrap(),
         Some(&Secret::new("s")),
         Some(Wait::from_secs(5)),
         true,
@@ -182,7 +182,7 @@ fn settings_resolve_the_region_credentials_and_endpoint_origin() {
         ("AKIDA", Some(Wait::from_secs(5)), true)
     );
     assert_eq!(a.connect_timeout, CONNECT_TIMEOUT);
-    match ClientSettings::from_connection(ws.connection("b").unwrap(), None, None, false, no_env) {
+    match ClientSettings::from_connection(ws.declared("b").unwrap(), None, None, false, no_env) {
         Err(ConnectError::Open { message }) => assert!(message.contains("AWS_REGION"), "{message}"),
         other => panic!("{:?}", other.err()),
     }
@@ -192,8 +192,8 @@ fn settings_resolve_the_region_credentials_and_endpoint_origin() {
         "AWS_SECRET_ACCESS_KEY" => Some("envsecret".to_owned()),
         _ => None,
     };
-    let b = ClientSettings::from_connection(ws.connection("b").unwrap(), None, None, false, env)
-        .unwrap();
+    let b =
+        ClientSettings::from_connection(ws.declared("b").unwrap(), None, None, false, env).unwrap();
     assert_eq!(
         (
             b.region.as_str(),

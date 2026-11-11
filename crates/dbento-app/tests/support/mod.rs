@@ -151,7 +151,7 @@ pub fn batches(
         .build()
         .unwrap();
     rt.block_on(async {
-        let conn = fx.ws.connection("lite").unwrap();
+        let conn = fx.ws.declared("lite").unwrap();
         let mut s = dbento_core::connect(&fx.ws, conn, None, Default::default())
             .await
             .unwrap();
@@ -183,7 +183,7 @@ pub fn edit_target(fx: &Fx, table: &str) -> dbento_core::EditTarget {
         .build()
         .unwrap();
     rt.block_on(async {
-        let conn = fx.ws.connection("lite").unwrap();
+        let conn = fx.ws.declared("lite").unwrap();
         let mut s = dbento_core::connect(&fx.ws, conn, None, Default::default())
             .await
             .unwrap();

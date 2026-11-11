@@ -75,7 +75,7 @@ impl SecretStore for Broken {
 #[test]
 fn the_keychain_entry_wins_over_the_environment() {
     let (_d, ws) = workspace();
-    let conn = ws.connection("kc").unwrap();
+    let conn = ws.declared("kc").unwrap();
     let store = MemoryStore::new();
     store
         .set(
@@ -93,7 +93,7 @@ fn the_keychain_entry_wins_over_the_environment() {
 #[test]
 fn an_absent_or_unavailable_entry_falls_back_to_the_named_variable() {
     let (_d, ws) = workspace();
-    let conn = ws.connection("my-db").unwrap();
+    let conn = ws.declared("my-db").unwrap();
     let env = env_of(&[("DBENTO_SECRET_MY_DB", "from-env")]);
     assert_eq!(
         exposed(resolve_secret(&ws, conn, &MemoryStore::new(), &env)),
@@ -112,7 +112,7 @@ fn an_absent_or_unavailable_entry_falls_back_to_the_named_variable() {
 #[test]
 fn a_failing_keychain_is_an_error_not_a_fallback() {
     let (_d, ws) = workspace();
-    let conn = ws.connection("my-db").unwrap();
+    let conn = ws.declared("my-db").unwrap();
     let env = env_of(&[("DBENTO_SECRET_MY_DB", "from-env")]);
     let err = resolve_secret(&ws, conn, &Broken::Failing, &env).expect_err("Failed propagates");
     assert!(matches!(err, SecretError::Failed { .. }), "{err:?}");
@@ -121,7 +121,7 @@ fn a_failing_keychain_is_an_error_not_a_fallback() {
 #[test]
 fn an_env_secret_reads_only_its_variable() {
     let (_d, ws) = workspace();
-    let conn = ws.connection("byenv").unwrap();
+    let conn = ws.declared("byenv").unwrap();
     let store = MemoryStore::new();
     store
         .set(
@@ -152,7 +152,7 @@ fn secret_none_and_sqlite_resolve_to_nothing() {
     let store = MemoryStore::new();
     let env = env_of(&[("DBENTO_SECRET_NOSECRET", "x"), ("DBENTO_SECRET_LITE", "x")]);
     for name in ["nosecret", "lite"] {
-        let conn = ws.connection(name).unwrap();
+        let conn = ws.declared(name).unwrap();
         store
             .set(&SecretKey::for_connection(&ws, conn), &Secret::new("x"))
             .unwrap();
@@ -179,7 +179,7 @@ fn an_empty_env_variable_name_is_rejected() {
 #[test]
 fn the_key_names_the_canonical_workspace_dir_and_connection() {
     let (_d, ws) = workspace();
-    let key = SecretKey::for_connection(&ws, ws.connection("kc").unwrap());
+    let key = SecretKey::for_connection(&ws, ws.declared("kc").unwrap());
     assert_eq!(key.workspace_dir(), ws.dir());
     assert_eq!(key.connection(), "kc");
 }

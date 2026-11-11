@@ -33,7 +33,7 @@ const HEAD: &str = "dbento = 1\n[connections.cache]\nengine = \"redis\"\n";
 #[test]
 fn a_redis_entry_opens_with_its_keys() {
     let (_d, ws) = open(RD);
-    let c = ws.connection("cache").unwrap();
+    let c = ws.declared("cache").unwrap();
     assert_eq!((c.engine(), c.engine().name()), (Engine::Redis, "redis"));
     assert_eq!(
         (c.host(), c.port(), c.database(), c.user()),
@@ -53,7 +53,7 @@ fn a_redis_entry_opens_with_its_keys() {
 #[test]
 fn a_bare_valkey_entry_takes_every_default() {
     let (_d, ws) = open("dbento = 1\n[connections.cache]\nengine = \"valkey\"\n");
-    let c = ws.connection("cache").unwrap();
+    let c = ws.declared("cache").unwrap();
     assert_eq!(c.engine(), Engine::Redis);
     assert_eq!(
         (c.host(), c.port(), c.database(), c.user()),
@@ -63,7 +63,7 @@ fn a_bare_valkey_entry_takes_every_default() {
     assert_eq!(c.secret_source(), &SecretSource::Keychain);
     assert_eq!(c.display_target(), "127.0.0.1:6379/0");
     let (_d, ws) = open(&format!("{HEAD}user = \"  \"\nsecret = \"none\"\n"));
-    let c = ws.connection("cache").unwrap();
+    let c = ws.declared("cache").unwrap();
     assert_eq!((c.user(), c.secret_source()), (None, &SecretSource::None));
 }
 
@@ -71,7 +71,7 @@ fn a_bare_valkey_entry_takes_every_default() {
 fn the_db_index_is_a_non_negative_integer_in_canonical_form() {
     for (word, want) in [("3", "3"), ("007", "7"), ("4294967295", "4294967295")] {
         let (_d, ws) = open(&format!("{HEAD}database = \"{word}\"\n"));
-        let c = ws.connection("cache").unwrap();
+        let c = ws.declared("cache").unwrap();
         assert_eq!(c.database(), Some(want), "{word}");
         assert_eq!(
             default_schema(Engine::Redis, c),
@@ -129,7 +129,7 @@ fn tls_follows_the_postgres_rules() {
     let tls = |host: &str, line: &str| {
         open(&format!("{HEAD}host = \"{host}\"\n{line}"))
             .1
-            .connection("cache")
+            .declared("cache")
             .unwrap()
             .tls()
     };
@@ -139,7 +139,7 @@ fn tls_follows_the_postgres_rules() {
     let pair = "tls = \"verify\"\ntls_ca = \"ca.pem\"\ntls_cert = \"c.pem\"\ntls_key = \"k.pem\"\n";
     let (_d, ws) = open(&format!("{HEAD}{pair}"));
     assert!(
-        ws.connection("cache")
+        ws.declared("cache")
             .unwrap()
             .tls_ca()
             .unwrap()
@@ -176,10 +176,7 @@ fn a_redis_entry_round_trips_through_a_save() {
 fn a_changed_db_index_is_a_different_session() {
     let (_a, a) = open(RD);
     let (_b, b) = open(&RD.replace("database = \"0\"", "database = \"1\""));
-    let (a, b) = (
-        a.connection("cache").unwrap(),
-        b.connection("cache").unwrap(),
-    );
+    let (a, b) = (a.declared("cache").unwrap(), b.declared("cache").unwrap());
     assert!(a.same_session(a) && !a.same_session(b));
 }
 
@@ -199,7 +196,7 @@ async fn a_read_only_redis_connection_dials_its_host() {
     let (_d, ws) = open(&RD.replace("cache.internal", "cache.invalid"));
     match connect(
         &ws,
-        ws.connection("cache").unwrap(),
+        ws.declared("cache").unwrap(),
         None,
         SessionOptions::default(),
     )
