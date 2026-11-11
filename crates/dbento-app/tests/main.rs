@@ -51,6 +51,7 @@ mod dynamo_columns;
 mod dynamo_completion;
 mod dynamo_form;
 mod dynamo_labels;
+mod dynamo_results;
 mod dynamo_tree;
 mod edit_bar;
 mod edit_cells;

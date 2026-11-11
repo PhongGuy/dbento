@@ -343,3 +343,67 @@ async fn completion_inserts_a_quoted_table_name() {
     assert_eq!(text.trim_end(), "SELECT * FROM \"orders\"", "{text}");
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_item_shows_as_a_document_and_copies_as_json_without_sql() {
+    let db = dynamo_db().await;
+    let ws = workspace(&db, "read_only = true");
+    let pilot = launch(ws.path()).await;
+    type_in(&pilot, "dy", "SELECT * FROM \"types\"").await;
+    click(&pilot, "run-all", json!({})).await;
+    let tree = until(&pilot, "one row", |t| {
+        name(t, "footer-rows") == Some("1 row")
+    })
+    .await;
+    assert!(
+        find_node(&tree, "footer-capacity").is_none(),
+        "Moto reports no capacity"
+    );
+    click(&pilot, "row-view-expand", json!({})).await;
+    until(&pilot, "the mode row", |t| {
+        find_node(t, "record-mode").is_some()
+    })
+    .await;
+    option(&pilot, "Document").await;
+    let tree = until(&pilot, "the document", |t| {
+        find_node(t, "record-document").is_some()
+    })
+    .await;
+    let shown = name(&tree, "record-document").unwrap_or_default();
+    for want in [
+        "12345678901234567890123456789012345678",
+        "<<",
+        "'x'",
+        "'t1'",
+    ] {
+        assert!(shown.contains(want), "{want}: {shown}");
+    }
+    click(&pilot, "row-view-expand", json!({})).await;
+    until(&pilot, "the grid", |t| find_node(t, "cell-0-1").is_some()).await;
+    click(&pilot, "cell-0-1", json!({ "button": "right" })).await;
+    let tree = until(&pilot, "the grid menu", |t| {
+        find_node(t, "grid-menu-copy-json").is_some()
+    })
+    .await;
+    assert!(
+        find_node(&tree, "grid-menu-copy-sql").is_none(),
+        "DynamoDB offers no Copy as SQL"
+    );
+    click(&pilot, "grid-menu-copy-json", json!({})).await;
+    let clip = pilot.ok("clipboard", json!({})).await;
+    let text = clip["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("12345678901234567890123456789012345678"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"ss\":[\"x\",\"y\"]") || text.contains("\"ss\": [\"x\", \"y\"]"),
+        "{text}"
+    );
+    assert_eq!(
+        pilot.ok("close", json!({})).await["exit_code"],
+        json!(0),
+        "the app exits cleanly"
+    );
+    pilot.assert_bus_untouched();
+}

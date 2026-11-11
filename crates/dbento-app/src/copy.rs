@@ -469,7 +469,12 @@ pub(crate) fn sql_literal(
                 Engine::Sqlite | Engine::Mysql => format!("X'{}'", &hex[2..]),
                 Engine::Postgres => format!("{}::bytea", quote_literal(engine, &hex)),
                 Engine::Mssql => format!("0x{}", &hex[2..]),
-                Engine::Duckdb | Engine::Mongodb | Engine::Surrealdb | Engine::Redis | _ => {
+                Engine::Duckdb
+                | Engine::Mongodb
+                | Engine::Surrealdb
+                | Engine::Redis
+                | Engine::Dynamodb
+                | _ => {
                     return None;
                 }
             }
