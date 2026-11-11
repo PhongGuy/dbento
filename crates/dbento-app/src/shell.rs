@@ -78,12 +78,24 @@ use crate::tab_model::{Closing, TabModel};
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 
-// The narrowest the tab area gets before the side panels give way, and their own minimum.
 /// The database a Postgres Test opens when the form names none: every server has it.
 const TEST_DATABASE_POSTGRES: &str = "postgres";
+/// How long a passed Test waits for the server's database list before offering none.
+const TEST_DATABASES_CAP: Duration = Duration::from_secs(5);
 
+// The narrowest the tab area gets before the side panels give way, and their own minimum.
 const MIN_TAB_AREA: Pixels = px(160.);
 const PANEL_MIN: Pixels = px(100.);
+
+// The list `list` answers within `cap`, or empty when it fails; `None` once the cap passes,
+// so the caller abandons the session the list still holds.
+async fn listed_within<E>(
+    cap: Duration,
+    list: impl Future<Output = Result<Vec<String>, E>>,
+) -> Option<Vec<String>> {
+    let listed = tokio::time::timeout(cap, list).await.ok()?;
+    Some(listed.unwrap_or_default())
+}
 
 // A failed save of the app state is logged, never fatal.
 fn save_state(file: &ChangeQueue<SavedState>) {
@@ -3222,8 +3234,13 @@ impl Shell {
                 .await
                 .map_err(|e| e.to_string())?;
             // The server's databases fill Database's suggestions. The session connected, so a
-            // list the engine lacks or the login may not read leaves the test passed.
-            let databases = session.databases().await.unwrap_or_default();
+            // list the engine lacks, the login may not read or the server stalls on leaves the
+            // test passed.
+            let Some(databases) = listed_within(TEST_DATABASES_CAP, session.databases()).await
+            else {
+                crate::catalog::abandon(session);
+                return Ok(Vec::new());
+            };
             // A connection test runs nothing that writes, so close has nothing to report.
             let _ = session.close().await;
             Ok::<Vec<String>, String>(databases)
@@ -5030,5 +5047,31 @@ impl Render for TabDragPreview {
             .shadow_md()
             .opacity(0.9)
             .child(self.0.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listed_within;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_database_list_that_never_answers_gives_up_at_the_cap() {
+        let never = std::future::pending::<Result<Vec<String>, ()>>();
+        assert_eq!(listed_within(Duration::from_millis(20), never).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_database_list_offers_nothing_and_an_answer_is_kept() {
+        let failed = async { Err::<Vec<String>, ()>(()) };
+        assert_eq!(
+            listed_within(Duration::from_secs(5), failed).await,
+            Some(Vec::new())
+        );
+        let answered = async { Ok::<_, ()>(vec!["app".to_owned()]) };
+        assert_eq!(
+            listed_within(Duration::from_secs(5), answered).await,
+            Some(vec!["app".to_owned()])
+        );
     }
 }

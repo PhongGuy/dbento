@@ -75,49 +75,55 @@ async fn postgres_leaves_out_a_database_that_refuses_connections() {
 
 #[tokio::test]
 async fn mysql_lists_its_schemas_as_databases_with_the_servers_own_last() {
-    for (label, fx) in my_fixtures("").await {
-        let mut s = fx.session(SessionOptions::default()).await;
-        let names = s.databases().await.unwrap();
-        let schemas: Vec<String> = s
-            .schemas()
-            .await
-            .unwrap()
-            .iter()
-            .map(|x| x.name().to_owned())
-            .collect();
-        assert_eq!(names, schemas, "{label}: a database is a schema");
-        assert!(
-            names.iter().any(|n| n == fx.db.database()),
-            "{label}: {names:?}"
-        );
-        let n = names.len();
-        assert_eq!(
-            &names[n - 4..],
-            ["information_schema", "mysql", "performance_schema", "sys"],
-            "{label}"
-        );
-    }
+    bounded(async {
+        for (label, fx) in my_fixtures("").await {
+            let mut s = fx.session(SessionOptions::default()).await;
+            let names = s.databases().await.unwrap();
+            let schemas: Vec<String> = s
+                .schemas()
+                .await
+                .unwrap()
+                .iter()
+                .map(|x| x.name().to_owned())
+                .collect();
+            assert_eq!(names, schemas, "{label}: a database is a schema");
+            assert!(
+                names.iter().any(|n| n == fx.db.database()),
+                "{label}: {names:?}"
+            );
+            let n = names.len();
+            assert_eq!(
+                &names[n - 4..],
+                ["information_schema", "mysql", "performance_schema", "sys"],
+                "{label}"
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn sql_server_lists_the_databases_it_can_enter_with_the_system_ones_last() {
     dbento_testkit::skip_without_mssql!();
-    let fx = ms_off().await;
-    // A second database on the same server: mssql_db would start another server, and it waits
-    // for the slot this fixture holds.
-    let other = format!("{}_other", fx.db.database());
-    let create = format!("DROP DATABASE IF EXISTS [{other}]; CREATE DATABASE [{other}]");
-    fx.db.scalar(&create).await;
-    let mut s = fx.session(SessionOptions::default()).await;
-    let names = s.databases().await.unwrap();
-    assert!(names.iter().any(|n| n == fx.db.database()), "{names:?}");
-    assert!(names.contains(&other), "{names:?}");
-    let n = names.len();
-    assert!(n > 4, "{names:?}");
-    let mut system = names[n - 4..].to_vec();
-    system.sort();
-    assert_eq!(system, ["master", "model", "msdb", "tempdb"], "{names:?}");
-    fx.db.scalar(&format!("DROP DATABASE [{other}]")).await;
+    bounded(async {
+        let fx = ms_off().await;
+        // A second database on the same server: mssql_db would start another server, and it waits
+        // for the slot this fixture holds.
+        let other = format!("{}_other", fx.db.database());
+        let create = format!("DROP DATABASE IF EXISTS [{other}]; CREATE DATABASE [{other}]");
+        fx.db.scalar(&create).await;
+        let mut s = fx.session(SessionOptions::default()).await;
+        let names = s.databases().await.unwrap();
+        assert!(names.iter().any(|n| n == fx.db.database()), "{names:?}");
+        assert!(names.contains(&other), "{names:?}");
+        let n = names.len();
+        assert!(n > 4, "{names:?}");
+        let mut system = names[n - 4..].to_vec();
+        system.sort();
+        assert_eq!(system, ["master", "model", "msdb", "tempdb"], "{names:?}");
+        fx.db.scalar(&format!("DROP DATABASE [{other}]")).await;
+    })
+    .await;
 }
 
 #[tokio::test]

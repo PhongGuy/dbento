@@ -351,7 +351,7 @@ fn definition_message(e: DefinitionError) -> String {
 
 // Cancels the timed-out statement in case the server can still hear us, then closes the
 // session off the runner's path; a close stuck on the dead socket is dropped at the cap.
-fn abandon(s: Session) {
+pub(crate) fn abandon(s: Session) {
     s.cancel_handle().cancel();
     tokio::spawn(async move {
         let _ = tokio::time::timeout(ABANDON_CAP, s.close()).await;
