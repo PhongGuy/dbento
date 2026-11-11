@@ -1096,8 +1096,7 @@ impl Shell {
 
     // The name of the declared connection selected in the explorer.
     fn selected_connection(&self, cx: &App) -> Option<String> {
-        let ix = self.sidebar.as_ref()?.read(cx).selected()?;
-        self.declared_name(ix)
+        self.sidebar.as_ref()?.read(cx).selected_name()
     }
 
     // The name of the workspace's declared connection `ix`.

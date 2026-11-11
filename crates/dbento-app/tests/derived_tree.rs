@@ -243,3 +243,68 @@ fn a_parent_has_no_relations_to_reveal() {
         "a listed parent"
     );
 }
+
+/// The queries of a reveal still waiting on its loads.
+fn waiting_on(step: RevealStep) -> Vec<CatalogQuery> {
+    match step {
+        RevealStep::Waiting(loads) => loads.into_iter().map(|l| l.query).collect(),
+        other @ (RevealStep::Shown | RevealStep::Missing | _) => {
+            panic!("expected Waiting, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn revealing_on_a_child_opens_its_collapsed_parent_first() {
+    let (_d, mut t) = srv_listing(&["app"]);
+    assert!(t.toggle(&conn("srv")).is_none(), "collapsing loads nothing");
+    let rel = RelationRef::new("public", "t");
+    assert_eq!(
+        waiting_on(t.reveal("srv/app", &rel)),
+        [CatalogQuery::Schemas]
+    );
+    assert!(t.is_expanded(&conn("srv")), "the parent opens");
+    assert!(t.is_expanded(&conn("srv/app")), "then the child");
+}
+
+#[test]
+fn a_child_reveal_waits_on_its_parents_listing_and_misses_an_unlisted_name() {
+    let (_d, mut t) = tree("databases = \"all\"");
+    let rel = RelationRef::new("public", "t");
+    let req = crate::schema_tree::waiting(t.reveal("srv/app", &rel));
+    assert_eq!(req.query, CatalogQuery::Databases);
+    assert!(t.is_expanded(&conn("srv")));
+    assert!(!t.is_expanded(&conn("srv/app")), "no hidden child session");
+    answer(&mut t, req, Ok(dbs(&["other"])));
+    assert_eq!(t.reveal("srv/app", &rel), RevealStep::Missing);
+    assert!(
+        !t.is_expanded(&conn("srv/app")),
+        "an unlisted child stays shut"
+    );
+}
+
+#[test]
+fn a_child_reveal_under_a_failed_listing_is_missing() {
+    let (_d, mut t) = tree("databases = \"all\"");
+    let req = t.toggle(&conn("srv")).unwrap();
+    answer(&mut t, req, Err("refused".into()));
+    let rel = RelationRef::new("public", "t");
+    assert_eq!(t.reveal("srv/app", &rel), RevealStep::Missing);
+    assert!(!t.is_expanded(&conn("srv/app")));
+}
+
+#[test]
+fn revealing_on_a_listed_child_opens_the_parent_without_a_load() {
+    let (_d, mut t) = tree("");
+    let rel = RelationRef::new("public", "t");
+    assert_eq!(
+        waiting_on(t.reveal("listed/app", &rel)),
+        [CatalogQuery::Schemas]
+    );
+    assert!(t.is_expanded(&conn("listed")));
+    assert_eq!(
+        t.reveal("listed/nope", &rel),
+        RevealStep::Missing,
+        "not listed"
+    );
+}

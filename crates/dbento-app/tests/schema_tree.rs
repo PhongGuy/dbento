@@ -498,7 +498,7 @@ fn expand_opens_and_never_collapses() {
 }
 
 // Unwraps a waiting step to its one load.
-fn waiting(step: RevealStep) -> LoadRequest {
+pub(crate) fn waiting(step: RevealStep) -> LoadRequest {
     match step {
         RevealStep::Waiting(mut loads) if loads.len() == 1 => loads.remove(0),
         other @ (RevealStep::Waiting(_) | RevealStep::Shown | RevealStep::Missing | _) => {

@@ -1,5 +1,5 @@
 //! The explorer's databases level: listing, invalid rows, child sessions and reloads.
-use crate::derived_tabs::tab_conns;
+use crate::derived_tabs::{tab_conns, with_shell};
 use crate::support::{Started, label_of, present, reload, started, wait_real};
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::explorer::part_id;
@@ -222,4 +222,14 @@ fn dropping_databases_forgets_the_children(cx: &mut TestAppContext) {
         sb.tree()
             .is_expanded(&NodeKey::Connection("srv/app".into()))
     }));
+}
+
+#[gpui_kit::test]
+fn a_new_tab_opens_on_a_selected_child(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    listed_srv(cx, &s, &["app"]);
+    wait_srv(cx, s.win, &["srv/app"]);
+    click(cx, s.win, ("tree-row", 0usize));
+    with_shell(cx, &s, |sh, w, cx| sh.new_tab(w, cx));
+    assert_eq!(tab_conns(cx, &s), ["srv/app"]);
 }

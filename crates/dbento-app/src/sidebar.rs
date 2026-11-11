@@ -356,16 +356,23 @@ impl Sidebar {
     /// The workspace index of the connection that owns the selection: a selected connection,
     /// or the connection of a selected catalog node. None for a folder or nothing.
     pub fn selected(&self) -> Option<usize> {
+        let name = self.selected_name()?;
+        self.workspace
+            .connections()
+            .iter()
+            .position(|c| c.name() == name)
+    }
+
+    /// The name of the connection that owns the selection, a derived child too, while it
+    /// resolves. None for a folder or nothing.
+    pub fn selected_name(&self) -> Option<String> {
         let name = match self.selection.as_ref()? {
             Selection::Connection(name) => name,
             Selection::Node(key) => node_connection(key),
             Selection::Object { conn, .. } | Selection::Key { conn, .. } => conn,
             Selection::Folder(_) => return None,
         };
-        self.workspace
-            .connections()
-            .iter()
-            .position(|c| c.name() == name)
+        self.workspace.connection(name).map(|_| name.to_owned())
     }
 
     /// How many times the selection has been set; any `select`, `reveal` or row click moves it.
@@ -2078,6 +2085,7 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
     };
     match kind {
         RowKind::Schema => Some(Icons::Layers),
+        RowKind::Database { .. } => Some(Icons::Database),
         RowKind::Kind(k) | RowKind::Relation(k) => Some(relation(k)),
         RowKind::Column {
             primary_key: true, ..
@@ -2097,8 +2105,7 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
         | RowKind::Empty
         | RowKind::KeyFolder { .. }
         | RowKind::Key(_)
-        | RowKind::LoadMore
-        | RowKind::Database { .. } => None,
+        | RowKind::LoadMore => None,
     }
 }
 

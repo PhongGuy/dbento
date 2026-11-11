@@ -420,6 +420,9 @@ impl CatalogTree {
         if self.parent(conn).is_some() {
             return RevealStep::Missing;
         }
+        if let Some(step) = self.reveal_parent(conn) {
+            return step;
+        }
         let loads: Vec<_> = self
             .expand(&NodeKey::Connection(conn.to_owned()))
             .into_iter()
@@ -455,6 +458,34 @@ impl CatalogTree {
         };
         self.expand(&kind);
         RevealStep::Shown
+    }
+
+    /// Opens the parent of child `conn` for a reveal; None once the child's row shows, so the
+    /// reveal goes on into the child. An `"all"` parent waits on its listing, and a child it
+    /// does not list is Missing; either way the child's own session stays shut until then.
+    fn reveal_parent(&mut self, conn: &str) -> Option<RevealStep> {
+        if self.unresolved(conn) {
+            return Some(RevealStep::Missing);
+        }
+        let parent = self
+            .workspace
+            .as_deref()?
+            .connection(conn)?
+            .parent()?
+            .to_owned();
+        let loads: Vec<_> = self
+            .expand(&NodeKey::Connection(parent.clone()))
+            .into_iter()
+            .collect();
+        let Some(Parent::All) = self.parent(&parent) else {
+            return None;
+        };
+        let database = conn.strip_prefix(&format!("{parent}/"))?;
+        match self.databases.get(&parent) {
+            Some(Load::Ready(names)) if names.iter().any(|n| n == database) => None,
+            Some(Load::Ready(_) | Load::Failed(_)) => Some(RevealStep::Missing),
+            None | Some(Load::Loading) => Some(RevealStep::Waiting(loads)),
+        }
     }
 
     /// Reloads a failed level under `key`; None unless it failed.
