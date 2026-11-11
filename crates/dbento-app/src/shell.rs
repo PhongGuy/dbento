@@ -79,6 +79,9 @@ use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 
 // The narrowest the tab area gets before the side panels give way, and their own minimum.
+/// The database a Postgres Test opens when the form names none: every server has it.
+const TEST_DATABASE_POSTGRES: &str = "postgres";
+
 const MIN_TAB_AREA: Pixels = px(160.);
 const PANEL_MIN: Pixels = px(100.);
 
@@ -3128,7 +3131,15 @@ impl Shell {
         let typed = f.password(cx);
         let typed_passphrase = f.key_passphrase(cx);
         let previous = f.previous().map(str::to_owned);
-        let planned = f.edit(cx).and_then(|(name, spec)| {
+        let planned = f.edit(cx).and_then(|(name, mut spec)| {
+            // Postgres needs a database to connect to, but the database is what a Test lists:
+            // with Database left empty, the test opens the server's own `postgres` instead, so
+            // Host, User and Password are enough to pick from the list. Save still needs one.
+            if spec.engine == Engine::Postgres
+                && spec.database.as_deref().is_none_or(|d| d.trim().is_empty())
+            {
+                spec.database = Some(TEST_DATABASE_POSTGRES.to_owned());
+            }
             let edit = Edit::PutConnection {
                 previous: f.previous().map(str::to_owned),
                 name: name.clone(),

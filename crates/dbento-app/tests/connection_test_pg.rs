@@ -99,11 +99,10 @@ fn a_passed_test_offers_the_servers_databases_under_database(cx: &mut TestAppCon
         .unwrap();
         cx.run_until_parked();
     };
-    // Postgres needs a database to test with; the server's own is enough to list the others.
+    // Database stays empty: the Test opens the server's own `postgres` to list the rest.
     set(cx, Field::Name, "pg".into());
     set(cx, Field::Host, db.host().to_owned());
     set(cx, Field::Port, db.port().to_string());
-    set(cx, Field::Database, "postgres".into());
     set(cx, Field::User, db.user().to_owned());
     set(cx, Field::Password, db.password().to_owned());
     support::click_id(cx, win, "conn-test");
@@ -112,18 +111,35 @@ fn a_passed_test_offers_the_servers_databases_under_database(cx: &mut TestAppCon
     });
     let offered = f.read_with(cx, |f, _| f.database_suggestions().to_vec());
     assert!(offered.iter().any(|d| d == db.database()), "{offered:?}");
-    assert!(
-        !offered.iter().any(|d| d == "postgres"),
-        "the database Test used is not offered again: {offered:?}"
+    assert_eq!(
+        offered.last().map(String::as_str),
+        Some("postgres"),
+        "{offered:?}"
     );
     assert!(
         !offered.iter().any(|d| d.starts_with("template")),
         "{offered:?}"
     );
+    // Picking the fixture's database fills the field the Test left empty.
+    let ix = offered.iter().position(|d| d == db.database()).unwrap();
     assert_eq!(
-        support::label_of(cx, win, ("conn-database-suggestion", 0usize)).as_deref(),
-        offered.first().map(String::as_str)
+        support::label_of(cx, win, ("conn-database-suggestion", ix)).as_deref(),
+        Some(db.database())
     );
+    support::click_id(cx, win, ("conn-database-suggestion", ix));
+    let database = f.read_with(cx, |f, _| f.input(Field::Database).clone());
+    assert_eq!(
+        database.read_with(cx, |s, _| s.value().to_string()),
+        db.database()
+    );
+    // With a database named, the test opens that one, and it is not offered again.
+    support::click_id(cx, win, "conn-test");
+    support::wait_real(cx, "connected again", |cx| {
+        support::label_of(cx, win, "conn-test-result").as_deref() == Some("Connected")
+    });
+    let offered = f.read_with(cx, |f, _| f.database_suggestions().to_vec());
+    assert!(!offered.iter().any(|d| d == db.database()), "{offered:?}");
+    assert!(offered.iter().any(|d| d == "postgres"), "{offered:?}");
 }
 
 #[gpui_kit::test]
