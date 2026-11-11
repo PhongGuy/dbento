@@ -1,5 +1,6 @@
 //! The MCP server: one `DbentoServer` per client, shared by every tool call.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -252,7 +253,7 @@ impl DbentoServer {
         let ws = self.workspace().await?;
         let conn = ws
             .connection(name)
-            .cloned()
+            .map(Cow::into_owned)
             .ok_or_else(|| ToolError::no_connection(name))?;
         Ok(Found {
             ws: Arc::new(ws),

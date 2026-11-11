@@ -265,3 +265,163 @@ mod targets {
         assert!(ws.connection_spec("pg/booking").is_none());
     }
 }
+
+mod resolve {
+    use std::borrow::Cow;
+    use std::time::Duration;
+
+    use super::open;
+    use dbento_core::{Color, FolderPath, ResolveError, SecretSource};
+
+    const TREE: &str = r#"dbento = 1
+[folders."Prod"]
+color = "red"
+
+[connections.pg]
+engine = "postgres"
+host = "db.internal"
+database = "app"
+user = "app"
+read_only = true
+folder = "Prod"
+statement_timeout = "30s"
+settings = { search_path = "app" }
+databases = ["booking", "user_db"]
+
+[connections.allpg]
+engine = "postgres"
+host = "db.internal"
+database = "postgres"
+user = "app"
+secret = { env = "ALL_PW" }
+databases = "all"
+
+[connections.ms]
+engine = "mssql"
+host = "db.internal"
+user = "app"
+read_only_user = "dbento_reader"
+databases = ["Booking"]
+
+[connections.plain]
+engine = "postgres"
+host = "db.internal"
+database = "plain"
+user = "app"
+"#;
+
+    #[test]
+    fn a_listed_child_is_its_parent_in_another_database() {
+        let (_d, ws) = open(TREE);
+        let parent = ws.declared("pg").unwrap();
+        let child = ws.resolve("pg/booking").unwrap();
+        assert!(matches!(child, Cow::Owned(_)));
+        assert_eq!(child.name(), "pg/booking");
+        assert_eq!(child.parent(), Some("pg"));
+        assert_eq!(parent.parent(), None);
+        assert_eq!(child.database(), Some("booking"));
+        assert_eq!(child.databases(), None);
+        assert_eq!(child.engine(), parent.engine());
+        assert_eq!(
+            (child.host(), child.port(), child.user()),
+            (parent.host(), parent.port(), parent.user())
+        );
+        assert_eq!(child.secret_source(), parent.secret_source());
+        assert_eq!(child.tls(), parent.tls());
+        assert!(child.read_only());
+        assert_eq!(child.statement_timeout(), Some(Duration::from_secs(30)));
+        assert_eq!(child.folder(), Some(&"Prod".parse::<FolderPath>().unwrap()));
+        assert_eq!(
+            child.effective_color(),
+            Some(Color::Red),
+            "the folder colour reaches the child"
+        );
+        assert!(child.is_production());
+        assert_eq!(child.settings(), parent.settings());
+        assert!(
+            child.display_target().ends_with("/booking"),
+            "{}",
+            child.display_target()
+        );
+        assert!(!child.same_session(parent));
+        assert!(!child.same_session(&ws.resolve("pg/user_db").unwrap()));
+        assert!(child.same_session(&ws.resolve("pg/booking").unwrap()));
+    }
+
+    #[test]
+    fn a_sql_server_child_keeps_the_reader_and_the_exact_spelling() {
+        let (_d, ws) = open(TREE);
+        let child = ws.resolve("ms/Booking").unwrap();
+        assert_eq!(child.read_only_user(), Some("dbento_reader"));
+        assert_eq!(child.database(), Some("Booking"));
+    }
+
+    #[test]
+    fn all_resolves_any_valid_name_without_a_server() {
+        let (_d, ws) = open(TREE);
+        let child = ws.resolve("allpg/anything_at-all").unwrap();
+        assert_eq!(child.database(), Some("anything_at-all"));
+        assert_eq!(child.secret_source(), &SecretSource::Env("ALL_PW".into()));
+    }
+
+    #[test]
+    fn a_name_that_does_not_resolve_says_why() {
+        let (_d, ws) = open(TREE);
+        for (name, says) in [
+            ("nope", "no connection named \"nope\" in dbento.toml"),
+            ("nope/x", "no connection named \"nope/x\" in dbento.toml"),
+            (
+                "plain/x",
+                "connection \"plain\" sets no `databases`, so it has no child connections",
+            ),
+            (
+                "pg/hotel",
+                "\"hotel\" is not in the `databases` list of connection \"pg\"",
+            ),
+            (
+                "pg/Booking",
+                "\"Booking\" is not in the `databases` list of connection \"pg\"",
+            ),
+            (
+                "ms/booking",
+                "\"booking\" is not in the `databases` list of connection \"ms\"",
+            ),
+            (
+                "allpg/my.db",
+                "database name \"my.db\" must match [A-Za-z0-9_-]+ to be used as a connection",
+            ),
+            (
+                "allpg/a/b",
+                "database name \"a/b\" must match [A-Za-z0-9_-]+ to be used as a connection",
+            ),
+            (
+                "allpg/",
+                "database name \"\" must match [A-Za-z0-9_-]+ to be used as a connection",
+            ),
+        ] {
+            let e = ws
+                .resolve(name)
+                .err()
+                .unwrap_or_else(|| panic!("{name} resolved"));
+            assert_eq!(e.to_string(), says, "{name}");
+            assert!(ws.connection(name).is_none(), "{name}");
+        }
+        assert!(matches!(
+            ws.resolve("pg/hotel"),
+            Err(ResolveError::NotListed { ref parent, ref database }) if parent == "pg" && database == "hotel"
+        ));
+    }
+
+    #[test]
+    fn declared_and_connections_see_only_the_file() {
+        let (_d, ws) = open(TREE);
+        assert!(ws.declared("pg/booking").is_none());
+        assert!(
+            ws.secret_target("pg/booking").is_none(),
+            "a resolved child still has no keychain target"
+        );
+        assert!(matches!(ws.connection("pg"), Some(Cow::Borrowed(_))));
+        let names: Vec<&str> = ws.connections().iter().map(|c| c.name()).collect();
+        assert_eq!(names, ["allpg", "ms", "pg", "plain"]);
+    }
+}

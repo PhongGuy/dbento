@@ -3193,12 +3193,12 @@ impl Shell {
                     tokio::task::spawn_blocking(move || {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
-                        let found = resolve_key_passphrase(ws, conn, &*store, &*env)
+                        let found = resolve_key_passphrase(ws, &conn, &*store, &*env)
                             .map_err(|e| e.to_string())?;
                         // Only a key that needs a passphrase reads the old name's slot, so a
                         // plain key still never touches the keychain.
                         match (found, renamed) {
-                            (None, Some(old)) if tls_key_is_encrypted(conn) => {
+                            (None, Some(old)) if tls_key_is_encrypted(&conn) => {
                                 match store.get(&SecretKey::key_passphrase(ws.dir(), old)) {
                                     Ok(found) => Ok(found),
                                     Err(SecretError::Unavailable { .. }) => Ok(None),
@@ -3220,10 +3220,10 @@ impl Shell {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
                         let found =
-                            resolve_secret(ws, conn, &*store, &*env).map_err(|e| e.to_string())?;
+                            resolve_secret(ws, &conn, &*store, &*env).map_err(|e| e.to_string())?;
                         // Only a keychain connection reads the old name's secret.
                         match (found, renamed) {
-                            (None, Some(old)) if keychain_backed(conn) => store
+                            (None, Some(old)) if keychain_backed(&conn) => store
                                 .get(&SecretKey::new(ws.dir(), old))
                                 .map_err(|e| e.to_string()),
                             (found, _) => Ok(found),
@@ -3237,7 +3237,7 @@ impl Shell {
             let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
             let mut options = SessionOptions::default();
             options.key_passphrase = key_passphrase;
-            let mut session = connect(ws, conn, secret, options)
+            let mut session = connect(ws, &conn, secret, options)
                 .await
                 .map_err(|e| e.to_string())?;
             // The server's databases fill Database's suggestions. The session connected, so a

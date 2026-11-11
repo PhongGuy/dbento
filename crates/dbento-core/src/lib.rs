@@ -15,7 +15,7 @@ pub use folder::{FolderPath, FolderPathError, WorkspaceItem};
 mod workspace;
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, Engine, Folder, InitError, MAX_QUERY_FILE_BYTES,
-    OpenError, QueryFileError, SavedQuery, SecretSource, TlsMode, Workspace,
+    OpenError, QueryFileError, ResolveError, SavedQuery, SecretSource, TlsMode, Workspace,
 };
 
 mod form;

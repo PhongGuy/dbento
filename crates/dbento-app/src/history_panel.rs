@@ -219,7 +219,7 @@ impl HistoryPanel {
                 let entry = &self.rows[ix];
                 let conn = self.workspace.connection(entry.connection());
                 // A connection since removed lexes as Postgres, the stricter of the two.
-                let engine = conn.map_or(Engine::Postgres, |c| c.engine());
+                let engine = conn.as_ref().map_or(Engine::Postgres, |c| c.engine());
                 let sql = one_line(engine, entry.sql());
                 let tag = conn.and_then(|c| c.effective_color());
                 let detail = format!(

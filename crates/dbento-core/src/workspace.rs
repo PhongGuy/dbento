@@ -6,6 +6,7 @@ use crate::edit::ConnectionSpec;
 use crate::folder::{FolderPath, parse_written};
 use crate::session::{Capabilities, QueryLanguage, ReadOnlyEnforcement};
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::net::IpAddr;
@@ -317,6 +318,38 @@ pub enum InitError {
     },
 }
 
+/// Why a connection name does not resolve to a declared connection or a child of one.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    /// Neither the name nor its `parent/` part is declared in `dbento.toml`.
+    #[error("no connection named {name:?} in dbento.toml")]
+    NotFound {
+        /// The whole name asked for.
+        name: String,
+    },
+    /// The parent is declared but has no `databases` key.
+    #[error("connection {parent:?} sets no `databases`, so it has no child connections")]
+    NotAParent {
+        /// The declared connection named before the slash.
+        parent: String,
+    },
+    /// The parent lists its databases and this one is not among them.
+    #[error("{database:?} is not in the `databases` list of connection {parent:?}")]
+    NotListed {
+        /// The parent connection.
+        parent: String,
+        /// The database named after the slash.
+        database: String,
+    },
+    /// The part after the slash is not a valid connection name.
+    #[error("database name {database:?} must match [A-Za-z0-9_-]+ to be used as a connection")]
+    InvalidDatabase {
+        /// The database named after the slash.
+        database: String,
+    },
+}
+
 /// The largest saved query `Workspace::read_query` loads, in bytes.
 pub const MAX_QUERY_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -476,6 +509,7 @@ pub struct ConnectionConfig {
     settings: BTreeMap<String, String>,
     read_only_user: Option<String>,
     databases: Option<Databases>,
+    parent: Option<String>,
     uri: Option<String>,
     namespace: Option<String>,
     auth_level: Option<AuthLevel>,
@@ -1043,9 +1077,43 @@ impl Workspace {
         &self.folders
     }
 
-    /// The connection with this name, if configured.
-    pub fn connection(&self, name: &str) -> Option<&ConnectionConfig> {
-        self.connections.iter().find(|c| c.name == name)
+    /// The connection with this name, declared or derived; `resolve` says why one is missing.
+    pub fn connection(&self, name: &str) -> Option<Cow<'_, ConnectionConfig>> {
+        self.resolve(name).ok()
+    }
+
+    /// A declared connection borrowed, or `parent/database` derived from a parent's `databases`.
+    ///
+    /// Purely syntactic: `databases = "all"` accepts any valid name without asking the server.
+    pub fn resolve(&self, name: &str) -> Result<Cow<'_, ConnectionConfig>, ResolveError> {
+        let not_found = || ResolveError::NotFound {
+            name: name.to_owned(),
+        };
+        let Some((parent, database)) = name.split_once('/') else {
+            return self.declared(name).map(Cow::Borrowed).ok_or_else(not_found);
+        };
+        let config = self.declared(parent).ok_or_else(not_found)?;
+        let listed = match config.databases() {
+            None => {
+                return Err(ResolveError::NotAParent {
+                    parent: parent.to_owned(),
+                });
+            }
+            Some(Databases::All) => None,
+            Some(Databases::Listed(names)) => Some(names),
+        };
+        if !valid_name(database) {
+            return Err(ResolveError::InvalidDatabase {
+                database: database.to_owned(),
+            });
+        }
+        if listed.is_some_and(|names| !names.iter().any(|n| n == database)) {
+            return Err(ResolveError::NotListed {
+                parent: parent.to_owned(),
+                database: database.to_owned(),
+            });
+        }
+        Ok(Cow::Owned(config.child(database)))
     }
 
     /// A connection written in dbento.toml; what edits, keychain writes and `queries/` moves act on.
@@ -1312,6 +1380,7 @@ impl ConnectionConfig {
             settings: BTreeMap::new(),
             read_only_user: None,
             databases: None,
+            parent: None,
             uri: None,
             namespace: None,
             auth_level: None,
@@ -1938,6 +2007,22 @@ impl ConnectionConfig {
     /// Client private key: the workspace directory joined with `tls_key`.
     pub fn tls_key(&self) -> Option<&Path> {
         self.tls_key.as_deref()
+    }
+
+    /// The parent's name on a derived child; `None` on a connection written in dbento.toml.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    // The parent pointed at another database: everything else, secret source included, is shared.
+    fn child(&self, database: &str) -> ConnectionConfig {
+        ConnectionConfig {
+            name: format!("{}/{database}", self.name),
+            database: Some(database.to_owned()),
+            databases: None,
+            parent: Some(self.name.clone()),
+            ..self.clone()
+        }
     }
 
     /// The databases this parent exposes as children; `None` when it declares none.

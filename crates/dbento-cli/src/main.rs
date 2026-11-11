@@ -224,7 +224,7 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
             let config = ws
                 .connection(&conn)
                 .ok_or_else(|| anyhow::anyhow!("no connection named {conn:?} in dbento.toml"))?;
-            return exec::execute(&ws, config, &sql, &exec).await;
+            return exec::execute(&ws, &config, &sql, &exec).await;
         }
         Command::Run { file, conn, exec } => {
             let ws = open_workspace(cli.workspace.as_deref())?;
@@ -246,7 +246,7 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
             if let Some(why) = run::language_mismatch(&file, config.engine()) {
                 anyhow::bail!(why);
             }
-            return exec::execute(&ws, config, &sql, &exec).await;
+            return exec::execute(&ws, &config, &sql, &exec).await;
         }
         Command::Import {
             source: ImportSource::Datagrip(args),
