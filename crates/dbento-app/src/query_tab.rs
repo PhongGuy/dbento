@@ -101,6 +101,8 @@ pub const READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort:
 /// The Redis badge's head before the session has reported its level.
 pub const READ_ONLY_REDIS_UNCONNECTED_TOOLTIP: &str =
     "Read-only: the level follows the user's ACL and shows once connected.";
+/// The DynamoDB badge's head; its level is always best effort, since no session is read-only.
+pub const READ_ONLY_DYNAMODB_TOOLTIP: &str = "Read-only is best effort: DynamoDB has no read-only session, so Dbento sends only reads and refuses every statement it reads as a write or cannot classify.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -148,6 +150,7 @@ pub fn read_only_tooltip(engine: Engine) -> &'static str {
         Engine::Sqlite => READ_ONLY_SQLITE_TOOLTIP,
         Engine::Mysql => READ_ONLY_MYSQL_TOOLTIP,
         Engine::Duckdb => READ_ONLY_DUCKDB_TOOLTIP,
+        Engine::Dynamodb => READ_ONLY_DYNAMODB_TOOLTIP,
         Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis | _ => {
             "Read-only connection."
         }
@@ -165,7 +168,8 @@ pub fn read_only_tooltip_of(c: &ConnectionConfig) -> &'static str {
 }
 
 /// The badge text for `c` with the session's `level`: on SurrealDB and Redis the level's head, a
-/// space and the residual; on MongoDB the level's text alone; on every other engine
+/// space and the residual; on DynamoDB its fixed head and the residual at every level; on MongoDB
+/// the level's text alone; on every other engine
 /// `read_only_tooltip_of(c)`.
 pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcement>) -> String {
     match c.engine() {
@@ -177,6 +181,10 @@ pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcem
                 _ => READ_ONLY_MONGO_UNCONNECTED_TOOLTIP,
             }
             .to_owned();
+        }
+        Engine::Dynamodb => {
+            let residual = read_only_residual(Engine::Dynamodb).unwrap_or_default();
+            return format!("{READ_ONLY_DYNAMODB_TOOLTIP} {residual}");
         }
         Engine::Surrealdb | Engine::Redis => {}
         Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Mssql | Engine::Duckdb | _ => {
@@ -322,7 +330,7 @@ fn preview_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         QueryLanguage::MongoShell => "javascript",
         QueryLanguage::RedisCommands => "bash",
-        QueryLanguage::Sql | QueryLanguage::SurrealQl | _ => "sql",
+        QueryLanguage::Sql | QueryLanguage::SurrealQl | QueryLanguage::PartiQl | _ => "sql",
     }
 }
 
@@ -332,12 +340,13 @@ pub fn formats(engine: Engine) -> bool {
     engine.capabilities().language == QueryLanguage::Sql
 }
 
-/// The highlighter language for `engine`'s query editor: "sql" for an SQL engine,
+/// The highlighter language for `engine`'s query editor: "sql" for an SQL engine and PartiQL,
 /// "javascript" for the MongoDB shell, "bash" for Redis command lines (close enough to colour
 /// words and quotes), "text" (plain, no highlighting) for SurrealQL.
 pub fn editor_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
-        QueryLanguage::Sql => "sql",
+        // PartiQL's `<<`, `>>` and `{}` fall outside the SQL grammar; its keywords still colour.
+        QueryLanguage::Sql | QueryLanguage::PartiQl => "sql",
         QueryLanguage::MongoShell => "javascript",
         QueryLanguage::RedisCommands => "bash",
         QueryLanguage::SurrealQl | _ => "text",

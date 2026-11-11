@@ -118,6 +118,19 @@ async fn launch(ws: &Path) -> Pilot {
     pilot
 }
 
+async fn type_in(pilot: &Pilot, conn: &str, text: &str) {
+    click(pilot, &format!("connection-{conn}"), json!({ "count": 2 })).await;
+    pilot
+        .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
+        .await;
+    pilot
+        .ok(
+            "type",
+            json!({ "target": { "id": ["editor"] }, "text": text }),
+        )
+        .await;
+}
+
 /// Clicks `part` (`tree-row`, `tree-toggle`) of the row named `aria`, with `extra`.
 async fn row(pilot: &Pilot, aria: &str, part: &str, extra: Value) {
     let (_, ix) = seek(pilot, aria).await;
@@ -276,5 +289,35 @@ async fn sampled_attributes_are_marked_inferred() {
     );
     let (tree, ix) = seek(&pilot, &format!("dy.{r}.orders.pk")).await;
     assert_eq!(name(&tree, &format!("tree-detail-{ix}")), Some("S"));
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_badge_words_best_effort_and_a_write_is_refused() {
+    let db = dynamo_db().await;
+    let ws = workspace(&db, "read_only = true");
+    let pilot = launch(ws.path()).await;
+    type_in(&pilot, "dy", "DELETE FROM \"h\" WHERE id = 'nope'").await;
+    click(&pilot, "run-all", json!({})).await;
+    let tree = until(&pilot, "the badge", |t| {
+        name(t, "read-only-badge")
+            .is_some_and(|b| b.starts_with("Read-only is best effort: DynamoDB"))
+    })
+    .await;
+    assert!(name(&tree, "read-only-badge").unwrap().contains("IAM"));
+    until(&pilot, "the refusal", |t| {
+        find_node(t, "result-error-copy").is_some()
+    })
+    .await;
+    click(&pilot, "result-error-copy", json!({})).await;
+    let clip = pilot.ok("clipboard", json!({})).await;
+    // Core's refusal text (dynamo/driver.rs, the read-only gate in execute).
+    assert!(
+        clip["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("this statement writes"),
+        "{clip}"
+    );
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 }
