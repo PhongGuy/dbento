@@ -1272,12 +1272,7 @@ impl Shell {
     /// A click on connection `ix` in the explorer: activates the newest query tab on it, else
     /// opens one.
     pub fn click_connection(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self
-            .workspace
-            .as_ref()
-            .and_then(|ws| ws.connections().get(ix))
-            .map(|c| c.name().to_owned())
-        else {
+        let Some(name) = self.declared_name(ix) else {
             return;
         };
         // A key tab hides its editor, so opening the connection skips it for one that has one.

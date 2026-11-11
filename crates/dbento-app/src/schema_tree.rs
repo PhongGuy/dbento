@@ -1234,7 +1234,8 @@ impl CatalogTree {
         }
     }
 
-    /// The rows under connection `conn` when it is expanded, schemas at `depth`.
+    /// The rows under connection `conn` when it is expanded, at `depth`: its schemas, or under
+    /// a parent its databases with each expanded child's rows nested beneath.
     ///
     /// A non-empty `filter` (trimmed, case-insensitive) keeps rows whose name matches, the
     /// ancestors of visible matches and error rows, and everything below a match. Rows under a
