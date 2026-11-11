@@ -1,27 +1,31 @@
 # Dbento
 
-**A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client careful access to your databases. The name is db + bento: data in neat compartments.
+**A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client read-only access to your databases by default. It speaks SQL to Postgres, SQLite, MySQL, SQL Server and DuckDB, and each NoSQL store's own language to MongoDB, SurrealDB, Redis and DynamoDB. The name is db + bento: data in neat compartments.
 
 ![Dbento with the demo shop open: the explorer on the left, a saved query in the editor and its result in the grid](assets/screenshots/hero.png)
 
 ## Why Dbento
 
 - **Native and fast.** The desktop app is built on GPUI and rendered through the GPU. Results stream into a virtualized grid, so a large result scrolls as smoothly as a small one.
-- **Your workspace is a folder.** Connections live in `dbento.toml` and saved queries in plain `.sql` files, so a team can review them in git. No password is ever written to a file.
+- **Your workspace is a folder.** Connections live in `dbento.toml` and saved queries in plain text files, so a team can review them in git. No password is ever written to a file.
 - **The database enforces safety.** A read-only connection is opened read-only by the database itself, rather than by Dbento guessing from the SQL whether a statement writes.
 - **AI access with you in the loop.** The MCP server is read-only by default. A write runs only after you approve that exact call in the desktop app, and the AI can never approve itself.
 
 ## Supported databases
 
-| Database | `engine` in `dbento.toml` |
-| --- | --- |
-| PostgreSQL | `postgres` |
-| SQLite | `sqlite` |
-| MySQL and MariaDB | `mysql` |
-| SQL Server | `mssql` |
-| DuckDB | `duckdb` |
+| Database | `engine` in `dbento.toml` | Query language | Saved query files |
+| --- | --- | --- | --- |
+| PostgreSQL | `postgres` | SQL | `.sql` |
+| SQLite | `sqlite` | SQL | `.sql` |
+| MySQL and MariaDB | `mysql` (or `mariadb`) | SQL | `.sql` |
+| SQL Server | `mssql` (or `sqlserver`) | T-SQL | `.sql` |
+| DuckDB | `duckdb` | SQL | `.sql` |
+| MongoDB | `mongodb` (or `mongo`) | a subset of mongosh: `find`, `aggregate`, `insertOne`, `updateMany` and more | `.js` |
+| SurrealDB | `surrealdb` (or `surreal`) | SurrealQL, over WebSocket | `.surql` |
+| Redis and Valkey | `redis` (or `valkey`) | Redis commands, one per line | `.redis` |
+| Amazon DynamoDB | `dynamodb` (or `dynamo`) | PartiQL | `.partiql` |
 
-DuckDB is a default Cargo feature of the command line and the app; a build with `--no-default-features` leaves it out and skips its C++ compile. Support for MongoDB and SurrealDB is in progress: their connection settings are read, but connecting to either is not possible yet.
+DuckDB, MongoDB, SurrealDB, Redis and DynamoDB are default Cargo features (`duckdb`, `mongodb`, `surrealdb`, `redis`, `dynamodb`) of the core, the command line, the MCP server and the app. A build with `--no-default-features` leaves them out, and leaving out DuckDB skips its C++ compile. Other engines are tracked in the [issue tracker](https://github.com/PhongGuy/dbento/issues).
 
 ## Features
 
@@ -41,19 +45,28 @@ The schema tree shows tables, views, materialized views and foreign tables, and 
 
 ![The orders table expanded in the explorer, with its index's CREATE INDEX statement in the definition dock](assets/screenshots/explorer.png)
 
+### Documents, keys and items
+
+The NoSQL stores share the same explorer, editor and grid, each in its own language.
+
+- **MongoDB:** databases and collections, with fields inferred from a sample of documents, and indexes. Opening a collection runs its `find()`. Columns come from the first documents, and fields that appear later land in a `(more fields)` column.
+- **Redis and Valkey:** each DB index with its key count, and the keys grouped into folders by `:`. Keys are listed with a `SCAN` walk that shows each key's type and TTL, and the filter takes a pattern plus `type:<kind>`. Opening a string, hash, list, set, sorted set or stream shows its value in a paged grid, with its type, length and TTL. Command completion comes from the server's `COMMAND DOCS`.
+- **DynamoDB:** one schema per region, with tables, their key attributes, indexes, and attributes sampled from items. Opening a table or an index runs a PartiQL `SELECT`, and attributes beyond the first items land in a `(more attributes)` column.
+- **SurrealDB:** the namespace's databases and their tables, read from `INFO` and sampled rows, with fields, indexes and triggers. Opening a table runs `SELECT * FROM` it.
+
 ### Editing you review before it lands
 
-Edit cells, add rows and delete rows in a browsed table. Changes are staged, then applied in one transaction with typed parameters, after a prompt that says how many rows they affect and asks you to commit or roll back. Rows without a primary key are found by `ctid` and `xmin` on Postgres and by `rowid` on SQLite, and a row someone else changed or deleted in the meantime is marked instead of overwritten.
+Edit cells, add rows and delete rows in a browsed Postgres or SQLite table. Changes are staged, then applied in one transaction with typed parameters, after a prompt that says how many rows they affect and asks you to commit or roll back. Rows without a primary key are found by `ctid` and `xmin` on Postgres and by `rowid` on SQLite, and a row someone else changed or deleted in the meantime is marked instead of overwritten.
 
 ![Two staged price changes on products and the prompt: affects 2 rows, roll back or commit](assets/screenshots/editing.png)
 
 ### AI access through MCP
 
-`dbento mcp` serves a workspace to an AI client over MCP on stdio, with nine tools: `list_connections`, `list_schemas`, `list_tables`, `describe_table`, `query`, `explain`, `list_saved_queries`, `read_saved_query` and `execute`.
+`dbento mcp` serves a workspace to an AI client over MCP on stdio, with ten tools: `list_connections`, `list_databases`, `list_schemas`, `list_tables`, `describe_table`, `query`, `explain`, `list_saved_queries`, `read_saved_query` and `execute`.
 
-- `query` always runs read-only. It returns 100 rows by default and at most 1,000, about 64 KiB, under a statement timeout of 30 seconds by default.
+- `query` always runs read-only, one statement in the connection's own language: SQL, a mongosh statement, SurrealQL, one Redis command, or PartiQL. Redis commands in the `@dangerous`, `@blocking`, `@scripting` and `@pubsub` categories are refused. It returns 100 rows by default and at most 1,000, about 64 KiB, under a statement timeout of 30 seconds by default.
 - `explain` shows the plan of one statement on Postgres and SQLite in the same read-only session, so an AI can preview an `UPDATE` or `DELETE` without running it. `ANALYZE` is refused.
-- `list_saved_queries` and `read_saved_query` read the `.sql` files under the workspace's `queries/` folder and nothing outside it, not even through a symlink.
+- `list_saved_queries` and `read_saved_query` read the saved query files (`.sql`, `.js`, `.surql`, `.redis`, `.partiql`) under the workspace's `queries/` folder and nothing outside it, not even through a symlink.
 - `execute` waits until you approve that exact call in the desktop app, once. When you deny a call you can type a reason, and the AI gets it back with the denial.
 
 Query results are passed to the AI as untrusted data. The app's approvals panel shows the command to connect your AI client.
@@ -62,13 +75,17 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 
 ### Safety the database enforces
 
-- A `read_only` connection runs every statement in `BEGIN READ ONLY` on Postgres and opens SQLite and DuckDB read-only, so the database itself refuses a write.
+- A `read_only` connection runs every statement in `BEGIN READ ONLY` on Postgres and opens SQLite and DuckDB read-only, so the database itself refuses a write. A `read_only` DuckDB connection also has file access off, so `read_csv` and Parquet reads of local files do not work there.
 - On Postgres the server still lets a few things through: functions that open their own connections, such as `dblink_exec` where the dblink extension is installed, and admin functions whose effect is not transactional, such as `pg_terminate_backend`, `pg_cancel_backend` and `pg_stat_reset`. For a production database, use a role without the privileges the rest need; it can still cancel or terminate backends of its own role.
 - A MySQL or MariaDB `read_only` connection, and every MCP session on one, runs each statement in `START TRANSACTION READ ONLY`. The server still lets a few things through: `SELECT ... INTO OUTFILE` or `DUMPFILE`, `SET GLOBAL` and `SET PERSIST`, `FLUSH`, `GET_LOCK`, and an existing stored procedure that commits and then writes. For a production database, use an account without the FILE, RELOAD, SYSTEM_VARIABLES_ADMIN or SUPER privileges and without EXECUTE on such procedures, ideally one granted only SELECT.
 - On SQL Server, give a `read_only` connection a `read_only_user` (a login that can only read) and the database enforces it. Without one the session is best effort: Dbento fences each batch in a transaction it rolls back and refuses the batches it can parse as writes, but a login with the rights can get past the fence with a hidden commit. `list_connections` states the level of each connection to an AI client.
+- On MongoDB, Dbento reads the user's privileges when it connects. A user that can only read is enforced by the server; for any other user Dbento refuses every command it cannot show reads.
+- On SurrealDB each statement runs in a transaction that is cancelled, and a VIEWER login is enforced by the server. At either level, stored logic reached from a `SELECT` can still advance sequences, call `http::*` functions or write files, and a root OWNER or anonymous login can run `ALTER SYSTEM`.
+- On Redis and Valkey, Dbento checks the user's ACL against the server's command table when it connects. A user whose ACL refuses every write is enforced by the server; otherwise Dbento refuses writes and commands it cannot classify. The check runs once, so a later `ACL SETUSER` can widen the user.
+- DynamoDB has no read-only session. A read-only connection sends only `ListTables`, `DescribeTable`, `Scan` and PartiQL `SELECT`, but only IAM stops someone with the same keys from writing, so give a production connection keys that can only read.
 - A connection tagged red is marked as production in the tab line and the status bar.
-- `UPDATE` or `DELETE` without `WHERE`, `DROP` and `TRUNCATE` ask before they run.
-- Postgres statements are parsed with `pg_query`, so a write hidden in a CTE is still caught. A statement the parser cannot handle is never blocked for that reason alone.
+- `UPDATE` or `DELETE` without `WHERE`, `DROP`, `TRUNCATE`, `updateMany` or `deleteMany` with an empty filter, and `FLUSHDB` or `FLUSHALL` ask before they run.
+- Write detection follows each engine: `pg_query` for Postgres and DuckDB, so a write hidden in a CTE is still caught; SQLite's own read-only check; sqlparser for MySQL and SQL Server; an allowlist of read methods for MongoDB; and the server's command table for Redis. Outside a read-only session, a statement the parser cannot handle is never blocked for that reason alone.
 
 ### Also
 
@@ -90,7 +107,7 @@ All of the logic lives in `dbento-core`, a library with no UI: the workspace for
 
 ### A workspace is a folder
 
-A workspace is any folder with a `dbento.toml` in it. Connections live in that file, and saved queries in `queries/<connection>/*.sql`, so a query file knows which connection it runs on. Folders group connections and give them a color.
+A workspace is any folder with a `dbento.toml` in it. Connections live in that file, and saved queries in `queries/<connection>/`, as `.sql` files or the extension of the connection's language, so a query file knows which connection it runs on. Folders group connections and give them a color.
 
 ```toml
 dbento = 1
@@ -113,6 +130,40 @@ color = "red"
 engine = "sqlite"
 path = "data/app.db"
 ```
+
+The NoSQL stores take their own keys:
+
+```toml
+[connections.docs]
+engine = "mongodb"
+uri = "mongodb://app@localhost:27017/app?authSource=admin"
+
+[connections.cache]
+engine = "redis"
+host = "localhost"
+database = "2"
+secret = "none"
+
+[connections.items]
+engine = "dynamodb"
+region = "eu-north-1"
+access_key_id = "AKIAEXAMPLEKEYID"
+consistent_read = true
+
+[connections.graph]
+engine = "surrealdb"
+host = "localhost"
+namespace = "app"
+database = "main"
+user = "reader"
+auth_level = "database"
+```
+
+- **MongoDB** takes everything in `uri`, options such as `authSource` and `tls=true` included. A password in `uri` is refused; the secret is stored like any other.
+- **Redis and Valkey** take `host` (default `127.0.0.1`), `port` (6379), `user`, and `database` as a DB index (0 when left out).
+- **DynamoDB** takes `region`, else `AWS_REGION` or `AWS_DEFAULT_REGION`, and an `endpoint` for a local server; plain `http` is allowed only on this machine. With `access_key_id` the secret access key is the connection's secret; without it the credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. `consistent_read = true` makes reads strongly consistent.
+- **SurrealDB** takes `host`, `port` (8000), `namespace`, `database`, and with a `user` an `auth_level` of `root`, `namespace` or `database`. Without a user the session is anonymous.
+- **SQL Server** can take a `read_only_user`, a user that can only read, for its read-only work (see [Safety the database enforces](#safety-the-database-enforces)).
 
 A Postgres or SQL Server connection can also reach the other databases on its server. Set `databases` to a list of names, such as `databases = ["billing", "audit"]`, or to `"all"`, and each database becomes a child connection named `<parent>/<database>`, for example `app-dev/billing`. A child uses its parent's credentials and safety settings, and works anywhere a connection name does: `dbento query`, `dbento run`, `dbento connections`, and the MCP server, where `list_databases` lists a parent's databases.
 
@@ -218,6 +269,8 @@ dbento run queries/app-dev/recent-orders.sql
 dbento run report.sql --conn app-dev --format csv > report.csv
 ```
 
+On a MongoDB, SurrealDB, Redis or DynamoDB connection, `dbento query` takes that engine's language instead of SQL, and `dbento run` refuses a file whose extension belongs to another language.
+
 Both commands take `--format table|json|csv`, `--max-rows N`, `--read-only`, `--timeout 30s`, and `--yes` to run an `UPDATE` or `DELETE` without `WHERE`, a `DROP` or a `TRUNCATE` without asking. Every command finds the nearest `dbento.toml` above the working directory, or takes `--workspace <dir>`.
 
 ### The desktop app
@@ -266,18 +319,18 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 `make pilot-check` and `make screenshots` need the `gpui-pilot` server on your `PATH`, or `GPUI_PILOT_BIN` naming it. Install it with:
 
 ```sh
-cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.2.0 gpui-pilot
+cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.3.0 gpui-pilot
 ```
 
 A change to the results grid, its scrolling or rendering merges only once `make timing-guard` passes: run `make pilot-timing` on a quiet machine on the commit you merge. The paths it watches are listed in `scripts/timing-guard.sh`.
 
 ### Tests against real databases
 
-Tests against database servers start containers through testcontainers. With rootless podman, point it at the podman socket:
+Tests against database servers start containers through testcontainers: Postgres, MySQL and MariaDB, SQL Server, MongoDB, Valkey for Redis, SurrealDB, and Moto for DynamoDB. SQL Server containers start only once `DBENTO_MSSQL_ACCEPT_EULA=Y` accepts Microsoft's licence; without it those tests are skipped. With rootless podman, point it at the podman socket:
 
     export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
 
-`cargo xtask db up` starts a matrix of Postgres versions with the Chinook dataset (`--datasets` adds pagila, airlines or the stress tables) and prints the `export` lines that point the tests at it; `cargo xtask db down` removes the containers. To skip containers, set `DBENTO_PG_URL` to a running server.
+`cargo xtask db up` starts a matrix of Postgres versions with the Chinook dataset (`--datasets` adds pagila, airlines or the stress tables), or with `--engine mysql`, `mariadb` or `mssql` those servers, and prints the `export` lines that point the tests at it; `cargo xtask db down` removes the containers. To skip containers, point a variable at a running server: `DBENTO_PG_URL`, `DBENTO_MYSQL_URL`, `DBENTO_MARIADB_URL`, `DBENTO_MSSQL_URL`, `DBENTO_MONGO_URL`, `DBENTO_REDIS_URL`, `DBENTO_SURREAL_URL` or `DBENTO_DYNAMO_URL`.
 
 ### Contributing
 
