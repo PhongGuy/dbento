@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::link::LinkState;
-use dbento_app::schema_tree::{CatalogTree, LoadRequest, NodeKey, RowKind};
-use dbento_core::{SchemaInfo, Workspace};
+use dbento_app::schema_tree::{CatalogTree, LoadRequest, NodeKey, RevealStep, RowKind};
+use dbento_core::{RelationRef, SchemaInfo, Workspace};
 
 fn answer(t: &mut CatalogTree, req: LoadRequest, result: Result<CatalogData, String>) {
     t.apply(
@@ -230,4 +230,16 @@ fn retry_on_a_failed_listing_lists_again() {
     let again = t.retry(&conn("srv")).expect("a failed listing retries");
     assert_eq!(again.query, CatalogQuery::Databases);
     assert_eq!(shape(&t, "srv", ""), ["srv:loading"]);
+}
+
+#[test]
+fn a_parent_has_no_relations_to_reveal() {
+    let (_d, mut t) = tree("databases = \"all\"");
+    let rel = RelationRef::new("public", "t");
+    assert_eq!(t.reveal("srv", &rel), RevealStep::Missing, "an all parent");
+    assert_eq!(
+        t.reveal("listed", &rel),
+        RevealStep::Missing,
+        "a listed parent"
+    );
 }

@@ -58,8 +58,8 @@ pub enum SidebarEvent {
     /// Open a tab on connection `connection` (index into `Workspace::connections`) on `rel`:
     /// a browse tab for a table, a `select_text` tab for any other kind.
     OpenRelation {
-        /// The connection's index.
-        connection: usize,
+        /// The connection's name, declared or derived.
+        connection: String,
         /// The relation to select from.
         rel: RelationRef,
         /// The relation's kind, which decides the tab it opens as.
@@ -1007,17 +1007,9 @@ impl Sidebar {
         kind: RelationKind,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self
-            .workspace
-            .connections()
-            .iter()
-            .position(|c| c.name() == conn)
-        else {
-            return;
-        };
         // The owner selects the connection once the tab opens, which it may decline.
         cx.emit(SidebarEvent::OpenRelation {
-            connection: ix,
+            connection: conn.to_owned(),
             rel: rel.clone(),
             kind,
         });

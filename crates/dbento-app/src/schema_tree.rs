@@ -416,6 +416,10 @@ impl CatalogTree {
     /// Opens the path down to `rel` as far as its loaded levels allow: the connection, the
     /// schema once the schemas are in, the relation's kind group once the relations are in.
     pub fn reveal(&mut self, conn: &str, rel: &RelationRef) -> RevealStep {
+        // A parent's row lists databases, not schemas, so none of its relations has a row.
+        if self.parent(conn).is_some() {
+            return RevealStep::Missing;
+        }
         let loads: Vec<_> = self
             .expand(&NodeKey::Connection(conn.to_owned()))
             .into_iter()
