@@ -2014,6 +2014,12 @@ impl ConnectionConfig {
         self.parent.as_deref()
     }
 
+    /// The connection whose secret, keychain entries and hints this one uses: the parent on a
+    /// derived child, else itself.
+    pub fn secret_owner(&self) -> &str {
+        self.parent.as_deref().unwrap_or(&self.name)
+    }
+
     // The parent pointed at another database: everything else, secret source included, is shared.
     fn child(&self, database: &str) -> ConnectionConfig {
         ConnectionConfig {

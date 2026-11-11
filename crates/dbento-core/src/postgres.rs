@@ -211,7 +211,7 @@ pub(crate) fn client_auth(
     }
     let pem = std::fs::read(key_path).map_err(|e| fail(e.to_string()))?;
     let key = if is_encrypted_pem(&pem) {
-        let name = conn.name();
+        let name = conn.secret_owner();
         let Some(passphrase) = passphrase else {
             return Err(fail(format!(
                 "the key is encrypted and no passphrase was found: run `dbento secret set \
@@ -1933,5 +1933,35 @@ mod tests {
             .map(|c| (c.name(), c.type_name(), c.pg_type_oid()))
             .collect();
         assert_eq!(got, vec![("a", "", None), ("b", "", None), ("c", "", None)]);
+    }
+
+    #[test]
+    fn a_childs_encrypted_key_hint_names_the_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        // The certificate is never verified before the key is read, so any PEM body will do.
+        std::fs::write(
+            dir.path().join("c.crt"),
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("c.key"),
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("dbento.toml"),
+            "dbento = 1\n[connections.locked]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ntls = \"verify\"\ntls_cert = \"c.crt\"\ntls_key = \"c.key\"\ndatabases = [\"app\"]\n",
+        )
+        .unwrap();
+        let ws = crate::Workspace::open(dir.path()).unwrap();
+        let child = ws.connection("locked/app").unwrap();
+        let says = client_auth(&child, None).err().unwrap().to_string();
+        assert!(
+            says.contains("dbento secret set --tls-key locked`"),
+            "{says}"
+        );
+        assert!(says.contains("DBENTO_KEY_PASSPHRASE_LOCKED"), "{says}");
+        assert!(!says.contains("locked/app"), "{says}");
     }
 }

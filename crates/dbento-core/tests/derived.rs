@@ -425,3 +425,70 @@ user = "app"
         assert_eq!(names, ["allpg", "ms", "pg", "plain"]);
     }
 }
+
+mod secrets {
+    use super::open;
+    use dbento_core::{
+        MemoryStore, Secret, SecretKey, SecretStore, resolve_secret, secret_env_var, secret_hint,
+    };
+
+    const PARENTS: &str = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = \"all\"\n[connections.my-srv]\nengine = \"mssql\"\nhost = \"h\"\nuser = \"u\"\ndatabases = [\"app\"]\n";
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn a_child_keys_its_secret_by_its_parent() {
+        let (_d, ws) = open(PARENTS);
+        let parent = ws.declared("stayzy").unwrap();
+        let child = ws.connection("stayzy/booking").unwrap();
+        assert_eq!(parent.secret_owner(), "stayzy");
+        assert_eq!(child.secret_owner(), "stayzy");
+        assert_eq!(
+            SecretKey::for_connection(&ws, &child),
+            SecretKey::for_connection(&ws, parent)
+        );
+        assert_eq!(
+            SecretKey::key_passphrase_for(&ws, &child),
+            SecretKey::key_passphrase_for(&ws, parent)
+        );
+        assert_eq!(
+            SecretKey::for_connection(&ws, &child).connection(),
+            "stayzy"
+        );
+    }
+
+    #[test]
+    fn a_child_reads_the_parents_keychain_entry_then_its_variable() {
+        let (_d, ws) = open(PARENTS);
+        let child = ws.connection("my-srv/app").unwrap();
+        let store = MemoryStore::new();
+        let env = |v: &str| (v == "DBENTO_SECRET_MY_SRV").then(|| "from-env".to_owned());
+        let got = resolve_secret(&ws, &child, &store, &env).unwrap();
+        assert_eq!(
+            got.map(|s| s.expose().to_owned()).as_deref(),
+            Some("from-env")
+        );
+        let key = SecretKey::for_connection(&ws, ws.declared("my-srv").unwrap());
+        store.set(&key, &Secret::new("from-keychain")).unwrap();
+        let got = resolve_secret(&ws, &child, &store, &no_env).unwrap();
+        assert_eq!(
+            got.map(|s| s.expose().to_owned()).as_deref(),
+            Some("from-keychain")
+        );
+    }
+
+    #[test]
+    fn the_missing_secret_hint_names_the_parent() {
+        let (_d, ws) = open(PARENTS);
+        let child = ws.connection("stayzy/booking").unwrap();
+        assert_eq!(
+            secret_hint(&ws, &child, &MemoryStore::new()).as_deref(),
+            Some(
+                "no secret was found for 'stayzy': run `dbento secret set stayzy` or set DBENTO_SECRET_STAYZY"
+            )
+        );
+        assert_eq!(secret_env_var(child.secret_owner()), "DBENTO_SECRET_STAYZY");
+    }
+}
