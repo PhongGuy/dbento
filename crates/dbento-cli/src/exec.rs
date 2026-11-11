@@ -366,6 +366,12 @@ fn best_effort_note(engine: Engine, connection: &str) -> String {
              +multi +exec +discard +client|setname +client|setinfo +client|id +client|info) \
              for production"
         }
+        Engine::Dynamodb => {
+            "Dbento sends DynamoDB only reads, but IAM decides what the credentials may do; \
+             for production grant only the reader actions (dynamodb:ListTables, \
+             dynamodb:DescribeTable, dynamodb:Scan, dynamodb:Query, dynamodb:GetItem, \
+             dynamodb:BatchGetItem, dynamodb:PartiQLSelect)"
+        }
         _ => {
             "SQL Server refuses writes in the database only with read_only_user; set \
              read_only_user or use a reader login for production"
@@ -448,5 +454,24 @@ mod tests {
             "{note}"
         );
         assert!(!note.contains("read_only_user"), "{note}");
+    }
+
+    #[test]
+    fn the_dynamodb_best_effort_note_names_iam_not_sql_server() {
+        let note = best_effort_note(Engine::Dynamodb, "orders");
+        assert!(
+            note.contains("'orders'") && note.contains("best effort"),
+            "{note}"
+        );
+        assert!(
+            note.contains("IAM") && note.contains("dynamodb:PartiQLSelect"),
+            "{note}"
+        );
+        assert!(
+            !note.contains("read_only_user") && !note.contains("SQL Server"),
+            "{note}"
+        );
+        let notes = read_only_notes(Engine::Dynamodb, "orders", ReadOnlyEnforcement::BestEffort);
+        assert_eq!(notes.len(), 2, "{notes:?}");
     }
 }

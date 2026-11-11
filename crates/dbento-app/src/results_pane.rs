@@ -88,6 +88,21 @@ pub fn more_rows(n: u64) -> String {
     format!("{}+ rows", group_digits(n))
 }
 
+/// The footer's consumed capacity for a finished statement: "1 capacity unit",
+/// "12.5 capacity units", or `None` when the engine reported none.
+pub fn capacity_text(end: Option<&StatementEnd>) -> Option<String> {
+    let units = match end? {
+        StatementEnd::Complete(o) | StatementEnd::Truncated(o) => o.consumed_capacity?,
+        StatementEnd::Skipped
+        | StatementEnd::Planned
+        | StatementEnd::Failed(_)
+        | StatementEnd::Stopped { .. } => return None,
+    };
+    let units = units.to_string();
+    let noun = if units == "1" { "unit" } else { "units" };
+    Some(format!("{units} capacity {noun}"))
+}
+
 /// A paused or parked result's tab text: "first 1,000 rows · more available".
 pub fn paused_label(rows: u64) -> String {
     format!("first {} · more available", format_rows(rows))
@@ -2748,6 +2763,17 @@ impl Render for ResultsPane {
                         .child(text),
                 )
             });
+            let capacity = capacity_text(r.store.end()).map(|t| {
+                div()
+                    .id("footer-capacity")
+                    .aria_label(t.clone())
+                    .test_support()
+                    .flex_none()
+                    .font_family(mono.clone())
+                    .text_size(mono_size)
+                    .text_color(dim)
+                    .child(t)
+            });
             let elapsed = m.elapsed_at(r.stmt, Instant::now()).map(|t| {
                 let t = format_elapsed(t);
                 div()
@@ -2828,6 +2854,7 @@ impl Render for ResultsPane {
                 )
                 .children(record_nav)
                 .when(plan_shown.is_none(), |d| d.child(self.row_view_buttons(cx)))
+                .children(capacity)
                 .children(elapsed)
         });
         let message = m.error().map(|e| {

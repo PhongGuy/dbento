@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use unicode_width::UnicodeWidthStr;
 
-use dbento_core::{ColumnInfo, Engine, ExecuteError, Outcome, ResultBatch, Unguarded};
+use dbento_core::{
+    CapacityUnits, ColumnInfo, Engine, ExecuteError, Outcome, ResultBatch, Unguarded,
+};
 
 use crate::cell::cell_text;
 use crate::confirm::unguarded_words;
@@ -67,6 +69,13 @@ pub(crate) fn more_results(n: u32) -> Option<String> {
         1 => Some("1 more result set not shown".to_owned()),
         n => Some(format!("{n} more result sets not shown")),
     }
+}
+
+/// `consumed 1 capacity unit` or `consumed 2.5 capacity units`.
+pub(crate) fn capacity_phrase(units: CapacityUnits) -> String {
+    let text = units.to_string();
+    let plural = if text == "1" { "" } else { "s" };
+    format!("consumed {text} capacity unit{plural}")
 }
 
 /// `1 row` or `3 rows`.
@@ -170,6 +179,9 @@ impl<W: Write, E: Write> Sink for TableSink<W, E> {
         if outcome.rolled_back {
             more.push_str(", any changes were rolled back");
         }
+        if let Some(units) = outcome.consumed_capacity {
+            more.push_str(&format!(", {}", capacity_phrase(units)));
+        }
         if had_columns {
             let cut = if outcome.truncated && self.default_cap {
                 ", showing the first 1000 rows; pass --max-rows to change"
@@ -215,8 +227,10 @@ impl<W: Write, E: Write> Sink for TableSink<W, E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_note, more_results, render};
-    use dbento_core::{Engine, ExecuteError};
+    use super::{TableSink, capacity_phrase, error_note, more_results, render};
+    use crate::exec::Sink;
+    use dbento_core::{CapacityUnits, Engine, ExecuteError, Outcome};
+    use std::time::Duration;
 
     fn row(a: &str, b: &str) -> Vec<String> {
         vec![a.to_owned(), b.to_owned()]
@@ -281,6 +295,30 @@ mod tests {
         assert_eq!(
             more_results(3).as_deref(),
             Some("3 more result sets not shown")
+        );
+    }
+
+    #[test]
+    fn the_footer_names_the_consumed_capacity() {
+        assert_eq!(
+            capacity_phrase(CapacityUnits::from_thousandths(1_000)),
+            "consumed 1 capacity unit"
+        );
+        assert_eq!(
+            capacity_phrase(CapacityUnits::from_thousandths(2_500)),
+            "consumed 2.5 capacity units"
+        );
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut sink = TableSink::new(&mut out, &mut err, Engine::Dynamodb);
+        sink.begin("dy").unwrap();
+        sink.started(0, "UPDATE \"h\" SET n = 1 WHERE id = 'a'", &[])
+            .unwrap();
+        let mut o = Outcome::complete(0);
+        o.consumed_capacity = Some(CapacityUnits::from_thousandths(1_000));
+        sink.finished(&o, Duration::from_millis(3)).unwrap();
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "OK, consumed 1 capacity unit (3 ms)\n"
         );
     }
 }

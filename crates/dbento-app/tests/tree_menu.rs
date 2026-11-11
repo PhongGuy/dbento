@@ -139,6 +139,7 @@ fn each_row_kind_has_its_own_items(cx: &mut TestAppContext) {
         let column = RowKind::Column {
             type_name: "INTEGER".into(),
             primary_key: true,
+            inferred: false,
         };
         assert_eq!(
             ids(column),
@@ -528,6 +529,7 @@ fn surrealdb_menus_offer_no_generated_sql(cx: &mut TestAppContext) {
             ids(RowKind::Column {
                 type_name: "string".into(),
                 primary_key: false,
+                inferred: false,
             }),
             ["tree-menu-copy-name"]
         );

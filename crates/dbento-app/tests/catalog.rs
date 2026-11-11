@@ -34,7 +34,8 @@ fn rel_names(data: &CatalogData) -> Vec<(String, RelationKind)> {
         | CatalogData::SchemaObjects(_)
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -88,7 +89,8 @@ async fn loads_each_level_in_request_order() {
         | CatalogData::SchemaObjects(_)
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     let second = reply(&rx).await;
     assert_eq!(
@@ -112,7 +114,8 @@ async fn loads_each_level_in_request_order() {
         | CatalogData::SchemaObjects(_)
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     tokio::time::timeout(Duration::from_secs(5), r.close().wait())
         .await
@@ -384,7 +387,8 @@ async fn first_index(
         | CatalogData::SchemaObjects(_)
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -412,7 +416,8 @@ async fn objects_and_definitions_load_in_request_order() {
         | CatalogData::RelationObjects(_)
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     r.load(
         2,
@@ -434,7 +439,8 @@ async fn objects_and_definitions_load_in_request_order() {
         | CatalogData::RelationObjects(_)
         | CatalogData::SchemaObjects(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     let view = ObjectRef::relation(RelationRef::new("main", "v"));
     r.load(2, CatalogQuery::Definition { object: view });
@@ -447,7 +453,8 @@ async fn objects_and_definitions_load_in_request_order() {
         | CatalogData::RelationObjects(_)
         | CatalogData::SchemaObjects(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
 }
 
@@ -504,7 +511,8 @@ async fn a_killed_postgres_session_is_replaced_after_a_definition_load() {
         | CatalogData::RelationObjects(_)
         | CatalogData::SchemaObjects(_)
         | CatalogData::Keys(_)
-        | CatalogData::CommandDocs(_)) => panic!("{other:?}"),
+        | CatalogData::CommandDocs(_)
+        | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     db.scalar("SELECT pg_terminate_backend(pid)::text FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()")
         .await;

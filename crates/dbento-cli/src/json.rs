@@ -214,6 +214,9 @@ impl<W: Write> Sink for JsonSink<W> {
         if outcome.rolled_back {
             self.out.write_all(b",\"rolled_back\":true")?;
         }
+        if let Some(units) = outcome.consumed_capacity {
+            write!(self.out, ",\"consumed_capacity\":{units}")?;
+        }
         self.out.write_all(b",\"status\":\"ok\"}")?;
         self.out.flush()
     }
@@ -351,6 +354,28 @@ mod tests {
                 r#"{"index":0,"sql":"select * from x","status":"error","error":{"code":"42P01","message":"relation \"x\" does not exist"}}"#,
                 "\n]}\n"
             )
+        );
+    }
+
+    fn finished_json(outcome: &Outcome) -> serde_json::Value {
+        let mut out = Vec::new();
+        let mut sink = JsonSink::new(&mut out, Engine::Dynamodb);
+        sink.begin("dy").unwrap();
+        sink.started(0, "SELECT * FROM \"t\"", &[]).unwrap();
+        sink.finished(outcome, Duration::from_millis(3)).unwrap();
+        sink.end(None).unwrap();
+        serde_json::from_slice(&out).unwrap()
+    }
+
+    #[test]
+    fn consumed_capacity_is_a_number_and_absent_when_unreported() {
+        let mut o = Outcome::complete(1);
+        o.consumed_capacity = Some(dbento_core::CapacityUnits::from_thousandths(1_500));
+        assert_eq!(finished_json(&o)["statements"][0]["consumed_capacity"], 1.5);
+        let none = finished_json(&Outcome::complete(1));
+        assert!(
+            none["statements"][0].get("consumed_capacity").is_none(),
+            "{none}"
         );
     }
 }

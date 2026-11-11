@@ -603,7 +603,7 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
     cx.update_window(o.win, |_, w, cx| {
         w.render_frame(cx);
         let name = w.find("conn-name").bounds();
-        for ix in 0..8usize {
+        for ix in 0..9usize {
             let option = w.within("conn-engine").find(ix).bounds();
             assert!(
                 option.right() <= name.right(),

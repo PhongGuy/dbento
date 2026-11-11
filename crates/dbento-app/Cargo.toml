@@ -60,7 +60,7 @@ tempfile.workspace = true
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "io-util"] }
 # Not forwarded from [features]: `cargo install` drops dev-dependencies, so a feature naming one fails.
-dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb", "redis"] }
+dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb"] }
 
 [package.metadata.packager]
 productName = "Dbento"

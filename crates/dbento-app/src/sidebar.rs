@@ -42,9 +42,10 @@ use crate::keys::{KeyFilter, display_key, parse_key_filter, ttl_text, type_name}
 use crate::link::{LinkState, shows_read_only};
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
-    CatalogRow, CatalogTree, LoadRequest, NodeKey, ObjectGroup, RevealStep, RowKind,
-    catalog_entries, count_text, db_index, group_title, insert_sql, lone_schema, node_connection,
-    object_group_title, qualified_name, select_text, short_type,
+    CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
+    RevealStep, RowKind, catalog_entries, column_detail, count_text, db_index, group_title,
+    index_select_sql, insert_sql, lone_schema, node_connection, object_group_title, qualified_name,
+    select_text,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
 use crate::{settings, theme, tokio_bridge};
@@ -114,6 +115,13 @@ pub enum SidebarEvent {
         connection: String,
         /// The object to show.
         object: ObjectRef,
+    },
+    /// Open a new tab on the named connection holding `sql` and run it: a DynamoDB index.
+    OpenIndex {
+        /// The connection's name.
+        connection: String,
+        /// The tab's text, run at once.
+        sql: String,
     },
     /// Open Redis key `key` of DB `db` in its own value tab.
     OpenKey {
@@ -1031,6 +1039,24 @@ impl Sidebar {
         });
     }
 
+    // A DynamoDB index has no definition, so opening one runs its PartiQL SELECT instead;
+    // every other object shows its definition.
+    fn open_object(&mut self, connection: String, object: ObjectRef, cx: &mut Context<Self>) {
+        let engine = self
+            .workspace
+            .connections()
+            .iter()
+            .find(|c| c.name() == connection)
+            .map(ConnectionConfig::engine);
+        match (&object, engine) {
+            (ObjectRef::Index { rel, name, .. }, Some(Engine::Dynamodb)) => {
+                let sql = index_select_sql(Engine::Dynamodb, rel, name);
+                cx.emit(SidebarEvent::OpenIndex { connection, sql });
+            }
+            _ => cx.emit(SidebarEvent::ViewDefinition { connection, object }),
+        }
+    }
+
     /// Sets DB `db`'s key filter on `conn` and rescans it when open.
     pub fn filter_keys(&mut self, conn: &str, db: u32, filter: KeyFilter, cx: &mut Context<Self>) {
         if let Some(request) = self.tree.filter_keys(conn, db, filter) {
@@ -1072,10 +1098,11 @@ impl Sidebar {
     }
 
     // Enter opens a selected relation as its double click does and asks for a selected
-    // object's definition; any other selection lets the key go on to whatever binds it above.
+    // object's definition (a DynamoDB index runs instead); any other selection lets the key go on
+    // to whatever binds it above.
     fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
         if let Some((connection, object)) = self.selected_object() {
-            cx.emit(SidebarEvent::ViewDefinition { connection, object });
+            self.open_object(connection, object, cx);
             return;
         }
         if let Some(Selection::Key { conn, db, key }) = self.selection.clone() {
@@ -1769,10 +1796,7 @@ impl Sidebar {
                     };
                     this.set_selection(selection, cx);
                     if e.click_count() == 2 {
-                        cx.emit(SidebarEvent::ViewDefinition {
-                            connection: conn.clone(),
-                            object: object.clone(),
-                        });
+                        this.open_object(conn.clone(), object.clone(), cx);
                     }
                 }))
         } else if let (RowKind::Key(item), Some(db)) = (&row.kind, node_db(&row.key)) {
@@ -1875,7 +1899,11 @@ impl Sidebar {
             RowKind::Object { detail, .. } => base
                 .child(name(row.label.clone()))
                 .child(mono_dim(detail.clone()).min_w_0().truncate()),
-            RowKind::Column { type_name, .. } => base
+            RowKind::Column {
+                type_name,
+                inferred,
+                ..
+            } => base
                 // A long type shrinks before the column name, which keeps most of the row.
                 .child(
                     div()
@@ -1884,12 +1912,21 @@ impl Sidebar {
                         .truncate()
                         .child(row.label.clone()),
                 )
-                .child(
-                    mono_dim(short_type(type_name))
+                .child({
+                    let detail = column_detail(type_name, *inferred);
+                    mono_dim(detail.clone())
                         .flex_initial()
                         .min_w_0()
-                        .truncate(),
-                ),
+                        .truncate()
+                        .id(("tree-detail", visible))
+                        .aria_label(detail)
+                        .when(*inferred, |d| {
+                            d.tooltip(|window, cx| {
+                                theme::tooltip(INFERRED_COLUMN_TOOLTIP, window, cx)
+                            })
+                        })
+                        .test_support()
+                }),
             RowKind::Failed { message } => {
                 let key = row.key.clone();
                 let message: SharedString = message.clone().into();
@@ -2043,7 +2080,8 @@ pub fn engine_icon(engine: Engine) -> IconName {
         Engine::Surrealdb => Icons::Layers,
         Engine::Mongodb => Icons::FileCode,
         Engine::Redis => Icons::Zap,
-        Engine::Dynamodb | _ => Icons::Database,
+        Engine::Dynamodb => Icons::Shapes,
+        _ => Icons::Database,
     }
 }
 
@@ -2410,15 +2448,22 @@ fn catalog_menu(
         );
         let (conn, node) = (t.connection.clone(), t.node.clone());
         let item = match entry.id {
-            "tree-menu-open" => {
-                let (Some(rel), RowKind::Relation(kind)) = (rel.clone(), &t.kind) else {
-                    continue;
-                };
-                let kind = *kind;
-                item.on_click(on_sidebar(weak, move |s, cx| {
-                    s.open_relation(&conn, &rel, kind, cx)
-                }))
-            }
+            // A relation opens its rows; only a DynamoDB index row offers Open among objects.
+            "tree-menu-open" => match (&t.kind, rel.clone()) {
+                (RowKind::Relation(kind), Some(rel)) => {
+                    let kind = *kind;
+                    item.on_click(on_sidebar(weak, move |s, cx| {
+                        s.open_relation(&conn, &rel, kind, cx)
+                    }))
+                }
+                (RowKind::Object { object, .. }, _) => {
+                    let object = object.clone();
+                    item.on_click(on_sidebar(weak, move |s, cx| {
+                        s.open_object(conn.clone(), object.clone(), cx)
+                    }))
+                }
+                _ => continue,
+            },
             "tree-menu-new-query" => {
                 let sql = rel
                     .as_ref()

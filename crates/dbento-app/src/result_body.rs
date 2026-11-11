@@ -138,7 +138,8 @@ pub fn error_view(r: &StatementResult) -> Option<ErrorView> {
 }
 
 /// The code as the body labels it for `engine`: `SQLSTATE c` on Postgres, `error c` with
-/// any SQLSTATE after a dot on MySQL, the class as `c Error` on DuckDB, `code c` otherwise;
+/// any SQLSTATE after a dot on MySQL, the class as `c Error` on DuckDB, the AWS code alone on
+/// DynamoDB, `code c` otherwise;
 /// None without a code.
 pub fn code_label(engine: Option<Engine>, v: &ErrorView) -> Option<String> {
     let code = v.code.as_deref()?;
@@ -150,6 +151,7 @@ pub fn code_label(engine: Option<Engine>, v: &ErrorView) -> Option<String> {
         // A statement-level SurrealDB error carries code 0, which names nothing.
         (Some(Engine::Surrealdb), _) if code == "0" => return None,
         (Some(Engine::Surrealdb), _) => format!("error {code}"),
+        (Some(Engine::Dynamodb), _) => code.to_owned(),
         _ => format!("code {code}"),
     })
 }

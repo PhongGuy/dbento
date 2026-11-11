@@ -9,6 +9,7 @@
 mod cancel;
 mod common;
 mod duckdb;
+mod dynamo;
 mod execute;
 mod execute_grant;
 mod execute_pg;
