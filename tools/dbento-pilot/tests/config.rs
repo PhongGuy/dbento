@@ -81,7 +81,7 @@ fn the_pilot_workspace_pins_its_host_tag_and_optimises_its_dependencies() {
     let manifest: toml::Table = toml::from_str(&text).unwrap();
     assert_eq!(
         manifest["dependencies"]["gpui-pilot-host"]["tag"].as_str(),
-        Some("v0.3.0")
+        Some("v0.3.1")
     );
     assert_eq!(
         manifest["profile"]["dev"]["package"]["*"]["opt-level"].as_integer(),
