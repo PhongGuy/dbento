@@ -606,7 +606,7 @@ fn databases(raw: RawDatabases, engine: Engine) -> Result<Databases, String> {
             if earlier == name {
                 return Err(format!("`databases` lists `{name}` twice"));
             }
-            if engine == Engine::Mssql && earlier.to_lowercase() == name.to_lowercase() {
+            if engine == Engine::Mssql && earlier.eq_ignore_ascii_case(name) {
                 return Err(format!(
                     "`databases` lists `{earlier}` and `{name}`, which SQL Server treats as one database"
                 ));

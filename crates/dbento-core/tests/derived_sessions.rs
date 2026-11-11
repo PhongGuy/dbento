@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use crate::support::{ms_reader, run, text};
 use dbento_core::{
-    ExecuteError, Limits, MemoryStore, Secret, SecretKey, SecretStore, SessionOptions, Workspace,
-    connect, resolve_secret,
+    ConnectError, ExecuteError, Limits, MemoryStore, Secret, SecretKey, SecretStore,
+    SessionOptions, Workspace, connect, resolve_secret,
 };
 use dbento_testkit::PgDb;
 
@@ -145,7 +145,15 @@ async fn a_sql_server_child_reads_as_the_reader_and_one_without_it_fails_alone()
         SessionOptions::default(),
     )
     .await;
-    assert!(refused.is_err(), "master has no dbento_reader user");
+    assert!(
+        matches!(
+            &refused,
+            Err(ConnectError::Open { message })
+                if message.contains("read_only_user \"dbento_reader\"")
+        ),
+        "master has no dbento_reader user, so becoming the reader fails: {:?}",
+        refused.as_ref().err()
+    );
     let again = connect(&fx.ws, &own, Some(fx.secret()), SessionOptions::default())
         .await
         .expect("the other child still opens");

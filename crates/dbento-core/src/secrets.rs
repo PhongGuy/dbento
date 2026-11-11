@@ -370,7 +370,7 @@ pub fn secret_hint(
 }
 
 /// The passphrase for a connection's encrypted `tls_key`: keychain first, then
-/// `DBENTO_KEY_PASSPHRASE_<NAME>`.
+/// `DBENTO_KEY_PASSPHRASE_<OWNER>`.
 ///
 /// Neither is consulted unless the key file is an encrypted PKCS#8 PEM, so a plain key never
 /// prompts a keychain; an unreadable key resolves to `None` and fails at connect, naming the
