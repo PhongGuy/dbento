@@ -44,6 +44,7 @@ mod copy;
 mod definition_dock;
 mod definition_panel;
 mod definition_probe;
+mod derived_tree;
 mod draft_tabs;
 mod drafts;
 mod duckdb_app;

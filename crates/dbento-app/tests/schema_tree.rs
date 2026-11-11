@@ -286,6 +286,7 @@ fn stale_replies_after_refresh_are_dropped_and_expanded_levels_reload() {
             | CatalogQuery::SchemaObjects { .. }
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
+            | CatalogQuery::Databases
             | CatalogQuery::CommandDocs => cols(&[
                 ("AlbumId", "INTEGER", Some(1)),
                 ("Title", "NVARCHAR(160)", None),
@@ -660,6 +661,7 @@ fn with_objects(
             | CatalogQuery::SchemaObjects { .. }
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
+            | CatalogQuery::Databases
             | CatalogQuery::CommandDocs => main.clone(),
         };
         answer(&mut t, req, result);
@@ -683,6 +685,7 @@ fn fixture_for(q: &CatalogQuery) -> CatalogData {
         other @ (CatalogQuery::Count { .. }
         | CatalogQuery::Definition { .. }
         | CatalogQuery::Keys { .. }
+        | CatalogQuery::Databases
         | CatalogQuery::CommandDocs) => panic!("{other:?} is no tree level"),
     }
 }
@@ -1046,6 +1049,7 @@ fn unreadable_album(columns: Result<CatalogData, String>) -> CatalogTree {
             | CatalogQuery::SchemaObjects { .. }
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
+            | CatalogQuery::Databases
             | CatalogQuery::CommandDocs => Ok(no_objects().1),
         };
         answer(&mut t, req, result);

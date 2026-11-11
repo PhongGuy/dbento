@@ -35,6 +35,7 @@ fn rel_names(data: &CatalogData) -> Vec<(String, RelationKind)> {
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
 }
@@ -90,6 +91,7 @@ async fn loads_each_level_in_request_order() {
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     let second = reply(&rx).await;
@@ -115,6 +117,7 @@ async fn loads_each_level_in_request_order() {
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     tokio::time::timeout(Duration::from_secs(5), r.close().wait())
@@ -388,6 +391,7 @@ async fn first_index(
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
 }
@@ -417,6 +421,7 @@ async fn objects_and_definitions_load_in_request_order() {
         | CatalogData::Definition(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     r.load(
@@ -440,6 +445,7 @@ async fn objects_and_definitions_load_in_request_order() {
         | CatalogData::SchemaObjects(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     let view = ObjectRef::relation(RelationRef::new("main", "v"));
@@ -454,6 +460,7 @@ async fn objects_and_definitions_load_in_request_order() {
         | CatalogData::SchemaObjects(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
 }
@@ -512,6 +519,7 @@ async fn a_killed_postgres_session_is_replaced_after_a_definition_load() {
         | CatalogData::SchemaObjects(_)
         | CatalogData::Keys(_)
         | CatalogData::CommandDocs(_)
+        | CatalogData::Databases(_)
         | CatalogData::KeyColumns { .. }) => panic!("{other:?}"),
     }
     db.scalar("SELECT pg_terminate_backend(pid)::text FROM pg_stat_activity WHERE application_name = 'dbento' AND datname = current_database()")
@@ -532,4 +540,62 @@ async fn a_killed_postgres_session_is_replaced_after_a_definition_load() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     assert!(ok, "a definition load on a dead session never reconnected");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parent_lists_its_databases_and_a_child_runner_opens_its_own() {
+    let (db, _dir, spec) = pg_spec("databases = \"all\"").await;
+    let kid = format!("{}_kid", db.database());
+    let admin = db.admin().await;
+    admin.batch_execute("CREATE TABLE t(x int)").await.unwrap();
+    admin
+        .batch_execute(&format!("CREATE DATABASE \"{kid}\""))
+        .await
+        .unwrap();
+    let parent = spawn_catalog(&here(), spec.clone());
+    let rx = parent.replies();
+    parent.load(0, CatalogQuery::Databases);
+    let got = reply(&rx).await;
+    assert_eq!(got.query, CatalogQuery::Databases);
+    let Ok(CatalogData::Databases(names)) = got.result else {
+        panic!("{:?}", got.result)
+    };
+    assert!(names.iter().any(|n| n == db.database()), "{names:?}");
+    assert!(names.contains(&kid), "{names:?}");
+    let child = spawn_catalog(
+        &here(),
+        dbento_app::runner::RunnerSpec {
+            connection: format!("pg/{kid}"),
+            ..spec
+        },
+    );
+    let crx = child.replies();
+    let public = CatalogQuery::Relations {
+        schema: "public".into(),
+    };
+    child.load(0, public.clone());
+    parent.load(0, public);
+    assert!(rel_names(&reply(&crx).await.result.unwrap()).is_empty());
+    assert_eq!(
+        rel_names(&reply(&rx).await.result.unwrap()),
+        [("t".to_owned(), RelationKind::Table)]
+    );
+    for r in [parent, child] {
+        tokio::time::timeout(Duration::from_secs(5), r.close().wait())
+            .await
+            .expect("closed");
+    }
+    admin
+        .batch_execute(&format!("DROP DATABASE \"{kid}\" WITH (FORCE)"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sqlite_has_no_databases_level() {
+    let fx = fixture("", "");
+    let r = spawn_catalog(&here(), spec(&fx, "lite"));
+    let rx = r.replies();
+    r.load(0, CatalogQuery::Databases);
+    assert!(reply(&rx).await.result.is_err());
 }

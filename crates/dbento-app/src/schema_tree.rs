@@ -238,6 +238,8 @@ pub struct CatalogTree {
     expanded: HashSet<NodeKey>,
     collapsed_kinds: HashSet<NodeKey>,
     schemas: HashMap<String, Load<Vec<SchemaInfo>>>,
+    // A parent connection's listed databases, its derived children.
+    databases: HashMap<String, Load<Vec<String>>>,
     relations: HashMap<(String, String), Load<RelationList>>,
     columns: HashMap<(String, RelationRef), Load<Vec<ColumnMeta>>>,
     // Relations whose columns are the declared keys alone, with why sampling failed.
@@ -630,6 +632,9 @@ impl CatalogTree {
             CatalogQuery::Schemas => {
                 self.schemas.insert(c, Load::Loading);
             }
+            CatalogQuery::Databases => {
+                self.databases.insert(c, Load::Loading);
+            }
             CatalogQuery::Relations { schema } => {
                 self.relations.insert((c, schema.clone()), Load::Loading);
             }
@@ -671,6 +676,7 @@ impl CatalogTree {
         let c = conn.to_owned();
         let present = match query {
             CatalogQuery::Schemas => self.schemas.contains_key(&c),
+            CatalogQuery::Databases => self.databases.contains_key(&c),
             CatalogQuery::CommandDocs => self.command_docs.contains_key(&c),
             CatalogQuery::Relations { schema } => self.relations.contains_key(&(c, schema.clone())),
             CatalogQuery::Columns { rel } => self.columns.contains_key(&(c, rel.clone())),
@@ -701,7 +707,8 @@ impl CatalogTree {
             CatalogQuery::Schemas => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Schemas(s) => Some(s),
-                    CatalogData::Relations(_)
+                    CatalogData::Databases(_)
+                    | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
                     | CatalogData::RelationObjects(_)
@@ -713,10 +720,27 @@ impl CatalogTree {
                 });
                 self.schemas.insert(conn, load);
             }
+            CatalogQuery::Databases => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::Databases(names) => Some(names),
+                    CatalogData::Schemas(_)
+                    | CatalogData::Relations(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::KeyColumns { .. } => None,
+                });
+                self.databases.insert(conn, load);
+            }
             CatalogQuery::Relations { schema } => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Relations(r) => Some(r),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
                     | CatalogData::RelationObjects(_)
@@ -739,6 +763,7 @@ impl CatalogTree {
                         Some(columns)
                     }
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Count(_)
                     | CatalogData::RelationObjects(_)
@@ -758,6 +783,7 @@ impl CatalogTree {
                 let load = load_of(result, |d| match d {
                     CatalogData::RelationObjects(o) => Some(o),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
@@ -773,6 +799,7 @@ impl CatalogTree {
                 let load = load_of(result, |d| match d {
                     CatalogData::SchemaObjects(o) => Some(o),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
@@ -791,6 +818,7 @@ impl CatalogTree {
                 let load = load_of(result, |d| match d {
                     CatalogData::CommandDocs(d) => Some(d),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
@@ -828,6 +856,7 @@ impl CatalogTree {
                     more: More::Idle,
                 }),
                 CatalogData::Schemas(_)
+                | CatalogData::Databases(_)
                 | CatalogData::Relations(_)
                 | CatalogData::Columns(_)
                 | CatalogData::Count(_)
@@ -927,6 +956,7 @@ impl CatalogTree {
         self.floor = self.generation;
         self.floors.clear();
         self.schemas.clear();
+        self.databases.clear();
         self.relations.clear();
         self.columns.clear();
         self.sample_errors.clear();
@@ -950,6 +980,7 @@ impl CatalogTree {
         self.generation += 1;
         self.floors.insert(conn.to_owned(), self.generation);
         self.schemas.remove(conn);
+        self.databases.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
         self.sample_errors.retain(|(c, _), _| c != conn);
@@ -1010,6 +1041,7 @@ impl CatalogTree {
         self.expanded.retain(|k| node_connection(k) != conn);
         self.collapsed_kinds.retain(|k| node_connection(k) != conn);
         self.schemas.remove(conn);
+        self.databases.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
         self.sample_errors.retain(|(c, _), _| c != conn);
@@ -1034,6 +1066,14 @@ impl CatalogTree {
     /// Loaded COMMAND DOCS of Redis connection `conn`, for completion.
     pub fn command_docs(&self, conn: &str) -> Option<&[RedisDoc]> {
         match self.command_docs.get(conn) {
+            Some(Load::Ready(d)) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Loaded database names of parent `conn`, in the server's order.
+    pub fn databases(&self, conn: &str) -> Option<&[String]> {
+        match self.databases.get(conn) {
             Some(Load::Ready(d)) => Some(d),
             _ => None,
         }
