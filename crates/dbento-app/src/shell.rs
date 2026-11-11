@@ -3323,7 +3323,7 @@ impl Shell {
     fn connection_in_use(&self, name: &str, cx: &Context<Self>) -> bool {
         self.tabs
             .iter()
-            .any(|t| t.read(cx).model().read(cx).spec().connection == name)
+            .any(|t| runs_on(&t.read(cx).model().read(cx).spec().connection, name))
     }
 
     // Reads the form, plans the edit and writes it. Every failure before the file is replaced
@@ -3655,8 +3655,26 @@ impl Shell {
             return;
         };
         let drafts = Drafts::new(self.services.paths.drafts.clone()).load(ws.dir());
-        let names: Vec<&str> = ws.connections().iter().map(|c| c.name()).collect();
-        let (plan, active) = plan_restore(self.saved.session(ws.dir()), drafts, &names);
+        // A child is not declared, so every saved or drafted name that still resolves joins
+        // the declared ones; a child the parent no longer lists stays out.
+        let session = self.saved.session(ws.dir());
+        let mut owned: Vec<String> = ws
+            .connections()
+            .iter()
+            .map(|c| c.name().to_owned())
+            .collect();
+        let used = session
+            .map_or(&[][..], |s| &s.tabs[..])
+            .iter()
+            .map(|t| t.connection.as_str())
+            .chain(drafts.iter().map(|d| d.connection.as_str()));
+        for name in used {
+            if !owned.iter().any(|n| n == name) && ws.connection(name).is_some() {
+                owned.push(name.to_owned());
+            }
+        }
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let (plan, active) = plan_restore(session, drafts, &names);
         // The folder is listed only when some tab edits a saved query.
         let queries = if plan.iter().any(|t| t.file.is_some()) {
             ws.saved_queries().unwrap_or_default()
@@ -3668,10 +3686,7 @@ impl Shell {
         // A tab the closing window refuses must not drop out of the saved session.
         let mut refused = false;
         for restored in plan {
-            let Some(ix) = names.iter().position(|n| *n == restored.connection) else {
-                continue;
-            };
-            let Some(tab) = self.push_tab(names[ix], restored.draft, window, cx) else {
+            let Some(tab) = self.push_tab(&restored.connection, restored.draft, window, cx) else {
                 refused = true;
                 continue;
             };
@@ -4230,6 +4245,13 @@ fn column(title: &'static str, title_id: &'static str, cx: &App) -> Div {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )
+}
+
+/// Whether a tab on `tab_connection` runs on `connection` or one of its children.
+pub fn runs_on(tab_connection: &str, connection: &str) -> bool {
+    tab_connection
+        .strip_prefix(connection)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// The connection a new tab opens on: the explorer's selection when it `moved` since the last

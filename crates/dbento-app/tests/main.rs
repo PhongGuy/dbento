@@ -45,6 +45,7 @@ mod definition_dock;
 mod definition_panel;
 mod definition_probe;
 mod derived_explorer;
+mod derived_lifecycle;
 mod derived_tabs;
 mod derived_tree;
 mod draft_tabs;
