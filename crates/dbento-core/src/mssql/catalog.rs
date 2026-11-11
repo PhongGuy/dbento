@@ -90,6 +90,19 @@ pub(crate) async fn schemas(d: &mut MssqlDriver) -> Result<Vec<SchemaInfo>, Intr
         .collect()
 }
 
+/// The online databases this login can enter, by name, with the system ones (`master`,
+/// `tempdb`, `model`, `msdb`: ids 1 to 4) after the rest.
+pub(crate) async fn databases(d: &mut MssqlDriver) -> Result<Vec<String>, IntrospectError> {
+    let rows = d
+        .catalog(
+            "SELECT name FROM sys.databases WHERE state = 0 AND HAS_DBACCESS(name) = 1 \
+             ORDER BY CASE WHEN database_id <= 4 THEN 1 ELSE 0 END, name",
+            &[],
+        )
+        .await?;
+    rows.iter().map(|r| text(r, 0)).collect()
+}
+
 /// The tables, views and synonyms of `schema` by name, at most RELATION_CAP of them;
 /// `sys.all_objects` also lists the system views of `sys` and `INFORMATION_SCHEMA`.
 pub(crate) async fn relations(

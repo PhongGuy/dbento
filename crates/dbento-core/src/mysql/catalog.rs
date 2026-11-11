@@ -70,6 +70,13 @@ pub(crate) async fn schemas(d: &mut MysqlDriver) -> Result<Vec<SchemaInfo>, Intr
     Ok(names.into_iter().map(SchemaInfo::new).collect())
 }
 
+/// The server's databases: on MySQL and MariaDB a database is a schema, so the same list in
+/// the same order, the server's own last.
+pub(crate) async fn databases(d: &mut MysqlDriver) -> Result<Vec<String>, IntrospectError> {
+    let schemas = schemas(d).await?;
+    Ok(schemas.into_iter().map(|s| s.name().to_owned()).collect())
+}
+
 /// The tables and views of `schema` in byte order, at most RELATION_CAP of them.
 pub(crate) async fn relations(
     d: &mut MysqlDriver,

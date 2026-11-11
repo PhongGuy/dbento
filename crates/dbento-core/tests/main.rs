@@ -14,6 +14,7 @@ mod byte_limit;
 mod client_cert;
 mod column_source;
 mod connection_form;
+mod databases;
 mod datagrip_config_dirs;
 mod datagrip_folders;
 mod datagrip_queries;
