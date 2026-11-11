@@ -152,7 +152,8 @@ fn rows_carry_kinds_labels_and_column_types() {
         rows[3].kind,
         RowKind::Column {
             type_name: "INTEGER".into(),
-            primary_key: true
+            primary_key: true,
+            inferred: false
         }
     );
     assert_eq!(
@@ -163,7 +164,8 @@ fn rows_carry_kinds_labels_and_column_types() {
         rows[4].kind,
         RowKind::Column {
             type_name: "NVARCHAR(160)".into(),
-            primary_key: false
+            primary_key: false,
+            inferred: false
         }
     );
     assert!(!rows[5].expanded);

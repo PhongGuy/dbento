@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use dbento_core::{
-    CellRef, ColumnMeta, CommandDoc, Definition, DefinitionError, ExecuteError, IntrospectError,
-    KeyBrowseError, KeyCursor, KeyPage, KeyScan, KeyTtl, ObjectRef, RelationList, RelationObjects,
-    RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions, quote_ident,
+    CellRef, ColumnMeta, CommandDoc, Definition, DefinitionError, Engine, ExecuteError,
+    IntrospectError, KeyBrowseError, KeyCursor, KeyPage, KeyScan, KeyTtl, ObjectRef, RelationList,
+    RelationObjects, RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions, quote_ident,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
@@ -98,6 +98,30 @@ pub enum CatalogData {
     Keys(KeyBatch),
     /// The answer to [`CatalogQuery::CommandDocs`].
     CommandDocs(Arc<[RedisDoc]>),
+    /// The answer to [`CatalogQuery::Columns`] when sampling the attributes failed but the
+    /// declared key columns loaded; `reason` is the sampling error.
+    KeyColumns {
+        /// The declared key columns.
+        columns: Vec<ColumnMeta>,
+        /// Why the other attributes are missing.
+        reason: String,
+    },
+}
+
+/// `columns` when it loaded; else `KeyColumns` with the error's text when `keys` holds a
+/// non-empty list; else the original `columns` error.
+pub fn columns_answer(
+    columns: Result<Vec<ColumnMeta>, IntrospectError>,
+    keys: Option<Result<Vec<ColumnMeta>, IntrospectError>>,
+) -> Result<CatalogData, IntrospectError> {
+    match (columns, keys) {
+        (Ok(c), _) => Ok(CatalogData::Columns(c)),
+        (Err(e), Some(Ok(keys))) if !keys.is_empty() => Ok(CatalogData::KeyColumns {
+            columns: keys,
+            reason: e.to_string(),
+        }),
+        (Err(e), _) => Err(e),
+    }
 }
 
 /// One answer, in request order; `generation` is echoed from the request.
@@ -362,7 +386,15 @@ async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, Intro
     Ok(match query {
         CatalogQuery::Schemas => CatalogData::Schemas(s.schemas().await?),
         CatalogQuery::Relations { schema } => CatalogData::Relations(s.relations(schema).await?),
-        CatalogQuery::Columns { rel } => CatalogData::Columns(s.columns(rel).await?),
+        // A DynamoDB table whose sample failed still shows its declared keys.
+        CatalogQuery::Columns { rel } => {
+            let columns = s.columns(rel).await;
+            let keys = match &columns {
+                Err(_) if s.engine() == Engine::Dynamodb => Some(s.key_columns(rel).await),
+                Ok(_) | Err(_) => None,
+            };
+            columns_answer(columns, keys)?
+        }
         CatalogQuery::Count { rel } => CatalogData::Count(count(s, rel).await?),
         CatalogQuery::RelationObjects { rel } => {
             CatalogData::RelationObjects(s.relation_objects(rel).await?)

@@ -42,9 +42,10 @@ use crate::keys::{KeyFilter, display_key, parse_key_filter, ttl_text, type_name}
 use crate::link::{LinkState, shows_read_only};
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
-    CatalogRow, CatalogTree, LoadRequest, NodeKey, ObjectGroup, RevealStep, RowKind,
-    catalog_entries, count_text, db_index, group_title, index_select_sql, insert_sql, lone_schema,
-    node_connection, object_group_title, qualified_name, select_text, short_type,
+    CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
+    RevealStep, RowKind, catalog_entries, column_detail, count_text, db_index, group_title,
+    index_select_sql, insert_sql, lone_schema, node_connection, object_group_title, qualified_name,
+    select_text,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
 use crate::{settings, theme, tokio_bridge};
@@ -1898,7 +1899,11 @@ impl Sidebar {
             RowKind::Object { detail, .. } => base
                 .child(name(row.label.clone()))
                 .child(mono_dim(detail.clone()).min_w_0().truncate()),
-            RowKind::Column { type_name, .. } => base
+            RowKind::Column {
+                type_name,
+                inferred,
+                ..
+            } => base
                 // A long type shrinks before the column name, which keeps most of the row.
                 .child(
                     div()
@@ -1907,12 +1912,21 @@ impl Sidebar {
                         .truncate()
                         .child(row.label.clone()),
                 )
-                .child(
-                    mono_dim(short_type(type_name))
+                .child({
+                    let detail = column_detail(type_name, *inferred);
+                    mono_dim(detail.clone())
                         .flex_initial()
                         .min_w_0()
-                        .truncate(),
-                ),
+                        .truncate()
+                        .id(("tree-detail", visible))
+                        .aria_label(detail)
+                        .when(*inferred, |d| {
+                            d.tooltip(|window, cx| {
+                                theme::tooltip(INFERRED_COLUMN_TOOLTIP, window, cx)
+                            })
+                        })
+                        .test_support()
+                }),
             RowKind::Failed { message } => {
                 let key = row.key.clone();
                 let message: SharedString = message.clone().into();

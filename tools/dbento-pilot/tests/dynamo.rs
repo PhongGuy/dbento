@@ -260,3 +260,21 @@ async fn the_tree_opens_tables_and_indexes_and_keeps_sql_actions_hidden() {
     .await;
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sampled_attributes_are_marked_inferred() {
+    let db = dynamo_db().await;
+    let ws = workspace(&db, "read_only = true");
+    let pilot = launch(ws.path()).await;
+    let r = db.region();
+    click(&pilot, "connection-toggle-dy", json!({})).await;
+    row(&pilot, &format!("dy.{r}.orders"), "tree-toggle", json!({})).await;
+    let (tree, ix) = seek(&pilot, &format!("dy.{r}.orders.status")).await;
+    assert_eq!(
+        name(&tree, &format!("tree-detail-{ix}")),
+        Some("S · inferred")
+    );
+    let (tree, ix) = seek(&pilot, &format!("dy.{r}.orders.pk")).await;
+    assert_eq!(name(&tree, &format!("tree-detail-{ix}")), Some("S"));
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+}

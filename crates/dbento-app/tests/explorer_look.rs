@@ -23,6 +23,7 @@ fn column(primary_key: bool) -> RowKind {
     RowKind::Column {
         type_name: "int4".into(),
         primary_key,
+        inferred: false,
     }
 }
 

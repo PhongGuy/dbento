@@ -110,6 +110,8 @@ pub enum RowKind {
         type_name: String,
         /// Whether the column is part of the primary key.
         primary_key: bool,
+        /// Whether the column was inferred from sampled rows rather than declared.
+        inferred: bool,
     },
     /// An object group such as "indexes".
     Group(ObjectGroup),
@@ -238,6 +240,8 @@ pub struct CatalogTree {
     schemas: HashMap<String, Load<Vec<SchemaInfo>>>,
     relations: HashMap<(String, String), Load<RelationList>>,
     columns: HashMap<(String, RelationRef), Load<Vec<ColumnMeta>>>,
+    // Relations whose columns are the declared keys alone, with why sampling failed.
+    sample_errors: HashMap<(String, RelationRef), String>,
     relation_objects: HashMap<(String, RelationRef), Load<RelationObjects>>,
     schema_objects: HashMap<(String, String), Load<SchemaObjects>>,
     // Connections whose DB rows list keys rather than relations, with each DB's filter and
@@ -448,10 +452,11 @@ impl CatalogTree {
                 self.relations.get(&(conn.clone(), schema.clone())),
                 Some(Load::Failed(_))
             ),
-            NodeKey::Relation { conn, rel } => matches!(
-                self.columns.get(&(conn.clone(), rel.clone())),
-                Some(Load::Failed(_))
-            ),
+            NodeKey::Relation { conn, rel } => {
+                let k = (conn.clone(), rel.clone());
+                matches!(self.columns.get(&k), Some(Load::Failed(_)))
+                    || self.sample_errors.contains_key(&k)
+            }
             NodeKey::Objects(inner) => {
                 return match inner.as_ref() {
                     NodeKey::Relation { conn, rel }
@@ -703,7 +708,8 @@ impl CatalogTree {
                     | CatalogData::SchemaObjects(_)
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
-                    | CatalogData::CommandDocs(_) => None,
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::KeyColumns { .. } => None,
                 });
                 self.schemas.insert(conn, load);
             }
@@ -717,13 +723,21 @@ impl CatalogTree {
                     | CatalogData::SchemaObjects(_)
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
-                    | CatalogData::CommandDocs(_) => None,
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::KeyColumns { .. } => None,
                 });
                 self.relations.insert((conn, schema), load);
             }
             CatalogQuery::Columns { rel } => {
+                // Key columns load as the level and keep why the rest are missing; a full
+                // answer or a failure drops that reason.
+                let mut reason = None;
                 let load = load_of(result, |d| match d {
                     CatalogData::Columns(c) => Some(c),
+                    CatalogData::KeyColumns { columns, reason: r } => {
+                        reason = Some(r);
+                        Some(columns)
+                    }
                     CatalogData::Schemas(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Count(_)
@@ -733,7 +747,12 @@ impl CatalogTree {
                     | CatalogData::Keys(_)
                     | CatalogData::CommandDocs(_) => None,
                 });
-                self.columns.insert((conn, rel), load);
+                let k = (conn, rel);
+                match reason {
+                    Some(r) => self.sample_errors.insert(k.clone(), r),
+                    None => self.sample_errors.remove(&k),
+                };
+                self.columns.insert(k, load);
             }
             CatalogQuery::RelationObjects { rel } => {
                 let load = load_of(result, |d| match d {
@@ -745,7 +764,8 @@ impl CatalogTree {
                     | CatalogData::SchemaObjects(_)
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
-                    | CatalogData::CommandDocs(_) => None,
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::KeyColumns { .. } => None,
                 });
                 self.relation_objects.insert((conn, rel), load);
             }
@@ -759,7 +779,8 @@ impl CatalogTree {
                     | CatalogData::RelationObjects(_)
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
-                    | CatalogData::CommandDocs(_) => None,
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::KeyColumns { .. } => None,
                 });
                 self.schema_objects.insert((conn, schema), load);
             }
@@ -776,7 +797,8 @@ impl CatalogTree {
                     | CatalogData::RelationObjects(_)
                     | CatalogData::SchemaObjects(_)
                     | CatalogData::Definition(_)
-                    | CatalogData::Keys(_) => None,
+                    | CatalogData::Keys(_)
+                    | CatalogData::KeyColumns { .. } => None,
                 });
                 self.command_docs.insert(conn, load);
             }
@@ -812,7 +834,8 @@ impl CatalogTree {
                 | CatalogData::RelationObjects(_)
                 | CatalogData::SchemaObjects(_)
                 | CatalogData::Definition(_)
-                | CatalogData::CommandDocs(_) => None,
+                | CatalogData::CommandDocs(_)
+                | CatalogData::KeyColumns { .. } => None,
             });
             self.keys.insert(k, load);
             return;
@@ -906,6 +929,7 @@ impl CatalogTree {
         self.schemas.clear();
         self.relations.clear();
         self.columns.clear();
+        self.sample_errors.clear();
         self.keys.clear();
         self.command_docs.clear();
         let rels = std::mem::take(&mut self.relation_objects)
@@ -928,6 +952,7 @@ impl CatalogTree {
         self.schemas.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
+        self.sample_errors.retain(|(c, _), _| c != conn);
         self.keys.retain(|(c, _), _| c != conn);
         self.command_docs.remove(conn);
         let rels = self
@@ -987,6 +1012,7 @@ impl CatalogTree {
         self.schemas.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
+        self.sample_errors.retain(|(c, _), _| c != conn);
         self.relation_objects.retain(|(c, _), _| c != conn);
         self.schema_objects.retain(|(c, _), _| c != conn);
         self.keys.retain(|(c, _), _| c != conn);
@@ -1576,6 +1602,7 @@ impl CatalogTree {
                     let kind = RowKind::Column {
                         type_name: c.type_name().to_owned(),
                         primary_key: c.primary_key().is_some(),
+                        inferred: c.inferred(),
                     };
                     row(
                         kind,
@@ -1588,6 +1615,16 @@ impl CatalogTree {
                 })
                 .collect(),
         };
+        if let Some(reason) = self.sample_errors.get(&(conn.to_owned(), rel.clone())) {
+            let message = format!("attributes not sampled: {reason}");
+            out.extend(status(
+                RowKind::Failed {
+                    message: message.clone(),
+                },
+                message,
+                "error",
+            ));
+        }
         if matches!(columns, Some(Load::Ready(_))) {
             out.extend(self.relation_object_rows(w, rel, depth, all));
         }
@@ -1796,6 +1833,20 @@ pub fn group_title(kind: RelationKind) -> &'static str {
         RelationKind::Other | _ => "Other",
     }
 }
+
+/// A column row's dim detail: its short type, marked when it was inferred from samples.
+pub fn column_detail(type_name: &str, inferred: bool) -> String {
+    let short = short_type(type_name);
+    if inferred {
+        format!("{short} · inferred")
+    } else {
+        short
+    }
+}
+
+/// The tooltip on an inferred column's detail.
+pub const INFERRED_COLUMN_TOOLTIP: &str =
+    "Inferred from up to 100 sampled items; sampling costs read capacity.";
 
 /// A Postgres `format_type` spelling in the grid header's short name ("character varying(40)[]"
 /// becomes "varchar(40)[]"), keeping the modifier and array brackets. Other text is unchanged.
