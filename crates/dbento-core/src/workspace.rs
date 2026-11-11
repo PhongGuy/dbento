@@ -393,7 +393,8 @@ impl SavedQuery {
         &self.path
     }
 
-    /// The connection whose name is the first folder under `queries/`, if configured.
+    /// The connection the file's folder under `queries/` binds, if any: the first folder names
+    /// it, and a database folder under a parent's folder binds that child `parent/database`.
     pub fn connection(&self) -> Option<&str> {
         self.connection.as_deref()
     }

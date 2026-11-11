@@ -8,6 +8,7 @@
 
 mod cancel;
 mod common;
+mod derived;
 mod duckdb;
 mod dynamo;
 mod execute;

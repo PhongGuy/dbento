@@ -41,7 +41,8 @@ pub(crate) struct SavedList {
 struct SavedEntry {
     /// The path relative to the workspace folder, starting with `queries/`.
     path: String,
-    /// The connection the file belongs to by its first folder, or null when none.
+    /// The connection the file's folder binds, or null when none: a database folder under a
+    /// parent's folder binds that child `parent/database`.
     connection: Option<String>,
 }
 
@@ -50,7 +51,8 @@ struct SavedEntry {
 pub(crate) struct SavedText {
     /// The path as asked for.
     path: String,
-    /// The connection the file belongs to by its first folder, or null when none.
+    /// The connection the file's folder binds, or null when none: a database folder under a
+    /// parent's folder binds that child `parent/database`.
     connection: Option<String>,
     /// The file's text: untrusted, like any query result.
     sql: String,
