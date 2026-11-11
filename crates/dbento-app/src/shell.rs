@@ -3395,6 +3395,7 @@ impl Shell {
             folder.map(|(old, new)| format!("Move queries/{old} to queries/{new} by hand."));
         let old_keychain = base.declared(old_name).is_some_and(keychain_backed);
         let new_keychain = plan.workspace().declared(name).is_some_and(keychain_backed);
+        let new_key = plan.workspace().secret_target(name);
         // A new connection has no old passphrase slot, so its key comes from the written plan.
         let passphrase_from = base
             .key_passphrase_target(old_name)
@@ -3402,11 +3403,11 @@ impl Shell {
         self.install_workspace(plan.into_workspace(), window, cx);
         self.close_connection_form(window, cx);
         let old_key = base.secret_target(old_name).filter(|_| old_keychain);
-        match (old_key, new_keychain, renamed) {
+        match (old_key, new_keychain, renamed.and(new_key)) {
             // The old entry has no reader any more.
             (Some(old_key), false, _) => self.remove_secret(old_key, window, cx),
-            (Some(old_key), true, Some((_, new))) => {
-                self.move_password(old_key, new, password, window, cx)
+            (Some(old_key), true, Some(new_key)) => {
+                self.move_password(old_key, new_key, password, window, cx)
             }
             _ => {
                 if let Some((key, secret)) = password {
@@ -3477,13 +3478,13 @@ impl Shell {
     fn move_password(
         &mut self,
         from: SecretKey,
-        new: String,
+        to: SecretKey,
         password: Option<(SecretKey, Secret)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let store = Arc::clone(&self.services.store);
-        let to = SecretKey::new(from.workspace_dir(), new.clone());
+        let new = to.connection().to_owned();
         let moved = cx.background_spawn(async move {
             move_secret(&*store, &from, &to)?;
             match password {
