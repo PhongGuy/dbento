@@ -321,3 +321,25 @@ async fn the_badge_words_best_effort_and_a_write_is_refused() {
     );
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_inserts_a_quoted_table_name() {
+    let db = dynamo_db().await;
+    let ws = workspace(&db, "read_only = true");
+    let pilot = launch(ws.path()).await;
+    // Expanding the connection loads the table names completion reads.
+    click(&pilot, "connection-toggle-dy", json!({})).await;
+    until(&pilot, "the tables", |t| {
+        row_named(t, &format!("dy.{}.orders", db.region())).is_some()
+    })
+    .await;
+    type_in(&pilot, "dy", "SELECT * FROM ord").await;
+    pilot.ok("wait", json!({ "ms": 500 })).await;
+    pilot.ok("key", json!({ "keys": "enter" })).await;
+    pilot.ok("key", json!({ "keys": "ctrl-a" })).await;
+    pilot.ok("key", json!({ "keys": "ctrl-c" })).await;
+    let clip = pilot.ok("clipboard", json!({})).await;
+    let text = clip["text"].as_str().unwrap_or_default();
+    assert_eq!(text.trim_end(), "SELECT * FROM \"orders\"", "{text}");
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+}

@@ -8,7 +8,7 @@ use dbento_core::{
 };
 
 use crate::catalog::CatalogQuery;
-use crate::schema_tree::CatalogTree;
+use crate::schema_tree::{CatalogTree, lone_schema};
 
 /// What a candidate names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,11 +184,51 @@ pub const SURREAL_FUNCTIONS: &[&str] = &[
     "type::table",
 ];
 
+/// The PartiQL words offered on DynamoDB: keywords uppercase, functions in the lowercase
+/// spelling DynamoDB documents, which they keep whatever the prefix's case.
+pub const PARTIQL_KEYWORDS: &[&str] = &[
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "BETWEEN",
+    "IS",
+    "NULL",
+    "MISSING",
+    "EXISTS",
+    "INSERT",
+    "INTO",
+    "VALUE",
+    "UPDATE",
+    "SET",
+    "REMOVE",
+    "DELETE",
+    "RETURNING",
+    "ALL_OLD",
+    "MODIFIED_OLD",
+    "ALL_NEW",
+    "MODIFIED_NEW",
+    "ORDER",
+    "BY",
+    "ASC",
+    "DESC",
+    "begins_with",
+    "contains",
+    "size",
+    "attribute_type",
+    "attribute_exists",
+    "attribute_not_exists",
+];
+
 /// Keywords after which only relations and schemas make sense.
 const RELATION_KEYWORDS: [&str; 5] = ["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
 
 /// Completes at byte `offset` of `text` against `conn`'s cached catalog in `tree`; unqualified
-/// relations come from `default_schema`, and none complete when it is None.
+/// relations come from `default_schema`, and none complete when it is None (DynamoDB falls back
+/// to the connection's lone loaded region).
 pub fn complete(
     engine: Engine,
     text: &str,
@@ -372,11 +412,27 @@ impl Ctx<'_> {
         }
     }
 
+    /// The schema unqualified names resolve in. A DynamoDB region taken from the environment
+    /// leaves `default_schema` unset, so the connection's one loaded region stands in.
+    fn default_schema(&mut self) -> Option<String> {
+        if let Some(s) = self.default_schema {
+            return Some(s.to_owned());
+        }
+        if self.engine != Engine::Dynamodb {
+            return None;
+        }
+        let Some(list) = self.tree.schemas(self.conn) else {
+            self.want(CatalogQuery::Schemas);
+            return None;
+        };
+        lone_schema(list).map(str::to_owned)
+    }
+
     /// The relation a FROM item names, when its schema's relations are loaded.
     fn resolve(&mut self, schema: Option<&str>, name: &str) -> Option<RelationRef> {
         let schema = match schema {
             Some(s) => self.schema(s)?,
-            None => self.default_schema?.to_owned(),
+            None => self.default_schema()?,
         };
         let Some(list) = self.tree.relations(self.conn, &schema) else {
             self.want(CatalogQuery::Relations { schema });
@@ -422,8 +478,8 @@ impl Ctx<'_> {
                 Some(s) => s,
                 None => return Vec::new(),
             },
-            None => match self.default_schema {
-                Some(s) => s.to_owned(),
+            None => match self.default_schema() {
+                Some(s) => s,
                 None => return Vec::new(),
             },
         };
@@ -440,8 +496,11 @@ impl Ctx<'_> {
         sorted(out)
     }
 
-    /// Schemas matching `prefix`.
+    /// Schemas matching `prefix`; none on DynamoDB, whose region is no part of a PartiQL name.
     fn schemas(&mut self, prefix: &str) -> Vec<Candidate> {
+        if self.engine == Engine::Dynamodb {
+            return Vec::new();
+        }
         let Some(list) = self.tree.schemas(self.conn) else {
             self.want(CatalogQuery::Schemas);
             return Vec::new();
@@ -465,16 +524,30 @@ impl Ctx<'_> {
 }
 
 /// `engine`'s keywords matching `prefix`, uppercase when the prefix holds an uppercase letter;
-/// SurrealDB adds its function paths, which keep their own lowercase spelling.
+/// SurrealDB adds its function paths and PartiQL lists its functions, both of which keep their
+/// own lowercase spelling.
 fn keywords(engine: Engine, prefix: &str) -> Vec<Candidate> {
     let upper = prefix.chars().any(char::is_uppercase);
     let sr = engine == Engine::Surrealdb;
-    let list = if sr { SURREAL_KEYWORDS } else { KEYWORDS };
+    let list = match engine {
+        Engine::Surrealdb => SURREAL_KEYWORDS,
+        Engine::Dynamodb => PARTIQL_KEYWORDS,
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis
+        | _ => KEYWORDS,
+    };
     let mut out: Vec<Candidate> = list
         .iter()
         .filter(|k| starts(k, prefix))
         .map(|k| {
-            let word = if upper {
+            // A lowercase entry is a PartiQL function, spelled as written.
+            let function = k.chars().any(char::is_lowercase);
+            let word = if upper || function {
                 (*k).to_owned()
             } else {
                 k.to_lowercase()
@@ -483,7 +556,7 @@ fn keywords(engine: Engine, prefix: &str) -> Vec<Candidate> {
                 label: word.clone(),
                 insert: word,
                 kind: CandidateKind::Keyword,
-                detail: "keyword".into(),
+                detail: if function { "function" } else { "keyword" }.into(),
             }
         })
         .collect();
@@ -580,11 +653,13 @@ fn is_word_char(c: char) -> bool {
 /// SurrealDB reads `'..'` and `"..."` as strings with backslash escapes (one `rdubsf` prefix
 /// letter joins them), backticks and `⟨..⟩` as names, `--`, `//` and `#` as line comments, and
 /// `::` as part of a function path word.
+/// PartiQL on DynamoDB quotes names only with `"..."`; `[` opens a list and is punctuation.
 pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
     let pg = matches!(engine, Engine::Postgres | Engine::Duckdb);
     let my = matches!(engine, Engine::Mysql);
     let ms = engine == Engine::Mssql;
     let sr = engine == Engine::Surrealdb;
+    let dy = engine == Engine::Dynamodb;
     let word_char = |c: char| is_word_char(c) || (ms && matches!(c, '@' | '#'));
     let b = s.as_bytes();
     let mut toks = Vec::new();
@@ -642,13 +717,13 @@ pub(crate) fn lex(engine: Engine, s: &str) -> Vec<Tok> {
             // A lone `N` touching a quote is the Unicode string prefix, part of the string.
             let (end, open) = quoted(b, i + 1, b'\'', false, true);
             (TokKind::Str, end, open)
-        } else if c == '"' || (!pg && !ms && c == '`') || (ms && c == '[') {
+        } else if c == '"' || (!pg && !ms && !dy && c == '`') || (ms && c == '[') {
             let close = if c == '[' { ']' } else { c };
             let (end, open) = quoted(b, i, close as u8, false, true);
             let inner = &s[i + 1..if open { end } else { end - 1 }];
             let d = close.to_string();
             (TokKind::Quoted(inner.replace(&d.repeat(2), &d)), end, open)
-        } else if !pg && !my && !sr && c == '[' {
+        } else if !pg && !my && !sr && !dy && c == '[' {
             match s[i..].find(']') {
                 Some(n) => (
                     TokKind::Quoted(s[i + 1..i + n].to_owned()),

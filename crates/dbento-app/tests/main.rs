@@ -48,6 +48,7 @@ mod draft_tabs;
 mod drafts;
 mod duckdb_app;
 mod dynamo_columns;
+mod dynamo_completion;
 mod dynamo_form;
 mod dynamo_labels;
 mod dynamo_tree;
