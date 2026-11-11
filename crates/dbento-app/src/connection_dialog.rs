@@ -187,6 +187,10 @@ pub struct ConnectionForm {
     stale: bool,
     folders: Vec<FolderPath>,
     suggestions: Vec<FolderPath>,
+    // The server's databases from the last Test that connected, kept until a field that
+    // shapes the server or the login changes, and those offered under Database right now.
+    databases: Vec<String>,
+    database_suggestions: Vec<String>,
     base_dir: Option<PathBuf>,
     secrets_in_memory: bool,
     env_fallback: bool,
@@ -197,8 +201,11 @@ pub struct ConnectionForm {
     _field_changes: Vec<Subscription>,
 }
 
-/// The most folder suggestions shown at once.
+/// The most folder suggestions offered, and the database rows shown before the list scrolls.
 const MAX_SUGGESTIONS: usize = 8;
+
+/// One suggestion row's height.
+const SUGGESTION_HEIGHT: f32 = 22.;
 
 impl EventEmitter<ConnectionFormEvent> for ConnectionForm {}
 
@@ -257,15 +264,14 @@ impl ConnectionForm {
                 this.suggest(cx);
             }
         });
-        // Typing in any field that shapes the session makes the last Test answer stale.
-        let inputs = [
-            &name,
+        // Typing in any field that shapes the session makes the last Test answer stale; one
+        // that shapes the server or the login also drops the databases that Test listed.
+        let server_inputs = [
             &path,
             &host,
             &port,
             &uri,
             &namespace,
-            &database,
             &user,
             &password,
             &env_var,
@@ -273,11 +279,9 @@ impl ConnectionForm {
             &tls_cert,
             &tls_key,
             &key_passphrase,
-            &read_only_user,
-            &auth_level,
-            &timeout,
         ];
-        let field_changes = inputs
+        let session_inputs = [&name, &read_only_user, &auth_level, &timeout];
+        let mut field_changes: Vec<Subscription> = server_inputs
             .into_iter()
             .map(|input| {
                 cx.subscribe_in(input, window, |this, _, e: &InputEvent, _, cx| {
@@ -287,6 +291,22 @@ impl ConnectionForm {
                 })
             })
             .collect();
+        field_changes.extend(session_inputs.into_iter().map(|input| {
+            cx.subscribe_in(input, window, |this, _, e: &InputEvent, _, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.untested(cx);
+                }
+            })
+        }));
+        // The database typed so far narrows the listed ones; the list itself stays.
+        field_changes.push(
+            cx.subscribe_in(&database, window, |this, _, e: &InputEvent, _, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.untested(cx);
+                    this.suggest_databases(cx);
+                }
+            }),
+        );
         let form = ConnectionForm {
             previous,
             engine: loaded.engine,
@@ -317,6 +337,8 @@ impl ConnectionForm {
             stale: false,
             folders,
             suggestions: Vec::new(),
+            databases: Vec::new(),
+            database_suggestions: Vec::new(),
             base_dir: None,
             secrets_in_memory,
             env_fallback: false,
@@ -385,6 +407,8 @@ impl ConnectionForm {
     ) {
         self.folders = folders;
         self.suggestions.clear();
+        // A reload may move the server under the form, so a Test lists the databases again.
+        self.forget_databases();
         let Some(loaded) = loaded else {
             cx.notify();
             return;
@@ -536,9 +560,61 @@ impl ConnectionForm {
         (!typed.is_empty()).then(|| Secret::new(typed.to_string()))
     }
 
+    /// The databases offered under `conn-database` for the text typed so far.
+    pub fn database_suggestions(&self) -> &[String] {
+        &self.database_suggestions
+    }
+
+    /// Takes the databases a Test listed on the server and offers all but the one Database
+    /// names: Postgres needs a database to test with, so the field is rarely empty here.
+    /// An empty list offers none.
+    pub fn set_databases(&mut self, databases: Vec<String>, cx: &mut Context<Self>) {
+        self.databases = databases;
+        let named = self.database.read(cx).value().trim().to_owned();
+        self.database_suggestions = self
+            .databases
+            .iter()
+            .filter(|d| **d != named)
+            .cloned()
+            .collect();
+        cx.notify();
+    }
+
+    // While the user types in Database, offers the listed databases that extend the text;
+    // a name typed in full offers nothing more for it.
+    fn suggest_databases(&mut self, cx: &mut Context<Self>) {
+        let typed = self.database.read(cx).value().trim().to_owned();
+        self.database_suggestions = self
+            .databases
+            .iter()
+            .filter(|d| d.starts_with(&typed) && **d != typed)
+            .cloned()
+            .collect();
+        cx.notify();
+    }
+
+    // A picked database closes the list and, like typing it, drops the last Test answer: that
+    // answer was for the database the form named then.
+    fn database_picked(&mut self, cx: &mut Context<Self>) {
+        self.database_suggestions.clear();
+        self.untested(cx);
+    }
+
+    fn forget_databases(&mut self) {
+        self.databases.clear();
+        self.database_suggestions.clear();
+    }
+
+    // A change to what reaches the server or signs in: the listed databases may not be this
+    // server's, so they go with the last Test answer.
+    fn touched(&mut self, cx: &mut Context<Self>) {
+        self.forget_databases();
+        self.untested(cx);
+    }
+
     // A change drops the last Test answer and any inline error, except the stale-file one,
     // which only Reload resolves.
-    fn touched(&mut self, cx: &mut Context<Self>) {
+    fn untested(&mut self, cx: &mut Context<Self>) {
         self.test = TestState::Idle;
         if !self.stale {
             self.error = None;
@@ -1010,7 +1086,20 @@ impl ConnectionForm {
                     };
                     rows.push(self.file_row(f.label, id, field, prompt, cx));
                 }
-                (_, Some((field, id))) => rows.push(self.text_row(f.label, id, field, cx)),
+                (_, Some((field, id))) => {
+                    rows.push(self.text_row(f.label, id, field, cx));
+                    if field == Field::Database && !self.database_suggestions.is_empty() {
+                        let items = self.database_suggestions.clone();
+                        let list = self.suggestion_list(
+                            "conn-database-suggestion",
+                            Field::Database,
+                            items,
+                            Self::database_picked,
+                            cx,
+                        );
+                        rows.push(list.into_any_element());
+                    }
+                }
                 _ => {}
             }
             for f in shown {
@@ -1034,19 +1123,27 @@ impl ConnectionForm {
         }
     }
 
-    // The suggestions sit under the folder input, aligned with it; a click takes the path
-    // and closes the list (`set_value` emits no change, so the list is cleared here).
-    fn suggestion_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    // A list under `field`'s input, aligned with it, that scrolls past MAX_SUGGESTIONS rows;
+    // a click takes the row's text and closes the list (`set_value` emits no change, so
+    // `picked` does what typing would have).
+    fn suggestion_list(
+        &self,
+        id: &'static str,
+        field: Field,
+        items: Vec<String>,
+        picked: fn(&mut Self, &mut Context<Self>),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let (border, bg, hover, radius) =
             (theme.border, theme.popover, theme.list_hover, theme.radius);
-        let rows = self.suggestions.iter().enumerate().map(|(ix, path)| {
-            let text = path.to_string();
+        let rows = items.into_iter().enumerate().map(|(ix, text)| {
             div()
-                .id(("conn-folder-suggestion", ix))
+                .id((id, ix))
                 .aria_label(SharedString::from(text.clone()))
                 .test_support()
-                .h(px(22.))
+                .h(px(SUGGESTION_HEIGHT))
+                .flex_none()
                 .px_2()
                 .flex()
                 .items_center()
@@ -1055,19 +1152,22 @@ impl ConnectionForm {
                 .hover(move |s| s.bg(hover))
                 .child(text.clone())
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    let folder = this.folder.clone();
-                    folder.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
-                    this.suggestions.clear();
+                    let input = this.input(field).clone();
+                    input.update(cx, |s, cx| s.set_value(text.clone(), window, cx));
+                    picked(this, cx);
                     cx.notify();
                 }))
         });
         div().pl(px(LABEL_WIDTH + 12.)).child(
             v_flex()
+                .id(SharedString::from(format!("{id}s")))
                 .py_0p5()
                 .border_1()
                 .border_color(border)
                 .rounded(radius)
                 .bg(bg)
+                .max_h(px(SUGGESTION_HEIGHT * MAX_SUGGESTIONS as f32 + 4.))
+                .overflow_y_scroll()
                 .children(rows),
         )
     }
@@ -1240,7 +1340,8 @@ impl Render for ConnectionForm {
             .checked(self.read_only)
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.read_only = *checked;
-                this.touched(cx);
+                // Read only shapes the session, not which databases the server holds.
+                this.untested(cx);
                 cx.notify();
             }));
         let mut options = vec![Self::row("Safety", read_only, cx)];
@@ -1252,8 +1353,11 @@ impl Render for ConnectionForm {
         options.push(Self::row("Colour", swatches, cx));
         options.push(self.text_row("Folder", "conn-folder", Field::Folder, cx));
         if !self.suggestions.is_empty() {
-            let list = self.suggestion_list(cx).into_any_element();
-            options.push(list);
+            let items = self.suggestions.iter().map(|p| p.to_string()).collect();
+            let picked: fn(&mut Self, &mut Context<Self>) = |this, _| this.suggestions.clear();
+            let list =
+                self.suggestion_list("conn-folder-suggestion", Field::Folder, items, picked, cx);
+            options.push(list.into_any_element());
         }
         section("Options", options);
 

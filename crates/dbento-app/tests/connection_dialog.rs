@@ -162,6 +162,79 @@ fn the_folder_field_suggests_existing_folders_and_takes_new_ones(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn a_tests_databases_are_offered_under_database_until_the_server_changes(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    support::gear(cx, o.win, "nopg");
+    let f = form(cx, &o);
+    fill(cx, &o, Field::Database, "");
+    let listed = ["app", "app_test", "billing", "postgres"];
+    f.update(cx, |f, cx| {
+        f.set_test(TestState::Connected, cx);
+        f.set_databases(listed.map(str::to_owned).to_vec(), cx);
+    });
+    cx.run_until_parked();
+    for (ix, name) in listed.iter().enumerate() {
+        assert_eq!(
+            label_of(cx, o.win, ("conn-database-suggestion", ix)).as_deref(),
+            Some(*name),
+            "an empty Database offers every listed database"
+        );
+    }
+    let database = f.read_with(cx, |f, _| f.input(Field::Database).clone());
+    cx.update_window(o.win, |_, w, cx| {
+        database.update(cx, |s, cx| s.focus(w, cx));
+        w.input("ap", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        f.read_with(cx, |f, _| f.database_suggestions().to_vec()),
+        ["app", "app_test"],
+        "typing narrows the list"
+    );
+    f.update(cx, |f, cx| f.set_test(TestState::Connected, cx));
+    cx.run_until_parked();
+    click_id(cx, o.win, ("conn-database-suggestion", 1usize));
+    assert_eq!(
+        database.read_with(cx, |s, _| s.value().to_string()),
+        "app_test"
+    );
+    assert!(
+        !present(cx, o.win, ("conn-database-suggestion", 0usize)),
+        "a pick closes the list"
+    );
+    assert!(
+        !present(cx, o.win, "conn-test-result"),
+        "the Test answer was for the database named before the pick"
+    );
+    // The list belongs to the server, so editing Database offers it again.
+    cx.update_window(o.win, |_, w, cx| {
+        database.update(cx, |s, cx| s.focus(w, cx));
+        for _ in 0.."_test".len() {
+            w.press("backspace", cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        f.read_with(cx, |f, _| f.database_suggestions().to_vec()),
+        ["app_test"]
+    );
+    // Another host may hold other databases, so the list goes until the next Test.
+    let host = f.read_with(cx, |f, _| f.input(Field::Host).clone());
+    cx.update_window(o.win, |_, w, cx| {
+        host.update(cx, |s, cx| s.focus(w, cx));
+        w.input("x", cx);
+        database.update(cx, |s, cx| s.focus(w, cx));
+        w.press("backspace", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(f.read_with(cx, |f, _| f.database_suggestions().is_empty()));
+    assert!(!present(cx, o.win, ("conn-database-suggestion", 0usize)));
+}
+
+#[gpui_kit::test]
 fn the_file_picker_fills_the_path(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     support::gear(cx, o.win, "lite");

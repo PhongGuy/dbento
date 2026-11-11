@@ -3207,24 +3207,28 @@ impl Shell {
             let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
             let mut options = SessionOptions::default();
             options.key_passphrase = key_passphrase;
-            let session = connect(ws, conn, secret, options)
+            let mut session = connect(ws, conn, secret, options)
                 .await
                 .map_err(|e| e.to_string())?;
-            // A connection test runs nothing, so close has nothing to report.
+            // The server's databases fill Database's suggestions. The session connected, so a
+            // list the engine lacks or the login may not read leaves the test passed.
+            let databases = session.databases().await.unwrap_or_default();
+            // A connection test runs nothing that writes, so close has nothing to report.
             let _ = session.close().await;
-            Ok::<(), String>(())
+            Ok::<Vec<String>, String>(databases)
         });
         let form = form.downgrade();
         self.connection_test = Some(cx.spawn_in(window, async move |_, cx| {
-            let state = match attempt.await {
-                Ok(Ok(())) => TestState::Connected,
-                Ok(Err(says)) => TestState::Failed(says),
-                Err(e) => TestState::Failed(e.to_string()),
+            let (state, databases) = match attempt.await {
+                Ok(Ok(databases)) => (TestState::Connected, databases),
+                Ok(Err(says)) => (TestState::Failed(says), Vec::new()),
+                Err(e) => (TestState::Failed(e.to_string()), Vec::new()),
             };
             // Only the attempt the form still waits on may answer.
             let _ = form.update(cx, |f, cx| {
                 if *f.test_state() == TestState::Testing {
                     f.set_test(state, cx);
+                    f.set_databases(databases, cx);
                 }
             });
         }));
