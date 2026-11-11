@@ -49,6 +49,14 @@ impl ToolError {
         )
     }
 
+    /// `name` is a connection but declares no databases of its own, as a child never does.
+    pub(crate) fn not_a_parent(name: &str) -> Self {
+        ToolError::new(
+            "not_a_parent",
+            format!("connection {name:?} declares no databases; call list_connections"),
+        )
+    }
+
     /// The connection's secret could not be resolved.
     pub(crate) fn from_secret(e: &SecretError) -> Self {
         ToolError::new("secret", e.to_string())

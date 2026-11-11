@@ -4,6 +4,7 @@ use crate::common::TestServer;
 use dbento_core::Decision;
 use dbento_testkit::pg_db;
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
 const TREE: &str = r#"dbento = 1
 [connections.stayzy]
@@ -169,4 +170,95 @@ async fn a_grant_for_one_database_does_not_cover_another() {
         .batch_execute(&format!("DROP DATABASE \"{other}\" WITH (FORCE)"))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn list_databases_answers_a_list_without_connecting() {
+    let server = TestServer::start(TREE).await;
+    let out = server
+        .ok("list_databases", json!({"connection": "stayzy"}))
+        .await;
+    assert_eq!(
+        out,
+        json!({"databases": [
+            {"name": "booking", "connection": "stayzy/booking"},
+            {"name": "user_db", "connection": "stayzy/user_db"},
+        ]})
+    );
+    assert!(
+        server
+            .instructions()
+            .unwrap_or_default()
+            .contains("list_databases")
+    );
+}
+
+#[tokio::test]
+async fn list_databases_needs_an_exposed_parent() {
+    let server = TestServer::start(TREE).await;
+    for (name, code) in [
+        ("lite", "not_a_parent"),
+        ("stayzy/booking", "not_a_parent"),
+        ("nope", "no_connection"),
+        ("stayzy/hotel", "no_connection"),
+    ] {
+        let e = server
+            .err("list_databases", json!({"connection": name}))
+            .await;
+        assert_eq!(e["code"], code, "{name}: {e}");
+    }
+    let server = TestServer::start_with(TREE, |o| o.expose(["stayzy/booking"])).await;
+    let e = server
+        .err("list_databases", json!({"connection": "stayzy"}))
+        .await;
+    assert_eq!(e["code"], "no_connection", "{e}");
+}
+
+#[tokio::test]
+async fn list_databases_asks_the_server_for_all() {
+    let db = pg_db().await;
+    let odd = format!("{}.odd", db.database());
+    let admin = db.admin().await;
+    admin
+        .batch_execute(&format!("CREATE DATABASE \"{odd}\""))
+        .await
+        .unwrap();
+    let server = TestServer::postgres(&db, "databases = \"all\"").await;
+    let out = server
+        .ok("list_databases", json!({"connection": "pg"}))
+        .await;
+    let list = out["databases"].as_array().expect("databases");
+    let own = json!({"name": db.database(), "connection": format!("pg/{}", db.database())});
+    assert!(list.contains(&own), "{out}");
+    assert!(
+        list.contains(&json!({"name": &odd, "connection": null})),
+        "{out}"
+    );
+    drop(server);
+    admin
+        .batch_execute(&format!("DROP DATABASE \"{odd}\" WITH (FORCE)"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn list_databases_gives_up_after_five_seconds() {
+    // Accepted into the backlog and never answered, the Postgres startup waits past 5 s.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let toml = format!(
+        "dbento = 1\n[connections.stall]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = {port}\ndatabase = \"d\"\nuser = \"u\"\nsecret = \"none\"\ndatabases = \"all\"\n"
+    );
+    let server = TestServer::start(&toml).await;
+    let started = Instant::now();
+    let e = server
+        .err("list_databases", json!({"connection": "stall"}))
+        .await;
+    let took = started.elapsed();
+    assert_eq!(e["code"], "timeout", "{e}");
+    assert!(
+        took >= Duration::from_secs(4) && took < Duration::from_secs(9),
+        "{took:?}"
+    );
+    drop(silent);
 }
