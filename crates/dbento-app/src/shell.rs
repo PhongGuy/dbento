@@ -1094,7 +1094,7 @@ impl Shell {
         });
     }
 
-    // The name of the declared connection selected in the explorer.
+    // The name of the connection selected in the explorer: a declared one or a derived child.
     fn selected_connection(&self, cx: &App) -> Option<String> {
         self.sidebar.as_ref()?.read(cx).selected_name()
     }
