@@ -13,7 +13,7 @@ publish = false
 dbento-app = { path = "../../crates/dbento-app" }
 dbento-core = { path = "../../crates/dbento-core" }
 gpui-kit = "=0.9.0"
-gpui-pilot-host = { git = "https://github.com/PhongGuy/gpui-pilot", tag = "v0.2.0" }
+gpui-pilot-host = { git = "https://github.com/PhongGuy/gpui-pilot", tag = "v0.3.0" }
 anyhow = "1"
 
 [dev-dependencies]
