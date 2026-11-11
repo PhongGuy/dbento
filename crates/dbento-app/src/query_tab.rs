@@ -102,7 +102,7 @@ pub const READ_ONLY_REDIS_BEST_EFFORT_TOOLTIP: &str = "Read-only is best effort:
 pub const READ_ONLY_REDIS_UNCONNECTED_TOOLTIP: &str =
     "Read-only: the level follows the user's ACL and shows once connected.";
 /// The DynamoDB badge's head; its level is always best effort, since no session is read-only.
-pub const READ_ONLY_DYNAMODB_TOOLTIP: &str = "Read-only is best effort: DynamoDB has no read-only session, so Dbento sends only reads and refuses every statement it reads as a write or cannot classify.";
+pub const READ_ONLY_DYNAMODB_TOOLTIP: &str = "Read-only is best effort: DynamoDB statements that Dbento reads as a write or cannot classify are refused.";
 
 /// The Save button's tooltip: with `staged` edits, which effective keys save them and which
 /// the query. A clause whose action is unbound is left out.
@@ -315,7 +315,12 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
             c.namespace().unwrap_or_default(),
             c.database().unwrap_or_default()
         ),
-        Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis | _ => c.display_target(),
+        Engine::Sqlite
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis
+        | Engine::Dynamodb
+        | _ => c.display_target(),
     };
     format!(
         "{} \u{b7} {} \u{b7} {target}",
