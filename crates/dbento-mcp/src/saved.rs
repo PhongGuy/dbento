@@ -70,20 +70,15 @@ pub(crate) async fn list(server: &DbentoServer) -> Result<SavedList, ToolError> 
         Ok(queries
             .into_iter()
             .map(|q| {
-                let target = target_connection(&ws, q.path());
-                (q, target)
+                let gates = [gate(&ws, q.path()), target_connection(&ws, q.path())];
+                (q, gates)
             })
             .collect::<Vec<_>>())
     })
     .await?;
     let mut queries: Vec<SavedEntry> = found
         .iter()
-        .filter(|(q, target)| {
-            [q.connection(), target.as_deref()]
-                .into_iter()
-                .flatten()
-                .all(|c| server.exposed(c))
-        })
+        .filter(|(_, gates)| gates.iter().flatten().all(|c| server.exposed(c)))
         .map(|(q, _)| SavedEntry {
             path: slashed(q.path()),
             connection: q.connection().map(str::to_owned),
@@ -107,7 +102,7 @@ pub(crate) async fn read(server: &DbentoServer, args: ReadArgs) -> Result<SavedT
         return Err(outside(&args.path));
     }
     let connection = ws.bound_connection(&rel);
-    if connection.as_deref().is_some_and(|c| !server.exposed(c)) {
+    if gate(&ws, &rel).is_some_and(|c| !server.exposed(&c)) {
         return Err(no_query(&args.path));
     }
     let shown = args.path.clone();
@@ -153,13 +148,25 @@ fn queries_inside(ws: &Workspace) -> Result<(), ToolError> {
     }
 }
 
-/// The connection bound by the folder of the file `rel` resolves to, links followed; None
-/// when it binds none or does not resolve inside `queries/`.
+/// The `gate` of the file `rel` resolves to, links followed; None when it has none or does not
+/// resolve inside `queries/`.
 fn target_connection(ws: &Workspace, rel: &Path) -> Option<String> {
     let root = std::fs::canonicalize(ws.dir().join("queries")).ok()?;
     let real = std::fs::canonicalize(ws.dir().join(rel)).ok()?;
     let below = real.strip_prefix(&root).ok()?;
-    ws.bound_connection(&Path::new("queries").join(below))
+    gate(ws, &Path::new("queries").join(below))
+}
+
+/// The connection that must be exposed for the file at `rel` to be seen: the one it binds, or,
+/// when it binds none from inside a declared connection's folder, that connection.
+fn gate(ws: &Workspace, rel: &Path) -> Option<String> {
+    ws.bound_connection(rel).or_else(|| {
+        let first = rel.strip_prefix("queries").ok()?.components().next()?;
+        let name = first.as_os_str().to_str()?;
+        // A file directly in queries/ has its own name as the first part, never a folder.
+        let in_folder = rel.components().count() > 2;
+        (in_folder && ws.declared(name).is_some()).then(|| name.to_owned())
+    })
 }
 
 /// The path with `/` between its parts on every platform.

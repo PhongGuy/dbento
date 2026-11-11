@@ -108,7 +108,11 @@ async fn a_parent_exposes_its_children_and_a_child_only_itself() {
 #[tokio::test]
 async fn a_childs_saved_queries_follow_its_exposure() {
     let server = TestServer::start_with(TREE, |o| o.expose(["stayzy/booking"])).await;
-    for rel in ["queries/stayzy/q.sql", "queries/stayzy/booking/q.sql"] {
+    for rel in [
+        "queries/stayzy/q.sql",
+        "queries/stayzy/booking/q.sql",
+        "queries/stayzy/reports/q.sql",
+    ] {
         let path = server.root().join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "select 1").unwrap();
@@ -118,6 +122,11 @@ async fn a_childs_saved_queries_follow_its_exposure() {
         list["queries"],
         json!([{"path": "queries/stayzy/booking/q.sql", "connection": "stayzy/booking"}])
     );
+    // A subfolder naming no child binds nothing, yet it sits in the unexposed parent's folder.
+    for path in ["queries/stayzy/q.sql", "queries/stayzy/reports/q.sql"] {
+        let e = server.err("read_saved_query", json!({"path": path})).await;
+        assert_eq!(e["code"], "no_query", "{path}: {e}");
+    }
 }
 
 #[tokio::test]
