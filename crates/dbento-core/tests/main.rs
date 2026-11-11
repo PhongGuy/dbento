@@ -20,6 +20,7 @@ mod datagrip_folders;
 mod datagrip_queries;
 mod datagrip_read;
 mod dbeaver_read;
+mod derived;
 mod duckdb_cancel;
 mod duckdb_catalog;
 mod duckdb_crate;

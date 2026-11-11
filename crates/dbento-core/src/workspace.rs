@@ -441,6 +441,16 @@ impl Folder {
     }
 }
 
+/// The databases a Postgres or SQL Server parent exposes as child connections.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Databases {
+    /// Every database the server lists, written `databases = "all"`.
+    All,
+    /// Only these, in the order written.
+    Listed(Vec<String>),
+}
+
 /// One configured connection. Holds no secret.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -465,6 +475,7 @@ pub struct ConnectionConfig {
     tls_key: Option<PathBuf>,
     settings: BTreeMap<String, String>,
     read_only_user: Option<String>,
+    databases: Option<Databases>,
     uri: Option<String>,
     namespace: Option<String>,
     auth_level: Option<AuthLevel>,
@@ -509,6 +520,7 @@ struct RawConnection {
     tls_key: Option<String>,
     settings: Option<BTreeMap<String, String>>,
     read_only_user: Option<String>,
+    databases: Option<RawDatabases>,
     read_only: Option<bool>,
     color: Option<String>,
     folder: Option<String>,
@@ -527,6 +539,46 @@ struct RawConnection {
 enum RawSecret {
     Word(String),
     Env(RawEnv),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawDatabases {
+    Word(String),
+    List(Vec<String>),
+}
+
+// A parent's `databases`: the word "all" or a non-empty list of distinct database names.
+// SQL Server compares names case-insensitively, so it also refuses a pair differing in case.
+fn databases(raw: RawDatabases, engine: Engine) -> Result<Databases, String> {
+    let names = match raw {
+        RawDatabases::Word(w) if w == "all" => return Ok(Databases::All),
+        RawDatabases::Word(_) => {
+            return Err("`databases` must be \"all\" or a list of database names".to_owned());
+        }
+        RawDatabases::List(names) => names,
+    };
+    if names.is_empty() {
+        return Err("`databases` lists no database; use \"all\" or name at least one".to_owned());
+    }
+    for (i, name) in names.iter().enumerate() {
+        if !valid_name(name) {
+            return Err(format!(
+                "`databases` entry `{name}` must match [A-Za-z0-9_-]+"
+            ));
+        }
+        for earlier in &names[..i] {
+            if earlier == name {
+                return Err(format!("`databases` lists `{name}` twice"));
+            }
+            if engine == Engine::Mssql && earlier.to_lowercase() == name.to_lowercase() {
+                return Err(format!(
+                    "`databases` lists `{earlier}` and `{name}`, which SQL Server treats as one database"
+                ));
+            }
+        }
+    }
+    Ok(Databases::Listed(names))
 }
 
 // Its own struct because `deny_unknown_fields` is ignored on an untagged struct variant.
@@ -1022,6 +1074,11 @@ impl Workspace {
         spec.tls_cert = raw.tls_cert;
         spec.tls_key = raw.tls_key;
         spec.read_only_user = raw.read_only_user;
+        // The source text already loaded, so any word here is "all".
+        spec.databases = raw.databases.map(|d| match d {
+            RawDatabases::Word(_) => Databases::All,
+            RawDatabases::List(names) => Databases::Listed(names),
+        });
         spec.secret = raw.secret.map(|s| match s {
             RawSecret::Env(e) => SecretSource::Env(e.env),
             RawSecret::Word(w) if w == "keychain" => SecretSource::Keychain,
@@ -1249,6 +1306,7 @@ impl ConnectionConfig {
             tls_key: None,
             settings: BTreeMap::new(),
             read_only_user: None,
+            databases: None,
             uri: None,
             namespace: None,
             auth_level: None,
@@ -1294,6 +1352,32 @@ impl ConnectionConfig {
                 if present {
                     return Err(invalid(format!(
                         "`{key}` is a dynamodb key, not valid for {}",
+                        engine.name()
+                    )));
+                }
+            }
+        }
+
+        // Ahead of the per-engine rules, so its message wins over a "postgres key" one.
+        if let Some(raw_databases) = raw.databases {
+            match engine {
+                Engine::Postgres | Engine::Mssql => {
+                    config.databases = Some(databases(raw_databases, engine).map_err(invalid)?);
+                }
+                Engine::Mysql => {
+                    return Err(invalid(
+                        "`databases` is not valid for mysql: leave `database` empty to browse every database as a schema"
+                            .to_owned(),
+                    ));
+                }
+                Engine::Sqlite
+                | Engine::Duckdb
+                | Engine::Mongodb
+                | Engine::Surrealdb
+                | Engine::Redis
+                | Engine::Dynamodb => {
+                    return Err(invalid(format!(
+                        "`databases` is a postgres and mssql key, not valid for {}",
                         engine.name()
                     )));
                 }
@@ -1849,6 +1933,11 @@ impl ConnectionConfig {
     /// Client private key: the workspace directory joined with `tls_key`.
     pub fn tls_key(&self) -> Option<&Path> {
         self.tls_key.as_deref()
+    }
+
+    /// The databases this parent exposes as children; `None` when it declares none.
+    pub fn databases(&self) -> Option<&Databases> {
+        self.databases.as_ref()
     }
 
     /// The SQL Server reader user that read-only work impersonates; `None` on other engines.
