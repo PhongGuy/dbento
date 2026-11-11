@@ -692,7 +692,8 @@ fn index_ref(cx: &mut TestAppContext, shell: &Entity<Shell>) -> ObjectRef {
                     | RowKind::Empty
                     | RowKind::KeyFolder { .. }
                     | RowKind::Key(_)
-                    | RowKind::LoadMore => None,
+                    | RowKind::LoadMore
+                    | RowKind::Database { .. } => None,
                 })
         })
         .expect("the index row")

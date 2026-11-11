@@ -967,7 +967,8 @@ fn object_groups_follow_columns_and_kinds_collapsed() {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
         .collect();
     let want: Vec<(String, String)> = [
@@ -1014,7 +1015,8 @@ fn a_replica_only_trigger_says_so_like_a_disabled_one() {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -1348,7 +1350,8 @@ fn object_details_name_index_flags_and_constraint_kinds() {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
         .collect();
     let want: Vec<(String, String)> = [

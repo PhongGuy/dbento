@@ -217,7 +217,8 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
             | RowKind::Failed { .. }
             | RowKind::Truncated
             | RowKind::Empty
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         },
     }
 }
@@ -1734,7 +1735,8 @@ impl Sidebar {
             | RowKind::Truncated
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
-            | RowKind::LoadMore => {
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => {
                 expandable && self.selection.as_ref() == Some(&Selection::Node(row.key.clone()))
             }
         };
@@ -1773,7 +1775,8 @@ impl Sidebar {
                 | RowKind::Empty
                 | RowKind::KeyFolder { .. }
                 | RowKind::Key(_)
-                | RowKind::LoadMore => None,
+                | RowKind::LoadMore
+                | RowKind::Database { .. } => None,
             };
             base.cursor_pointer()
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -1956,7 +1959,7 @@ impl Sidebar {
                     )
             }
             RowKind::Truncated => base.text_color(muted).child(name(row.label.clone())),
-            RowKind::Loading | RowKind::Empty => {
+            RowKind::Loading | RowKind::Empty | RowKind::Database { .. } => {
                 base.text_color(dim).child(name(row.label.clone()))
             }
         }
@@ -2066,7 +2069,8 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
         | RowKind::Empty
         | RowKind::KeyFolder { .. }
         | RowKind::Key(_)
-        | RowKind::LoadMore => None,
+        | RowKind::LoadMore
+        | RowKind::Database { .. } => None,
     }
 }
 
@@ -2431,7 +2435,8 @@ fn catalog_menu(
         | RowKind::Empty
         | RowKind::KeyFolder { .. }
         | RowKind::Key(_)
-        | RowKind::LoadMore => qualified_name(engine, rel),
+        | RowKind::LoadMore
+        | RowKind::Database { .. } => qualified_name(engine, rel),
     });
     let copy = |text: String| {
         move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
@@ -2503,7 +2508,8 @@ fn catalog_menu(
                 | RowKind::Failed { .. }
                 | RowKind::Truncated
                 | RowKind::Empty
-                | RowKind::LoadMore => t.label.clone(),
+                | RowKind::LoadMore
+                | RowKind::Database { .. } => t.label.clone(),
             })),
             "tree-menu-open-key" => match (&t.kind, node_db(&t.node)) {
                 (RowKind::Key(k), Some(db)) => {
@@ -2561,7 +2567,8 @@ fn catalog_menu(
                 | RowKind::Empty
                 | RowKind::KeyFolder { .. }
                 | RowKind::Key(_)
-                | RowKind::LoadMore => continue,
+                | RowKind::LoadMore
+                | RowKind::Database { .. } => continue,
             },
             _ => item,
         };
