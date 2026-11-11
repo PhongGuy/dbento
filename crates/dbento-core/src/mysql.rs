@@ -1807,7 +1807,7 @@ mod tests {
         std::fs::write(dir.path().join("dbento.toml"), "dbento = 1\n[connections.m]\nengine = \"mysql\"\nhost = \"h\"\nuser = \"u\"\ntls = \"verify\"\nsecret = \"none\"\n").unwrap();
         let ws = crate::Workspace::open(dir.path()).unwrap();
         let e = mysql_async::Error::Driver(DriverError::NoClientSslFlagFromServer);
-        match tls_failure(ws.connection("m").unwrap(), &e) {
+        match tls_failure(ws.declared("m").unwrap(), &e) {
             Some(ConnectError::Tls { message, .. }) => assert_eq!(
                 message,
                 format!("{e}; {TLS_WAYS_OUT} to connect without TLS")

@@ -42,19 +42,19 @@ mod load {
             server("plain", "postgres", ""),
         ));
         assert_eq!(
-            ws.connection("pg").unwrap().databases(),
+            ws.declared("pg").unwrap().databases(),
             Some(&Databases::Listed(vec![
                 "booking".to_owned(),
                 "user_db".to_owned()
             ]))
         );
         assert_eq!(
-            ws.connection("ms").unwrap().databases(),
+            ws.declared("ms").unwrap().databases(),
             Some(&Databases::All)
         );
-        assert_eq!(ws.connection("plain").unwrap().databases(), None);
+        assert_eq!(ws.declared("plain").unwrap().databases(), None);
         assert_eq!(
-            ws.connection("pg").unwrap().database(),
+            ws.declared("pg").unwrap().database(),
             Some("app"),
             "the parent keeps its own default database"
         );
@@ -130,7 +130,7 @@ mod load {
             server("pg", "postgres", "databases = [\"Booking\", \"booking\"]")
         ));
         assert_eq!(
-            ws.connection("pg").unwrap().databases(),
+            ws.declared("pg").unwrap().databases(),
             Some(&Databases::Listed(vec![
                 "Booking".to_owned(),
                 "booking".to_owned()
@@ -204,5 +204,64 @@ mod spec {
         let text = rewrite(&ws, "pg", spec);
         assert!(!text.contains("databases"), "{text}");
         assert!(text.contains("engine = \"mysql\""), "{text}");
+    }
+}
+
+mod targets {
+    use super::open;
+    use dbento_core::{Edit, EditError, SecretKey, WorkspaceItem, plan_edit};
+
+    const PARENT: &str = "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = [\"booking\"]\n";
+
+    #[test]
+    fn only_a_declared_connection_has_a_keychain_target() {
+        let (_d, ws) = open(PARENT);
+        assert_eq!(ws.secret_target("pg"), Some(SecretKey::new(ws.dir(), "pg")));
+        assert_eq!(
+            ws.key_passphrase_target("pg"),
+            Some(SecretKey::key_passphrase(ws.dir(), "pg"))
+        );
+        for name in ["pg/booking", "pg/other", "nope", ""] {
+            assert_eq!(ws.secret_target(name), None, "{name}");
+            assert_eq!(ws.key_passphrase_target(name), None, "{name}");
+            assert!(ws.declared(name).is_none(), "{name}");
+        }
+        assert!(ws.declared("pg").is_some());
+    }
+
+    #[test]
+    fn an_edit_never_reaches_a_child() {
+        let (_d, ws) = open(PARENT);
+        let child = "pg/booking".to_owned();
+        let spec = ws.connection_spec("pg").unwrap();
+        for edit in [
+            Edit::DeleteConnection {
+                name: child.clone(),
+            },
+            Edit::PutConnection {
+                previous: Some(child.clone()),
+                name: "renamed".into(),
+                spec: spec.clone(),
+            },
+            Edit::Move {
+                item: WorkspaceItem::Connection(child.clone()),
+                to: None,
+            },
+        ] {
+            assert!(
+                matches!(plan_edit(&ws, &edit), Err(EditError::NotFound { ref name }) if *name == child),
+                "{edit:?}"
+            );
+        }
+        let added = Edit::PutConnection {
+            previous: None,
+            name: child,
+            spec,
+        };
+        assert!(matches!(
+            plan_edit(&ws, &added),
+            Err(EditError::InvalidName { .. })
+        ));
+        assert!(ws.connection_spec("pg/booking").is_none());
     }
 }

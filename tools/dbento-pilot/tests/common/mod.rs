@@ -261,7 +261,7 @@ pub async fn demo_workspace() -> (tempfile::TempDir, PathBuf) {
     std::fs::write(ws.join("shop.sqlite"), b"").unwrap();
     let seed = std::fs::read_to_string(ws.join("seed.sql")).unwrap();
     let w = dbento_core::Workspace::open(&ws).unwrap();
-    let conn = w.connection("shop").unwrap();
+    let conn = w.declared("shop").unwrap();
     let mut s = dbento_core::connect(&w, conn, None, Default::default())
         .await
         .unwrap();

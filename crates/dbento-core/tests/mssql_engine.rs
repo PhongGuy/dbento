@@ -29,14 +29,14 @@ fn mssql_and_its_sqlserver_alias_name_one_engine() {
         "{MS}[connections.alias]\nengine = \"sqlserver\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"shop\"\n"
     ));
     let ws = ws.unwrap();
-    let c = ws.connection("ms").unwrap();
+    let c = ws.declared("ms").unwrap();
     assert_eq!((c.engine(), c.engine().name()), (Engine::Mssql, "mssql"));
     assert_eq!(
         (c.host(), c.port(), c.user(), c.database()),
         (Some("db.example.com"), Some(1433), Some("app"), None)
     );
     assert_eq!(c.display_target(), "app@db.example.com:1433");
-    let alias = ws.connection("alias").unwrap();
+    let alias = ws.declared("alias").unwrap();
     assert_eq!(alias.engine(), Engine::Mssql);
     assert_eq!(alias.display_target(), "u@h:1433/shop");
     assert_eq!(ws.connection_spec("alias").unwrap().engine, Engine::Mssql);
@@ -59,7 +59,7 @@ fn sql_server_capabilities_and_flavor() {
 fn a_sql_server_keychain_connection_gets_the_secret_hint() {
     let (_dir, ws) = ws_with(MS);
     let ws = ws.unwrap();
-    let hint = secret_hint(&ws, ws.connection("ms").unwrap(), &MemoryStore::new()).unwrap();
+    let hint = secret_hint(&ws, ws.declared("ms").unwrap(), &MemoryStore::new()).unwrap();
     assert!(
         hint.contains("dbento secret set ms") && hint.contains("DBENTO_SECRET_MS"),
         "{hint}"
@@ -76,7 +76,7 @@ fn names_and_literals_are_t_sql() {
     assert_eq!(key_filter(Engine::Mssql, &bytes_key), None);
     let (_dir, ws) = ws_with(MS);
     let ws = ws.unwrap();
-    let schema = default_schema(Engine::Mssql, ws.connection("ms").unwrap());
+    let schema = default_schema(Engine::Mssql, ws.declared("ms").unwrap());
     assert_eq!(schema.as_deref(), Some("dbo"));
 }
 
@@ -295,7 +295,7 @@ fn sql_server_keys_parse_with_their_defaults() {
          database = \"shop\"\ntls_ca = \"ca.pem\"\nread_only_user = \"dbento_reader\"\nsecret = { env = \"MS_PW\" }\n",
     );
     let ws = ws.unwrap();
-    let c = ws.connection("ms").unwrap();
+    let c = ws.declared("ms").unwrap();
     assert_eq!((c.port(), c.database()), (Some(1433), Some("shop")));
     assert_eq!(
         c.tls(),
@@ -307,7 +307,7 @@ fn sql_server_keys_parse_with_their_defaults() {
     assert_eq!(c.secret_source(), &SecretSource::Env("MS_PW".into()));
     let (_d2, plain) = ws_with(MS);
     assert_eq!(
-        plain.unwrap().connection("ms").unwrap().read_only_user(),
+        plain.unwrap().declared("ms").unwrap().read_only_user(),
         None
     );
 }
@@ -386,7 +386,7 @@ fn a_sql_server_entry_round_trips_through_a_save() {
     let (_d2, reopened) = ws_with(&text);
     let reopened = reopened.unwrap();
     assert_eq!(reopened.connection_spec("ms"), Some(spec));
-    let c = reopened.connection("ms").unwrap();
+    let c = reopened.declared("ms").unwrap();
     assert_eq!(
         (c.read_only_user(), c.port(), c.tls()),
         (Some("dbento_reader"), Some(14330), Some(TlsMode::Off))

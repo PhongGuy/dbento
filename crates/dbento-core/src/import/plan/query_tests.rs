@@ -220,7 +220,7 @@ fn queries_are_written_before_dbento_toml_and_a_rerun_converges() {
     assert!(
         Workspace::open(ws.path())
             .unwrap()
-            .connection("shop")
+            .declared("shop")
             .is_some()
     );
 }

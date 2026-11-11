@@ -242,3 +242,26 @@ fn secret_set_names_the_env_variable_or_sqlite_in_its_refusal() {
         refusal("lite")
     );
 }
+
+#[test]
+fn secret_set_and_delete_refuse_a_child_before_reading_input() {
+    let ws = common::write_tree(&[(
+        "dbento.toml",
+        "dbento = 1\n[connections.kc]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = [\"app\"]\n",
+    )]);
+    for action in ["set", "delete"] {
+        let out = dbento()
+            .current_dir(ws.path())
+            .env("DBENTO_TEST_NO_KEYCHAIN", "1")
+            .args(["secret", action, "kc/app"])
+            .write_stdin("pw\n")
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(3), "{action}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("no such connection in dbento.toml"),
+            "{action}: {err}"
+        );
+    }
+}

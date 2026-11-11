@@ -27,7 +27,7 @@ async fn two_connections() -> tempfile::TempDir {
         ),
     ] {
         std::fs::write(ws.path().join(file), b"").unwrap();
-        let conn = w.connection(name).unwrap();
+        let conn = w.declared(name).unwrap();
         let mut s = dbento_core::connect(&w, conn, None, Default::default())
             .await
             .unwrap();

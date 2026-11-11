@@ -115,7 +115,7 @@ async fn a_missing_database_file_is_a_connect_error_and_is_not_created() {
     let ws = Workspace::open(dir.path()).unwrap();
     let err = connect(
         &ws,
-        ws.connection("lite").unwrap(),
+        ws.declared("lite").unwrap(),
         None,
         SessionOptions::default(),
     )

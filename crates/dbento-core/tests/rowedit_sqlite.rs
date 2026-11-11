@@ -244,7 +244,7 @@ async fn render_sql_run_directly_matches_apply_on_sqlite() {
     let script = render_sql(&batch);
     let applied = apply(
         &applied_fx.ws,
-        applied_fx.ws.connection("lite").unwrap(),
+        applied_fx.ws.declared("lite").unwrap(),
         None,
         batch,
     )
@@ -435,7 +435,7 @@ async fn typed_literals_run_directly_store_what_apply_stores_on_sqlite() {
     );
     let applied = apply(
         &applied_fx.ws,
-        applied_fx.ws.connection("lite").unwrap(),
+        applied_fx.ws.declared("lite").unwrap(),
         None,
         batch,
     )

@@ -76,7 +76,7 @@ async fn launch(ws: &Path, password: &str) -> Pilot {
 }
 async fn my_exec(ws: &Path, password: &str, sql: &str) {
     let w = dbento_core::Workspace::open(ws).unwrap();
-    let conn = w.connection("my").unwrap();
+    let conn = w.declared("my").unwrap();
     let secret = Some(dbento_core::Secret::new(password));
     let mut s = dbento_core::connect(&w, conn, secret, Default::default())
         .await

@@ -179,7 +179,7 @@ fn import_with_secrets(ws: &Path, store: &MemoryStore) -> StoredSecrets {
 
 fn stored(ws: &Path, store: &MemoryStore, name: &str) -> Option<String> {
     let ws = Workspace::open(ws).unwrap();
-    let key = SecretKey::for_connection(&ws, ws.connection(name).unwrap());
+    let key = SecretKey::for_connection(&ws, ws.declared(name).unwrap());
     store.get(&key).unwrap().map(|s| s.expose().to_owned())
 }
 
@@ -195,7 +195,7 @@ fn secrets_land_under_the_final_names_and_a_rerun_stores_and_replaces_nothing() 
     .unwrap();
     let store = MemoryStore::new();
     let own = Workspace::open(ws.path()).unwrap();
-    let own_key = SecretKey::for_connection(&own, own.connection("orders-db").unwrap());
+    let own_key = SecretKey::for_connection(&own, own.declared("orders-db").unwrap());
     store.set(&own_key, &Secret::new("users-own")).unwrap();
 
     let first = import_with_secrets(ws.path(), &store);

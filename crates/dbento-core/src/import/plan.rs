@@ -250,7 +250,7 @@ pub fn plan(
         let candidates = candidate_names(&workspace, c.name(), on_conflict);
         if let Some(name) = candidates.iter().find(|n| {
             workspace
-                .connection(n)
+                .declared(n)
                 .is_some_and(|e| same_server(&dir, e, c.draft()))
         }) {
             folders.insert(c.source_id(), Some(name.clone()));
@@ -266,7 +266,7 @@ pub fn plan(
             continue;
         }
 
-        let taken = |n: &str| workspace.connection(n).is_some() || added.contains_key(n);
+        let taken = |n: &str| workspace.declared(n).is_some() || added.contains_key(n);
         let name = match on_conflict {
             OnConflict::Skip if taken(c.name()) => {
                 let name = c.name().to_owned();

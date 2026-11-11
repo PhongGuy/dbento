@@ -56,7 +56,7 @@ fn reload_keeps_selection_collapse_and_expansion_by_name(cx: &mut TestAppContext
         Some("aaa")
     );
     assert!(o.shell.read_with(cx, |s, _| {
-        s.workspace().unwrap().connection("aaa").is_some()
+        s.workspace().unwrap().declared("aaa").is_some()
     }));
 }
 
@@ -133,7 +133,7 @@ fn a_broken_file_keeps_the_old_workspace_and_says_why(cx: &mut TestAppContext) {
     let detail = label_of(cx, o.win, "confirm-detail").unwrap();
     assert!(detail.contains("lite"), "{detail}");
     assert!(o.shell.read_with(cx, |s, _| {
-        s.workspace().unwrap().connection("nopg").is_some()
+        s.workspace().unwrap().declared("nopg").is_some()
     }));
 }
 
@@ -147,7 +147,7 @@ fn the_history_panel_and_new_tabs_follow_the_reload(cx: &mut TestAppContext) {
     let ws = o
         .shell
         .read_with(cx, |s, _| Arc::clone(s.workspace().unwrap()));
-    assert!(ws.connection("aaa").is_some(), "the key reloads too");
+    assert!(ws.declared("aaa").is_some(), "the key reloads too");
     let panel = o
         .shell
         .read_with(cx, |s, _| s.history_panel().cloned().unwrap());

@@ -191,7 +191,7 @@ impl Targets {
                 ("lite", None)
             }
         };
-        let conn = self.ws.connection(name).context("connection missing")?;
+        let conn = self.ws.declared(name).context("connection missing")?;
         Ok(connect(&self.ws, conn, secret, SessionOptions::default()).await?)
     }
 }

@@ -2867,7 +2867,7 @@ impl Shell {
             return;
         };
         let (mut copy, mut n) = (format!("{name}-copy"), 2);
-        while ws.connection(&copy).is_some() {
+        while ws.declared(&copy).is_some() {
             copy = format!("{name}-copy-{n}");
             n += 1;
         }
@@ -3278,12 +3278,11 @@ impl Shell {
         cx: &Context<Self>,
     ) -> Option<(SecretKey, Secret)> {
         let ws = plan.workspace();
-        let conn = ws.connection(name)?;
-        if !keychain_backed(conn) {
+        if !keychain_backed(ws.declared(name)?) {
             return None;
         }
         let typed = form.read(cx).password(cx)?;
-        Some((SecretKey::for_connection(ws, conn), typed))
+        Some((ws.secret_target(name)?, typed))
     }
 
     // Stores the password off the UI thread (a keychain call can take seconds); a failure
@@ -3385,7 +3384,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let reads_key =
-            |ws: &Workspace, name: &str| ws.connection(name).is_some_and(|c| c.tls_key().is_some());
+            |ws: &Workspace, name: &str| ws.declared(name).is_some_and(|c| c.tls_key().is_some());
         let key_before = reads_key(base, old_name);
         let key_after = reads_key(plan.workspace(), name);
         let renamed = plan
@@ -3394,32 +3393,37 @@ impl Shell {
         let folder = renamed.as_ref().filter(|_| plan.move_queries().is_err());
         let folder =
             folder.map(|(old, new)| format!("Move queries/{old} to queries/{new} by hand."));
-        let old_keychain = base.connection(old_name).is_some_and(keychain_backed);
-        let new_keychain = plan
-            .workspace()
-            .connection(name)
-            .is_some_and(keychain_backed);
+        let old_keychain = base.declared(old_name).is_some_and(keychain_backed);
+        let new_keychain = plan.workspace().declared(name).is_some_and(keychain_backed);
+        // A new connection has no old passphrase slot, so its key comes from the written plan.
+        let passphrase_from = base
+            .key_passphrase_target(old_name)
+            .or_else(|| plan.workspace().key_passphrase_target(name));
         self.install_workspace(plan.into_workspace(), window, cx);
         self.close_connection_form(window, cx);
-        let old_key = SecretKey::new(base.dir(), old_name);
-        match (old_keychain, new_keychain, renamed) {
+        let old_key = base.secret_target(old_name).filter(|_| old_keychain);
+        match (old_key, new_keychain, renamed) {
             // The old entry has no reader any more.
-            (true, false, _) => self.remove_secret(old_key, window, cx),
-            (true, true, Some((_, new))) => self.move_password(old_key, new, password, window, cx),
+            (Some(old_key), false, _) => self.remove_secret(old_key, window, cx),
+            (Some(old_key), true, Some((_, new))) => {
+                self.move_password(old_key, new, password, window, cx)
+            }
             _ => {
                 if let Some((key, secret)) = password {
                     self.store_password(key, secret, window, cx);
                 }
             }
         }
-        self.follow_key_passphrase(
-            SecretKey::key_passphrase(base.dir(), old_name),
-            name,
-            (key_before, key_after),
-            key_passphrase,
-            window,
-            cx,
-        );
+        if let Some(from) = passphrase_from {
+            self.follow_key_passphrase(
+                from,
+                name,
+                (key_before, key_after),
+                key_passphrase,
+                window,
+                cx,
+            );
+        }
         if let Some(detail) = folder {
             show_error("Saved queries not moved", detail, window, cx);
         }
@@ -3603,15 +3607,15 @@ impl Shell {
                 }
             },
         };
-        let had_keychain = ws.connection(name).is_some_and(keychain_backed);
-        let had_key = ws.connection(name).is_some_and(|c| c.tls_key().is_some());
+        let had_keychain = ws.declared(name).is_some_and(keychain_backed);
+        let had_key = ws.declared(name).is_some_and(|c| c.tls_key().is_some());
         self.install_workspace(plan.into_workspace(), window, cx);
         self.close_connection_form(window, cx);
-        if had_keychain {
-            self.remove_secret(SecretKey::new(ws.dir(), name), window, cx);
+        if let Some(key) = ws.secret_target(name).filter(|_| had_keychain) {
+            self.remove_secret(key, window, cx);
         }
-        if had_key {
-            self.remove_secret(SecretKey::key_passphrase(ws.dir(), name), window, cx);
+        if let Some(key) = ws.key_passphrase_target(name).filter(|_| had_key) {
+            self.remove_secret(key, window, cx);
         }
     }
 

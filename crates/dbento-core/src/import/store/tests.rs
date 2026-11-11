@@ -80,7 +80,7 @@ fn import(
 
 fn stored_value(dir: &Path, name: &str, store: &dyn SecretStore) -> Option<String> {
     let ws = Workspace::open(dir).unwrap();
-    let key = SecretKey::for_connection(&ws, ws.connection(name).unwrap());
+    let key = SecretKey::for_connection(&ws, ws.declared(name).unwrap());
     store.get(&key).unwrap().map(|s| s.expose().to_owned())
 }
 
@@ -153,7 +153,7 @@ fn an_unchanged_connection_fills_an_empty_entry_and_never_replaces_one() {
     let store = MemoryStore::new();
     {
         let w = Workspace::open(ws.path()).unwrap();
-        let key = SecretKey::for_connection(&w, w.connection("b").unwrap());
+        let key = SecretKey::for_connection(&w, w.declared("b").unwrap());
         store.set(&key, &Secret::new("user-changed")).unwrap();
     }
     let set = set_of(vec![pg("a", "db.a"), pg("b", "db.b")]);

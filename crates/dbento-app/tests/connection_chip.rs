@@ -24,14 +24,8 @@ fn connection(cx: &mut TestAppContext, o: &Opened) -> String {
 #[test]
 fn the_chip_names_the_connection_engine_and_target() {
     let fx = fixture("", "");
-    assert_eq!(
-        connection_chip_text(fx.ws.connection("lite").unwrap()),
-        LITE
-    );
-    assert_eq!(
-        connection_chip_text(fx.ws.connection("nopg").unwrap()),
-        NOPG
-    );
+    assert_eq!(connection_chip_text(fx.ws.declared("lite").unwrap()), LITE);
+    assert_eq!(connection_chip_text(fx.ws.declared("nopg").unwrap()), NOPG);
 }
 
 #[gpui_kit::test]
@@ -220,11 +214,11 @@ fn a_mysql_chip_names_its_database_or_its_server() {
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
     assert_eq!(
-        connection_chip_text(ws.connection("shop").unwrap()),
+        connection_chip_text(ws.declared("shop").unwrap()),
         "shop \u{b7} mysql \u{b7} sales"
     );
     assert_eq!(
-        connection_chip_text(ws.connection("all").unwrap()),
+        connection_chip_text(ws.declared("all").unwrap()),
         "all \u{b7} mysql \u{b7} u@h:3306"
     );
 }

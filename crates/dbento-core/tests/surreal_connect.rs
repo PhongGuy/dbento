@@ -37,7 +37,7 @@ async fn a_bad_password_names_what_to_check() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("sr").unwrap();
+    let conn = ws.declared("sr").unwrap();
     let secret = Some(dbento_core::Secret::new("wrong"));
     let message =
         open_message(dbento_core::connect(&ws, conn, secret, SessionOptions::default()).await);
@@ -82,7 +82,7 @@ async fn wss_try(db: &dbento_testkit::SrDb, extra: &str) -> Result<Session, Conn
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let conn = ws.connection("sr").unwrap();
+    let conn = ws.declared("sr").unwrap();
     let secret = Some(dbento_core::Secret::new(db.password()));
     dbento_core::connect(&ws, conn, secret, SessionOptions::default()).await
 }

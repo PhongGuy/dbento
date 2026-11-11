@@ -20,7 +20,7 @@ const SR: &str = "dbento = 1\n[connections.graph]\nengine = \"surrealdb\"\nhost 
 fn the_default_schema_is_the_connections_database() {
     let (_d, ws) = ws_with(SR);
     let ws = ws.unwrap();
-    let c = ws.connection("graph").unwrap();
+    let c = ws.declared("graph").unwrap();
     assert_eq!(
         default_schema(Engine::Surrealdb, c).as_deref(),
         Some("main")
@@ -86,7 +86,7 @@ async fn connect_error(toml: &str) -> String {
     let ws = ws.unwrap();
     match connect(
         &ws,
-        ws.connection("graph").unwrap(),
+        ws.declared("graph").unwrap(),
         None,
         SessionOptions::default(),
     )
@@ -105,7 +105,7 @@ async fn connect_reaches_the_driver() {
                 port = 1\nnamespace = \"app\"\ndatabase = \"main\"\ntls = \"off\"\n";
     let (_d, ws) = ws_with(toml);
     let ws = ws.unwrap();
-    let conn = ws.connection("graph").unwrap();
+    let conn = ws.declared("graph").unwrap();
     let opened = connect(&ws, conn, None, SessionOptions::default()).await;
     assert!(
         matches!(opened, Err(ConnectError::Open { .. })),

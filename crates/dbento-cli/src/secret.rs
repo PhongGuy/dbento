@@ -58,7 +58,7 @@ pub(crate) fn keychain_connection<'w>(
     name: &str,
 ) -> anyhow::Result<&'w ConnectionConfig> {
     // The name is not echoed: the user may have typed the secret in its place.
-    let conn = ws.connection(name).ok_or_else(|| {
+    let conn = ws.declared(name).ok_or_else(|| {
         anyhow::anyhow!("no such connection in dbento.toml; see `dbento connections`")
     })?;
     if !conn.engine().capabilities().password {
@@ -79,7 +79,7 @@ pub(crate) fn key_connection<'w>(
     ws: &'w Workspace,
     name: &str,
 ) -> anyhow::Result<&'w ConnectionConfig> {
-    let conn = ws.connection(name).ok_or_else(|| {
+    let conn = ws.declared(name).ok_or_else(|| {
         anyhow::anyhow!("no such connection in dbento.toml; see `dbento connections`")
     })?;
     if conn.tls_key().is_none() {
@@ -95,8 +95,7 @@ pub(crate) fn set_key_passphrase(
     store: &dyn SecretStore,
     secret: &Secret,
 ) -> anyhow::Result<()> {
-    let conn = key_connection(ws, name)?;
-    store.set(&SecretKey::key_passphrase_for(ws, conn), secret)?;
+    store.set(&key_passphrase_target(ws, name)?, secret)?;
     Ok(())
 }
 
@@ -106,9 +105,22 @@ pub(crate) fn delete_key_passphrase(
     name: &str,
     store: &dyn SecretStore,
 ) -> anyhow::Result<()> {
-    let conn = key_connection(ws, name)?;
-    store.delete(&SecretKey::key_passphrase_for(ws, conn))?;
+    store.delete(&key_passphrase_target(ws, name)?)?;
     Ok(())
+}
+
+/// The password key of keychain connection `name`, from the declared-only target.
+fn secret_target(ws: &Workspace, name: &str) -> anyhow::Result<SecretKey> {
+    keychain_connection(ws, name)?;
+    ws.secret_target(name)
+        .context("no such connection in dbento.toml; see `dbento connections`")
+}
+
+/// The `tls_key` passphrase key of connection `name`, from the declared-only target.
+fn key_passphrase_target(ws: &Workspace, name: &str) -> anyhow::Result<SecretKey> {
+    key_connection(ws, name)?;
+    ws.key_passphrase_target(name)
+        .context("no such connection in dbento.toml; see `dbento connections`")
 }
 
 /// Where a missing secret can be supplied; see `dbento_core::secret_hint`.
@@ -148,15 +160,13 @@ pub(crate) fn set(
     store: &dyn SecretStore,
     secret: &Secret,
 ) -> anyhow::Result<()> {
-    let conn = keychain_connection(ws, name)?;
-    store.set(&SecretKey::for_connection(ws, conn), secret)?;
+    store.set(&secret_target(ws, name)?, secret)?;
     Ok(())
 }
 
 /// Removes the stored secret of the keychain connection `name`.
 pub(crate) fn delete(ws: &Workspace, name: &str, store: &dyn SecretStore) -> anyhow::Result<()> {
-    let conn = keychain_connection(ws, name)?;
-    store.delete(&SecretKey::for_connection(ws, conn))?;
+    store.delete(&secret_target(ws, name)?)?;
     Ok(())
 }
 
@@ -180,7 +190,7 @@ mod tests {
         let store = MemoryStore::new();
         let secret = read_secret(&mut "s3cret\r\nignored\n".as_bytes()).unwrap();
         set(&ws, "kc", &store, &secret).unwrap();
-        let key = SecretKey::for_connection(&ws, ws.connection("kc").unwrap());
+        let key = SecretKey::for_connection(&ws, ws.declared("kc").unwrap());
         assert_eq!(store.get(&key).unwrap().unwrap().expose(), "s3cret");
         delete(&ws, "kc", &store).unwrap();
         assert!(store.get(&key).unwrap().is_none());
@@ -197,7 +207,7 @@ mod tests {
         let store = MemoryStore::new();
         let secret = read_secret(&mut "pp\n".as_bytes()).unwrap();
         set_key_passphrase(&ws, "cert", &store, &secret).unwrap();
-        let conn = ws.connection("cert").unwrap();
+        let conn = ws.declared("cert").unwrap();
         let key = SecretKey::key_passphrase_for(&ws, conn);
         assert_eq!(store.get(&key).unwrap().unwrap().expose(), "pp");
         assert!(
@@ -242,12 +252,12 @@ mod tests {
     fn a_keychain_connection_hints_at_both_secret_places() {
         let (_d, ws) = ws();
         let hint =
-            connect_hint(&ws, ws.connection("kc").unwrap(), &MemoryStore::new()).expect("a hint");
+            connect_hint(&ws, ws.declared("kc").unwrap(), &MemoryStore::new()).expect("a hint");
         assert!(hint.contains("dbento secret set kc"), "{hint}");
         assert!(hint.contains("DBENTO_SECRET_KC"), "{hint}");
         for name in ["none", "lite"] {
             assert!(
-                connect_hint(&ws, ws.connection(name).unwrap(), &MemoryStore::new()).is_none(),
+                connect_hint(&ws, ws.declared(name).unwrap(), &MemoryStore::new()).is_none(),
                 "{name}"
             );
         }
@@ -271,7 +281,7 @@ mod tests {
     #[test]
     fn the_hint_says_why_the_keychain_was_unavailable() {
         let (_d, ws) = ws();
-        let hint = connect_hint(&ws, ws.connection("kc").unwrap(), &Locked).unwrap();
+        let hint = connect_hint(&ws, ws.declared("kc").unwrap(), &Locked).unwrap();
         assert!(
             hint.contains("the keychain is unavailable: locked"),
             "{hint}"
@@ -288,11 +298,35 @@ mod tests {
         let store = MemoryStore::new();
         let secret = read_secret(&mut "pw\n".as_bytes()).unwrap();
         set(&ws, "my", &store, &secret).unwrap();
-        let key = SecretKey::for_connection(&ws, ws.connection("my").unwrap());
+        let key = SecretKey::for_connection(&ws, ws.declared("my").unwrap());
         assert_eq!(store.get(&key).unwrap().unwrap().expose(), "pw");
         assert_eq!(
             keychain_connection(&ws, "lite").unwrap_err().to_string(),
             "connection \"lite\" has no secret: a sqlite connection opens without one"
         );
+    }
+
+    const PARENT: &str = "dbento = 1\n[connections.kc]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ntls = \"verify\"\ntls_cert = \"c.crt\"\ntls_key = \"c.key\"\ndatabases = [\"app\"]\n";
+
+    #[test]
+    fn a_child_never_reaches_the_keychain() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dbento.toml"), PARENT).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        let secret = read_secret(&mut "pw\n".as_bytes()).unwrap();
+        // `Locked` panics on set and delete, so a refusal here provably never touched the store.
+        for name in ["kc/app", "kc/other"] {
+            assert!(keychain_connection(&ws, name).is_err(), "{name}");
+            assert!(key_connection(&ws, name).is_err(), "{name}");
+            assert!(set(&ws, name, &Locked, &secret).is_err(), "{name}");
+            assert!(delete(&ws, name, &Locked).is_err(), "{name}");
+            assert!(
+                set_key_passphrase(&ws, name, &Locked, &secret).is_err(),
+                "{name}"
+            );
+            assert!(delete_key_passphrase(&ws, name, &Locked).is_err(), "{name}");
+        }
+        assert!(keychain_connection(&ws, "kc").is_ok());
+        assert!(key_connection(&ws, "kc").is_ok());
     }
 }

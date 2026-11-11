@@ -22,7 +22,7 @@ fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
 fn the_region_comes_from_the_file_then_aws_region_then_aws_default_region() {
     let file = ws("region = \"eu-west-1\"\n");
     let bare = ws("");
-    let (file, bare) = (file.connection("d").unwrap(), bare.connection("d").unwrap());
+    let (file, bare) = (file.declared("d").unwrap(), bare.declared("d").unwrap());
     let both = env(&[
         ("AWS_REGION", "us-east-1"),
         ("AWS_DEFAULT_REGION", "ap-southeast-2"),
@@ -44,7 +44,7 @@ fn the_region_comes_from_the_file_then_aws_region_then_aws_default_region() {
 #[test]
 fn a_file_key_takes_the_resolved_secret_and_no_session_token() {
     let w = ws("access_key_id = \"AKIDFILE\"\n");
-    let c = w.connection("d").unwrap();
+    let c = w.declared("d").unwrap();
     let secret = Secret::new("s3cret");
     let vars = env(&[
         ("AWS_ACCESS_KEY_ID", "AKIDENV"),
@@ -67,7 +67,7 @@ fn a_file_key_takes_the_resolved_secret_and_no_session_token() {
 #[test]
 fn without_a_file_key_every_credential_comes_from_the_variables() {
     let w = ws("");
-    let c = w.connection("d").unwrap();
+    let c = w.declared("d").unwrap();
     let creds = resolve_credentials(
         c,
         None,
@@ -114,7 +114,7 @@ fn without_a_file_key_every_credential_comes_from_the_variables() {
 fn credentials_never_print_their_secrets() {
     let w = ws("");
     let creds = resolve_credentials(
-        w.connection("d").unwrap(),
+        w.declared("d").unwrap(),
         None,
         env(&[
             ("AWS_ACCESS_KEY_ID", "AKIDENV"),

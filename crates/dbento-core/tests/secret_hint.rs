@@ -41,19 +41,19 @@ const KC: &str = "no secret was found for 'kc': run `dbento secret set kc` or se
 #[test]
 fn a_keychain_connection_names_both_places() {
     let (_d, ws) = ws();
-    let hint = secret_hint(&ws, ws.connection("kc").unwrap(), &MemoryStore::new());
+    let hint = secret_hint(&ws, ws.declared("kc").unwrap(), &MemoryStore::new());
     assert_eq!(hint.as_deref(), Some(KC));
 }
 #[test]
 fn an_unavailable_keychain_says_why() {
     let (_d, ws) = ws();
-    let hint = secret_hint(&ws, ws.connection("kc").unwrap(), &Locked).unwrap();
+    let hint = secret_hint(&ws, ws.declared("kc").unwrap(), &Locked).unwrap();
     assert_eq!(hint, format!("{KC}; the keychain is unavailable: locked"));
 }
 #[test]
 fn a_dashed_name_becomes_an_underscored_variable() {
     let (_d, ws) = ws();
-    let hint = secret_hint(&ws, ws.connection("my-db").unwrap(), &MemoryStore::new()).unwrap();
+    let hint = secret_hint(&ws, ws.declared("my-db").unwrap(), &MemoryStore::new()).unwrap();
     assert!(hint.ends_with("or set DBENTO_SECRET_MY_DB"), "{hint}");
 }
 #[test]
@@ -61,7 +61,7 @@ fn other_connections_get_no_hint() {
     let (_d, ws) = ws();
     for name in ["none", "byenv", "lite"] {
         assert_eq!(
-            secret_hint(&ws, ws.connection(name).unwrap(), &MemoryStore::new()),
+            secret_hint(&ws, ws.declared(name).unwrap(), &MemoryStore::new()),
             None,
             "{name}"
         );

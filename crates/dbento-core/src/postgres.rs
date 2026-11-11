@@ -1892,7 +1892,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("dbento.toml"), "dbento = 1\n[connections.s]\nengine = \"postgres\"\nhost = \"/run/postgresql\"\nport = 5433\ndatabase = \"d\"\nuser = \"u\"\nsecret = \"none\"\n").unwrap();
         let ws = crate::Workspace::open(dir.path()).unwrap();
-        let config = pg_config(ws.connection("s").unwrap(), None, None);
+        let config = pg_config(ws.declared("s").unwrap(), None, None);
         assert_eq!(config.get_hosts(), &[Host::Unix("/run/postgresql".into())]);
         assert_eq!(config.get_ports(), &[5433]);
         assert_eq!(

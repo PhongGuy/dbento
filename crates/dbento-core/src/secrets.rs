@@ -57,6 +57,22 @@ pub struct SecretKey {
     slot: Slot,
 }
 
+// Keychain writes take their key only from these targets, so a name that is not written in
+// dbento.toml (a derived child, a typo) can never create or remove a keychain entry.
+impl Workspace {
+    /// The keychain entry of declared connection `name`'s password; None for any other name.
+    pub fn secret_target(&self, name: &str) -> Option<SecretKey> {
+        self.declared(name)
+            .map(|c| SecretKey::for_connection(self, c))
+    }
+
+    /// As `secret_target`, for the `tls_key` passphrase.
+    pub fn key_passphrase_target(&self, name: &str) -> Option<SecretKey> {
+        self.declared(name)
+            .map(|c| SecretKey::key_passphrase_for(self, c))
+    }
+}
+
 impl SecretKey {
     /// The password key for `connection` in the workspace at `workspace_dir`.
     pub fn new(workspace_dir: impl Into<PathBuf>, connection: impl Into<String>) -> Self {

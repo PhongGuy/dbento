@@ -82,7 +82,7 @@ async fn tls_on(flavor: MyFlavor) {
     let passphrase = format!("{:x}", RandomState::new().hash_one(7u8));
     let (_dir, ws) = workspace(&db, &cert, &encrypted_key(&cert, &passphrase));
     let root = || Some(Secret::new(db.password()));
-    let conn = |name: &str| ws.connection(name).unwrap();
+    let conn = |name: &str| ws.declared(name).unwrap();
     let mut s = connect(&ws, conn("root"), root(), SessionOptions::default())
         .await
         .unwrap();
@@ -169,7 +169,7 @@ async fn a_tls_ca_without_certificates_is_refused_before_connecting() {
     let ws = Workspace::open(dir.path()).unwrap();
     match connect(
         &ws,
-        ws.connection("c").unwrap(),
+        ws.declared("c").unwrap(),
         None,
         SessionOptions::default(),
     )
@@ -202,7 +202,7 @@ async fn a_certificate_for_another_host_name_names_tls_ca_and_tls_off() {
     let ws = Workspace::open(dir.path()).unwrap();
     let r = connect(
         &ws,
-        ws.connection("c").unwrap(),
+        ws.declared("c").unwrap(),
         Some(Secret::new(db.password())),
         SessionOptions::default(),
     )

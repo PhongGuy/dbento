@@ -57,7 +57,7 @@ fn a_full_workspace_opens_with_every_field() {
     assert_eq!(ws.dir(), fs::canonicalize(dir.path()).unwrap());
     let names: Vec<&str> = ws.connections().iter().map(|c| c.name()).collect();
     assert_eq!(names, ["local-pg", "prod", "scratch", "sock"]);
-    let prod = ws.connection("prod").unwrap();
+    let prod = ws.declared("prod").unwrap();
     assert_eq!(prod.engine(), Engine::Postgres);
     assert!(prod.read_only());
     assert_eq!(prod.color(), Some(Color::Red));
@@ -88,7 +88,7 @@ fn a_full_workspace_opens_with_every_field() {
         prod.settings().get("app.tenant").map(String::as_str),
         Some("7")
     );
-    let local = ws.connection("local-pg").unwrap();
+    let local = ws.declared("local-pg").unwrap();
     assert!(!local.read_only());
     assert_eq!(
         (local.color(), local.statement_timeout(), local.tls_ca()),
@@ -98,10 +98,10 @@ fn a_full_workspace_opens_with_every_field() {
     assert_eq!(local.display_target(), "me@127.0.0.1:5433/dev");
     assert!(local.settings().is_empty());
     assert_eq!(
-        ws.connection("sock").unwrap().secret_source(),
+        ws.declared("sock").unwrap().secret_source(),
         &SecretSource::Keychain
     );
-    let scratch = ws.connection("scratch").unwrap();
+    let scratch = ws.declared("scratch").unwrap();
     assert_eq!(scratch.engine(), Engine::Sqlite);
     assert_eq!(scratch.secret_source(), &SecretSource::None);
     assert_eq!(
@@ -117,10 +117,10 @@ fn a_full_workspace_opens_with_every_field() {
 fn tls_defaults_to_off_only_for_loopback_and_sockets() {
     let (_d, ws) = ws_with(FULL);
     let ws = ws.unwrap();
-    assert_eq!(ws.connection("prod").unwrap().tls(), Some(TlsMode::Verify));
-    assert_eq!(ws.connection("local-pg").unwrap().tls(), Some(TlsMode::Off));
-    assert_eq!(ws.connection("sock").unwrap().tls(), Some(TlsMode::Off));
-    assert_eq!(ws.connection("scratch").unwrap().tls(), None);
+    assert_eq!(ws.declared("prod").unwrap().tls(), Some(TlsMode::Verify));
+    assert_eq!(ws.declared("local-pg").unwrap().tls(), Some(TlsMode::Off));
+    assert_eq!(ws.declared("sock").unwrap().tls(), Some(TlsMode::Off));
+    assert_eq!(ws.declared("scratch").unwrap().tls(), None);
     for (host, extra, want) in [
         ("localhost", "", TlsMode::Off),
         ("::1", "", TlsMode::Off),
@@ -131,7 +131,7 @@ fn tls_defaults_to_off_only_for_loopback_and_sockets() {
         );
         let (_d, ws) = ws_with(&toml);
         assert_eq!(
-            ws.unwrap().connection("l").unwrap().tls(),
+            ws.unwrap().declared("l").unwrap().tls(),
             Some(want),
             "{host} {extra}"
         );
@@ -243,6 +243,6 @@ fn malformed_values_are_rejected() {
 #[test]
 fn an_engine_is_named_as_dbento_toml_names_it() {
     let ws = ws_with(FULL).1.unwrap();
-    assert_eq!(ws.connection("prod").unwrap().engine().name(), "postgres");
-    assert_eq!(ws.connection("scratch").unwrap().engine().name(), "sqlite");
+    assert_eq!(ws.declared("prod").unwrap().engine().name(), "postgres");
+    assert_eq!(ws.declared("scratch").unwrap().engine().name(), "sqlite");
 }

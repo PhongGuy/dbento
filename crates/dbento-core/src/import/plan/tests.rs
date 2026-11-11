@@ -99,7 +99,7 @@ fn new_tables_follow_the_old_text_byte_for_byte() {
     );
     assert_eq!(toml_text(ws.path()), expected);
     let opened = Workspace::open(ws.path()).unwrap();
-    assert!(opened.connection("orders-db").unwrap().read_only());
+    assert!(opened.declared("orders-db").unwrap().read_only());
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn a_draft_folder_is_written_and_reopens_as_that_folder() {
     );
     assert_eq!(toml_text(ws.path()), expected);
     let opened = Workspace::open(ws.path()).unwrap();
-    let conn = opened.connection("orders-db").unwrap();
+    let conn = opened.declared("orders-db").unwrap();
     assert_eq!(conn.folder().map(|f| f.as_str()), Some("Prod/EU"));
 }
 
@@ -369,11 +369,7 @@ fn odd_folder_names_survive_toml_escaping_through_apply() {
             .apply()
             .unwrap();
         let opened = Workspace::open(ws.path()).unwrap();
-        let got = opened
-            .connection("odd")
-            .unwrap()
-            .folder()
-            .map(|f| f.as_str());
+        let got = opened.declared("odd").unwrap().folder().map(|f| f.as_str());
         assert_eq!(got, Some(folder), "case {n}: {}", toml_text(ws.path()));
     }
 }
@@ -417,7 +413,7 @@ fn a_draft_colour_is_written_and_reopens_as_that_colour() {
         .unwrap();
     assert!(toml_text(ws.path()).contains("[connections.x]\nengine = \"postgres\"\nhost = \"db.example\"\ndatabase = \"orders\"\nuser = \"app\"\ntls = \"verify\"\ncolor = \"red\"\n"));
     let opened = Workspace::open(ws.path()).unwrap();
-    assert_eq!(opened.connection("x").unwrap().color(), Some(Color::Red));
+    assert_eq!(opened.declared("x").unwrap().color(), Some(Color::Red));
 }
 
 #[test]

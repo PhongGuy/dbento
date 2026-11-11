@@ -110,7 +110,7 @@ async fn an_unreachable_server_is_named() {
     let ws = Workspace::open(dir.path()).unwrap();
     match connect(
         &ws,
-        ws.connection("c").unwrap(),
+        ws.declared("c").unwrap(),
         None,
         SessionOptions::default(),
     )

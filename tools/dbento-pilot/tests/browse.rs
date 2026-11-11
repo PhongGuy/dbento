@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 async fn seeded() -> tempfile::TempDir {
     let ws = sqlite_workspace();
     let w = dbento_core::Workspace::open(ws.path()).unwrap();
-    let conn = w.connection("lite").unwrap();
+    let conn = w.declared("lite").unwrap();
     let mut s = dbento_core::connect(&w, conn, None, Default::default())
         .await
         .unwrap();

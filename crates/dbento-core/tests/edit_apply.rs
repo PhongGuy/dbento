@@ -46,7 +46,7 @@ fn apply_writes_the_new_text_and_nothing_else() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), plan.new_text());
     assert_eq!(names(d.path()), ["dbento.toml"]);
     let again = Workspace::open(d.path()).unwrap();
-    assert!(again.connection("b").is_some());
+    assert!(again.declared("b").is_some());
     assert_eq!(again.source_text(), plan.new_text());
 }
 
@@ -145,7 +145,7 @@ fn move_secret_onto_its_own_key_keeps_it() {
 fn same_session_ignores_only_colour_and_folder() {
     let base = "dbento = 1\n[connections.p]\nengine = \"postgres\"\nhost = \"localhost\"\ndatabase = \"d\"\nuser = \"u\"\n";
     let (_a, a) = ws(base);
-    let pa = a.connection("p").unwrap();
+    let pa = a.declared("p").unwrap();
     for (extra, same) in [
         ("color = \"red\"\nfolder = \"x\"\n", true),
         ("tls = \"off\"\n", true),
@@ -157,7 +157,7 @@ fn same_session_ignores_only_colour_and_folder() {
         ("settings = { search_path = \"app\" }\n", false),
     ] {
         let (_b, b) = ws(&format!("{base}{extra}"));
-        assert_eq!(pa.same_session(b.connection("p").unwrap()), same, "{extra}");
+        assert_eq!(pa.same_session(b.declared("p").unwrap()), same, "{extra}");
     }
 }
 

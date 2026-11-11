@@ -31,7 +31,7 @@ async fn connect_error(toml: &str) -> String {
     let ws = ws.unwrap();
     match connect(
         &ws,
-        ws.connection("shop").unwrap(),
+        ws.declared("shop").unwrap(),
         None,
         SessionOptions::default(),
     )
@@ -50,11 +50,8 @@ fn a_mongodb_entry_opens_beside_a_sql_one_and_a_password_is_refused() {
          [connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n"
     ));
     let ws = ws.unwrap();
-    assert_eq!(ws.connection("lite").unwrap().engine(), Engine::Sqlite);
-    let (c, a) = (
-        ws.connection("shop").unwrap(),
-        ws.connection("alias").unwrap(),
-    );
+    assert_eq!(ws.declared("lite").unwrap().engine(), Engine::Sqlite);
+    let (c, a) = (ws.declared("shop").unwrap(), ws.declared("alias").unwrap());
     let uri = "mongodb://app@db.internal:27017/shop?authSource=admin";
     assert_eq!(
         (c.engine(), c.engine().name(), c.uri()),
@@ -148,7 +145,7 @@ fn a_secret_needs_a_user_in_the_uri() {
     ] {
         let (_d, ws) = ws_with(&toml);
         assert_eq!(
-            ws.unwrap().connection(name).unwrap().secret_source(),
+            ws.unwrap().declared(name).unwrap().secret_source(),
             &want,
             "{toml}"
         );
@@ -224,7 +221,7 @@ fn a_changed_uri_is_a_different_session() {
     let (_a, a) = ws_with(MG);
     let (_b, b) = ws_with(&other);
     let (a, b) = (a.unwrap(), b.unwrap());
-    let (a, b) = (a.connection("shop").unwrap(), b.connection("shop").unwrap());
+    let (a, b) = (a.declared("shop").unwrap(), b.declared("shop").unwrap());
     assert!(!a.same_session(b));
     assert!(a.same_session(a));
 }

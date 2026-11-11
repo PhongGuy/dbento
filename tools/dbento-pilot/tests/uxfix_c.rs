@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 async fn exec(ws: &Path, sql: &str) {
     let w = dbento_core::Workspace::open(ws).unwrap();
-    let conn = w.connection("lite").unwrap();
+    let conn = w.declared("lite").unwrap();
     let mut s = dbento_core::connect(&w, conn, None, Default::default())
         .await
         .unwrap();

@@ -27,7 +27,7 @@ const ANON: &str = "dbento = 1\n[connections.graph]\nengine = \"surreal\"\nhost 
 fn a_surrealdb_entry_opens_with_its_keys_and_defaults() {
     let (_d, ws) = ws_with(SR);
     let ws = ws.unwrap();
-    let c = ws.connection("graph").unwrap();
+    let c = ws.declared("graph").unwrap();
     assert_eq!(
         (c.engine(), c.engine().name()),
         (Engine::Surrealdb, "surrealdb")
@@ -49,7 +49,7 @@ fn a_surrealdb_entry_opens_with_its_keys_and_defaults() {
 fn no_user_is_anonymous_and_reads_no_secret() {
     let (_d, ws) = ws_with(ANON);
     let ws = ws.unwrap();
-    let c = ws.connection("graph").unwrap();
+    let c = ws.declared("graph").unwrap();
     assert_eq!(c.engine(), Engine::Surrealdb);
     assert_eq!((c.user(), c.auth_level()), (None, None));
     assert_eq!(c.secret_source(), &SecretSource::None);
@@ -70,7 +70,7 @@ fn a_blank_user_is_anonymous() {
         let user = format!("{ANON}user = \"{blank}\"\n");
         let (_d, ws) = ws_with(&user);
         let ws = ws.unwrap();
-        let c = ws.connection("graph").unwrap();
+        let c = ws.declared("graph").unwrap();
         assert_eq!((c.user(), c.auth_level()), (None, None));
         assert_eq!(c.secret_source(), &SecretSource::None);
         assert_eq!(c.display_target(), "h:8000/app/main");
@@ -89,13 +89,13 @@ fn the_tls_key_picks_the_scheme_and_a_local_host_gets_no_exception() {
              namespace = \"a\"\ndatabase = \"b\"\n{line}"
         );
         let (_d, ws) = ws_with(&toml);
-        ws.unwrap().connection("graph").unwrap().tls()
+        ws.unwrap().declared("graph").unwrap().tls()
     };
     assert_eq!(tls("localhost", ""), Some(TlsMode::Verify));
     assert_eq!(tls("localhost", "tls = \"off\"\n"), Some(TlsMode::Off));
     let (_d, ws) = ws_with(&format!("{SR}tls_ca = \"ca.pem\"\n"));
     let ws = ws.unwrap();
-    let ca = ws.connection("graph").unwrap().tls_ca().unwrap();
+    let ca = ws.declared("graph").unwrap().tls_ca().unwrap();
     assert!(ca.ends_with("ca.pem"), "{ca:?}");
 }
 
@@ -147,7 +147,7 @@ fn the_required_keys_are_host_namespace_and_database() {
             &format!("auth_level = \"{word}\""),
         );
         let (_d, ws) = ws_with(&toml);
-        let level = ws.unwrap().connection("graph").unwrap().auth_level();
+        let level = ws.unwrap().declared("graph").unwrap().auth_level();
         assert_eq!(level, Some(want), "{word}");
     }
 }
@@ -226,7 +226,7 @@ fn a_surrealdb_entry_round_trips_through_a_save() {
 fn a_changed_namespace_or_level_is_a_different_session() {
     let (_a, a) = ws_with(SR);
     let a = a.unwrap();
-    let a = a.connection("graph").unwrap();
+    let a = a.declared("graph").unwrap();
     assert!(a.same_session(a));
     for other in [
         SR.replace("namespace = \"app\"", "namespace = \"web\""),
@@ -234,6 +234,6 @@ fn a_changed_namespace_or_level_is_a_different_session() {
     ] {
         let (_b, b) = ws_with(&other);
         let b = b.unwrap();
-        assert!(!a.same_session(b.connection("graph").unwrap()), "{other}");
+        assert!(!a.same_session(b.declared("graph").unwrap()), "{other}");
     }
 }

@@ -1048,6 +1048,11 @@ impl Workspace {
         self.connections.iter().find(|c| c.name == name)
     }
 
+    /// A connection written in dbento.toml; what edits, keychain writes and `queries/` moves act on.
+    pub fn declared(&self, name: &str) -> Option<&ConnectionConfig> {
+        self.connections.iter().find(|c| c.name == name)
+    }
+
     /// The text of `dbento.toml` this workspace was loaded from.
     pub fn source_text(&self) -> &str {
         &self.source

@@ -282,11 +282,11 @@ fn ms_workspace() -> (tempfile::TempDir, dbento_core::Workspace) {
 fn the_sql_server_badge_names_its_enforcement_level() {
     let (_dir, ws) = ms_workspace();
     assert_eq!(
-        read_only_tooltip_of(ws.connection("ms").unwrap()),
+        read_only_tooltip_of(ws.declared("ms").unwrap()),
         READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP
     );
     assert_eq!(
-        read_only_tooltip_of(ws.connection("rr").unwrap()),
+        read_only_tooltip_of(ws.declared("rr").unwrap()),
         READ_ONLY_MSSQL_READER_TOOLTIP
     );
     assert_eq!(
@@ -306,11 +306,11 @@ fn the_sql_server_badge_names_its_enforcement_level() {
 fn the_sql_server_chip_names_its_database_and_its_errors_their_number() {
     let (_dir, ws) = ms_workspace();
     assert_eq!(
-        connection_chip_text(ws.connection("ms").unwrap()),
+        connection_chip_text(ws.declared("ms").unwrap()),
         "ms \u{b7} mssql \u{b7} shop"
     );
     assert_eq!(
-        connection_chip_text(ws.connection("rr").unwrap()),
+        connection_chip_text(ws.declared("rr").unwrap()),
         "rr \u{b7} mssql \u{b7} sa@db.example:1433"
     );
     let v = ErrorView {
@@ -343,7 +343,7 @@ fn sr_workspace() -> (tempfile::TempDir, dbento_core::Workspace) {
 #[test]
 fn the_surrealdb_badge_names_the_session_s_level_and_what_the_fence_cannot_undo() {
     let (_dir, ws) = sr_workspace();
-    let c = ws.connection("sr").unwrap();
+    let c = ws.declared("sr").unwrap();
     let residual = read_only_residual(Engine::Surrealdb).unwrap();
     for (level, head) in [
         (
@@ -371,7 +371,7 @@ fn the_surrealdb_badge_names_the_session_s_level_and_what_the_fence_cannot_undo(
     let (_ms_dir, ms) = ms_workspace();
     assert_eq!(
         read_only_badge_text(
-            ms.connection("ms").unwrap(),
+            ms.declared("ms").unwrap(),
             Some(ReadOnlyEnforcement::Database)
         ),
         READ_ONLY_MSSQL_BEST_EFFORT_TOOLTIP,
@@ -383,7 +383,7 @@ fn the_surrealdb_badge_names_the_session_s_level_and_what_the_fence_cannot_undo(
 fn the_surrealdb_chip_names_namespace_and_database_and_its_errors_their_code() {
     let (_dir, ws) = sr_workspace();
     assert_eq!(
-        connection_chip_text(ws.connection("sr").unwrap()),
+        connection_chip_text(ws.declared("sr").unwrap()),
         "sr \u{b7} surrealdb \u{b7} app/main"
     );
     let view = |code: &str| ErrorView {
@@ -458,7 +458,7 @@ fn a_mongodb_badge_names_the_level_its_users_privileges_give() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let c = ws.connection("mg").unwrap();
+    let c = ws.declared("mg").unwrap();
     let text = |level| read_only_badge_text(c, level);
     assert_eq!(
         text(Some(ReadOnlyEnforcement::Database)),
@@ -481,7 +481,7 @@ fn a_redis_badge_names_the_level_its_acl_gives_and_the_residual() {
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
-    let c = ws.connection("rd").unwrap();
+    let c = ws.declared("rd").unwrap();
     let residual = read_only_residual(Engine::Redis).expect("Redis states a residual");
     let text = |level| read_only_badge_text(c, level);
     assert_eq!(

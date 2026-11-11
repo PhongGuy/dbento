@@ -423,11 +423,11 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
                 return Err(EditError::InvalidName { name: name.clone() });
             }
             if let Some(prev) = previous
-                && ws.connection(prev).is_none()
+                && ws.declared(prev).is_none()
             {
                 return Err(EditError::NotFound { name: prev.clone() });
             }
-            if previous.as_deref() != Some(name) && ws.connection(name).is_some() {
+            if previous.as_deref() != Some(name) && ws.declared(name).is_some() {
                 return Err(EditError::NameTaken { name: name.clone() });
             }
             match previous {
@@ -458,7 +458,7 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
             }
         }
         Edit::DeleteConnection { name } => {
-            if ws.connection(name).is_none() {
+            if ws.declared(name).is_none() {
                 return Err(EditError::NotFound { name: name.clone() });
             }
             entry_table(&mut doc, name)?;
@@ -512,7 +512,7 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
             to,
         } => {
             let conn = ws
-                .connection(name)
+                .declared(name)
                 .ok_or_else(|| EditError::NotFound { name: name.clone() })?;
             if conn.folder() == to.as_ref() {
                 unchanged = true;

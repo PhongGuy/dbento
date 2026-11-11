@@ -16,7 +16,7 @@ const TABLE: &str = "CREATE TABLE n(id INTEGER PRIMARY KEY, w TEXT, b BLOB); \
 
 async fn exec(ws: &Path, sql: &str) {
     let w = dbento_core::Workspace::open(ws).unwrap();
-    let conn = w.connection("lite").unwrap();
+    let conn = w.declared("lite").unwrap();
     let mut s = dbento_core::connect(&w, conn, None, Default::default())
         .await
         .unwrap();

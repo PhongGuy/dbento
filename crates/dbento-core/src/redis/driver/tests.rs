@@ -36,7 +36,7 @@ fn the_client_carries_resp3_the_db_index_and_the_login() {
         "host = \"cache.internal\"\nport = 6380\ndatabase = \"3\"\nuser = \"dbento_ro\"\ntls = \"verify\"",
     );
     let secret = Secret::new("pw");
-    let c = client(ws.connection("c").unwrap(), Some(&secret), None).unwrap();
+    let c = client(ws.declared("c").unwrap(), Some(&secret), None).unwrap();
     let info = c.get_connection_info();
     assert!(
         matches!(info.addr(), ConnectionAddr::TcpTls { host, port: 6380, insecure: false, .. } if host == "cache.internal")
@@ -52,7 +52,7 @@ fn the_client_carries_resp3_the_db_index_and_the_login() {
 #[test]
 fn defaults_are_localhost_6379_db0_and_the_default_user() {
     let (_d, ws) = workspace("secret = \"none\"");
-    let c = client(ws.connection("c").unwrap(), None, None).unwrap();
+    let c = client(ws.declared("c").unwrap(), None, None).unwrap();
     let info = c.get_connection_info();
     assert!(matches!(info.addr(), ConnectionAddr::Tcp(h, 6379) if h == "127.0.0.1"));
     assert_eq!(
@@ -65,7 +65,7 @@ fn defaults_are_localhost_6379_db0_and_the_default_user() {
 fn a_missing_ca_file_is_a_tls_error() {
     let (_d, ws) = workspace("tls = \"verify\"\ntls_ca = \"nope.pem\"\nsecret = \"none\"");
     assert!(matches!(
-        client(ws.connection("c").unwrap(), None, None),
+        client(ws.declared("c").unwrap(), None, None),
         Err(ConnectError::Tls { .. })
     ));
 }

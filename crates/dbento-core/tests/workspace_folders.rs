@@ -45,18 +45,18 @@ folder = "prod"
 #[test]
 fn own_colour_wins_then_the_nearest_folder_with_one() {
     let ws = open(TREE).unwrap();
-    let eff = |n: &str| ws.connection(n).unwrap().effective_color();
+    let eff = |n: &str| ws.declared(n).unwrap().effective_color();
     assert_eq!(eff("a"), Some(Color::Red));
     assert_eq!(eff("b"), Some(Color::Blue));
     assert_eq!(eff("c"), Some(Color::Green));
     assert_eq!(eff("d"), None);
     assert_eq!(eff("e"), Some(Color::Orange));
     assert_eq!(eff("f"), None, "folder names are case-sensitive");
-    let a = ws.connection("a").unwrap();
+    let a = ws.declared("a").unwrap();
     assert!(a.is_production() && a.color().is_none());
     assert_eq!(a.folder().map(|f| f.as_str()), Some("Prod/EU"));
-    assert!(!ws.connection("b").unwrap().is_production());
-    assert!(ws.connection("d").unwrap().folder().is_none());
+    assert!(!ws.declared("b").unwrap().is_production());
+    assert!(ws.declared("d").unwrap().folder().is_none());
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn no_folders_table_means_no_folders() {
     )
     .unwrap();
     assert!(ws.folders().is_empty());
-    assert!(ws.connection("a").unwrap().is_production());
+    assert!(ws.declared("a").unwrap().is_production());
 }
 
 fn folder_err(toml: &str) -> (String, String) {

@@ -190,7 +190,7 @@ fn default_user_fills_a_missing_user() {
     );
     assert_eq!(json(&out)["connections"][1]["name"], "nobody");
     let opened = dbento_core::Workspace::open(ws.path()).unwrap();
-    assert_eq!(opened.connection("nobody").unwrap().user(), Some("bob"));
+    assert_eq!(opened.declared("nobody").unwrap().user(), Some("bob"));
 }
 
 #[test]

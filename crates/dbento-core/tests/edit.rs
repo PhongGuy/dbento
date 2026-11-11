@@ -179,7 +179,7 @@ fn a_new_connection_goes_after_the_last_table_in_key_order() {
         )
     );
     assert_eq!(plan.workspace().source_text(), plan.new_text());
-    assert!(plan.workspace().connection("pg2").unwrap().read_only());
+    assert!(plan.workspace().declared("pg2").unwrap().read_only());
     assert_eq!(plan.renamed_connection(), None);
 }
 
@@ -346,7 +346,7 @@ fn a_rename_keeps_comments_and_place() {
         BASE.replace("[connections.prod] # main", "[connections.prod2] # main")
     );
     assert_eq!(plan.renamed_connection(), Some(("prod", "prod2")));
-    assert!(plan.workspace().connection("prod").is_none());
+    assert!(plan.workspace().declared("prod").is_none());
 }
 
 #[test]
@@ -415,7 +415,7 @@ fn delete_removes_the_entry_and_its_header_comments() {
         "{}",
         plan.new_text()
     );
-    assert!(plan.workspace().connection("prod").is_none());
+    assert!(plan.workspace().declared("prod").is_none());
     let (_d, w) = ws(DOTTED);
     let plan = plan_edit(&w, &Edit::DeleteConnection { name: "b".into() }).unwrap();
     assert_eq!(
@@ -496,7 +496,7 @@ fn switching_away_from_postgres_drops_the_settings() {
             "{name}: another connection keeps its settings: {text}"
         );
         let (_d, reopened) = ws(&text);
-        let conn = reopened.connection(name).unwrap();
+        let conn = reopened.declared(name).unwrap();
         assert_eq!(conn.engine(), engine, "{name}");
         assert!(conn.settings().is_empty(), "{name}");
     }
