@@ -204,7 +204,7 @@ fn chips_spell_the_vertical_arrows_and_home_and_end() {
     assert_eq!(keymap::chip_keys("end"), "End");
 }
 
-const IDS: [&str; 52] = [
+const IDS: [&str; 53] = [
     "view.cycle_appearance",
     "app.open_settings",
     "grid.copy_cells",
@@ -213,6 +213,7 @@ const IDS: [&str; 52] = [
     "query.format",
     "query.explain",
     "query.explain_analyze",
+    "query.toggle_comment",
     "tabs.new",
     "tabs.close",
     "query.save",

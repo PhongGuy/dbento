@@ -194,6 +194,8 @@ pub enum PaletteCommand {
     Explain,
     /// Shows the plan with ANALYZE timings.
     ExplainAnalyze,
+    /// Comments or uncomments the selected lines.
+    ToggleComment,
     /// Cancels the active run.
     CancelQuery,
     /// Opens the new connection dialog.
@@ -214,7 +216,7 @@ pub enum PaletteCommand {
 
 impl PaletteCommand {
     /// Every command, in the order the Commands group lists them.
-    pub const ALL: [PaletteCommand; 16] = [
+    pub const ALL: [PaletteCommand; 17] = [
         Self::NewTab,
         Self::CloseTab,
         Self::SaveQuery,
@@ -223,6 +225,7 @@ impl PaletteCommand {
         Self::FormatSql,
         Self::Explain,
         Self::ExplainAnalyze,
+        Self::ToggleComment,
         Self::CancelQuery,
         Self::NewConnection,
         Self::ReloadWorkspace,
@@ -244,6 +247,7 @@ impl PaletteCommand {
             Self::FormatSql => "Format SQL",
             Self::Explain => "Explain plan",
             Self::ExplainAnalyze => "Explain analyze",
+            Self::ToggleComment => "Toggle line comment",
             Self::CancelQuery => "Cancel query",
             Self::NewConnection => "New connection",
             Self::ReloadWorkspace => "Reload dbento.toml",
@@ -266,6 +270,7 @@ impl PaletteCommand {
             Self::FormatSql => Box::new(keymap::FormatSql),
             Self::Explain => Box::new(keymap::Explain),
             Self::ExplainAnalyze => Box::new(keymap::ExplainAnalyze),
+            Self::ToggleComment => Box::new(keymap::ToggleComment),
             Self::CancelQuery => Box::new(keymap::CancelQuery),
             Self::NewConnection => Box::new(keymap::NewConnection),
             Self::ReloadWorkspace => Box::new(keymap::ReloadWorkspace),

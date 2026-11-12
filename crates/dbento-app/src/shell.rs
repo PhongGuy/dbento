@@ -1635,7 +1635,7 @@ impl Shell {
     }
 
     /// Runs `cmd` after the palette closed. Tab commands (RunStatement, RunAll, FormatSql,
-    /// CancelQuery) focus the active tab's editor and dispatch the action; the rest call the
+    /// ToggleComment, CancelQuery) focus the active tab's editor and dispatch the action; the rest call the
     /// shell's own method. Without a tab, tab commands do nothing.
     pub fn run_palette_command(
         &mut self,
@@ -1665,6 +1665,7 @@ impl Shell {
             | C::FormatSql
             | C::Explain
             | C::ExplainAnalyze
+            | C::ToggleComment
             | C::CancelQuery => {
                 let (Some(tab), Some(action)) = (self.tab().cloned(), cmd.action()) else {
                     return;

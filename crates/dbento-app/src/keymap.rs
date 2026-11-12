@@ -27,6 +27,8 @@ gpui_kit::actions!(
         Explain,
         /// Shows the plan with ANALYZE timings; the statement runs and is rolled back.
         ExplainAnalyze,
+        /// Comments out the selected lines, or the caret's, else uncomments them.
+        ToggleComment,
         /// Opens a tab on the active tab's connection.
         NewTab,
         /// Closes the active tab.
@@ -132,6 +134,8 @@ pub const FORMAT_SQL_ALIASES: [&str; 2] = ["alt-shift-f", "secondary-alt-l"];
 pub const EXPLAIN_KEYS: &str = "secondary-e";
 /// The keys for `ExplainAnalyze`.
 pub const EXPLAIN_ANALYZE_KEYS: &str = "secondary-shift-e";
+/// The keys for `ToggleComment`, as in VS Code, Zed and DataGrip.
+pub const TOGGLE_COMMENT_KEYS: &str = "secondary-/";
 /// The keys for `NewTab`.
 pub const NEW_TAB_KEYS: &str = "secondary-t";
 /// The keys for `CloseTab`.
@@ -345,6 +349,20 @@ pub fn bindings() -> Vec<Binding> {
             || Box::new(ExplainAnalyze),
             qt,
             Some("Explain analyze"),
+        ),
+        row(
+            "query.toggle_comment",
+            TOGGLE_COMMENT_KEYS,
+            || Box::new(ToggleComment),
+            qt,
+            Some("Toggle line comment"),
+        ),
+        row(
+            "query.toggle_comment",
+            TOGGLE_COMMENT_KEYS,
+            || Box::new(ToggleComment),
+            qti,
+            Some("Toggle line comment"),
         ),
         row(
             "tabs.new",

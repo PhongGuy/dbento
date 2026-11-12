@@ -12,6 +12,7 @@ pub mod bench;
 pub mod bench_driver;
 pub mod browse;
 pub mod catalog;
+pub mod comment;
 pub mod completion;
 pub mod completion_popup;
 pub mod confirm;
