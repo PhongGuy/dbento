@@ -20,7 +20,8 @@ use testcontainers_modules::testcontainers::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{
-    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, engine, remove_labelled, retry_start, sweep_orphans,
+    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, READY_TIMEOUT, engine, remove_labelled, retry_start,
+    sweep_orphans,
 };
 
 /// The environment variable the generated connection reads its password from.
@@ -36,7 +37,6 @@ const URL_VAR: &str = "DBENTO_MONGO_URL";
 const URL_FORM: &str = "mongodb://user:password@host:port";
 const MG_ROOT_PASSWORD: &str = "DbentoMongoRoot8";
 const MG_USER_PASSWORD: &str = "DbentoMongoUser8";
-const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const REPLICA_SET: &str = "rs0";
 
 /// Who a client or URI logs in as.
@@ -540,36 +540,21 @@ async fn start(mut request: impl FnMut() -> ContainerRequest<Mongo>) -> Containe
 }
 
 /// Pings as root until the real server answers, past the image's init server, which binds only
-/// inside the container and is then restarted. Each ping is bounded, so the deadline holds; a
-/// container that exits, or never answers, fails with its state and the tail of its log.
+/// inside the container and is then restarted.
 async fn wait_ready(container: &ContainerAsync<Mongo>, host: &str, port: u16) {
-    let deadline = Instant::now() + READY_TIMEOUT;
     let mut options = options(host, port, Some(credential("root", MG_ROOT_PASSWORD)));
     options.server_selection_timeout = Some(Duration::from_secs(2));
-    loop {
-        let client =
-            Client::with_options(options.clone()).expect("cannot build the MongoDB test client");
-        let admin = client.database("admin");
-        let ping = admin.run_command(doc! { "ping": 1 });
-        let error = match tokio::time::timeout(Duration::from_secs(5), ping).await {
-            Ok(Ok(_)) => return,
-            Ok(Err(e)) => e.kind.to_string(),
-            Err(_) => "the ping got no reply within 5 s".to_owned(),
-        };
-        let running = container.is_running().await.unwrap_or(true);
-        if !running || Instant::now() >= deadline {
-            let state = if running { "running" } else { "exited" };
-            let log = container.stdout_to_vec().await.unwrap_or_default();
-            let log = String::from_utf8_lossy(&log);
-            let tail: Vec<&str> = log.lines().rev().take(20).collect();
-            let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
-            panic!(
-                "the MongoDB test container never answered ({state}): {error}\n\
-                 its last log lines:\n{tail}"
-            );
+    super::wait_ready(container, "MongoDB", || {
+        let options = options.clone();
+        async move {
+            let client =
+                Client::with_options(options).expect("cannot build the MongoDB test client");
+            let admin = client.database("admin");
+            let ping = admin.run_command(doc! { "ping": 1 }).await;
+            ping.map(drop).map_err(|e| e.kind.to_string())
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    })
+    .await;
 }
 
 /// Creates the users and seeds the collections; every name carries `suffix`.

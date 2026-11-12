@@ -18,7 +18,7 @@ use testcontainers_modules::testcontainers::bollard::query_parameters::{
 };
 use testcontainers_modules::testcontainers::bollard::{API_DEFAULT_VERSION, Docker};
 use testcontainers_modules::testcontainers::{
-    ContainerAsync, ContainerRequest, ImageExt, core::Mount, runners::AsyncRunner,
+    ContainerAsync, ContainerRequest, Image, ImageExt, core::Mount, runners::AsyncRunner,
 };
 use tokio_postgres::{Client, Config, NoTls, config::Host};
 
@@ -435,6 +435,44 @@ where
             }
             done => return done,
         }
+    }
+}
+
+/// How long a started container gets to answer its readiness probe.
+const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The bound on one readiness probe, so a probe that hangs cannot outlive the deadline.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `probe` until it answers, judging readiness by the server itself rather than a log line,
+/// which journald's rate limit can drop. Each attempt is bounded by [`PROBE_TIMEOUT`]; a container
+/// that exits, or never answers within [`READY_TIMEOUT`], panics with its state and log tail.
+async fn wait_ready<I, F, Fut>(container: &ContainerAsync<I>, what: &str, mut probe: F)
+where
+    I: Image,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let deadline = std::time::Instant::now() + READY_TIMEOUT;
+    loop {
+        let error = match tokio::time::timeout(PROBE_TIMEOUT, probe()).await {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) => e,
+            Err(_) => format!("the probe got no reply within {PROBE_TIMEOUT:?}"),
+        };
+        let running = container.is_running().await.unwrap_or(true);
+        if !running || std::time::Instant::now() >= deadline {
+            let state = if running { "running" } else { "exited" };
+            let log = container.stdout_to_vec().await.unwrap_or_default();
+            let log = String::from_utf8_lossy(&log);
+            let tail: Vec<&str> = log.lines().rev().take(20).collect();
+            let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+            panic!(
+                "the {what} test container never answered ({state}): {error}\n\
+                 its last log lines:\n{tail}"
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
 

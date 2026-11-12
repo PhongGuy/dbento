@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use base64::Engine as _;
-use testcontainers_modules::testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers_modules::testcontainers::core::ContainerPort;
 use testcontainers_modules::testcontainers::{
     ContainerAsync, ContainerRequest, GenericImage, ImageExt, runners::AsyncRunner,
 };
@@ -17,7 +17,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{
     ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, RETRY_BACKOFF, remove_labelled, retry, retry_start,
-    server_tls,
+    server_tls, wait_ready,
 };
 
 /// The gate image's tag.
@@ -348,7 +348,6 @@ async fn server(
         );
         let mut request = GenericImage::new(IMAGE, tag)
             .with_exposed_port(SERVER_PORT)
-            .with_wait_for(WaitFor::message_on_stdout("Started web server on "))
             .with_cmd(["start"])
             .with_env_var("SURREAL_USER", "root")
             .with_env_var("SURREAL_PASS", password.clone())
@@ -383,6 +382,10 @@ async fn server(
         .get_host_port_ipv4(SERVER_PORT)
         .await
         .expect("no mapped SurrealDB port");
+    // No log wait: journald's rate limit can drop the startup log, so the server's own answer
+    // on `/health` is the readiness signal.
+    let tls = env.iter().any(|(key, _)| key == "SURREAL_WEB_CRT");
+    wait_ready(&c, "SurrealDB", || health("127.0.0.1", port, tls)).await;
     let server = Endpoint {
         host: "127.0.0.1".to_owned(),
         port,
@@ -390,6 +393,40 @@ async fn server(
         password,
     };
     fresh(server, Some(c), Some(permit))
+}
+
+/// One plaintext `GET /health`, judged by [`answered`].
+async fn health(host: &str, port: u16, tls: bool) -> Result<(), String> {
+    let request =
+        format!("GET /health HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    let mut socket = TcpStream::connect((host, port))
+        .await
+        .map_err(|e| e.to_string())?;
+    socket
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut reply = Vec::new();
+    // A reset after a TLS alert still leaves the alert in `reply`, so only the bytes count.
+    let _ = socket.read_to_end(&mut reply).await;
+    answered(&reply, tls)
+}
+
+/// Whether a `/health` reply shows a ready server. A plain server answers 200; a TLS server
+/// answers plaintext with an alert record (content type 0x15), which proves it is listening.
+/// Before the server binds, podman's port proxy accepts and closes with nothing.
+fn answered(reply: &[u8], tls: bool) -> Result<(), String> {
+    let ready = if tls {
+        reply.first() == Some(&0x15)
+    } else {
+        reply.starts_with(b"HTTP/1.1 200")
+    };
+    if ready {
+        return Ok(());
+    }
+    let head = String::from_utf8_lossy(reply);
+    let head = head.lines().next().unwrap_or("nothing");
+    Err(format!("/health answered {head:?}"))
 }
 
 #[cfg(test)]
@@ -441,6 +478,31 @@ mod tests {
         ] {
             assert!(sr_url(bad).unwrap_err().contains(URL_FORM), "{bad}");
         }
+    }
+
+    #[test]
+    fn health_counts_a_200_or_on_tls_an_alert_and_never_a_closed_socket() {
+        let ok = b"HTTP/1.1 200 OK\r\nserver: SurrealDB\r\n\r\n";
+        let alert = [0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x32];
+        assert_eq!(answered(ok, false), Ok(()));
+        assert_eq!(answered(&alert, true), Ok(()));
+        assert!(answered(b"", false).is_err());
+        assert!(answered(b"", true).is_err());
+        assert!(answered(b"HTTP/1.1 503 Service Unavailable\r\n\r\n", false).is_err());
+        assert!(answered(&alert, false).is_err());
+        assert!(answered(ok, true).is_err());
+    }
+
+    // Journald's rate limit can drop a container's whole startup log, so readiness must come
+    // from the server itself: at log level none it never prints "Started web server".
+    #[tokio::test]
+    async fn a_server_that_logs_nothing_still_starts() {
+        let silent = [("SURREAL_LOG".to_owned(), "none".to_owned())];
+        let start = server(SURREAL_TAG, &silent, |r| r);
+        let db = tokio::time::timeout(std::time::Duration::from_secs(45), start)
+            .await
+            .expect("the start waited for a log line that never came");
+        assert_eq!(db.scalar("RETURN 7").await, 7);
     }
 
     #[tokio::test]
