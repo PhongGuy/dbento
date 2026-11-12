@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use dbento_core::{
-    AuthLevel, Color, ConnectionSpec, Engine, FieldKind, FolderPath, FormField, Secret,
-    SecretSource, TlsMode, secret_env_var,
+    AuthLevel, Color, ConnectionSpec, Databases, Engine, FieldKind, FolderPath, FormField, Secret,
+    SecretSource, TlsMode, secret_env_var, valid_database_name,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
@@ -135,6 +135,31 @@ pub enum TlsChoice {
     Off,
 }
 
+/// Which of the server's databases become child connections, in the radio order of
+/// `conn-databases`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabasesChoice {
+    /// No `databases` key: only the connection's own database.
+    Only,
+    /// `databases = "all"`.
+    All,
+    /// `databases = [...]`, the ticked names.
+    Choose,
+}
+
+const DATABASES_CHOICES: [DatabasesChoice; 3] = [
+    DatabasesChoice::Only,
+    DatabasesChoice::All,
+    DatabasesChoice::Choose,
+];
+
+/// The database a Postgres parent lists the others from when the form names none: every
+/// server has it, and an empty-Database Test opens it too.
+pub const POSTGRES_DATABASE: &str = "postgres";
+
+// The tooltip on a database that cannot be a child connection's name.
+const BAD_DATABASE_NAME: &str = "Only names matching [A-Za-z0-9_-]+ can be opened as a connection.";
+
 /// What the form asks of its owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionFormEvent {
@@ -195,6 +220,9 @@ pub struct ConnectionForm {
     tls: TlsChoice,
     read_only: bool,
     consistent_read: bool,
+    // The Databases choice and, under Choose, the ticked names in the order they show.
+    databases_choice: DatabasesChoice,
+    chosen: Vec<String>,
     color: Option<Color>,
     error: Option<String>,
     stale: bool,
@@ -354,6 +382,8 @@ impl ConnectionForm {
             tls: shown.tls,
             read_only: shown.read_only,
             consistent_read: shown.consistent_read,
+            databases_choice: shown.databases_choice,
+            chosen: shown.chosen,
             color: loaded.color,
             loaded,
             error: None,
@@ -478,6 +508,10 @@ impl ConnectionForm {
         if self.consistent_read == was.consistent_read {
             self.consistent_read = now.consistent_read;
         }
+        if self.databases_choice == was.databases_choice && self.chosen == was.chosen {
+            self.databases_choice = now.databases_choice;
+            self.chosen = now.chosen;
+        }
         if self.color == self.loaded.color {
             self.color = loaded.color;
         }
@@ -595,6 +629,59 @@ impl ConnectionForm {
     /// The databases offered under `conn-database` for the text typed so far.
     pub fn database_suggestions(&self) -> &[String] {
         &self.database_suggestions
+    }
+
+    /// The Databases choice shown under Database.
+    pub fn databases_choice(&self) -> DatabasesChoice {
+        self.databases_choice
+    }
+
+    /// The databases ticked under Choose, in the order the list shows them.
+    pub fn chosen_databases(&self) -> &[String] {
+        &self.chosen
+    }
+
+    /// The rows of the Choose list: the last Test's databases in the server's order, then
+    /// the stored and ticked names the server did not return.
+    pub fn database_items(&self) -> Vec<String> {
+        let stored = Shown::of(&self.loaded).chosen;
+        let mut items = self.databases.clone();
+        for name in stored.iter().chain(&self.chosen) {
+            if !items.contains(name) {
+                items.push(name.clone());
+            }
+        }
+        items
+    }
+
+    // A parent on Postgres lists its databases from the one it names, so picking All or Choose
+    // with Database empty fills in `postgres`, in sight, rather than writing it at save.
+    fn choose_databases(
+        &mut self,
+        choice: DatabasesChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.databases_choice = choice;
+        let empty = self.database.read(cx).value().trim().is_empty();
+        if choice != DatabasesChoice::Only && self.engine == Engine::Postgres && empty {
+            self.database
+                .update(cx, |s, cx| s.set_value(POSTGRES_DATABASE, window, cx));
+            self.database_suggestions.retain(|d| d != POSTGRES_DATABASE);
+            self.untested(cx);
+        }
+        cx.notify();
+    }
+
+    // Ticking keeps the list's order, so the file lists them as the dialog shows them.
+    fn tick_database(&mut self, name: &str, on: bool, cx: &mut Context<Self>) {
+        if on {
+            let ticked = |d: &String| d == name || self.chosen.contains(d);
+            self.chosen = self.database_items().into_iter().filter(ticked).collect();
+        } else {
+            self.chosen.retain(|d| d != name);
+        }
+        cx.notify();
     }
 
     /// Takes the databases a Test listed on the server and offers all but the one Database
@@ -735,6 +822,20 @@ impl ConnectionForm {
                         };
                     }
                 }
+                FieldKind::Databases => {
+                    let now = self.databases_value()?;
+                    if now != spec.databases {
+                        spec.databases = now;
+                    }
+                    if self.databases_choice != DatabasesChoice::Only
+                        && self.engine == Engine::Postgres
+                        && text(Field::Database).is_empty()
+                    {
+                        return Err(format!(
+                            "Enter a database to list the others from, such as {POSTGRES_DATABASE}"
+                        ));
+                    }
+                }
                 // Only `consistent_read` is a flag today; ticked writes true, unticked drops the key.
                 FieldKind::Flag => {
                     if f.key == "consistent_read" && self.consistent_read != shown.consistent_read {
@@ -798,6 +899,38 @@ impl ConnectionForm {
         Ok((name, spec))
     }
 
+    // The `databases` value the Databases controls stand for; a list the workspace would refuse
+    // is refused here, with what to change.
+    fn databases_value(&self) -> Result<Option<Databases>, String> {
+        Ok(match self.databases_choice {
+            DatabasesChoice::Only => None,
+            DatabasesChoice::All => Some(Databases::All),
+            DatabasesChoice::Choose => {
+                if self.chosen.is_empty() {
+                    return Err(
+                        "Tick at least one database, or pick another Databases option".into(),
+                    );
+                }
+                if let Some(bad) = self.chosen.iter().find(|d| !valid_database_name(d)) {
+                    return Err(format!("{bad} can't be a connection name; untick it"));
+                }
+                if self.engine == Engine::Mssql {
+                    for (i, name) in self.chosen.iter().enumerate() {
+                        if let Some(same) = self.chosen[..i]
+                            .iter()
+                            .find(|d| d.eq_ignore_ascii_case(name))
+                        {
+                            return Err(format!(
+                                "{same} and {name} are one database on SQL Server; untick one"
+                            ));
+                        }
+                    }
+                }
+                Some(Databases::Listed(self.chosen.clone()))
+            }
+        })
+    }
+
     /// Shows `error` under the fields; `stale` adds the Reload button for a file changed since load.
     pub fn set_error(&mut self, error: Option<String>, stale: bool, cx: &mut Context<Self>) {
         self.error = error;
@@ -828,6 +961,7 @@ impl ConnectionForm {
                 | FieldKind::Tls
                 | FieldKind::Uri
                 | FieldKind::Flag
+                | FieldKind::Databases
                 | _ => None,
             })
         };
@@ -861,6 +995,10 @@ impl ConnectionForm {
             if !had("consistent_read") {
                 self.consistent_read = shown.consistent_read;
             }
+            if !had("databases") {
+                self.databases_choice = shown.databases_choice;
+                self.chosen = shown.chosen;
+            }
             cx.notify();
             return;
         }
@@ -888,6 +1026,10 @@ impl ConnectionForm {
         }
         if !has("consistent_read") {
             self.consistent_read = false;
+        }
+        if !has("databases") {
+            self.databases_choice = DatabasesChoice::Only;
+            self.chosen.clear();
         }
         cx.notify();
     }
@@ -1113,6 +1255,100 @@ impl ConnectionForm {
         Self::row("", flag, cx)
     }
 
+    // The Databases choice and, under Choose, a checklist of the Test's databases and the
+    // stored ones: a stored name the server did not return says so, and a name that can't be
+    // a connection is disabled.
+    fn databases_rows(
+        &self,
+        label: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let choice = ui::segmented(
+            "conn-databases",
+            &["Only this one", "All on the server", "Choose\u{2026}"],
+            self.databases_choice as usize,
+            cx.listener(|this, ix: &usize, window, cx| {
+                this.choose_databases(DATABASES_CHOICES[*ix], window, cx);
+            }),
+            window,
+            cx,
+        );
+        let mut rows = vec![Self::row(label, h_flex().child(choice), cx)];
+        if self.databases_choice != DatabasesChoice::Choose {
+            return rows;
+        }
+        let listed = !self.databases.is_empty();
+        if !listed {
+            rows.push(Self::help_line(
+                "conn-databases-untested".into(),
+                "Test the connection to list the server's databases.",
+                cx,
+            ));
+        }
+        let items = self.database_items();
+        if items.is_empty() {
+            return rows;
+        }
+        let dim = theme::dim(cx);
+        let theme = cx.theme();
+        let (border, radius) = (theme.border, theme.radius);
+        let checks: Vec<AnyElement> = items
+            .into_iter()
+            .enumerate()
+            .map(|(ix, name)| {
+                let valid = valid_database_name(&name);
+                let gone = listed && !self.databases.contains(&name);
+                let mut check = Checkbox::new(("conn-databases-item", ix))
+                    .small()
+                    .label(SharedString::from(name.clone()))
+                    .checked(self.chosen.contains(&name))
+                    .disabled(!valid);
+                if !valid {
+                    check = check.tooltip(BAD_DATABASE_NAME);
+                }
+                let check = check.on_click(cx.listener(move |this, on: &bool, _, cx| {
+                    this.tick_database(&name, *on, cx);
+                }));
+                h_flex()
+                    .h(px(SUGGESTION_HEIGHT))
+                    .flex_none()
+                    .px_2()
+                    .gap_2()
+                    .child(check)
+                    .when(gone, |row| {
+                        row.child(
+                            div()
+                                .id(("conn-databases-gone", ix))
+                                .test_support()
+                                .text_xs()
+                                .text_color(dim)
+                                .child("not on the server"),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect();
+        rows.push(
+            div()
+                .pl(px(LABEL_WIDTH + 12.))
+                .child(
+                    v_flex()
+                        .id("conn-databases-items")
+                        .test_support()
+                        .py_0p5()
+                        .border_1()
+                        .border_color(border)
+                        .rounded(radius)
+                        .max_h(px(SUGGESTION_HEIGHT * MAX_SUGGESTIONS as f32 + 4.))
+                        .overflow_y_scroll()
+                        .children(checks),
+                )
+                .into_any_element(),
+        );
+        rows
+    }
+
     // The rows of one descriptor section, in order; a Port joins the field before it.
     fn section_rows(
         &self,
@@ -1132,6 +1368,7 @@ impl ConnectionForm {
                 (FieldKind::Secret, _) => rows.extend(self.secret_rows(f.label, window, cx)),
                 (FieldKind::Tls, _) => rows.extend(self.tls_rows(f.label, window, cx)),
                 (FieldKind::Flag, _) => rows.push(self.flag_row(f, cx)),
+                (FieldKind::Databases, _) => rows.extend(self.databases_rows(f.label, window, cx)),
                 (FieldKind::Text, Some((field, id))) if next_is_port => {
                     rows.push(self.host_port_row(f.label, id, field, cx));
                     shown.push(&fields[ix + 1]);
@@ -1575,6 +1812,8 @@ struct Shown {
     tls: TlsChoice,
     read_only: bool,
     consistent_read: bool,
+    databases_choice: DatabasesChoice,
+    chosen: Vec<String>,
 }
 
 impl Shown {
@@ -1606,6 +1845,11 @@ impl Shown {
 
     fn of(spec: &ConnectionSpec) -> Self {
         let text = |v: &Option<String>| v.clone().unwrap_or_default();
+        let (databases_choice, chosen) = match &spec.databases {
+            Some(Databases::All) => (DatabasesChoice::All, Vec::new()),
+            Some(Databases::Listed(names)) => (DatabasesChoice::Choose, names.clone()),
+            None | Some(_) => (DatabasesChoice::Only, Vec::new()),
+        };
         let (secret, env_var) = match &spec.secret {
             Some(SecretSource::Env(var)) => (SecretChoice::Env, var.clone()),
             Some(SecretSource::None) => (SecretChoice::None, String::new()),
@@ -1645,6 +1889,8 @@ impl Shown {
             },
             read_only: spec.read_only.unwrap_or(false),
             consistent_read: spec.consistent_read.unwrap_or(false),
+            databases_choice,
+            chosen,
         }
     }
 }
@@ -1699,8 +1945,8 @@ fn fields_owned(f: &FormField) -> Vec<Field> {
             Field::TlsKey,
             Field::KeyPassphrase,
         ],
-        // A flag is a checkbox, not an input, so it owns none.
-        FieldKind::Flag => Vec::new(),
+        // A flag is a checkbox and Databases a choice, not inputs, so they own none.
+        FieldKind::Flag | FieldKind::Databases => Vec::new(),
         FieldKind::Text | FieldKind::Port { .. } | FieldKind::Path | FieldKind::Uri | _ => {
             field_of(f.key)
                 .map(|(field, _)| field)
@@ -1738,6 +1984,9 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     }
     if !has("consistent_read") {
         spec.consistent_read = None;
+    }
+    if !has("databases") {
+        spec.databases = None;
     }
     if !has("secret") {
         spec.secret = None;

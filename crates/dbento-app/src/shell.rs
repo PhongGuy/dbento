@@ -80,7 +80,7 @@ use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 
 /// The database a Postgres Test opens when the form names none: every server has it.
-const TEST_DATABASE_POSTGRES: &str = "postgres";
+const TEST_DATABASE_POSTGRES: &str = crate::connection_dialog::POSTGRES_DATABASE;
 /// How long a passed Test waits for the server's database list before offering none.
 const TEST_DATABASES_CAP: Duration = Duration::from_secs(5);
 
