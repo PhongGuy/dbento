@@ -1,7 +1,10 @@
 //! DynamoDB harness: every `DynamoDb` is a seeded region leased on a capped Moto container or on
-//! the server `DBENTO_DYNAMO_URL` names. Moto keeps tables per region, so leases never collide.
+//! the server `DBENTO_DYNAMO_URL` names. Moto keeps tables per region, and a lease is a lock file
+//! per server and region, so leases never collide, not even between processes.
 
 use std::collections::{BTreeSet, HashMap};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -57,6 +60,8 @@ pub const REGIONS: [&str; 16] = [
 const URL_VAR: &str = "DBENTO_DYNAMO_URL";
 const MOTO_PORT: u16 = 5000;
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a handle waits for a region while every one is leased.
+const LEASE_TIMEOUT: Duration = Duration::from_secs(300);
 /// BatchWriteItem calls per chunk before a seed that keeps coming back unprocessed gives up.
 const SEED_ATTEMPTS: u32 = 10;
 
@@ -88,22 +93,74 @@ fn leases() -> &'static Mutex<BTreeSet<usize>> {
     &LEASES
 }
 
-/// A leased region index, given back when dropped, even by a handle that failed to seed.
-struct Lease(usize);
+/// A region held for one endpoint across every process on the machine, given back when dropped,
+/// even by a handle that failed to seed.
+pub struct RegionLease {
+    index: usize,
+    // An exclusive flock on the region's lock file; the kernel drops it when a process dies.
+    _lock: File,
+}
 
-impl Lease {
-    fn take() -> Self {
+impl RegionLease {
+    /// Takes the lowest region free for `endpoint` in this process and in every other, waiting
+    /// up to `LEASE_TIMEOUT` while all are held.
+    pub async fn take(endpoint: &str) -> Self {
+        let dir = std::env::temp_dir().join("dbento-testkit-dynamo");
+        std::fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| panic!("cannot create {}: {e}", dir.display()));
+        let server: String = endpoint
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let deadline = tokio::time::Instant::now() + LEASE_TIMEOUT;
+        loop {
+            if let Some(lease) = Self::try_take(&dir, &server) {
+                return lease;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("all 16 DynamoDB test regions are leased");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Walks the regions this process does not hold, lowest first, and keeps the first whose
+    /// lock file no other process holds.
+    fn try_take(dir: &Path, server: &str) -> Option<Self> {
         let mut taken = leases().lock().unwrap_or_else(|p| p.into_inner());
-        Self(lease_from(&mut taken).expect("all 16 DynamoDB test regions are leased"))
+        let mut skipped = taken.clone();
+        while let Some(index) = lease_from(&mut skipped) {
+            let path = dir.join(format!("{server}-{}.lock", REGIONS[index]));
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap_or_else(|e| panic!("cannot open {}: {e}", path.display()));
+            match file.try_lock() {
+                Ok(()) => {
+                    taken.insert(index);
+                    return Some(Self { index, _lock: file });
+                }
+                Err(TryLockError::WouldBlock) => {}
+                Err(TryLockError::Error(e)) => panic!("cannot lock {}: {e}", path.display()),
+            }
+        }
+        None
+    }
+
+    /// The leased region's name.
+    pub fn region(&self) -> &'static str {
+        REGIONS[self.index]
     }
 }
 
-impl Drop for Lease {
+impl Drop for RegionLease {
     fn drop(&mut self) {
         leases()
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.0);
+            .remove(&self.index);
     }
 }
 
@@ -114,7 +171,7 @@ pub struct DynamoDb {
     // Declared before the permit, so the container is gone before another may start.
     container: Option<ContainerAsync<GenericImage>>,
     _permit: Option<OwnedSemaphorePermit>,
-    lease: Lease,
+    lease: RegionLease,
 }
 
 impl DynamoDb {
@@ -124,7 +181,7 @@ impl DynamoDb {
     }
     /// The leased region the seed lives in.
     pub fn region(&self) -> &str {
-        REGIONS[self.lease.0]
+        self.lease.region()
     }
     /// A native client signed for this handle's region.
     pub fn client(&self) -> &Client {
@@ -412,9 +469,9 @@ pub async fn dynamo_db() -> DynamoDb {
             (endpoint, Some(c), Some(permit))
         }
     };
-    let lease = Lease::take();
+    let lease = RegionLease::take(&endpoint).await;
     let db = DynamoDb {
-        client: client(&endpoint, REGIONS[lease.0]),
+        client: client(&endpoint, lease.region()),
         endpoint,
         container,
         _permit: permit,
