@@ -183,3 +183,52 @@ fn every_gsi_and_lsi_is_an_index_of_the_table() {
         ]
     );
 }
+
+/// `count` ListTables pages of `size` names each, numbered in order; every page but the last
+/// names its final table as the place to resume.
+fn table_pages(count: usize, size: usize) -> Vec<Reply> {
+    (0..count)
+        .map(|p| {
+            let names: Vec<String> = (p * size..(p + 1) * size)
+                .map(|i| format!("t{i:05}"))
+                .collect();
+            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            let last = (p + 1 < count).then(|| refs[size - 1]);
+            Reply::ok(tables(&refs, last))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn relations_stop_paging_past_the_cap_and_mark_the_list_truncated() {
+    // Four pages cross the cap; the fifth must never be asked for.
+    let replay = Replay::new(table_pages(5, 3_000));
+    let list = relations(&replay.client(false), "eu-west-1", "eu-west-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.seen().len(),
+        4,
+        "paging stops once the cap is passed"
+    );
+    assert_eq!(list.items().len(), RELATION_CAP);
+    assert!(list.truncated());
+    assert_eq!(list.items()[0].name(), "t00000");
+    assert_eq!(
+        list.items()[RELATION_CAP - 1].name(),
+        format!("t{:05}", RELATION_CAP - 1)
+    );
+}
+
+#[tokio::test]
+async fn relations_below_or_at_the_cap_are_whole_and_not_truncated() {
+    for (count, size) in [(3, 3_000), (4, RELATION_CAP / 4)] {
+        let replay = Replay::new(table_pages(count, size));
+        let list = relations(&replay.client(false), "eu-west-1", "eu-west-1")
+            .await
+            .unwrap();
+        assert_eq!(replay.seen().len(), count, "{count} x {size}");
+        assert_eq!(list.items().len(), count * size, "{count} x {size}");
+        assert!(!list.truncated(), "{count} x {size}");
+    }
+}
