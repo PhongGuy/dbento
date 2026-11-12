@@ -26,6 +26,7 @@ mod cell_filter;
 mod chrome;
 mod column_drift;
 mod column_view;
+mod comment_toggle;
 mod commit_preview;
 mod completion;
 mod completion_view;

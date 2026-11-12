@@ -27,6 +27,7 @@ use gpui_kit::{
 };
 
 use crate::browse::{BrowseEvent, unavailable_text};
+use crate::comment::toggle_line_comments;
 use crate::completion_popup::CompletionPopup;
 use crate::confirm::{Ask, Choice, ask};
 use crate::drafts::{DRAFT_DEBOUNCE, Draft, DraftSlot};
@@ -36,7 +37,7 @@ use crate::grid_menu::MenuEntry;
 use crate::key_view::KeyView;
 use crate::keymap::{
     CancelQuery, Explain, ExplainAnalyze, FormatSql, RunAll, RunStatement, SaveEdits, SaveQuery,
-    all_keys_for, chip_keys, keys_for, plus_keys,
+    ToggleComment, all_keys_for, chip_keys, keys_for, plus_keys,
 };
 use crate::nav::NavHistory;
 use crate::results_pane::{OpenTable, ResultsPane, skip_notice};
@@ -479,17 +480,17 @@ pub struct QueryTab {
     preview_of: Option<EntityId>,
     // The reference hops this tab walked, for Back and Forward.
     nav: NavHistory,
-    // The last format, so undoing it can put back the caret it replaced.
-    format_undo: Option<FormatUndo>,
+    // The last format or comment toggle, so undoing it can put back the caret it replaced.
+    replace_undo: Option<ReplaceUndo>,
     _observe: Subscription,
     _editor_changes: Subscription,
     _browse: Subscription,
     _open_table: Subscription,
 }
 
-// What one Format SQL replaced: the text and selection before it, and the range it selected
-// for the replace.
-struct FormatUndo {
+// What one Format SQL or comment toggle replaced: the text and selection before it, and the
+// range it selected for the replace.
+struct ReplaceUndo {
     pre_text: String,
     pre_selection: Range<usize>,
     range: Range<usize>,
@@ -533,7 +534,7 @@ impl QueryTab {
         // once staged edits are discarded.
         let editor_changes = cx.subscribe(&editor, |this, editor, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
-                this.restore_format_caret(&editor, cx);
+                this.restore_replace_caret(&editor, cx);
                 this.model.update(cx, |m, cx| m.request_clear_browse(cx));
                 this.schedule_draft(cx);
             }
@@ -598,7 +599,7 @@ impl QueryTab {
             label: None,
             key_title: None,
             preview_of: None,
-            format_undo: None,
+            replace_undo: None,
             nav: NavHistory::default(),
             _observe: observe,
             _editor_changes: editor_changes,
@@ -1026,21 +1027,46 @@ impl QueryTab {
             e.set_selected_range(range.clone(), cx);
             e.replace(new, window, cx);
         });
-        self.format_undo = Some(FormatUndo {
+        self.replace_undo = Some(ReplaceUndo {
             pre_text,
             pre_selection,
             range,
         });
     }
 
-    // Undoing a format reselects the range `replace` was given, so put the selection from
-    // before the format back. Remove once gpui-base has a public replace-range API that
-    // records the real pre-edit selection rather than the range selected for the replace.
-    fn restore_format_caret(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
-        let Some(undo) = &self.format_undo else {
+    /// Comments out the selected lines, or the caret's, with the tab language's line-comment
+    /// marker, else uncomments them; one undo step. A language without one does nothing.
+    pub fn toggle_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_completion(cx);
+        let language = self.session_conn.engine().capabilities().language;
+        let Some(marker) = language.line_comment() else {
             return;
         };
-        // Only an undo of the format yields its old text with exactly that range selected.
+        let e = self.editor.read(cx);
+        let (pre_text, pre_selection) = (e.value().to_string(), e.selected_range());
+        let Some(edit) = toggle_line_comments(&pre_text, pre_selection.clone(), marker) else {
+            return;
+        };
+        self.editor.update(cx, |e, cx| {
+            e.set_selected_range(edit.range.clone(), cx);
+            e.replace(edit.text, window, cx);
+            e.set_selected_range(edit.selection, cx);
+        });
+        self.replace_undo = Some(ReplaceUndo {
+            pre_text,
+            pre_selection,
+            range: edit.range,
+        });
+    }
+
+    // Undoing a format or comment toggle reselects the range `replace` was given, so put the
+    // selection from before it back. Remove once gpui-base has a public replace-range API that
+    // records the real pre-edit selection rather than the range selected for the replace.
+    fn restore_replace_caret(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
+        let Some(undo) = &self.replace_undo else {
+            return;
+        };
+        // Only an undo of the replace yields its old text with exactly that range selected.
         let e = editor.read(cx);
         if *e.value() == *undo.pre_text && e.selected_range() == undo.range {
             let len = undo.pre_text.len();
@@ -1744,6 +1770,9 @@ impl Render for QueryTab {
             .on_action(cx.listener(|this, _: &RunStatement, _, cx| this.run_statement(cx)))
             .on_action(cx.listener(|this, _: &RunAll, _, cx| this.run_all(cx)))
             .on_action(cx.listener(|this, _: &FormatSql, window, cx| this.format_sql(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleComment, window, cx| {
+                this.toggle_comment(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Explain, window, cx| {
                 this.explain(ExplainMode::Plan, window, cx)
             }))

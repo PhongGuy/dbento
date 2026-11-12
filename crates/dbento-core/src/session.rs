@@ -305,6 +305,18 @@ impl QueryLanguage {
             Self::PartiQl => "partiql",
         }
     }
+
+    /// The marker that comments out the rest of a line, as Dbento's own splitter reads it:
+    /// "--" for SQL and PartiQL, "//" for the MongoDB shell and SurrealQL, "#" for Redis
+    /// commands. None would mean the language has no line comment.
+    pub fn line_comment(self) -> Option<&'static str> {
+        // SurrealQL also takes `--` and `#`, but only `//` still comments inside a script body.
+        Some(match self {
+            Self::Sql | Self::PartiQl => "--",
+            Self::MongoShell | Self::SurrealQl => "//",
+            Self::RedisCommands => "#",
+        })
+    }
 }
 
 /// Which server of a family a session talks to.
