@@ -37,7 +37,8 @@ fn folder_keys(cx: &mut TestAppContext, s: &Started, aria: &str) -> Option<usize
             | RowKind::Truncated
             | RowKind::Empty
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
 }
 

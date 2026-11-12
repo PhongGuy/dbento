@@ -1,6 +1,7 @@
 //! The window's root view: the title bar over either the welcome view or the open
 //! workspace's layout, with the status bar at the foot.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -970,16 +971,12 @@ impl Shell {
         let Some(ws) = self.workspace.clone() else {
             return;
         };
-        let position = |name: &str| ws.connections().iter().position(|c| c.name() == name);
-        let active = self
-            .tab()
-            .map(|t| t.read(cx).model().read(cx).spec().connection.clone());
-        let conn = position(connection)
-            .or_else(|| active.as_deref().and_then(position))
-            .unwrap_or(0);
+        let Some(conn) = self.fallback_connection(&ws, Some(connection), cx) else {
+            return;
+        };
         // The new tab is the one pushed; nothing opens while the window closes.
         let before = self.tabs.len();
-        self.open_connection(conn, window, cx);
+        self.open_connection_named(&conn, window, cx);
         let Some(tab) = self.tabs.get(before).cloned() else {
             return;
         };
@@ -1088,37 +1085,60 @@ impl Shell {
             let name = tab.model().read(cx).spec().connection.clone();
             (name, tab.origin().cloned())
         };
-        let Some(conn) = ws.connections().iter().position(|c| c.name() == name) else {
-            return;
-        };
-        sidebar.update(cx, |s, cx| match origin {
-            Some(rel) => s.reveal(NodeKey::Relation { conn: name, rel }, cx),
-            None => s.select(conn, cx),
+        // Explorer rows are declared connections, so a child tab without an origin selects none.
+        let row = ws.connections().iter().position(|c| c.name() == name);
+        sidebar.update(cx, |s, cx| match (origin, row) {
+            (Some(rel), _) => s.reveal(NodeKey::Relation { conn: name, rel }, cx),
+            (None, Some(ix)) => s.select(ix, cx),
+            (None, None) => {}
         });
     }
 
-    // The workspace index of the active tab's connection, else of the explorer's selection.
-    fn active_connection(&self, cx: &Context<Self>) -> Option<usize> {
+    // The name of the connection selected in the explorer: a declared one or a derived child.
+    fn selected_connection(&self, cx: &App) -> Option<String> {
+        self.sidebar.as_ref()?.read(cx).selected_name()
+    }
+
+    // The name of the workspace's declared connection `ix`.
+    fn declared_name(&self, ix: usize) -> Option<String> {
         let ws = self.workspace.as_ref()?;
-        match self.tab() {
-            Some(tab) => {
-                let name = &tab.read(cx).model().read(cx).spec().connection;
-                ws.connections().iter().position(|c| c.name() == name)
-            }
-            None => self.sidebar.as_ref()?.read(cx).selected(),
-        }
+        Some(ws.connections().get(ix)?.name().to_owned())
+    }
+
+    // The connection a tab opens on: `wanted` when it resolves, else the active tab's, else
+    // the first declared one.
+    fn fallback_connection(
+        &self,
+        ws: &Workspace,
+        wanted: Option<&str>,
+        cx: &App,
+    ) -> Option<String> {
+        let active = self
+            .tab()
+            .map(|t| t.read(cx).model().read(cx).spec().connection.clone());
+        let resolves = |name: &&str| ws.connection(name).is_some();
+        wanted
+            .filter(resolves)
+            .map(str::to_owned)
+            .or_else(|| active.filter(|a| resolves(&a.as_str())))
+            .or_else(|| Some(ws.connections().first()?.name().to_owned()))
     }
 
     /// Opens a tab on the connection selected in the explorer since the last tab activation,
     /// else on the active tab's (the explorer's selection when no tab is open), and activates it.
     pub fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (selected, moved) = self.sidebar.as_ref().map_or((None, false), |s| {
-            let s = s.read(cx);
-            (s.selected(), s.selection_serial() != self.activated_serial)
-        });
-        let tab = self.tab().and(self.active_connection(cx));
-        if let Some(ix) = new_tab_connection(tab, selected, moved) {
-            self.open_connection(ix, window, cx);
+        let moved = (self.sidebar.as_ref())
+            .is_some_and(|s| s.read(cx).selection_serial() != self.activated_serial);
+        let selected = self.selected_connection(cx);
+        // A tab whose connection is gone counts as no tab, so the selection decides.
+        let tab = self
+            .tab()
+            .map(|t| t.read(cx).model().read(cx).spec().connection.clone())
+            .filter(|name| {
+                (self.workspace.as_ref()).is_some_and(|ws| ws.connection(name).is_some())
+            });
+        if let Some(name) = new_tab_connection(tab, selected, moved) {
+            self.open_connection_named(&name, window, cx);
         }
     }
 
@@ -1126,20 +1146,32 @@ impl Shell {
     /// connects at once, so the first Run does not wait on the handshake. Nothing opens while
     /// the window closes, since the close would not wait for it.
     pub fn open_connection(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.open_unnumbered(ix, window, cx) {
+        if let Some(name) = self.declared_name(ix) {
+            self.open_connection_named(&name, window, cx);
+        }
+    }
+
+    /// As `open_connection`, on a declared or derived connection; nothing for an unknown name.
+    pub fn open_connection_named(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tab) = self.open_unnumbered(name, window, cx) {
             self.number_untitled(&tab, cx);
         }
     }
 
-    // Opens and activates a new tab on connection `ix` without naming it, for callers that
+    // Opens and activates a new tab on connection `name` without naming it, for callers that
     // give it a file or an origin; activating the new tab connects it.
     fn open_unnumbered(
         &mut self,
-        ix: usize,
+        name: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<QueryTab>> {
-        let tab = self.push_tab(ix, Drafts::new_id(), window, cx)?;
+        let tab = self.push_tab(name, Drafts::new_id(), window, cx)?;
         self.activate(self.tabs.len() - 1, window, cx);
         Some(tab)
     }
@@ -1158,17 +1190,17 @@ impl Shell {
         });
     }
 
-    // Appends an unconnected tab on the workspace's connection `ix` that keeps its edited text
-    // as draft `draft_id`; None without that connection or while the window closes.
+    // Appends an unconnected tab on connection `name`, declared or derived, that keeps its
+    // edited text as draft `draft_id`; None without that connection or while the window closes.
     fn push_tab(
         &mut self,
-        ix: usize,
+        name: &str,
         draft_id: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<QueryTab>> {
         let ws = self.workspace.clone()?;
-        let conn = ws.connections().get(ix).cloned()?;
+        let conn = ws.connection(name)?.into_owned();
         if self.closing {
             return None;
         }
@@ -1216,16 +1248,9 @@ impl Shell {
             QueryTabEvent::SwitchConnection(name) => {
                 this.switch_tab_connection(tab, name, window, cx)
             }
-            // The tab's connection by name, as a reload may have moved its index.
             QueryTabEvent::OpenTable(rel) => {
                 let name = tab.read(cx).model().read(cx).spec().connection.clone();
-                let ix = this
-                    .workspace
-                    .as_ref()
-                    .and_then(|ws| ws.connections().iter().position(|c| c.name() == name));
-                if let Some(ix) = ix {
-                    this.open_relation(ix, rel, RelationKind::Table, window, cx);
-                }
+                this.open_relation_named(&name, rel, RelationKind::Table, window, cx);
             }
         });
         // A filter, a sort or leaving the browse changes what the session restores.
@@ -1246,12 +1271,7 @@ impl Shell {
     /// A click on connection `ix` in the explorer: activates the newest query tab on it, else
     /// opens one.
     pub fn click_connection(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self
-            .workspace
-            .as_ref()
-            .and_then(|ws| ws.connections().get(ix))
-            .map(|c| c.name().to_owned())
-        else {
+        let Some(name) = self.declared_name(ix) else {
             return;
         };
         // A key tab hides its editor, so opening the connection skips it for one that has one.
@@ -1277,11 +1297,23 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(conn) = self
-            .workspace
-            .as_ref()
-            .and_then(|ws| ws.connections().get(connection))
-            .cloned()
+        if let Some(name) = self.declared_name(connection) {
+            self.open_relation_named(&name, rel, kind, window, cx);
+        }
+    }
+
+    /// As `open_relation`, on a declared or derived connection by name.
+    pub fn open_relation_named(
+        &mut self,
+        connection: &str,
+        rel: &RelationRef,
+        kind: RelationKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conn) = (self.workspace.as_ref())
+            .and_then(|ws| ws.connection(connection))
+            .map(Cow::into_owned)
         else {
             return;
         };
@@ -1331,13 +1363,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(ix) = self
-            .workspace
-            .as_ref()
-            .and_then(|ws| ws.connections().iter().position(|c| c.name() == connection))
-        else {
+        if !(self.workspace.as_ref()).is_some_and(|ws| ws.connection(connection).is_some()) {
             return false;
-        };
+        }
         if self.closing {
             return false;
         }
@@ -1369,7 +1397,8 @@ impl Shell {
                 self.tabs[t].clone()
             }
             None => {
-                let Some(tab) = self.open_relation_tab(ix, rel, true, Some(filter), window, cx)
+                let Some(tab) =
+                    self.open_relation_tab(connection, rel, true, Some(filter), window, cx)
                 else {
                     return true;
                 };
@@ -1500,7 +1529,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(tab) = self.open_unnumbered(connection, window, cx) {
+        let Some(name) = self.declared_name(connection) else {
+            return;
+        };
+        if let Some(tab) = self.open_unnumbered(&name, window, cx) {
             tab.update(cx, |t, cx| t.open_key(db, key, cx));
             // Opening recorded the tab while it still had a draft; it now has none to keep.
             self.save_session(cx);
@@ -1511,7 +1543,7 @@ impl Shell {
     // None when the tab cannot open.
     fn open_relation_tab(
         &mut self,
-        connection: usize,
+        connection: &str,
         rel: &RelationRef,
         table: bool,
         filter: Option<String>,
@@ -1592,22 +1624,12 @@ impl Shell {
 
     // Connections are named in palette rows; a name the workspace no longer has opens nothing.
     fn on_palette(&mut self, event: &PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let position = |name: &str| {
-            (self.workspace.as_ref())
-                .and_then(|ws| ws.connections().iter().position(|c| c.name() == name))
-        };
         match event {
             PaletteEvent::OpenTable(t) => {
-                if let Some(ix) = position(&t.connection) {
-                    self.open_relation(ix, &t.rel, t.kind, window, cx);
-                }
+                self.open_relation_named(&t.connection, &t.rel, t.kind, window, cx)
             }
             PaletteEvent::OpenQuery(q) => self.open_saved(q, window, cx),
-            PaletteEvent::OpenConnection(name) => {
-                if let Some(ix) = position(name) {
-                    self.open_connection(ix, window, cx);
-                }
-            }
+            PaletteEvent::OpenConnection(name) => self.open_connection_named(name, window, cx),
             PaletteEvent::Run(cmd) => self.run_palette_command(*cmd, window, cx),
         }
     }
@@ -1673,17 +1695,11 @@ impl Shell {
             Ok(text) => text,
             Err(e) => return show_error("Cannot open", e.to_string(), window, cx),
         };
-        let position = |name: &str| ws.connections().iter().position(|c| c.name() == name);
-        let active = self
-            .tab()
-            .map(|t| t.read(cx).model().read(cx).spec().connection.clone());
-        let conn = q
-            .connection()
-            .and_then(position)
-            .or_else(|| active.as_deref().and_then(position))
-            .unwrap_or(0);
+        let Some(conn) = self.fallback_connection(&ws, q.connection(), cx) else {
+            return;
+        };
         // Nothing opens while the window closes.
-        let Some(tab) = self.open_unnumbered(conn, window, cx) else {
+        let Some(tab) = self.open_unnumbered(&conn, window, cx) else {
             return;
         };
         tab.update(cx, |t, cx| {
@@ -2063,18 +2079,15 @@ impl Shell {
 
     /// A new tab on tab `ix`'s connection holding its SQL, activated, unsaved, never run.
     pub fn duplicate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(tab), Some(ws)) = (self.tabs.get(ix), &self.workspace) else {
+        let Some(tab) = self.tabs.get(ix) else {
             return;
         };
         let (name, sql) = {
             let t = tab.read(cx);
-            (t.conn().name().to_owned(), t.sql(cx))
-        };
-        let Some(conn) = ws.connections().iter().position(|c| c.name() == name) else {
-            return;
+            (t.model().read(cx).spec().connection.clone(), t.sql(cx))
         };
         // A fresh "Query N" keeps an empty baseline, so the copied SQL reads as unsaved.
-        let Some(copy) = self.open_unnumbered(conn, window, cx) else {
+        let Some(copy) = self.open_unnumbered(&name, window, cx) else {
             return;
         };
         self.number_untitled(&copy, cx);
@@ -2247,7 +2260,7 @@ impl Shell {
                             connection,
                             rel,
                             kind,
-                        } => this.open_relation(*connection, rel, *kind, window, cx),
+                        } => this.open_relation_named(connection, rel, *kind, window, cx),
                         SidebarEvent::Reload => this.reload_workspace(window, cx),
                         SidebarEvent::NewConnection => this.new_connection(window, cx),
                         SidebarEvent::Edit(name) => this.edit_connection(name, window, cx),
@@ -3310,7 +3323,7 @@ impl Shell {
     fn connection_in_use(&self, name: &str, cx: &Context<Self>) -> bool {
         self.tabs
             .iter()
-            .any(|t| t.read(cx).model().read(cx).spec().connection == name)
+            .any(|t| runs_on(&t.read(cx).model().read(cx).spec().connection, name))
     }
 
     // Reads the form, plans the edit and writes it. Every failure before the file is replaced
@@ -3642,8 +3655,26 @@ impl Shell {
             return;
         };
         let drafts = Drafts::new(self.services.paths.drafts.clone()).load(ws.dir());
-        let names: Vec<&str> = ws.connections().iter().map(|c| c.name()).collect();
-        let (plan, active) = plan_restore(self.saved.session(ws.dir()), drafts, &names);
+        // A child is not declared, so every saved or drafted name that still resolves joins
+        // the declared ones; a child the parent no longer lists stays out.
+        let session = self.saved.session(ws.dir());
+        let mut owned: Vec<String> = ws
+            .connections()
+            .iter()
+            .map(|c| c.name().to_owned())
+            .collect();
+        let used = session
+            .map_or(&[][..], |s| &s.tabs[..])
+            .iter()
+            .map(|t| t.connection.as_str())
+            .chain(drafts.iter().map(|d| d.connection.as_str()));
+        for name in used {
+            if !owned.iter().any(|n| n == name) && ws.connection(name).is_some() {
+                owned.push(name.to_owned());
+            }
+        }
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let (plan, active) = plan_restore(session, drafts, &names);
         // The folder is listed only when some tab edits a saved query.
         let queries = if plan.iter().any(|t| t.file.is_some()) {
             ws.saved_queries().unwrap_or_default()
@@ -3655,10 +3686,7 @@ impl Shell {
         // A tab the closing window refuses must not drop out of the saved session.
         let mut refused = false;
         for restored in plan {
-            let Some(ix) = names.iter().position(|n| *n == restored.connection) else {
-                continue;
-            };
-            let Some(tab) = self.push_tab(ix, restored.draft, window, cx) else {
+            let Some(tab) = self.push_tab(&restored.connection, restored.draft, window, cx) else {
                 refused = true;
                 continue;
             };
@@ -4017,11 +4045,9 @@ impl Shell {
         let tab = self.tab().map(|t| t.read(cx));
         // Without a tab the bar names the explorer's selected connection and its link.
         let idle = match (&tab, self.sidebar.as_ref().map(|s| s.read(cx))) {
-            (None, Some(sidebar)) => sidebar.selected().and_then(|ix| {
-                let ws = self.workspace.as_ref()?;
-                let name = ws.connections().get(ix)?.name().to_owned();
+            (None, Some(sidebar)) => self.selected_connection(cx).map(|name| {
                 let link = sidebar.link(&name);
-                Some((name, link))
+                (name, link)
             }),
             _ => None,
         };
@@ -4221,13 +4247,16 @@ fn column(title: &'static str, title_id: &'static str, cx: &App) -> Div {
         )
 }
 
+/// Whether a tab on `tab_connection` runs on `connection` or one of its children.
+pub fn runs_on(tab_connection: &str, connection: &str) -> bool {
+    tab_connection
+        .strip_prefix(connection)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// The connection a new tab opens on: the explorer's selection when it `moved` since the last
 /// tab activation, else the active `tab`'s, else the selection.
-pub fn new_tab_connection(
-    tab: Option<usize>,
-    selected: Option<usize>,
-    moved: bool,
-) -> Option<usize> {
+pub fn new_tab_connection<T>(tab: Option<T>, selected: Option<T>, moved: bool) -> Option<T> {
     match selected {
         Some(s) if moved => Some(s),
         _ => tab.or(selected),

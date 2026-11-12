@@ -34,6 +34,8 @@ const ABANDON_CAP: Duration = Duration::from_secs(10);
 pub enum CatalogQuery {
     /// The connection's schemas.
     Schemas,
+    /// The server's databases a parent lists as children.
+    Databases,
     /// The tables and views of `schema`.
     Relations {
         /// The schema to list.
@@ -82,6 +84,8 @@ pub enum CatalogQuery {
 pub enum CatalogData {
     /// The answer to [`CatalogQuery::Schemas`].
     Schemas(Vec<SchemaInfo>),
+    /// The answer to [`CatalogQuery::Databases`].
+    Databases(Vec<String>),
     /// The answer to [`CatalogQuery::Relations`].
     Relations(RelationList),
     /// The answer to [`CatalogQuery::Columns`].
@@ -288,6 +292,7 @@ async fn load(
             }
             CatalogQuery::CommandDocs => Asked::Docs(s.command_docs().await),
             q @ (CatalogQuery::Schemas
+            | CatalogQuery::Databases
             | CatalogQuery::Relations { .. }
             | CatalogQuery::Columns { .. }
             | CatalogQuery::Count { .. }
@@ -385,6 +390,7 @@ pub(crate) fn abandon(s: Session) {
 async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, IntrospectError> {
     Ok(match query {
         CatalogQuery::Schemas => CatalogData::Schemas(s.schemas().await?),
+        CatalogQuery::Databases => CatalogData::Databases(s.databases().await?),
         CatalogQuery::Relations { schema } => CatalogData::Relations(s.relations(schema).await?),
         // A DynamoDB table whose sample failed still shows its declared keys.
         CatalogQuery::Columns { rel } => {

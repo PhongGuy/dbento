@@ -20,7 +20,7 @@ fn a_moved_selection_wins_else_the_active_tab() {
     assert_eq!(new_tab_connection(Some(0), Some(1), false), Some(0));
     assert_eq!(new_tab_connection(Some(0), None, true), Some(0));
     assert_eq!(new_tab_connection(None, Some(1), false), Some(1));
-    assert_eq!(new_tab_connection(None, None, true), None);
+    assert_eq!(new_tab_connection::<usize>(None, None, true), None);
 }
 
 #[gpui_kit::test]

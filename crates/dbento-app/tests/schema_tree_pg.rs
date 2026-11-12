@@ -181,7 +181,8 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
                     | RowKind::Empty
                     | RowKind::KeyFolder { .. }
                     | RowKind::Key(_)
-                    | RowKind::LoadMore => None,
+                    | RowKind::LoadMore
+                    | RowKind::Database { .. } => None,
                 })
         })
     };

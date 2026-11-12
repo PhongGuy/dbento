@@ -55,11 +55,11 @@ use crate::{settings, theme, tokio_bridge};
 pub enum SidebarEvent {
     /// Open a query tab on the connection at this index of `Workspace::connections`.
     Open(usize),
-    /// Open a tab on connection `connection` (index into `Workspace::connections`) on `rel`:
+    /// Open a tab on connection `connection` on `rel`:
     /// a browse tab for a table, a `select_text` tab for any other kind.
     OpenRelation {
-        /// The connection's index.
-        connection: usize,
+        /// The connection's name, declared or derived.
+        connection: String,
         /// The relation to select from.
         rel: RelationRef,
         /// The relation's kind, which decides the tab it opens as.
@@ -164,10 +164,10 @@ enum SidebarRow {
     Catalog(Box<CatalogRow>, usize, CatalogOwner),
 }
 
-/// The connection a catalog row belongs to.
+/// The declared connection a catalog row sits under; a row's own connection, which may be a
+/// derived child, comes from its key.
 #[derive(Clone)]
 struct CatalogOwner {
-    name: String,
     folder: Option<FolderPath>,
 }
 
@@ -196,19 +196,20 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
             WorkspaceItem::Connection(name) => Some(Selection::Connection(name.clone())),
             _ => None,
         },
-        SidebarRow::Catalog(r, _, owner) => match &r.kind {
+        SidebarRow::Catalog(r, ..) => match &r.kind {
             RowKind::Object { object, .. } => Some(Selection::Object {
-                conn: owner.name.clone(),
+                conn: node_connection(&r.key).to_owned(),
                 object: object.clone(),
             }),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
             | RowKind::Group(_)
-            | RowKind::KeyFolder { .. } => Some(Selection::Node(r.key.clone())),
+            | RowKind::KeyFolder { .. }
+            | RowKind::Database { invalid: None } => Some(Selection::Node(r.key.clone())),
             // A key shares its parent's node, so it selects by its DB and name instead.
             RowKind::Key(item) => Some(Selection::Key {
-                conn: owner.name.clone(),
+                conn: node_connection(&r.key).to_owned(),
                 db: node_db(&r.key)?,
                 key: item.name.clone(),
             }),
@@ -217,7 +218,8 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
             | RowKind::Failed { .. }
             | RowKind::Truncated
             | RowKind::Empty
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { invalid: Some(_) } => None,
         },
     }
 }
@@ -322,6 +324,7 @@ impl Sidebar {
             }
         });
         let mut tree = CatalogTree::new();
+        tree.set_workspace(Arc::clone(&workspace));
         mark_key_browsers(&mut tree, &workspace);
         Sidebar {
             workspace,
@@ -353,16 +356,23 @@ impl Sidebar {
     /// The workspace index of the connection that owns the selection: a selected connection,
     /// or the connection of a selected catalog node. None for a folder or nothing.
     pub fn selected(&self) -> Option<usize> {
+        let name = self.selected_name()?;
+        self.workspace
+            .connections()
+            .iter()
+            .position(|c| c.name() == name)
+    }
+
+    /// The name of the connection that owns the selection, a derived child too, while it
+    /// resolves. None for a folder or nothing.
+    pub fn selected_name(&self) -> Option<String> {
         let name = match self.selection.as_ref()? {
             Selection::Connection(name) => name,
             Selection::Node(key) => node_connection(key),
             Selection::Object { conn, .. } | Selection::Key { conn, .. } => conn,
             Selection::Folder(_) => return None,
         };
-        self.workspace
-            .connections()
-            .iter()
-            .position(|c| c.name() == name)
+        self.workspace.connection(name).map(|_| name.to_owned())
     }
 
     /// How many times the selection has been set; any `select`, `reveal` or row click moves it.
@@ -652,7 +662,13 @@ impl Sidebar {
 
     /// Drops every cached level and reloads what is expanded; late replies are ignored.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        for request in self.tree.refresh() {
+        let requests = self.tree.refresh();
+        self.reload_levels(requests, cx);
+    }
+
+    // Sends the loads of a refresh or a workspace reload, which leave every older reply stale.
+    fn reload_levels(&mut self, requests: Vec<LoadRequest>, cx: &mut Context<Self>) {
+        for request in requests {
             self.send(request, cx);
         }
         // A waiting Generate INSERT reloads its columns, since its old reply is now stale.
@@ -744,7 +760,19 @@ impl Sidebar {
     ) -> Vec<CatalogClosing> {
         // Swap first, so every runner `send` starts from here on opens on the new settings.
         let old = std::mem::replace(&mut self.workspace, ws);
+        self.tree.set_workspace(Arc::clone(&self.workspace));
         mark_key_browsers(&mut self.tree, &self.workspace);
+        // Gone: a declared connection dropped, or a runner's name (a child too) that no longer
+        // resolves.
+        let mut gone: Vec<String> = old
+            .connections()
+            .iter()
+            .map(|c| c.name().to_owned())
+            .chain(self.catalogs.keys().cloned())
+            .filter(|name| self.workspace.connection(name).is_none())
+            .collect();
+        gone.sort();
+        gone.dedup();
         let stale: Vec<String> = self
             .catalogs
             .keys()
@@ -758,12 +786,6 @@ impl Sidebar {
             .iter()
             .filter_map(|name| self.catalogs.remove(name))
             .map(|(runner, _pump)| runner.close())
-            .collect();
-        let gone: Vec<String> = old
-            .connections()
-            .iter()
-            .map(|c| c.name().to_owned())
-            .filter(|name| self.workspace.connection(name).is_none())
             .collect();
         for name in &gone {
             self.tree.forget(name);
@@ -793,9 +815,10 @@ impl Sidebar {
             self.revealing = None;
         }
         // A changed connection's expanded levels reload through a fresh runner; unchanged ones
-        // reload through their open sessions.
+        // reload through their open sessions. Database lists stay unless their parent changed.
         if !stale.is_empty() || !gone.is_empty() {
-            self.refresh(cx);
+            let requests = self.tree.reload();
+            self.reload_levels(requests, cx);
         }
         // The selection is keyed by name and path, so it carries over as is; `selected()`
         // resolves it against the new workspace.
@@ -1006,17 +1029,9 @@ impl Sidebar {
         kind: RelationKind,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self
-            .workspace
-            .connections()
-            .iter()
-            .position(|c| c.name() == conn)
-        else {
-            return;
-        };
         // The owner selects the connection once the tab opens, which it may decline.
         cx.emit(SidebarEvent::OpenRelation {
-            connection: ix,
+            connection: conn.to_owned(),
             rel: rel.clone(),
             kind,
         });
@@ -1042,12 +1057,7 @@ impl Sidebar {
     // A DynamoDB index has no definition, so opening one runs its PartiQL SELECT instead;
     // every other object shows its definition.
     fn open_object(&mut self, connection: String, object: ObjectRef, cx: &mut Context<Self>) {
-        let engine = self
-            .workspace
-            .connections()
-            .iter()
-            .find(|c| c.name() == connection)
-            .map(ConnectionConfig::engine);
+        let engine = self.workspace.connection(&connection).map(|c| c.engine());
         match (&object, engine) {
             (ObjectRef::Index { rel, name, .. }, Some(Engine::Dynamodb)) => {
                 let sql = index_select_sql(Engine::Dynamodb, rel, name);
@@ -1319,7 +1329,6 @@ impl Sidebar {
             let Some(conn) = conn else { continue };
             for c in self.tree.rows(conn.name(), depth + 1, &filter) {
                 let owner = CatalogOwner {
-                    name: conn.name().to_owned(),
                     folder: conn.folder().cloned(),
                 };
                 rows.push(SidebarRow::Catalog(Box::new(c), visible, owner));
@@ -1682,7 +1691,10 @@ impl Sidebar {
                 | RowKind::Relation(_)
                 | RowKind::Group(_)
                 | RowKind::KeyFolder { .. }
+                | RowKind::Database { invalid: None }
         );
+        // Under a parent the rows belong to a child connection, which only the key names.
+        let conn_name = node_connection(&row.key).to_owned();
         let lead = div().w(px(LEAD)).flex_none().flex().justify_center();
         // The chevron keeps its click to itself, so a double click on it toggles once.
         let lead = if expandable {
@@ -1717,13 +1729,13 @@ impl Sidebar {
             RowKind::Object { object, .. } => {
                 self.selection.as_ref()
                     == Some(&Selection::Object {
-                        conn: owner.name.clone(),
+                        conn: conn_name.clone(),
                         object: object.clone(),
                     })
             }
             RowKind::Key(item) => matches!(&self.selection,
                 Some(Selection::Key { conn, db, key })
-                    if *conn == owner.name && Some(*db) == node_db(&row.key) && *key == item.name),
+                    if *conn == conn_name && Some(*db) == node_db(&row.key) && *key == item.name),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
@@ -1734,7 +1746,8 @@ impl Sidebar {
             | RowKind::Truncated
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
-            | RowKind::LoadMore => {
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => {
                 expandable && self.selection.as_ref() == Some(&Selection::Node(row.key.clone()))
             }
         };
@@ -1752,7 +1765,7 @@ impl Sidebar {
         // row's own menu, never the connection's.
         let base = Self::drop_target(base, owner.folder.clone(), selected, cx);
         let target = ExplorerTarget::Catalog(Box::new(CatalogTarget {
-            connection: owner.name.clone(),
+            connection: conn_name.clone(),
             node: row.key.clone(),
             kind: row.kind.clone(),
             label: row.label.clone(),
@@ -1773,21 +1786,30 @@ impl Sidebar {
                 | RowKind::Empty
                 | RowKind::KeyFolder { .. }
                 | RowKind::Key(_)
-                | RowKind::LoadMore => None,
+                | RowKind::LoadMore
+                | RowKind::Database { .. } => None,
             };
             base.cursor_pointer()
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     window.focus(&this.focus, cx);
                     this.quiet_tip_on_click(&key, false, cx);
                     this.set_selection(Selection::Node(key.clone()), cx);
-                    if let (NodeKey::Relation { conn, rel }, Some(kind), 2) =
-                        (&key, kind, e.click_count())
-                    {
-                        this.open_relation(conn, rel, kind, cx);
+                    match (&key, kind, e.click_count()) {
+                        (NodeKey::Relation { conn, rel }, Some(kind), 2) => {
+                            this.open_relation(conn, rel, kind, cx);
+                        }
+                        // A database row is a child connection; its double click opens a query.
+                        (NodeKey::Connection(child), None, 2) => {
+                            cx.emit(SidebarEvent::NewQuery {
+                                connection: child.clone(),
+                                sql: String::new(),
+                            });
+                        }
+                        _ => {}
                     }
                 }))
         } else if let RowKind::Object { object, .. } = &row.kind {
-            let (conn, object) = (owner.name.clone(), object.clone());
+            let (conn, object) = (conn_name.clone(), object.clone());
             base.cursor_pointer()
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     window.focus(&this.focus, cx);
@@ -1802,7 +1824,7 @@ impl Sidebar {
                 }))
         } else if let (RowKind::Key(item), Some(db)) = (&row.kind, node_db(&row.key)) {
             // A key selects on a click and opens its value on the double click's second.
-            let (conn, key) = (owner.name.clone(), item.name.clone());
+            let (conn, key) = (conn_name.clone(), item.name.clone());
             base.cursor_pointer()
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     window.focus(&this.focus, cx);
@@ -1817,7 +1839,7 @@ impl Sidebar {
                     }
                 }))
         } else if let (RowKind::LoadMore, Some(db)) = (&row.kind, node_db(&row.key)) {
-            let conn = owner.name.clone();
+            let conn = conn_name.clone();
             base.cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(request) = this.tree.load_more_keys(&conn, db) {
@@ -1956,6 +1978,22 @@ impl Sidebar {
                     )
             }
             RowKind::Truncated => base.text_color(muted).child(name(row.label.clone())),
+            RowKind::Database { invalid: None } => base.child(name(row.label.clone())),
+            // A name that cannot be a child connection says why on hover.
+            RowKind::Database { invalid: Some(why) } => {
+                let tip: SharedString = why.clone().into();
+                let show_tip = self.tip_allowed(&row.key, false);
+                let key = row.key.clone();
+                base.text_color(dim)
+                    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                        this.quiet_tip_on_hover(&key, false, *over, cx)
+                    }))
+                    .tooltip_show_delay(TREE_TOOLTIP_DELAY)
+                    .when(show_tip, |row| {
+                        row.tooltip(move |window, cx| theme::tooltip(tip.clone(), window, cx))
+                    })
+                    .child(name(row.label.clone()))
+            }
             RowKind::Loading | RowKind::Empty => {
                 base.text_color(dim).child(name(row.label.clone()))
             }
@@ -2047,6 +2085,7 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
     };
     match kind {
         RowKind::Schema => Some(Icons::Layers),
+        RowKind::Database { .. } => Some(Icons::Database),
         RowKind::Kind(k) | RowKind::Relation(k) => Some(relation(k)),
         RowKind::Column {
             primary_key: true, ..
@@ -2431,7 +2470,8 @@ fn catalog_menu(
         | RowKind::Empty
         | RowKind::KeyFolder { .. }
         | RowKind::Key(_)
-        | RowKind::LoadMore => qualified_name(engine, rel),
+        | RowKind::LoadMore
+        | RowKind::Database { .. } => qualified_name(engine, rel),
     });
     let copy = |text: String| {
         move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
@@ -2503,7 +2543,8 @@ fn catalog_menu(
                 | RowKind::Failed { .. }
                 | RowKind::Truncated
                 | RowKind::Empty
-                | RowKind::LoadMore => t.label.clone(),
+                | RowKind::LoadMore
+                | RowKind::Database { .. } => t.label.clone(),
             })),
             "tree-menu-open-key" => match (&t.kind, node_db(&t.node)) {
                 (RowKind::Key(k), Some(db)) => {
@@ -2561,7 +2602,8 @@ fn catalog_menu(
                 | RowKind::Empty
                 | RowKind::KeyFolder { .. }
                 | RowKind::Key(_)
-                | RowKind::LoadMore => continue,
+                | RowKind::LoadMore
+                | RowKind::Database { .. } => continue,
             },
             _ => item,
         };

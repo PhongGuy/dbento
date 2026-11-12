@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dbento_core::{
-    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Engine, FormatOptions, IndexInfo,
-    ObjectRef, QueryLanguage, RELATION_CAP, RelationKind, RelationList, RelationObjects,
-    RelationRef, RoutineKind, SchemaInfo, SchemaObjects, TriggerState, TypeKind, format_sql,
-    quote_ident,
+    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Databases, Engine, FormatOptions,
+    IndexInfo, ObjectRef, QueryLanguage, RELATION_CAP, RelationKind, RelationList, RelationObjects,
+    RelationRef, RoutineKind, SchemaInfo, SchemaObjects, TriggerState, TypeKind, Workspace,
+    format_sql, quote_ident,
 };
 use gpui_kit::App;
 
@@ -146,6 +146,11 @@ pub enum RowKind {
     Key(KeyItem),
     /// Asks for the next page of a key listing.
     LoadMore,
+    /// A parent's database: a child connection, or `invalid` with why it cannot be one.
+    Database {
+        /// The resolve error of `parent/database`; None when the child connection exists.
+        invalid: Option<String>,
+    },
 }
 
 /// One visible row of the tree.
@@ -186,6 +191,14 @@ pub enum RevealStep {
     Shown,
     /// The relation, its schema, or a load on the way is gone or failed.
     Missing,
+}
+
+/// What a parent connection lists under its row.
+enum Parent<'a> {
+    /// The server's databases, from a `Databases` load.
+    All,
+    /// The names written in dbento.toml.
+    Listed(&'a [String]),
 }
 
 /// One cached level.
@@ -235,9 +248,13 @@ pub(crate) fn node_connection(key: &NodeKey) -> &str {
 /// Expansion state, cached levels and the generation that guards against stale replies.
 #[derive(Default)]
 pub struct CatalogTree {
+    // Says which connections are parents; without one, none is.
+    workspace: Option<Arc<Workspace>>,
     expanded: HashSet<NodeKey>,
     collapsed_kinds: HashSet<NodeKey>,
     schemas: HashMap<String, Load<Vec<SchemaInfo>>>,
+    // A parent connection's listed databases, its derived children.
+    databases: HashMap<String, Load<Vec<String>>>,
     relations: HashMap<(String, String), Load<RelationList>>,
     columns: HashMap<(String, RelationRef), Load<Vec<ColumnMeta>>>,
     // Relations whose columns are the declared keys alone, with why sampling failed.
@@ -341,6 +358,7 @@ impl CatalogTree {
                 return None;
             }
             NodeKey::Objects(_) => return None,
+            NodeKey::Connection(c) if self.unresolved(c) => return None,
             NodeKey::Connection(_)
             | NodeKey::Schema { .. }
             | NodeKey::Kind { .. }
@@ -352,9 +370,13 @@ impl CatalogTree {
         self.expanded.insert(key.clone());
         self.drop_failed_objects(key);
         let absent_or_failed = match key {
-            NodeKey::Connection(c) => {
-                !matches!(self.schemas.get(c), Some(Load::Loading | Load::Ready(_)))
-            }
+            NodeKey::Connection(c) => match self.parent(c) {
+                Some(Parent::All) => {
+                    !matches!(self.databases.get(c), Some(Load::Loading | Load::Ready(_)))
+                }
+                Some(Parent::Listed(_)) => false,
+                None => !matches!(self.schemas.get(c), Some(Load::Loading | Load::Ready(_))),
+            },
             NodeKey::Schema { conn, schema } => match self.key_db(conn, schema) {
                 Some(db) => !matches!(
                     self.keys.get(&(conn.clone(), db)),
@@ -394,6 +416,13 @@ impl CatalogTree {
     /// Opens the path down to `rel` as far as its loaded levels allow: the connection, the
     /// schema once the schemas are in, the relation's kind group once the relations are in.
     pub fn reveal(&mut self, conn: &str, rel: &RelationRef) -> RevealStep {
+        // A parent's row lists databases, not schemas, so none of its relations has a row.
+        if self.parent(conn).is_some() {
+            return RevealStep::Missing;
+        }
+        if let Some(step) = self.reveal_parent(conn) {
+            return step;
+        }
         let loads: Vec<_> = self
             .expand(&NodeKey::Connection(conn.to_owned()))
             .into_iter()
@@ -431,6 +460,34 @@ impl CatalogTree {
         RevealStep::Shown
     }
 
+    /// Opens the parent of child `conn` for a reveal; None once the child's row shows, so the
+    /// reveal goes on into the child. An `"all"` parent waits on its listing, and a child it
+    /// does not list is Missing; either way the child's own session stays shut until then.
+    fn reveal_parent(&mut self, conn: &str) -> Option<RevealStep> {
+        if self.unresolved(conn) {
+            return Some(RevealStep::Missing);
+        }
+        let parent = self
+            .workspace
+            .as_deref()?
+            .connection(conn)?
+            .parent()?
+            .to_owned();
+        let loads: Vec<_> = self
+            .expand(&NodeKey::Connection(parent.clone()))
+            .into_iter()
+            .collect();
+        let Some(Parent::All) = self.parent(&parent) else {
+            return None;
+        };
+        let database = conn.strip_prefix(&format!("{parent}/"))?;
+        match self.databases.get(&parent) {
+            Some(Load::Ready(names)) if names.iter().any(|n| n == database) => None,
+            Some(Load::Ready(_) | Load::Failed(_)) => Some(RevealStep::Missing),
+            None | Some(Load::Loading) => Some(RevealStep::Waiting(loads)),
+        }
+    }
+
     /// Reloads a failed level under `key`; None unless it failed.
     pub fn retry(&mut self, key: &NodeKey) -> Option<LoadRequest> {
         // A key listing fails either its first page, which starts over, or a later one,
@@ -447,7 +504,7 @@ impl CatalogTree {
             };
         }
         let failed = match key {
-            NodeKey::Connection(c) => matches!(self.schemas.get(c), Some(Load::Failed(_))),
+            NodeKey::Connection(c) => matches!(self.top_level(c), Some(Load::Failed(_))),
             NodeKey::Schema { conn, schema } => matches!(
                 self.relations.get(&(conn.clone(), schema.clone())),
                 Some(Load::Failed(_))
@@ -596,7 +653,11 @@ impl CatalogTree {
     /// Marks the level under `key` loading and builds its request at the current generation.
     fn start(&mut self, key: &NodeKey) -> Option<LoadRequest> {
         let (conn, query) = match key {
-            NodeKey::Connection(c) => (c, CatalogQuery::Schemas),
+            NodeKey::Connection(c) => match self.parent(c) {
+                Some(Parent::All) => (c, CatalogQuery::Databases),
+                Some(Parent::Listed(_)) => return None,
+                None => (c, CatalogQuery::Schemas),
+            },
             NodeKey::Schema { conn, schema } => match self.key_db(conn, schema) {
                 Some(db) => (
                     conn,
@@ -629,6 +690,9 @@ impl CatalogTree {
         match &query {
             CatalogQuery::Schemas => {
                 self.schemas.insert(c, Load::Loading);
+            }
+            CatalogQuery::Databases => {
+                self.databases.insert(c, Load::Loading);
             }
             CatalogQuery::Relations { schema } => {
                 self.relations.insert((c, schema.clone()), Load::Loading);
@@ -671,6 +735,7 @@ impl CatalogTree {
         let c = conn.to_owned();
         let present = match query {
             CatalogQuery::Schemas => self.schemas.contains_key(&c),
+            CatalogQuery::Databases => self.databases.contains_key(&c),
             CatalogQuery::CommandDocs => self.command_docs.contains_key(&c),
             CatalogQuery::Relations { schema } => self.relations.contains_key(&(c, schema.clone())),
             CatalogQuery::Columns { rel } => self.columns.contains_key(&(c, rel.clone())),
@@ -701,7 +766,8 @@ impl CatalogTree {
             CatalogQuery::Schemas => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Schemas(s) => Some(s),
-                    CatalogData::Relations(_)
+                    CatalogData::Databases(_)
+                    | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
                     | CatalogData::RelationObjects(_)
@@ -713,10 +779,27 @@ impl CatalogTree {
                 });
                 self.schemas.insert(conn, load);
             }
+            CatalogQuery::Databases => {
+                let load = load_of(result, |d| match d {
+                    CatalogData::Databases(names) => Some(names),
+                    CatalogData::Schemas(_)
+                    | CatalogData::Relations(_)
+                    | CatalogData::Columns(_)
+                    | CatalogData::Count(_)
+                    | CatalogData::RelationObjects(_)
+                    | CatalogData::SchemaObjects(_)
+                    | CatalogData::Definition(_)
+                    | CatalogData::Keys(_)
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::KeyColumns { .. } => None,
+                });
+                self.databases.insert(conn, load);
+            }
             CatalogQuery::Relations { schema } => {
                 let load = load_of(result, |d| match d {
                     CatalogData::Relations(r) => Some(r),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
                     | CatalogData::RelationObjects(_)
@@ -739,6 +822,7 @@ impl CatalogTree {
                         Some(columns)
                     }
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Count(_)
                     | CatalogData::RelationObjects(_)
@@ -758,6 +842,7 @@ impl CatalogTree {
                 let load = load_of(result, |d| match d {
                     CatalogData::RelationObjects(o) => Some(o),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
@@ -773,6 +858,7 @@ impl CatalogTree {
                 let load = load_of(result, |d| match d {
                     CatalogData::SchemaObjects(o) => Some(o),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
@@ -791,6 +877,7 @@ impl CatalogTree {
                 let load = load_of(result, |d| match d {
                     CatalogData::CommandDocs(d) => Some(d),
                     CatalogData::Schemas(_)
+                    | CatalogData::Databases(_)
                     | CatalogData::Relations(_)
                     | CatalogData::Columns(_)
                     | CatalogData::Count(_)
@@ -828,6 +915,7 @@ impl CatalogTree {
                     more: More::Idle,
                 }),
                 CatalogData::Schemas(_)
+                | CatalogData::Databases(_)
                 | CatalogData::Relations(_)
                 | CatalogData::Columns(_)
                 | CatalogData::Count(_)
@@ -923,6 +1011,20 @@ impl CatalogTree {
 
     /// Drops every cache, bumps the generation and returns a load for each expanded level.
     pub fn refresh(&mut self) -> Vec<LoadRequest> {
+        self.databases.clear();
+        self.refresh_levels()
+    }
+
+    /// As [`Self::refresh`], but keeps loaded database lists: the workspace-reload path.
+    pub fn reload(&mut self) -> Vec<LoadRequest> {
+        // A listing in flight goes stale with the generation, so only a loaded one is kept.
+        self.databases.retain(|_, l| matches!(l, Load::Ready(_)));
+        self.refresh_levels()
+    }
+
+    /// Drops every cache but the database lists, bumps the generation and returns a load for
+    /// each expanded level whose cache is now absent.
+    fn refresh_levels(&mut self) -> Vec<LoadRequest> {
         self.generation += 1;
         self.floor = self.generation;
         self.floors.clear();
@@ -938,10 +1040,80 @@ impl CatalogTree {
         let schemas = std::mem::take(&mut self.schema_objects)
             .into_keys()
             .collect();
-        let keys: Vec<NodeKey> = self.expanded.iter().cloned().collect();
+        let keys: Vec<NodeKey> = self
+            .expanded
+            .iter()
+            .filter(|k| !matches!(k, NodeKey::Connection(c) if self.databases(c).is_some()))
+            .cloned()
+            .collect();
         let mut loads: Vec<_> = keys.iter().filter_map(|k| self.start(k)).collect();
         loads.extend(self.restart_objects(rels, schemas));
         loads
+    }
+
+    /// Takes the workspace that says which connections are parents. Drops each parent's list
+    /// unless it is still `"all"` with `same_session`, and forgets every name that no longer
+    /// resolves.
+    pub fn set_workspace(&mut self, ws: Arc<Workspace>) {
+        let old = self.workspace.replace(Arc::clone(&ws));
+        let all = |w: &Workspace, name: &str| {
+            w.declared(name)
+                .filter(|c| matches!(c.databases(), Some(Databases::All)))
+                .cloned()
+        };
+        self.databases.retain(|name, _| {
+            let before = old.as_deref().and_then(|w| all(w, name));
+            matches!((before, all(&ws, name)), (Some(b), Some(a)) if b.same_session(&a))
+        });
+        let mut names: HashSet<String> = self
+            .expanded
+            .iter()
+            .chain(&self.collapsed_kinds)
+            .map(|k| node_connection(k).to_owned())
+            .collect();
+        names.extend(self.schemas.keys().cloned());
+        names.extend(self.databases.keys().cloned());
+        names.extend(self.command_docs.keys().cloned());
+        names.extend(self.relations.keys().map(|(c, _)| c.clone()));
+        names.extend(self.columns.keys().map(|(c, _)| c.clone()));
+        names.extend(self.relation_objects.keys().map(|(c, _)| c.clone()));
+        names.extend(self.schema_objects.keys().map(|(c, _)| c.clone()));
+        names.extend(self.keys.keys().map(|(c, _)| c.clone()));
+        names.extend(self.key_filters.keys().map(|(c, _)| c.clone()));
+        for name in names {
+            if ws.connection(&name).is_none() {
+                self.forget(&name);
+            }
+        }
+    }
+
+    /// What expanding `conn` lists when the workspace declares it a parent.
+    fn parent(&self, conn: &str) -> Option<Parent<'_>> {
+        let databases = self.workspace.as_deref()?.declared(conn)?.databases()?;
+        Some(if let Databases::Listed(names) = databases {
+            Parent::Listed(names)
+        } else {
+            Parent::All
+        })
+    }
+
+    /// The state of the level expanding `conn` shows: its database listing for an `"all"`
+    /// parent, none for a listed parent, else its schemas.
+    fn top_level(&self, conn: &str) -> Option<Load<()>> {
+        match self.parent(conn) {
+            Some(Parent::All) => self.databases.get(conn).map(load_state),
+            Some(Parent::Listed(_)) => None,
+            None => self.schemas.get(conn).map(load_state),
+        }
+    }
+
+    /// Whether `conn` names a child that the workspace cannot resolve.
+    fn unresolved(&self, conn: &str) -> bool {
+        conn.contains('/')
+            && self
+                .workspace
+                .as_deref()
+                .is_some_and(|w| w.resolve(conn).is_err())
     }
 
     /// Drops `conn`'s cached levels and returns a load for each of its expanded levels. Only
@@ -950,6 +1122,7 @@ impl CatalogTree {
         self.generation += 1;
         self.floors.insert(conn.to_owned(), self.generation);
         self.schemas.remove(conn);
+        self.databases.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
         self.sample_errors.retain(|(c, _), _| c != conn);
@@ -1010,6 +1183,7 @@ impl CatalogTree {
         self.expanded.retain(|k| node_connection(k) != conn);
         self.collapsed_kinds.retain(|k| node_connection(k) != conn);
         self.schemas.remove(conn);
+        self.databases.remove(conn);
         self.relations.retain(|(c, _), _| c != conn);
         self.columns.retain(|(c, _), _| c != conn);
         self.sample_errors.retain(|(c, _), _| c != conn);
@@ -1021,19 +1195,28 @@ impl CatalogTree {
     }
 
     /// The schema level of `conn` as a link: absent Idle, loading Connecting, loaded
-    /// Connected, failed Failed with its error.
+    /// Connected, failed Failed with its error. An `"all"` parent follows its database
+    /// listing instead, and a listed parent is always Idle.
     pub fn link(&self, conn: &str) -> LinkState {
-        match self.schemas.get(conn) {
+        match self.top_level(conn) {
             None => LinkState::Idle,
             Some(Load::Loading) => LinkState::Connecting,
-            Some(Load::Ready(_)) => LinkState::Connected,
-            Some(Load::Failed(m)) => LinkState::Failed(m.clone()),
+            Some(Load::Ready(())) => LinkState::Connected,
+            Some(Load::Failed(m)) => LinkState::Failed(m),
         }
     }
 
     /// Loaded COMMAND DOCS of Redis connection `conn`, for completion.
     pub fn command_docs(&self, conn: &str) -> Option<&[RedisDoc]> {
         match self.command_docs.get(conn) {
+            Some(Load::Ready(d)) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Loaded database names of parent `conn`, in the server's order.
+    pub fn databases(&self, conn: &str) -> Option<&[String]> {
+        match self.databases.get(conn) {
             Some(Load::Ready(d)) => Some(d),
             _ => None,
         }
@@ -1082,7 +1265,8 @@ impl CatalogTree {
         }
     }
 
-    /// The rows under connection `conn` when it is expanded, schemas at `depth`.
+    /// The rows under connection `conn` when it is expanded, at `depth`: its schemas, or under
+    /// a parent its databases with each expanded child's rows nested beneath.
     ///
     /// A non-empty `filter` (trimmed, case-insensitive) keeps rows whose name matches, the
     /// ancestors of visible matches and error rows, and everything below a match. Rows under a
@@ -1097,17 +1281,22 @@ impl CatalogTree {
             conn,
             filter: &filter,
         };
-        let status = |load: Option<&Load<_>>| match load {
-            None | Some(Load::Loading) => {
-                Some((RowKind::Loading, "loading…".to_owned(), "loading"))
-            }
-            Some(Load::Failed(m)) => {
-                Some((RowKind::Failed { message: m.clone() }, m.clone(), "error"))
-            }
-            Some(Load::Ready(_)) => None,
-        };
         let mut out = Vec::new();
-        if let Some((kind, label, tag)) = status(self.schemas.get(conn)) {
+        let databases = match self.parent(conn) {
+            Some(Parent::Listed(names)) => Some(names),
+            Some(Parent::All) => {
+                if let Some((kind, label, tag)) = level_status(self.databases.get(conn)) {
+                    let aria = format!("{conn}:{tag}");
+                    return vec![row(kind, ckey, depth, false, label, aria)];
+                }
+                Some(self.databases(conn).unwrap_or_default())
+            }
+            None => None,
+        };
+        if let Some(names) = databases {
+            return self.database_rows(&w, names, ckey, depth);
+        }
+        if let Some((kind, label, tag)) = level_status(self.schemas.get(conn)) {
             out.push(row(
                 kind,
                 ckey,
@@ -1154,6 +1343,54 @@ impl CatalogTree {
                     s.name().to_owned(),
                     aria,
                 ));
+                out.extend(children);
+            }
+        }
+        out
+    }
+
+    /// One row per database under expanded parent `ckey`, each valid, expanded child's own
+    /// levels nested beneath it; a database whose name matches keeps all of them.
+    fn database_rows(
+        &self,
+        w: &Walk,
+        names: &[String],
+        ckey: NodeKey,
+        depth: usize,
+    ) -> Vec<CatalogRow> {
+        let parent = w.conn;
+        if names.is_empty() {
+            let aria = format!("{parent}:empty");
+            return vec![row(
+                RowKind::Empty,
+                ckey,
+                depth,
+                false,
+                "no databases".into(),
+                aria,
+            )];
+        }
+        let mut out = Vec::new();
+        for name in names {
+            let child = format!("{parent}/{name}");
+            let invalid = self
+                .workspace
+                .as_deref()
+                .and_then(|ws| ws.resolve(&child).err().map(|e| e.to_string()));
+            let matched = w.matches(name);
+            let children = match invalid {
+                None => self.rows(&child, depth + 1, if matched { "" } else { w.filter }),
+                Some(_) => Vec::new(),
+            };
+            if matched || !children.is_empty() {
+                let key = NodeKey::Connection(child.clone());
+                let expanded = self.expanded.contains(&key);
+                let aria = match invalid {
+                    None => child,
+                    Some(_) => format!("{child}:invalid"),
+                };
+                let kind = RowKind::Database { invalid };
+                out.push(row(kind, key, depth, expanded, name.clone(), aria));
                 out.extend(children);
             }
         }
@@ -1993,7 +2230,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             copy_name,
         ],
         RowKind::KeyFolder { .. } => vec![copy_name],
-        RowKind::LoadMore => Vec::new(),
+        RowKind::LoadMore | RowKind::Database { .. } => Vec::new(),
     }
 }
 
@@ -2087,6 +2324,24 @@ fn relation_objects_query(rel: &RelationRef) -> CatalogQuery {
 fn schema_objects_query(schema: &str) -> CatalogQuery {
     CatalogQuery::SchemaObjects {
         schema: schema.to_owned(),
+    }
+}
+
+/// The status row a connection's top level shows while it is not loaded: kind, label, aria tag.
+fn level_status<T>(load: Option<&Load<T>>) -> Option<(RowKind, String, &'static str)> {
+    match load {
+        None | Some(Load::Loading) => Some((RowKind::Loading, "loading…".to_owned(), "loading")),
+        Some(Load::Failed(m)) => Some((RowKind::Failed { message: m.clone() }, m.clone(), "error")),
+        Some(Load::Ready(_)) => None,
+    }
+}
+
+/// A cached level's state without its value, for [`CatalogTree::link`].
+fn load_state<T>(load: &Load<T>) -> Load<()> {
+    match load {
+        Load::Loading => Load::Loading,
+        Load::Ready(_) => Load::Ready(()),
+        Load::Failed(m) => Load::Failed(m.clone()),
     }
 }
 

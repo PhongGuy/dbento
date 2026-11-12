@@ -286,6 +286,7 @@ fn stale_replies_after_refresh_are_dropped_and_expanded_levels_reload() {
             | CatalogQuery::SchemaObjects { .. }
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
+            | CatalogQuery::Databases
             | CatalogQuery::CommandDocs => cols(&[
                 ("AlbumId", "INTEGER", Some(1)),
                 ("Title", "NVARCHAR(160)", None),
@@ -497,7 +498,7 @@ fn expand_opens_and_never_collapses() {
 }
 
 // Unwraps a waiting step to its one load.
-fn waiting(step: RevealStep) -> LoadRequest {
+pub(crate) fn waiting(step: RevealStep) -> LoadRequest {
     match step {
         RevealStep::Waiting(mut loads) if loads.len() == 1 => loads.remove(0),
         other @ (RevealStep::Waiting(_) | RevealStep::Shown | RevealStep::Missing | _) => {
@@ -660,6 +661,7 @@ fn with_objects(
             | CatalogQuery::SchemaObjects { .. }
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
+            | CatalogQuery::Databases
             | CatalogQuery::CommandDocs => main.clone(),
         };
         answer(&mut t, req, result);
@@ -683,6 +685,7 @@ fn fixture_for(q: &CatalogQuery) -> CatalogData {
         other @ (CatalogQuery::Count { .. }
         | CatalogQuery::Definition { .. }
         | CatalogQuery::Keys { .. }
+        | CatalogQuery::Databases
         | CatalogQuery::CommandDocs) => panic!("{other:?} is no tree level"),
     }
 }
@@ -964,7 +967,8 @@ fn object_groups_follow_columns_and_kinds_collapsed() {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
         .collect();
     let want: Vec<(String, String)> = [
@@ -1011,7 +1015,8 @@ fn a_replica_only_trigger_says_so_like_a_disabled_one() {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -1046,6 +1051,7 @@ fn unreadable_album(columns: Result<CatalogData, String>) -> CatalogTree {
             | CatalogQuery::SchemaObjects { .. }
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
+            | CatalogQuery::Databases
             | CatalogQuery::CommandDocs => Ok(no_objects().1),
         };
         answer(&mut t, req, result);
@@ -1344,7 +1350,8 @@ fn object_details_name_index_flags_and_constraint_kinds() {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
-            | RowKind::LoadMore => None,
+            | RowKind::LoadMore
+            | RowKind::Database { .. } => None,
         })
         .collect();
     let want: Vec<(String, String)> = [
