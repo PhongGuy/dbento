@@ -1227,6 +1227,7 @@ impl ConnectionForm {
         div().pl(px(LABEL_WIDTH + 12.)).child(
             v_flex()
                 .id(SharedString::from(format!("{id}s")))
+                .test_support()
                 .py_0p5()
                 .border_1()
                 .border_color(border)

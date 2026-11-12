@@ -173,6 +173,10 @@ fn a_tests_databases_are_offered_under_database_until_the_server_changes(cx: &mu
         f.set_databases(listed.map(str::to_owned).to_vec(), cx);
     });
     cx.run_until_parked();
+    assert!(
+        present(cx, o.win, "conn-database-suggestions"),
+        "the pilot finds the list itself by id"
+    );
     for (ix, name) in listed.iter().enumerate() {
         assert_eq!(
             label_of(cx, o.win, ("conn-database-suggestion", ix)).as_deref(),
