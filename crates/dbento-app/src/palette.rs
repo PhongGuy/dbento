@@ -515,6 +515,8 @@ pub struct Palette {
     wanted: HashSet<String>,
     // The labels of the last rendered rows, by group, to tell when rows change.
     shown: Vec<Vec<String>>,
+    // The query those rows were rendered for.
+    shown_query: SharedString,
     // While rows changed under a pointer that has not moved since, the row that keeps the
     // highlight: the kit hover-selects whatever row lands under a resting pointer.
     pinned: Option<String>,
@@ -610,11 +612,30 @@ impl Palette {
     }
 
     // Rows that changed keep the highlighted entry, or the first row once it is gone, until
-    // the pointer moves.
-    fn pin(&mut self, shown: Vec<Vec<String>>, cx: &App) {
+    // the pointer moves. Under an unchanged query the kit's selection follows the kept row
+    // once it has installed the new rows, since a vanished path resets it to the first row.
+    fn pin(
+        &mut self,
+        shown: Vec<Vec<String>>,
+        query: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if shown == self.shown {
             return;
         }
+        if query == self.shown_query {
+            let this = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                _ = this.update(cx, |p, cx| {
+                    if let Some(at) = p.pinned_at() {
+                        p.state
+                            .update(cx, |s, cx| s.set_selected_index(Some(at), window, cx));
+                    }
+                });
+            });
+        }
+        self.shown_query = query;
         let was = (self.state.read(cx).selected_index())
             .and_then(|ix| self.shown.get(ix.section)?.get(ix.row).cloned());
         let mut labels = shown.iter().flatten();
@@ -630,18 +651,24 @@ impl Palette {
         if window.last_input_was_keyboard() {
             return;
         }
-        let Some(pinned) = self.pinned.as_deref() else {
+        if self.pinned.is_none() {
             return;
-        };
-        let at = self.shown.iter().enumerate().find_map(|(s, rows)| {
-            let r = rows.iter().position(|l| l == pinned)?;
-            Some(IndexPath::new(r).section(s))
-        });
+        }
+        let at = self.pinned_at();
         if at.is_some_and(|at| at != ix) {
             self.under = Some(ix);
             self.state
                 .update(cx, |s, cx| s.set_selected_index(at, window, cx));
         }
+    }
+
+    // Where the pinned row sits among the shown rows.
+    fn pinned_at(&self) -> Option<IndexPath> {
+        let pinned = self.pinned.as_deref()?;
+        self.shown.iter().enumerate().find_map(|(s, rows)| {
+            let r = rows.iter().position(|l| l == pinned)?;
+            Some(IndexPath::new(r).section(s))
+        })
     }
 
     // The pointer moved: the pin ends, and the row it rests on takes the highlight it was
@@ -680,7 +707,7 @@ impl Render for Palette {
         let shown = groups
             .iter()
             .map(|g| g.entries.iter().map(|e| e.label(&src)).collect());
-        self.pin(shown.collect(), cx);
+        self.pin(shown.collect(), query.clone(), window, cx);
         let mut command = Command::new(&self.state)
             .bordered(false)
             .filterable(false)
@@ -769,6 +796,7 @@ pub fn open(init: PaletteInit, mode: Mode, window: &mut Window, cx: &mut App) ->
         init,
         wanted,
         shown: Vec::new(),
+        shown_query: SharedString::default(),
         pinned: None,
         under: None,
         _sidebar: cx.observe(&sidebar, |p: &mut Palette, _, cx| p.pump(cx)),

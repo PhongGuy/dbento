@@ -181,3 +181,76 @@ fn loaded_rows_under_a_resting_pointer_keep_the_highlight(cx: &mut TestAppContex
         "a moved pointer highlights its row"
     );
 }
+
+/// Loads lite's catalog in two steps, schemas in one frame and relations in a later one,
+/// as a catalog that lands on its own can; each step may leave no row under the old path.
+fn load_lite_in_two_steps(cx: &mut TestAppContext, o: &Opened) {
+    let sidebar = o.shell.read_with(cx, |s, _| s.sidebar().unwrap().clone());
+    sidebar.update(cx, |s, cx| {
+        s.ensure_loaded("lite", &[CatalogQuery::Schemas], cx)
+    });
+    wait_real(cx, "lite's schemas", |cx| {
+        !has(cx, o, "Search tables in lite")
+    });
+    let main = CatalogQuery::Relations {
+        schema: "main".into(),
+    };
+    wait_real(cx, "lite's tables", |cx| {
+        sidebar.update(cx, |s, cx| {
+            s.ensure_loaded("lite", std::slice::from_ref(&main), cx)
+        });
+        has(cx, o, "main.orders4 \u{b7} lite")
+    });
+}
+
+#[gpui_kit::test]
+fn a_catalog_landing_in_two_steps_keeps_the_hovered_highlight(cx: &mut TestAppContext) {
+    let o = launched(cx, MANY, "");
+    open(cx, &o);
+    wait_real(cx, "the idle rows", |cx| {
+        has(cx, &o, "Search tables in nopg")
+    });
+    let at = kit_rows(cx, &o)
+        .into_iter()
+        .find(|r| r.2 == "Search tables in nopg")
+        .unwrap()
+        .0
+        .center();
+    cx.update_window(o.win, |_, w, cx| w.simulate_mouse_move(at, cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        highlighted(cx, &o).as_deref(),
+        Some("Search tables in nopg")
+    );
+    load_lite_in_two_steps(cx, &o);
+    assert_eq!(
+        highlighted(cx, &o).as_deref(),
+        Some("Search tables in nopg")
+    );
+}
+
+#[gpui_kit::test]
+fn a_catalog_landing_in_two_steps_keeps_the_keyboard_highlight(cx: &mut TestAppContext) {
+    let o = launched(cx, MANY, "");
+    open(cx, &o);
+    wait_real(cx, "the idle rows", |cx| {
+        has(cx, &o, "Search tables in nopg")
+    });
+    for _ in 0..palette_rows(cx, o.win).len() {
+        if highlighted(cx, &o).as_deref() == Some("Search tables in nopg") {
+            break;
+        }
+        cx.simulate_keystrokes(o.win, "down");
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        highlighted(cx, &o).as_deref(),
+        Some("Search tables in nopg")
+    );
+    load_lite_in_two_steps(cx, &o);
+    assert_eq!(
+        highlighted(cx, &o).as_deref(),
+        Some("Search tables in nopg")
+    );
+}
