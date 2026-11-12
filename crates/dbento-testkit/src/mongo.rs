@@ -476,7 +476,7 @@ async fn container() -> MgDb {
         .await
         .expect("no mapped MongoDB port");
     let host = "127.0.0.1";
-    wait_ready(host, port).await;
+    wait_ready(&c, host, port).await;
     let mut db = seeded(host, port, "root", MG_ROOT_PASSWORD, "").await;
     db.container = Some(c);
     db._permit = Some(permit);
@@ -498,6 +498,9 @@ fn capped(args: Vec<String>) -> ContainerRequest<Mongo> {
                 .with_size_bytes(1 << 30),
         )
         .with_host_config_modifier(|h| h.memory = Some(1 << 30))
+        // No log wait: journald's rate limit can drop the whole startup log, so the line never
+        // arrives. Readiness is a ping instead, in `wait_ready` and `wait_primary`.
+        .with_ready_conditions(Vec::new())
 }
 
 fn cache_args() -> Vec<String> {
@@ -536,22 +539,36 @@ async fn start(mut request: impl FnMut() -> ContainerRequest<Mongo>) -> Containe
     })
 }
 
-/// Pings as root until the real server answers. The module's log wait fires at the image's init
-/// server, which binds only inside the container and is then restarted.
-async fn wait_ready(host: &str, port: u16) {
+/// Pings as root until the real server answers, past the image's init server, which binds only
+/// inside the container and is then restarted. Each ping is bounded, so the deadline holds; a
+/// container that exits, or never answers, fails with its state and the tail of its log.
+async fn wait_ready(container: &ContainerAsync<Mongo>, host: &str, port: u16) {
     let deadline = Instant::now() + READY_TIMEOUT;
+    let mut options = options(host, port, Some(credential("root", MG_ROOT_PASSWORD)));
+    options.server_selection_timeout = Some(Duration::from_secs(2));
     loop {
-        let mut options = options(host, port, Some(credential("root", MG_ROOT_PASSWORD)));
-        options.server_selection_timeout = Some(Duration::from_secs(2));
-        let client = Client::with_options(options).expect("cannot build the MongoDB test client");
+        let client =
+            Client::with_options(options.clone()).expect("cannot build the MongoDB test client");
         let admin = client.database("admin");
-        match admin.run_command(doc! { "ping": 1 }).await {
-            Ok(_) => return,
-            Err(e) if Instant::now() >= deadline => {
-                panic!("the MongoDB test container never answered: {}", e.kind)
-            }
-            Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
+        let ping = admin.run_command(doc! { "ping": 1 });
+        let error = match tokio::time::timeout(Duration::from_secs(5), ping).await {
+            Ok(Ok(_)) => return,
+            Ok(Err(e)) => e.kind.to_string(),
+            Err(_) => "the ping got no reply within 5 s".to_owned(),
+        };
+        let running = container.is_running().await.unwrap_or(true);
+        if !running || Instant::now() >= deadline {
+            let state = if running { "running" } else { "exited" };
+            let log = container.stdout_to_vec().await.unwrap_or_default();
+            let log = String::from_utf8_lossy(&log);
+            let tail: Vec<&str> = log.lines().rev().take(20).collect();
+            let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+            panic!(
+                "the MongoDB test container never answered ({state}): {error}\n\
+                 its last log lines:\n{tail}"
+            );
         }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -646,6 +663,27 @@ mod tests {
     fn a_bad_url_never_repeats_its_password() {
         let failure = mg_url("mongodb://root:s3cret@h").unwrap_err();
         assert!(!failure.contains("s3cret"), "{failure}");
+    }
+
+    // Journald's rate limit can drop a container's whole startup log, so readiness must come
+    // from the server itself: this mongod logs to /dev/null and prints nothing to stdout.
+    #[tokio::test]
+    async fn a_server_that_logs_nothing_still_starts() {
+        let silent = || capped(vec!["--logpath".to_owned(), "/dev/null".to_owned()]);
+        let c = tokio::time::timeout(Duration::from_secs(45), start(silent))
+            .await
+            .expect("the start waited for a log line that never came");
+        let port = c.get_host_port_ipv4(27017).await.unwrap();
+        let admin = Client::with_options(direct(port))
+            .unwrap()
+            .database("admin");
+        let deadline = Instant::now() + READY_TIMEOUT;
+        while admin.run_command(doc! { "ping": 1 }).await.is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "the silent server never answered"
+            );
+        }
     }
 
     #[test]
