@@ -1156,7 +1156,7 @@ impl QueryTab {
         };
         let reply = ask(spec, window, cx);
         cx.spawn_in(window, async move |this, cx| {
-            // A dialog that closes unanswered counts as Skip.
+            // A dialog that closes unanswered counts as Cancel, which stops the run.
             let run = reply.recv().await == Ok(1);
             let _ = this.update(cx, |this, cx| {
                 if this.asking == Some(key) {
