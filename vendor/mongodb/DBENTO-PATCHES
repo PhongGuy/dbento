@@ -23,3 +23,12 @@ P1
   Files: src/cmap/conn/wire/message.rs, src/cmap/conn/command.rs,
          src/operation/run_command.rs
   Upstream: none filed (project rule: own issue and local workaround)
+
+P2
+  Change: Cargo.toml raises base64 0.22 -> 0.23, macro_magic 0.5.1 -> 0.6.0,
+          typed-builder 0.22.0 -> 0.23.2 and the Windows-only windows-sys
+          0.60 -> 0.61, as Dependabot proposed in Dbento PR #86. No source
+          change was needed. mongodb-internal-macros still uses macro_magic
+          0.5.1; 0.6.0 only reformats the code, so its exported tokens match.
+  Files: Cargo.toml (Cargo.toml.orig left as shipped)
+  Upstream: none filed (project rule: own issue and local workaround)
