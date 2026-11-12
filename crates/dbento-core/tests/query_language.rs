@@ -330,3 +330,34 @@ fn partiql_files_under_queries_are_saved_queries_in_partiql() {
         ]
     );
 }
+
+#[test]
+fn each_language_names_its_line_comment() {
+    use QueryLanguage as L;
+    assert_eq!(L::Sql.line_comment(), Some("--"));
+    assert_eq!(L::PartiQl.line_comment(), Some("--"));
+    assert_eq!(L::MongoShell.line_comment(), Some("//"));
+    assert_eq!(L::SurrealQl.line_comment(), Some("//"));
+    assert_eq!(L::RedisCommands.line_comment(), Some("#"));
+}
+
+// The marker the editor inserts must be one Dbento's own splitter skips on every engine, so a
+// commented-out line never runs.
+#[test]
+fn every_engine_skips_a_line_its_marker_comments_out() {
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Duckdb,
+        Engine::Mongodb,
+        Engine::Surrealdb,
+        Engine::Redis,
+        Engine::Dynamodb,
+    ] {
+        let marker = e.capabilities().language.line_comment().unwrap();
+        let text = format!("{marker} DELETE x\n  {marker} DELETE y\n");
+        assert!(dbento_core::statement_ranges(e, &text).is_empty(), "{e:?}");
+    }
+}
