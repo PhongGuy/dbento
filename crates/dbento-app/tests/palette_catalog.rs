@@ -254,3 +254,23 @@ fn a_catalog_landing_in_two_steps_keeps_the_keyboard_highlight(cx: &mut TestAppC
         Some("Search tables in nopg")
     );
 }
+
+// Untouched, the highlight follows the first row as a catalog lands, so Enter opens it.
+#[gpui_kit::test]
+fn a_catalog_landing_under_an_untouched_highlight_follows_the_first_row(cx: &mut TestAppContext) {
+    let o = launched(cx, MANY, "");
+    open(cx, &o);
+    wait_real(cx, "the idle rows", |cx| {
+        has(cx, &o, "Search tables in nopg")
+    });
+    let before = palette_rows(cx, o.win)[0].clone();
+    assert_eq!(highlighted(cx, &o), Some(before.clone()));
+    load_lite_in_two_steps(cx, &o);
+    cx.run_until_parked();
+    let first = palette_rows(cx, o.win)[0].clone();
+    assert_ne!(
+        first, before,
+        "the catalog did not add a row above the old first"
+    );
+    assert_eq!(highlighted(cx, &o), Some(first));
+}
