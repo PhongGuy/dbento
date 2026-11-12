@@ -26,23 +26,46 @@ pub(crate) const TARGET: &str = "eu-west-1 at http://replay.test";
 /// The secret key every replayed client signs with.
 pub(crate) const SECRET: &str = "replay-secret";
 
-/// One scripted answer: a status, a JSON body and how long to wait before sending it.
+/// One scripted answer and how long to wait before giving it.
 #[derive(Clone)]
 pub(crate) struct Reply {
-    status: u16,
-    body: String,
+    answer: Answer,
     delay: Duration,
+}
+
+/// What the scripted server does: answer with a status and a JSON body, or let the
+/// connector time out before any response arrives.
+#[derive(Clone)]
+enum Answer {
+    Http { status: u16, body: String },
+    DispatchTimeout,
 }
 
 impl Reply {
     pub(crate) fn ok(body: impl Into<String>) -> Self {
-        Reply::error(200, body)
+        Reply {
+            answer: Answer::Http {
+                status: 200,
+                body: body.into(),
+            },
+            delay: Duration::ZERO,
+        }
     }
 
     pub(crate) fn error(status: u16, body: impl Into<String>) -> Self {
         Reply {
-            status,
-            body: body.into(),
+            answer: Answer::Http {
+                status,
+                body: body.into(),
+            },
+            delay: Duration::ZERO,
+        }
+    }
+
+    /// A connector timeout, as the SDK sees a connect or read that never finished.
+    pub(crate) fn dispatch_timeout() -> Self {
+        Reply {
+            answer: Answer::DispatchTimeout,
             delay: Duration::ZERO,
         }
     }
@@ -119,8 +142,16 @@ impl HttpConnector for Replay {
                 ));
             };
             tokio::time::sleep(reply.delay).await;
-            let status = StatusCode::try_from(reply.status).expect("a valid status");
-            let mut response = HttpResponse::new(status, SdkBody::from(reply.body));
+            let (status, body) = match reply.answer {
+                Answer::Http { status, body } => (status, body),
+                Answer::DispatchTimeout => {
+                    return Err(ConnectorError::timeout(
+                        "the replay sent nothing before the deadline".into(),
+                    ));
+                }
+            };
+            let status = StatusCode::try_from(status).expect("a valid status");
+            let mut response = HttpResponse::new(status, SdkBody::from(body));
             response
                 .headers_mut()
                 .insert("content-type", "application/x-amz-json-1.0");
