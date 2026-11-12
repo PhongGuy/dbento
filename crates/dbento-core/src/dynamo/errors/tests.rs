@@ -179,3 +179,36 @@ async fn an_html_reply_or_no_reply_names_the_endpoint() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_failure_before_sending_is_other_and_not_unreachable() {
+    let e: CallError<aws_sdk_dynamodb::operation::list_tables::ListTablesError> =
+        SdkError::construction_failure("the request could not be built").into();
+    match connect_error(e, TARGET) {
+        Some(ConnectError::Open { message }) => {
+            assert!(
+                message.starts_with(TARGET) && message.contains("could not be built"),
+                "{message}"
+            );
+            assert!(!message.contains("cannot reach"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_ping_that_times_out_in_dispatch_reports_the_timeout() {
+    let replay = Replay::new(vec![Reply::dispatch_timeout(); 3]);
+    let e = replay
+        .client(false)
+        .list_tables(None, Some(1))
+        .await
+        .expect_err("an error");
+    match connect_error(e, TARGET) {
+        Some(ConnectError::Open { message }) => assert!(
+            message.contains(TARGET) && message.contains("timeout"),
+            "{message}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
