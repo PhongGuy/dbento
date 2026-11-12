@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use aws_sdk_dynamodb::config::retry::RetryConfig;
+use aws_sdk_dynamodb::config::retry::{RetryConfig, RetryPartition, TokenBucket};
 use aws_sdk_dynamodb::config::timeout::TimeoutConfig;
 use aws_sdk_dynamodb::config::{BehaviorVersion, Credentials, Region, SharedHttpClient};
 use aws_sdk_dynamodb::error::SdkError;
@@ -117,6 +117,7 @@ impl DynamoClient {
         );
         let mut config = aws_sdk_dynamodb::Config::builder()
             .behavior_version(BehaviorVersion::v2026_11_10())
+            .retry_partition(own_retry_quota(&region))
             .region(Region::new(region))
             .timeout_config(timeouts.build())
             .credentials_provider(credentials)
@@ -211,6 +212,20 @@ impl DynamoClient {
         };
         sent.map_err(CallError::from)
     }
+}
+
+/// A retry quota this client alone draws on. The SDK's default partition is one bucket per
+/// region for the whole process, so one connection's failures could refuse every other's
+/// retries. The costs are those the SDK's Retry Behavior 2.1 gives its default bucket.
+fn own_retry_quota(region: &str) -> RetryPartition {
+    let bucket = TokenBucket::builder()
+        .retry_cost(14)
+        .throttling_retry_cost(5)
+        .timeout_retry_cost(14)
+        .build();
+    RetryPartition::custom(format!("dbento-dynamodb-{region}"))
+        .token_bucket(bucket)
+        .build()
 }
 
 /// An HTTPS client on ring rustls, the one every real connection uses.
