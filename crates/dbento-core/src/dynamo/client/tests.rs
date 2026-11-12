@@ -84,6 +84,43 @@ async fn a_read_is_retried_but_a_write_or_unknown_statement_gets_one_attempt() {
     }
 }
 
+// A region no other test uses, so the drain cannot reach their retries even if quotas
+// were shared per region.
+#[tokio::test(start_paused = true)]
+async fn draining_one_clients_retry_quota_leaves_another_clients_retries_alone() {
+    let settings = || ClientSettings {
+        region: "xx-quota-1".to_owned(),
+        ..crate::dynamo::replay::test_settings(false, None)
+    };
+    let throttled = || Reply::error(400, aws_error("ThrottlingException", "slow down"));
+
+    // Throttle the first client until a call goes out once with no retry: its quota is empty.
+    let noisy = Replay::new((0..600).map(|_| throttled()).collect());
+    let noisy_client = noisy.client_with(settings());
+    let mut drained = false;
+    for _ in 0..200 {
+        let before = noisy.seen().len();
+        let sent = noisy_client
+            .execute_statement(req(Kind::Select, "SELECT 1"))
+            .await;
+        assert!(sent.is_err());
+        if noisy.seen().len() - before == 1 {
+            drained = true;
+            break;
+        }
+    }
+    assert!(drained, "the first client's retry quota never ran out");
+
+    // A second client in the same region still retries its throttled read and succeeds.
+    let quiet = Replay::new(vec![throttled(), Reply::ok(page(&[], None, None))]);
+    let sent = quiet
+        .client_with(settings())
+        .execute_statement(req(Kind::Select, "SELECT 1"))
+        .await;
+    assert_eq!(quiet.seen().len(), 2, "the throttled read was retried");
+    assert!(sent.is_ok());
+}
+
 #[tokio::test]
 async fn a_read_only_client_refuses_writes_without_sending() {
     let replay = Replay::new(vec![]);
