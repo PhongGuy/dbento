@@ -295,3 +295,23 @@ fn save_writes_databases_and_a_plain_save_leaves_the_file_alone(cx: &mut TestApp
     click_id(cx, o.win, "conn-save");
     assert_eq!(toml(&o), saved, "an untouched parent saves byte for byte");
 }
+
+#[gpui_kit::test]
+fn a_parent_offers_no_database_suggestions(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("srv", pg())));
+    listed(cx, &f, &["app", "billing", "postgres"]);
+    assert!(present(cx, win, "conn-database-suggestions"));
+    choose(cx, win, DatabasesChoice::All);
+    assert!(
+        !present(cx, win, "conn-database-suggestions"),
+        "the databases are picked under Databases, not twice"
+    );
+    choose(cx, win, DatabasesChoice::Choose);
+    assert!(!present(cx, win, "conn-database-suggestions"));
+    assert!(present(cx, win, "conn-databases-items"));
+    choose(cx, win, DatabasesChoice::Only);
+    assert!(
+        present(cx, win, "conn-database-suggestions"),
+        "back to one database, Database offers the list again"
+    );
+}

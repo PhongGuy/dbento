@@ -1391,7 +1391,12 @@ impl ConnectionForm {
                 }
                 (_, Some((field, id))) => {
                     rows.push(self.text_row(f.label, id, field, cx));
-                    if field == Field::Database && !self.database_suggestions.is_empty() {
+                    // A parent picks its databases under Databases, so Database offers none:
+                    // there it only names the database the others are listed from.
+                    if field == Field::Database
+                        && !self.database_suggestions.is_empty()
+                        && self.databases_choice == DatabasesChoice::Only
+                    {
                         let items = self.database_suggestions.clone();
                         let list = self.suggestion_list(
                             "conn-database-suggestion",
