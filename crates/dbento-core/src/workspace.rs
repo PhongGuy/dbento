@@ -1248,6 +1248,12 @@ fn find_password(value: &toml::Value, prefix: &str) -> Option<String> {
     }
 }
 
+/// Whether `name` may be a connection name, or a database a `databases` list names:
+/// `[A-Za-z0-9_-]+`.
+pub fn valid_database_name(name: &str) -> bool {
+    valid_name(name)
+}
+
 pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name

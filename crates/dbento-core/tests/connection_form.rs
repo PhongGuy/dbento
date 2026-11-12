@@ -14,7 +14,7 @@ const ENGINES: [Engine; 9] = [
 ];
 /// Engine-specific keys the parser knows; the TLS kind's file keys and `settings` are not
 /// form fields of their own.
-const SERVER_KEYS: [&str; 15] = [
+const SERVER_KEYS: [&str; 16] = [
     "path",
     "host",
     "port",
@@ -30,6 +30,7 @@ const SERVER_KEYS: [&str; 15] = [
     "endpoint",
     "access_key_id",
     "consistent_read",
+    "databases",
 ];
 
 fn fields(engine: Engine) -> Vec<FormField> {
@@ -52,6 +53,7 @@ fn line(key: &str, kind: Option<FieldKind>) -> String {
         ("endpoint", _) => "\"http://127.0.0.1:5000\"".to_owned(),
         ("auth_level", _) => "\"root\"".to_owned(),
         ("database", _) => "\"0\"".to_owned(),
+        ("databases", _) => "\"all\"".to_owned(),
         _ => "\"x.db\"".to_owned(),
     };
     format!("{key} = {value}")
@@ -136,6 +138,7 @@ fn a_port_left_out_is_the_descriptor_default() {
             | FieldKind::Tls
             | FieldKind::Uri
             | FieldKind::Flag
+            | FieldKind::Databases
             | _ => None,
         });
         assert_eq!(default, Some(want), "{engine:?}");
@@ -149,18 +152,30 @@ fn the_descriptors_pin_their_fields_sections_and_help() {
     let keys = |e: Engine| -> Vec<(&'static str, bool)> {
         fields(e).into_iter().map(|f| (f.key, f.required)).collect()
     };
-    let server = [
-        ("host", true),
-        ("port", false),
-        ("database", true),
-        ("user", true),
-        ("secret", false),
-        ("tls", false),
-    ];
-    assert_eq!(keys(Engine::Postgres), server);
-    let mut my = server;
-    my[2].1 = false;
-    assert_eq!(keys(Engine::Mysql), my);
+    assert_eq!(
+        keys(Engine::Postgres),
+        [
+            ("host", true),
+            ("port", false),
+            ("database", true),
+            ("databases", false),
+            ("user", true),
+            ("secret", false),
+            ("tls", false),
+        ]
+    );
+    // MySQL browses every schema without a database, so it takes no `databases`.
+    assert_eq!(
+        keys(Engine::Mysql),
+        [
+            ("host", true),
+            ("port", false),
+            ("database", false),
+            ("user", true),
+            ("secret", false),
+            ("tls", false),
+        ]
+    );
     assert_eq!(keys(Engine::Sqlite), [("path", true)]);
     let titles = |e: Engine| -> Vec<&'static str> {
         connection_form(e)
@@ -202,6 +217,7 @@ fn the_sql_server_descriptor_pins_its_fields_sections_and_help() {
             ("host", true),
             ("port", false),
             ("database", false),
+            ("databases", false),
             ("user", true),
             ("secret", false),
             ("tls", false),
@@ -215,6 +231,7 @@ fn the_sql_server_descriptor_pins_its_fields_sections_and_help() {
             FieldKind::Text,
             FieldKind::Port { default: 1433 },
             FieldKind::Text,
+            FieldKind::Databases,
             FieldKind::Text,
             FieldKind::Secret,
             FieldKind::Tls,
@@ -236,6 +253,7 @@ fn the_sql_server_descriptor_pins_its_fields_sections_and_help() {
     );
     assert!(help("read_only_user").is_some_and(|h| h.contains("IMPERSONATE")));
     assert!(help("database").is_some());
+    assert!(help("databases").is_some_and(|h| h.contains("<name>/<database>")));
 }
 
 #[test]
