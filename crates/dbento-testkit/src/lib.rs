@@ -385,17 +385,40 @@ async fn start(image: impl Fn() -> ContainerRequest<Postgres>, host: &str) -> Pg
     db
 }
 
-/// How many times a container start is tried when its host port turns out to be taken.
+/// How many times a container start or a fixture seed is tried when it fails transiently.
 const START_ATTEMPTS: u32 = 3;
+
+/// The pause after the first transient failure; the n-th failure waits n times this.
+const RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
 
 const ATTEMPT_LABEL: &str = "dbento.attempt";
 
 static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
-/// Runs `attempt` (numbered from 1) until it succeeds, fails for another reason, or the
-/// attempts run out. Rootless podman picks a container's host port at create time but binds
-/// it only at start, so another socket can take it in between; a fresh attempt gets a new one.
-async fn retry_start<T, F, Fut>(mut attempt: F) -> Result<T, String>
+/// Whether `error` reads as a network blip rather than a real failure. Rootless podman picks a
+/// host port at create time but binds it only at start, so another socket can take it; a pull
+/// or a seed can lose its connection mid-stream. Anything else must fail on the first attempt.
+fn transient(error: &str) -> bool {
+    const BLIPS: [&str; 7] = [
+        "address already in use",
+        "bytes remaining on stream",
+        "connection reset",
+        "connection refused",
+        "connection aborted",
+        "broken pipe",
+        "unexpected eof",
+    ];
+    let error = error.to_lowercase();
+    BLIPS.iter().any(|blip| error.contains(blip))
+}
+
+/// Runs `attempt` (numbered from 1) until it succeeds, fails for a non-[`transient`] reason, or
+/// [`START_ATTEMPTS`] run out, returning the last result. Each retry is logged with its error.
+async fn retry<T, F, Fut>(
+    what: &str,
+    backoff: std::time::Duration,
+    mut attempt: F,
+) -> Result<T, String>
 where
     F: FnMut(u32) -> Fut,
     Fut: std::future::Future<Output = Result<T, String>>,
@@ -403,13 +426,25 @@ where
     let mut n = 1;
     loop {
         match attempt(n).await {
-            Err(e) if n < START_ATTEMPTS && e.contains("address already in use") => {
-                eprintln!("dbento-testkit: start attempt {n} found its host port taken; retrying");
+            Err(e) if n < START_ATTEMPTS && transient(&e) => {
+                eprintln!(
+                    "dbento-testkit: {what} attempt {n} of {START_ATTEMPTS} failed transiently, retrying: {e}"
+                );
+                tokio::time::sleep(backoff * n).await;
                 n += 1;
             }
             done => return done,
         }
     }
+}
+
+/// [`retry`] for a container start, where a fresh attempt also gets a fresh host port.
+async fn retry_start<T, F, Fut>(attempt: F) -> Result<T, String>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    retry("start", RETRY_BACKOFF, attempt).await
 }
 
 /// Ids of test containers whose `dbento.pid` names a process for which `alive` is false.
@@ -812,6 +847,71 @@ mod tests {
         .await;
         assert_eq!(r, Err(TAKEN.to_owned()));
         assert_eq!(calls, START_ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn a_truncated_image_pull_is_retried() {
+        let pull =
+            "failed to pull the image 'postgres:17-alpine', error: bytes remaining on stream";
+        let mut calls = 0;
+        let r = retry_start(|n| {
+            calls += 1;
+            async move { if n == 1 { Err(pull.to_owned()) } else { Ok(n) } }
+        })
+        .await;
+        assert_eq!(r, Ok(2));
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn network_blips_are_transient_and_real_failures_are_not() {
+        for blip in [
+            "bind: address already in use",
+            "error: bytes remaining on stream",
+            "Connection reset by peer (os error 104)",
+            "Connection refused (os error 111)",
+            "Broken pipe (os error 32)",
+            "connection aborted",
+            "unexpected EOF",
+        ] {
+            assert!(transient(blip), "{blip}");
+        }
+        for real in [
+            "SocketNotFoundError",
+            "manifest unknown",
+            "HTTP/1.1 400 Bad Request\n{\"error\":\"parse error\"}",
+            "assertion failed",
+        ] {
+            assert!(!transient(real), "{real}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transient_seed_error_is_retried_after_a_growing_backoff() {
+        let backoff = std::time::Duration::from_millis(20);
+        let began = std::time::Instant::now();
+        let mut calls = 0;
+        let r: Result<(), String> = retry("seed", backoff, |_| {
+            calls += 1;
+            async { Err("Connection reset by peer (os error 104)".to_owned()) }
+        })
+        .await;
+        assert_eq!(calls, START_ATTEMPTS);
+        assert!(r.unwrap_err().contains("reset by peer"));
+        // One backoff after the first attempt, two after the second.
+        assert!(began.elapsed() >= backoff * 3, "{:?}", began.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_real_seed_error_fails_on_the_first_attempt() {
+        let mut calls = 0;
+        let r: Result<(), String> = retry("seed", std::time::Duration::ZERO, |_| {
+            calls += 1;
+            async { Err("HTTP/1.1 400 Bad Request".to_owned()) }
+        })
+        .await;
+        assert_eq!(r, Err("HTTP/1.1 400 Bad Request".to_owned()));
+        assert_eq!(calls, 1);
     }
 
     // The engine is resolved the way testcontainers 0.27 resolves it, so these mirror its order.
