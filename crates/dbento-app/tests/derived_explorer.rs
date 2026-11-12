@@ -233,3 +233,29 @@ fn a_new_tab_opens_on_a_selected_child(cx: &mut TestAppContext) {
     with_shell(cx, &s, |sh, w, cx| sh.new_tab(w, cx));
     assert_eq!(tab_conns(cx, &s), ["srv/app"]);
 }
+
+#[gpui_kit::test]
+fn an_expanded_connection_that_becomes_a_parent_lists_its_databases(cx: &mut TestAppContext) {
+    // The dialog's Save takes this path too: only `databases` changes, so the session stays.
+    let plain = format!("dbento = 1\n[connections.srv]\n{PG}");
+    let s = started(cx, &plain);
+    click(cx, s.win, part_id("connection-toggle", "srv"));
+    wait_srv(cx, s.win, &["srv:error"]);
+    let parent = format!("{plain}databases = \"all\"\n");
+    std::fs::write(s.dir.path().join("dbento.toml"), parent).unwrap();
+    reload(cx, s.win);
+    // Nothing listens on port 9, so a listing that starts fails, and one that never starts
+    // would leave the row loading.
+    wait_srv(cx, s.win, &["srv:error"]);
+    answer(
+        cx,
+        &s,
+        "srv",
+        CatalogQuery::Databases,
+        CatalogData::Databases(vec!["app".into()]),
+    );
+    wait_srv(cx, s.win, &["srv/app"]);
+    std::fs::write(s.dir.path().join("dbento.toml"), &plain).unwrap();
+    reload(cx, s.win);
+    wait_srv(cx, s.win, &["srv:error"]);
+}
