@@ -15,7 +15,10 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::{ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, remove_labelled, retry_start, server_tls};
+use super::{
+    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, RETRY_BACKOFF, remove_labelled, retry, retry_start,
+    server_tls,
+};
 
 /// The gate image's tag.
 pub const SURREAL_TAG: &str = "v3.3.5";
@@ -255,8 +258,10 @@ pub async fn surreal_db() -> SrDb {
         NEXT_DB.fetch_add(1, Ordering::Relaxed)
     );
     db.database = "app".to_owned();
+    // Every statement overwrites, so a seed retried after a reset that the server had already
+    // applied lands the same fixture instead of failing on "already exists".
     let mut sql = format!(
-        "DEFINE NAMESPACE `{0}`; USE NS `{0}`; DEFINE DATABASE `{1}`; USE DB `{1}`;",
+        "DEFINE NAMESPACE OVERWRITE `{0}`; USE NS `{0}`; DEFINE DATABASE OVERWRITE `{1}`; USE DB `{1}`;",
         db.namespace, db.database
     );
     for (user, level, role) in SR_LOGINS {
@@ -266,9 +271,11 @@ pub async fn surreal_db() -> SrDb {
             db.password()
         ));
     }
-    http_sql(&db.server, "main", "main", &sql)
-        .await
-        .unwrap_or_else(|e| panic!("cannot create the fixture: {e}"));
+    retry("seed", RETRY_BACKOFF, |_| {
+        http_sql(&db.server, "main", "main", &sql)
+    })
+    .await
+    .unwrap_or_else(|e| panic!("cannot create the fixture: {e}"));
     db
 }
 
