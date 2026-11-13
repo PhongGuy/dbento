@@ -4,7 +4,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![warn(clippy::wildcard_enum_match_arm)]
 mod support;
-use dbento_app::export::{ExportFormat, chosen_path, export_format, export_text, write_export};
+use dbento_app::export::{
+    ExportFormat, Rest, chosen_path, export_format, export_notice, export_text, write_export,
+};
 use dbento_app::results::ResultStore;
 use gpui_kit::AppContext as _;
 use gpui_kit::TestAppContext;
@@ -52,6 +54,46 @@ fn export_text_writes_every_loaded_row() {
     assert_eq!(export_format(Path::new("/tmp/r.json")), ExportFormat::Json);
     assert_eq!(export_format(Path::new("/tmp/r.JSON")), ExportFormat::Json);
     assert_eq!(export_format(Path::new("/tmp/r.txt")), ExportFormat::Csv);
+}
+
+// TSV export writes what copying the rows as TSV does: tab-separated with a header, a field
+// holding a tab, newline or quote quoted, and NULL as an empty field just like empty text.
+#[test]
+fn a_tsv_export_matches_the_tsv_copy() {
+    let s = store("SELECT 1 AS a, 'x\ty' AS b, '' AS c UNION ALL SELECT 2, NULL, 'z'");
+    assert_eq!(
+        export_text(&s, ExportFormat::Tsv),
+        "a\tb\tc\n1\t\"x\ty\"\t\n2\t\tz"
+    );
+    assert_eq!(
+        export_format(Path::new("/tmp/orders.tsv")),
+        ExportFormat::Tsv
+    );
+    assert_eq!(
+        export_format(Path::new("/tmp/orders.TSV")),
+        ExportFormat::Tsv
+    );
+    assert_eq!(
+        export_format(Path::new("/tmp/orders.csv")),
+        ExportFormat::Csv
+    );
+}
+
+#[test]
+fn the_notice_says_when_only_the_loaded_rows_were_exported() {
+    assert_eq!(
+        export_notice(2, "rows.json", Rest::None),
+        "Exported 2 rows to rows.json"
+    );
+    assert_eq!(
+        export_notice(1_230, "orders.tsv", Rest::Fetchable),
+        "Exported the 1,230 loaded rows to orders.tsv; the result has more. \
+         Fetch all first to export everything."
+    );
+    assert_eq!(
+        export_notice(1, "orders.tsv", Rest::Withheld),
+        "Exported the 1 loaded row to orders.tsv; the result has more."
+    );
 }
 
 // The pane renders an export on the background executor from a snapshot, so the snapshot must
@@ -159,6 +201,40 @@ fn the_strip_export_writes_the_loaded_rows_without_a_rerun(cx: &mut TestAppConte
         run_id,
         "no re-run"
     );
+}
+
+#[gpui_kit::test]
+fn exporting_a_parked_result_says_the_rest_was_left_out(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let m = o.model(cx);
+    m.update(cx, |m, _| m.set_max_rows(Some(1_000)));
+    o.run(
+        cx,
+        "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 5000) \
+         SELECT x, -x AS y FROM r",
+    );
+    wait_real(cx, "the park at the cap", |cx| {
+        m.read_with(cx, |m, _| m.parked_at_cap().is_some())
+    });
+    let out = o.files.path().join("orders.tsv");
+    let target = out.clone();
+    cx.update_window(o.win, |_, w, cx| w.click("result-export", cx))
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_new_path_selection(move |_| Some(target));
+    wait_real(cx, "the notice", |cx| {
+        label_of(cx, o.win, "notice").is_some()
+    });
+    assert_eq!(
+        label_of(cx, o.win, "notice").as_deref(),
+        Some(
+            "Exported the 1,000 loaded rows to orders.tsv; the result has more. \
+             Fetch all first to export everything."
+        )
+    );
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.lines().count(), 1_001, "a header and the loaded rows");
+    assert!(text.starts_with("x\ty\n1\t-1\n2\t-2\n"), "tab-separated");
 }
 
 #[gpui_kit::test]

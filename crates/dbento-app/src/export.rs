@@ -1,11 +1,13 @@
-//! Writing a result's loaded rows to a file as CSV or JSON; nothing re-runs.
+//! Writing a result's loaded rows to a file as CSV, TSV or JSON; nothing re-runs.
 
 use std::fmt::Display;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::copy::{CopyFormat, copy_rows};
+use crate::labels::group_digits;
 use crate::results::ResultStore;
+use crate::results_pane::format_rows;
 
 /// The file format an export writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,12 +16,44 @@ pub enum ExportFormat {
     Csv,
     /// An array of objects keyed by column name.
     Json,
+    /// Tab-separated with a header line, as copying the rows as TSV writes it.
+    Tsv,
 }
 
-/// The format `path`'s extension asks for: `.json` in any case is JSON, anything else CSV.
+/// What an export left behind in its result beyond the loaded rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rest {
+    /// The loaded rows are the whole result.
+    None,
+    /// The result is parked with more rows that Fetch all would load.
+    Fetchable,
+    /// The result has more rows but Fetch all is not on offer: it was cut short or is still arriving.
+    Withheld,
+}
+
+/// The completion notice for `rows` written to `file`; when `rest` says the result has more,
+/// it says only the loaded rows went, and points at Fetch all when that would load the rest.
+pub fn export_notice(rows: u64, file: &str, rest: Rest) -> String {
+    let loaded = || {
+        format!(
+            "Exported the {} loaded {file_rows} to {file}; the result has more.",
+            group_digits(rows),
+            file_rows = if rows == 1 { "row" } else { "rows" }
+        )
+    };
+    match rest {
+        Rest::None => format!("Exported {} to {file}", format_rows(rows)),
+        Rest::Fetchable => format!("{} Fetch all first to export everything.", loaded()),
+        Rest::Withheld => loaded(),
+    }
+}
+
+/// The format `path`'s extension asks for, in any case: `.json` is JSON, `.tsv` TSV, anything
+/// else CSV.
 pub fn export_format(path: &Path) -> ExportFormat {
     match path.extension() {
         Some(ext) if ext.eq_ignore_ascii_case("json") => ExportFormat::Json,
+        Some(ext) if ext.eq_ignore_ascii_case("tsv") => ExportFormat::Tsv,
         _ => ExportFormat::Csv,
     }
 }
@@ -41,6 +75,7 @@ pub fn export_text(store: &ResultStore, format: ExportFormat) -> String {
     let format = match format {
         ExportFormat::Csv => CopyFormat::Csv,
         ExportFormat::Json => CopyFormat::Json,
+        ExportFormat::Tsv => CopyFormat::Tsv,
     };
     let cols: Vec<usize> = (0..store.columns().len()).collect();
     copy_rows(store, 0..store.rows(), &cols, &format, true)
