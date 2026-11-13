@@ -910,3 +910,39 @@ fn an_object_row_is_a_leaf_to_right_and_left_steps_to_its_group(cx: &mut TestApp
     assert_eq!(sidebar.read_with(cx, |s, _| s.selected_node()), Some(group));
     assert!(sidebar.read_with(cx, |s, _| s.selected_object()).is_none());
 }
+
+#[gpui_kit::test]
+fn enter_in_the_filter_opens_nothing(cx: &mut TestAppContext) {
+    let (_fx, _files, win, shell) = expanded_main(cx);
+    click(cx, win, ("tree-row", 2usize));
+    assert_eq!(selected_node(cx, &shell), Some(lite_rel("Album")));
+    let filter = shell.read_with(cx, |s, cx| {
+        s.sidebar().unwrap().read(cx).filter_state().clone()
+    });
+    cx.update_window(win, |_, w, cx| {
+        filter.update(cx, |f, cx| f.focus(w, cx));
+        w.input("alb", cx);
+    })
+    .unwrap();
+    wait_tree(
+        cx,
+        win,
+        &["lite.main", "lite.main/tables", "lite.main.Album"],
+    );
+    press_key(cx, win, "enter");
+    assert!(shell.read_with(cx, |s, _| s.tabs().is_empty()));
+    assert_eq!(filter.read_with(cx, |f, _| f.value().to_string()), "alb");
+}
+
+#[gpui_kit::test]
+fn enter_on_a_focused_relation_row_opens_it(cx: &mut TestAppContext) {
+    let (_fx, _files, win, shell) = expanded_main(cx);
+    click(cx, win, ("tree-row", 2usize));
+    press_key(cx, win, "enter");
+    wait_shown(
+        cx,
+        &shell,
+        "SELECT *\nFROM main.Album\nORDER BY AlbumId ASC",
+    );
+    assert_eq!(shell.read_with(cx, |s, _| s.tabs().len()), 1);
+}

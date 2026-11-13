@@ -442,15 +442,15 @@ pub fn bindings() -> Vec<Binding> {
             None,
             Some("New connection"),
         ),
+        // `!Input` leaves Enter and the arrows to the explorer's filter while it has focus, so
+        // Enter there opens nothing; each tree id also walks the plan view's tree.
         row(
             "explorer.open_selected",
             EXPLORER_OPEN_KEYS,
             || Box::new(OpenSelected),
-            Some("Explorer"),
+            Some("Explorer && !Input"),
             Some("Open selected table"),
         ),
-        // `!Input` leaves the arrows to the explorer's filter while it has focus; each id also
-        // walks the plan view's tree, so one rebinding moves both.
         row(
             "explorer.select_prev",
             TREE_KEYS[0],
