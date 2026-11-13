@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bson::{Document, doc};
-use dbento_testkit::{MgUser, TORTURE, mongo_db};
+use dbento_testkit::{MONGO_DATA_BYTES, MgUser, TORTURE, mongo_db};
 use mongodb::error::ErrorKind;
 
 fn code(e: mongodb::error::Error) -> i32 {
@@ -62,7 +62,12 @@ async fn a_container_is_capped_and_its_cache_is_small() {
         return;
     }
     let db = mongo_db().await;
-    assert_eq!(db.data_filesystem().await.as_deref(), Some("tmpfs"));
+    // Asked through MongoDB, not a container exec, which some runtimes refuse rootless. The
+    // overlay root would report the host disk's size; only the sized tmpfs reports its own.
+    let stats = db.run(doc! { "dbStats": 1 }).await;
+    let total = stats.get("fsTotalSize").unwrap();
+    let total = total.as_f64().or(total.as_i64().map(|n| n as f64));
+    assert_eq!(total, Some(MONGO_DATA_BYTES as f64), "{stats:?}");
     let host = db.run(doc! { "hostInfo": 1 }).await;
     let limit = host
         .get_document("system")

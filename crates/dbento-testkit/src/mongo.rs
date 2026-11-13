@@ -14,7 +14,7 @@ use mongodb::options::{ClientOptions, Credential, ServerAddress};
 use testcontainers_modules::mongo::Mongo;
 use testcontainers_modules::testcontainers::{
     ContainerAsync, ContainerRequest, ImageExt,
-    core::{ExecCommand, IntoContainerPort, Mount},
+    core::{IntoContainerPort, Mount},
     runners::AsyncRunner,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -29,6 +29,9 @@ pub const MG_SECRET_VAR: &str = "DBENTO_TEST_MG_SECRET";
 
 /// The gate image's tag.
 pub const MONGO_TAG: &str = "8.0";
+
+/// The size of the tmpfs a harness container keeps its data on, which `dbStats` reports.
+pub const MONGO_DATA_BYTES: i64 = 1 << 30;
 
 /// One canonical Extended JSON document per line, one per BSON type.
 pub const TORTURE: &str = include_str!("../fixtures/mongo_torture.jsonl");
@@ -192,19 +195,6 @@ impl MgDb {
             .count_documents(doc! {})
             .await
             .unwrap_or_else(|e| panic!("cannot count {collection}: {}", e.kind))
-    }
-
-    /// The filesystem type at `/data/db` in the container; `None` on a URL server.
-    pub async fn data_filesystem(&self) -> Option<String> {
-        let command = ExecCommand::new(["stat", "-f", "-c", "%T", "/data/db"]);
-        let mut result = self
-            .container
-            .as_ref()?
-            .exec(command)
-            .await
-            .expect("cannot run stat in the MongoDB test container");
-        let stdout = result.stdout_to_vec().await.expect("no stdout from stat");
-        Some(String::from_utf8_lossy(&stdout).trim().to_owned())
     }
 
     /// The cursors open on this database's collections, whoever owns them. Counted from
@@ -495,7 +485,7 @@ fn capped(args: Vec<String>) -> ContainerRequest<Mongo> {
         .with_mount(
             Mount::tmpfs_mount("/data/db")
                 .with_mode(0o1777)
-                .with_size_bytes(1 << 30),
+                .with_size_bytes(MONGO_DATA_BYTES),
         )
         .with_host_config_modifier(|h| h.memory = Some(1 << 30))
         // No log wait: journald's rate limit can drop the whole startup log, so the line never
