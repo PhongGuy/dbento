@@ -22,8 +22,8 @@ use gpui_kit::base::{ObservedElement, ResizeHandleRenderer, ResizeHandleState};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, ResizableState, TitleBar, WindowExt as _, h_resizable, resizable_panel,
-    resize_handle_appearance, v_flex,
+    ActiveTheme as _, Icon, ResizableState, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _,
+    h_resizable, resizable_panel, resize_handle_appearance, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -4441,6 +4441,9 @@ impl Shell {
                     .top_0()
                     .left_0()
                     .size_full()
+                    // Equal insets keep the pill centred and off the minimise, maximise and
+                    // close buttons; in a narrow window the pill shrinks instead.
+                    .px(TITLE_BAR_HEIGHT * 3.)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -4459,6 +4462,7 @@ impl Shell {
             .items_center()
             .gap_2()
             .w(px(420.))
+            .max_w_full()
             .h(px(28.))
             .pl_2()
             .pr_1()
@@ -4471,7 +4475,7 @@ impl Shell {
             .cursor_pointer()
             .hover(|s| s.border_color(theme.input))
             .child(ui::icon(Icons::Search, px(14.), theme.muted_foreground))
-            .child(div().flex_1().child(PALETTE_LABEL))
+            .child(div().flex_1().min_w_0().truncate().child(PALETTE_LABEL))
             .children(keys_for(&OpenPalette, cx).map(|k| {
                 let keys = chip_keys(&k);
                 ui::key_chip(keys.clone(), cx)

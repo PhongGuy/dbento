@@ -342,3 +342,48 @@ fn a_table_tab_does_not_become_the_saved_editor_height(cx: &mut TestAppContext) 
     wait_real(cx, "the window to close", closed);
     assert_eq!(saved(o.files.path()).editor_height, None);
 }
+
+#[gpui_kit::test]
+fn at_the_minimum_size_the_search_pill_leaves_the_window_controls_clear(cx: &mut TestAppContext) {
+    support::init(cx);
+    let (fx, files) = (support::fixture("", ""), tempfile::tempdir().unwrap());
+    let (w, h) = dbento_app::app::MIN_WINDOW;
+    let state = SavedState {
+        window: Some(WindowState {
+            x: 0.,
+            y: 0.,
+            width: w,
+            height: h,
+            maximized: false,
+        }),
+        ..SavedState::default()
+    };
+    save_json(&AppPaths::in_dir(files.path()).state, &state).unwrap();
+    let (win, _shell) = cx
+        .update(|cx| {
+            start(
+                support::services(files.path()),
+                Some(fx.dir.path().into()),
+                cx,
+            )
+        })
+        .unwrap();
+    assert!(present(cx, win, "title-search"));
+    let (pill, controls) = cx
+        .update_window(win, |_, w, cx| {
+            w.render_frame(cx);
+            (
+                w.find("title-search").bounds(),
+                w.find("window-controls").bounds(),
+            )
+        })
+        .unwrap();
+    // The test platform reports server decorations, so the kit draws no buttons here; on a
+    // client-decorated Linux window it draws minimise, maximise and close, each a square
+    // of the kit's title bar height, at the right edge.
+    let buttons = 3. * f32::from(gpui_kit::component::TITLE_BAR_HEIGHT);
+    assert!(f32::from(controls.right()) <= w + 0.5, "{controls:?}");
+    assert!(f32::from(pill.right()) <= w - buttons + 0.5, "{pill:?}");
+    assert!(f32::from(pill.left()) >= 28., "{pill:?}");
+    assert!(f32::from(pill.size.width) >= 120., "{pill:?}");
+}

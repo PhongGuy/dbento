@@ -123,7 +123,8 @@ where
 
 /// How many recent workspaces the welcome view lists.
 pub const MAX_RECENT: usize = 10;
-/// The smallest window size a saved state may restore.
+/// The smallest window size: the window manager stops a resize here, and a saved state is
+/// clamped to it.
 pub const MIN_WINDOW: (f32, f32) = (480., 320.);
 /// The largest window side a saved state may restore.
 pub const MAX_WINDOW_SIDE: f32 = 16384.;
@@ -281,6 +282,7 @@ pub fn window_options_for(saved: Option<&WindowState>) -> WindowOptions {
     });
     WindowOptions {
         window_bounds,
+        window_min_size: Some(size(px(MIN_WINDOW.0), px(MIN_WINDOW.1))),
         window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
         titlebar: Some(TitlebarOptions {
             title: Some("Dbento".into()),

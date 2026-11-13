@@ -1,5 +1,5 @@
 use crate::support;
-use dbento_app::app::{start, window_options};
+use dbento_app::app::{MIN_WINDOW, start, window_options, window_options_for};
 use gpui_kit::TestAppContext;
 use gpui_kit::component::Theme;
 #[gpui_kit::test]
@@ -36,4 +36,20 @@ fn linux_windows_draw_their_own_title_bar() {
     // The kit title bar is the only one: a compositor bar above it would double it.
     let expected = cfg!(target_os = "linux").then_some(gpui_kit::WindowDecorations::Client);
     assert_eq!(window_options().window_decorations, expected);
+}
+#[test]
+fn the_window_cannot_be_resized_below_its_minimum() {
+    let min = Some(gpui_kit::size(
+        gpui_kit::px(MIN_WINDOW.0),
+        gpui_kit::px(MIN_WINDOW.1),
+    ));
+    assert_eq!(window_options().window_min_size, min);
+    let saved = dbento_app::app::WindowState {
+        x: 0.,
+        y: 0.,
+        width: 900.,
+        height: 600.,
+        maximized: false,
+    };
+    assert_eq!(window_options_for(Some(&saved)).window_min_size, min);
 }
