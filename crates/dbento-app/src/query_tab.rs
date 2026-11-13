@@ -1666,9 +1666,14 @@ impl Render for QueryTab {
                         ),
                 )
             })
-            // Stop appears only while there is something to stop; its keys work regardless. An
-            // empty slot of its size holds the place, so Save and the row limit never shift.
-            .when(!cancellable, |d| d.child(div().flex_none().size(px(28.))))
+            // Stop is live only while there is something to stop; its keys work regardless. Idle,
+            // a disabled twin holds its place, so Save and the row limit never shift.
+            .when(!cancellable, |d| {
+                d.child(
+                    tool_button("cancel-idle", ui::Icons::CircleStop, "Cancel", muted)
+                        .disabled(true),
+                )
+            })
             .when(cancellable, |d| {
                 d.child(
                     div()

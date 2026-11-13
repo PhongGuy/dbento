@@ -166,6 +166,7 @@ mod runner_lifecycle;
 mod runner_redis;
 mod runner_stream;
 mod runner_surreal;
+mod running_state;
 mod save_disk;
 mod save_keys;
 mod saved_queries;

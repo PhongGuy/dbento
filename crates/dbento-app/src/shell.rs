@@ -21,9 +21,10 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{ObservedElement, ResizeHandleRenderer, ResizeHandleState};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, ResizableState, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _,
-    h_resizable, resizable_panel, resize_handle_appearance, v_flex,
+    ActiveTheme as _, Icon, ResizableState, Sizable as _, TITLE_BAR_HEIGHT, TitleBar,
+    WindowExt as _, h_resizable, resizable_panel, resize_handle_appearance, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -3980,6 +3981,20 @@ impl Shell {
             .flex()
             .flex_none()
             .child(ui::icon(glyph, px(14.), muted));
+        // A running tab spins in the strip, so a run behind another tab still shows.
+        let running = tab.model().read(cx).running().then(|| {
+            div()
+                .id(("tab-running", ix))
+                .aria_label("Running")
+                .test_support()
+                .flex()
+                .flex_none()
+                .child(
+                    Spinner::new()
+                        .with_size(gpui_kit::component::Size::Size(px(12.)))
+                        .color(muted),
+                )
+        });
         let color = tab.conn().effective_color();
         let dot = color.map(|color| {
             div()
@@ -4089,6 +4104,7 @@ impl Shell {
             .children(line)
             .child(kind)
             .child(name)
+            .children(running)
             .children(dot)
             .child(close)
             .when(!self.tab_menu_open, |h| {

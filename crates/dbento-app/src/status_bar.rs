@@ -224,8 +224,13 @@ pub fn status_bar(
                     .text_color(dim)
                     .child(statement_text(r)),
             );
+        // Before its first rows a running statement has nothing to count yet.
         if shown_ix == Some(ix) {
-            last = last.child(figure("status-rows", format_rows(r.store.rows())));
+            let rows = match model.awaiting_rows(r.stmt) {
+                Some(_) => "Running\u{2026}".to_owned(),
+                None => format_rows(r.store.rows()),
+            };
+            last = last.child(figure("status-rows", rows));
         }
         left = left.child(last);
     }
