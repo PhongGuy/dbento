@@ -814,9 +814,15 @@ impl Sidebar {
         {
             self.revealing = None;
         }
+        // A connection that became a parent, stopped being one or changed its list keeps its
+        // session, but what expanding it shows changed, so its levels load again too.
+        let reshaped = self.workspace.connections().iter().any(|c| {
+            old.declared(c.name())
+                .is_some_and(|was| was.databases() != c.databases())
+        });
         // A changed connection's expanded levels reload through a fresh runner; unchanged ones
         // reload through their open sessions. Database lists stay unless their parent changed.
-        if !stale.is_empty() || !gone.is_empty() {
+        if !stale.is_empty() || !gone.is_empty() || reshaped {
             let requests = self.tree.reload();
             self.reload_levels(requests, cx);
         }
