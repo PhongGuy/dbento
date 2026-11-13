@@ -342,7 +342,8 @@ pub struct Shell {
     closings: Vec<(Arc<AtomicBool>, Task<()>)>,
     // A discard question (window close, tab close, switch, disconnect) is on screen, so no
     // second one stacks on it; `close_confirmed` records Close on the window close question.
-    asking: bool,
+    asking: Option<Question>,
+    questions: u64,
     close_confirmed: bool,
     // Tabs are being reopened from the saved session, which is saved once at the end.
     restoring: bool,
@@ -504,7 +505,8 @@ impl Shell {
             appearance,
             closing: false,
             closings: Vec::new(),
-            asking: false,
+            asking: None,
+            questions: 0,
             close_confirmed: false,
             restoring: false,
             next_query: 1,
@@ -549,15 +551,21 @@ impl Shell {
     /// be, it asks, answering false; Close then continues below, Keep open cancels. The first
     /// request with tabs or a catalog session closes them all, shows "closing sessions" when
     /// there is a tab, answers false, and removes the window once every closing resolves or
-    /// `QUIT_CAP` passes. With neither, or on a second request, it answers true. While another
-    /// discard question is on screen it answers false and asks nothing.
+    /// `QUIT_CAP` passes. With neither, or on a second request, it answers true. Another
+    /// discard question on screen is withdrawn as if answered Keep; while its own question is
+    /// on screen it answers false and asks nothing.
     pub fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.closing {
             self.flush_saved();
             return true;
         }
-        if self.asking {
-            return false;
+        match self.asking.take() {
+            Some(q) if q.window_close => {
+                self.asking = Some(q);
+                return false;
+            }
+            Some(q) => q.dialog.close(window, cx),
+            None => {}
         }
         if !self.close_confirmed {
             let lost = self.flush_drafts(cx);
@@ -641,10 +649,13 @@ impl Shell {
             cx,
             |shell, window, cx| shell.close_unasked(window, cx),
         );
+        if let Some(q) = &mut self.asking {
+            q.window_close = true;
+        }
     }
 
     // Asks `ask_discard`'s question unless one is already on screen, running `close` on the
-    // shell when the answer is Close.
+    // shell when the answer is Close. A question withdrawn meanwhile counts as Keep.
     fn ask_once(
         &mut self,
         title: impl Into<SharedString>,
@@ -654,15 +665,25 @@ impl Shell {
         cx: &mut Context<Self>,
         close: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
-        if self.asking {
+        if self.asking.is_some() {
             return;
         }
-        self.asking = true;
-        let reply = ask_discard(title, detail, keep, window, cx);
+        self.questions += 1;
+        let serial = self.questions;
+        let dialog = ask_discard(title, detail, keep, window, cx);
+        let reply = dialog.answer.clone();
+        self.asking = Some(Question {
+            serial,
+            window_close: false,
+            dialog,
+        });
         cx.spawn_in(window, async move |this, cx| {
             let answer = reply.recv().await;
             let _ = this.update_in(cx, |shell, window, cx| {
-                shell.asking = false;
+                if shell.asking.as_ref().map(|q| q.serial) != Some(serial) {
+                    return;
+                }
+                shell.asking = None;
                 if answer == Ok(1) {
                     close(shell, window, cx);
                 }
@@ -5011,6 +5032,13 @@ fn lost_detail(lost: usize) -> String {
     }
 }
 
+// The shell's discard question on screen; `serial` tells its answer from a later question's.
+struct Question {
+    serial: u64,
+    window_close: bool,
+    dialog: confirm::Asked,
+}
+
 // The Keep-or-Close question before edited SQL is discarded; Keep is the default and the
 // cancel answer, so neither Enter nor Escape loses SQL.
 fn ask_discard(
@@ -5019,13 +5047,13 @@ fn ask_discard(
     keep: &'static str,
     window: &mut Window,
     cx: &mut gpui_kit::App,
-) -> async_channel::Receiver<usize> {
+) -> confirm::Asked {
     let choice = |id, label: &'static str, danger| Choice {
         id,
         label: label.into(),
         danger,
     };
-    ask(
+    confirm::ask_closable(
         Ask {
             title: title.into(),
             detail: Some(detail.into()),

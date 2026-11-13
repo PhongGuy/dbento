@@ -199,3 +199,56 @@ fn quitting_with_staged_edits_and_a_lost_draft_names_both(cx: &mut TestAppContex
         Some("Closing Dbento drops them. 1 tab could not be kept as a draft.")
     );
 }
+
+// Asks the close-tab question for tab 0 and waits until it is on screen.
+fn ask_tab_close(cx: &mut TestAppContext, o: &Opened) {
+    let shell = o.shell.clone();
+    cx.update_window(o.win, |_, w, cx| {
+        shell.update(cx, |s, cx| s.close_tab_at(0, w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    dialog(cx, o);
+}
+
+#[gpui_kit::test]
+fn a_window_close_replaces_an_open_tab_close_question_with_its_own(cx: &mut TestAppContext) {
+    let o = t(cx);
+    stage_z(cx, &o);
+    ask_tab_close(cx, &o);
+    let mut v = VisualTestContext::from_window(o.win, cx);
+    assert!(!v.simulate_close(), "the staged edits hold the window");
+    dialog(cx, &o);
+    assert_eq!(
+        label_of(cx, o.win, "confirm-detail").as_deref(),
+        Some("Closing Dbento drops them.")
+    );
+    click(cx, &o, "discard-keep");
+    // Keep answers the only question left: the tab question went away as Keep.
+    assert!(!present(cx, o.win, "confirm-dialog"));
+    assert!(!cx.update(|cx| cx.windows().is_empty()));
+    assert_eq!(o.shell.read_with(cx, |s, _| s.tabs().len()), 1);
+    assert_eq!(o.model(cx).read_with(cx, |m, _| m.edits().len()), 1);
+}
+
+#[gpui_kit::test]
+fn a_window_close_during_a_tab_close_question_closes_when_nothing_is_lost(cx: &mut TestAppContext) {
+    let o = t(cx);
+    let tab = o.shell.read_with(cx, |s, _| s.tab().unwrap().clone());
+    cx.update_window(o.win, |_, w, cx| {
+        tab.update(cx, |t, cx| t.set_sql("SELECT 1", w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    ask_tab_close(cx, &o);
+    assert_eq!(
+        label_of(cx, o.win, "confirm-detail").as_deref(),
+        Some("Its SQL is not saved anywhere.")
+    );
+    // The window keeps the SQL as a draft, so its close asks nothing and goes through.
+    let mut v = VisualTestContext::from_window(o.win, cx);
+    v.simulate_close();
+    wait_real(cx, "the window to close", |cx| {
+        cx.update(|cx| cx.windows().is_empty())
+    });
+}
