@@ -925,3 +925,38 @@ fn a_document_that_will_not_decode_copies_as_a_json_string() {
         "\"/* undecodable document: x */\""
     );
 }
+
+#[test]
+fn csv_tells_null_from_empty_text_while_tsv_leaves_both_empty() {
+    let s = store("SELECT 1 AS a, '' AS b, NULL AS c");
+    assert_eq!(
+        copy_as(&s, TableSelection::Row(0), &CopyFormat::Csv, true).as_deref(),
+        Some("a,b,c\n1,\"\",")
+    );
+    // Spreadsheets paste a bare empty field cleanly, so the clipboard keeps NULL empty.
+    assert_eq!(
+        copy_text(&s, TableSelection::Row(0)).as_deref(),
+        Some("1\t\t")
+    );
+    assert_eq!(
+        copy_as(&s, TableSelection::Row(0), &CopyFormat::Tsv, true).as_deref(),
+        Some("a\tb\tc\n1\t\t")
+    );
+}
+
+#[test]
+fn insert_writes_null_and_empty_text_apart() {
+    let s = store("SELECT 1 AS a, '' AS b, NULL AS c");
+    for engine in [Engine::Sqlite, Engine::Postgres] {
+        let insert = CopyFormat::Insert {
+            engine,
+            table: RelationRef::new("main", "t"),
+            columns: labels(&s),
+        };
+        assert_eq!(
+            copy_as(&s, TableSelection::Row(0), &insert, false).as_deref(),
+            Some("INSERT INTO main.t (a, b, c) VALUES (1, '', NULL);"),
+            "{engine:?}"
+        );
+    }
+}

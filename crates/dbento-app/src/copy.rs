@@ -77,7 +77,8 @@ pub fn copy_text(store: &ResultStore, sel: TableSelection) -> Option<String> {
 pub enum CopyFormat {
     /// Tab-separated, fields quoted as `copy_text` quotes them.
     Tsv,
-    /// Comma-separated, a field holding `,`, `"`, CR or LF quoted with `"` doubled.
+    /// Comma-separated, a field holding `,`, `"`, CR or LF quoted with `"` doubled; empty text
+    /// is `""` and NULL an empty field.
     Csv,
     /// An array of objects, one per row, keyed by column name in column order.
     Json,
@@ -131,22 +132,22 @@ pub fn copy_rows(
             .collect::<Option<Vec<_>>>()
     };
     let loaded_cells = || loaded.clone().filter_map(cells);
-    let delimited = |sep: &str, quote: fn(&str) -> String, lines: &mut Vec<String>| {
+    let delimited = |sep: &str,
+                     quote: fn(&str) -> String,
+                     cell: fn(CellRef<'_>) -> String,
+                     lines: &mut Vec<String>| {
         if headers {
             lines.push(names.iter().map(|n| quote(n)).collect::<Vec<_>>().join(sep));
         }
         for row in loaded_cells() {
-            let fields: Vec<String> = row
-                .into_iter()
-                .map(|(c, ..)| quote(&cell_copy(c)))
-                .collect();
+            let fields: Vec<String> = row.into_iter().map(|(c, ..)| cell(c)).collect();
             lines.push(fields.join(sep));
         }
     };
     let mut lines = Vec::new();
     match format {
-        CopyFormat::Tsv => delimited("\t", tsv_quote, &mut lines),
-        CopyFormat::Csv => delimited(",", csv_quote, &mut lines),
+        CopyFormat::Tsv => delimited("\t", tsv_quote, field, &mut lines),
+        CopyFormat::Csv => delimited(",", csv_quote, csv_cell, &mut lines),
         CopyFormat::Json => {
             // Rows that carry a stored document copy it whole, since the cells are only a flat
             // view of it; any row without one falls back to the cell objects for every row.
@@ -416,6 +417,17 @@ fn csv_quote(text: &str) -> String {
         format!("\"{}\"", text.replace('"', "\"\""))
     } else {
         text.to_owned()
+    }
+}
+
+/// A CSV field as Postgres COPY CSV writes it: NULL bare and empty text as `""`, so the two
+/// read back apart.
+fn csv_cell(cell: CellRef<'_>) -> String {
+    match cell {
+        CellRef::Text("") => "\"\"".to_owned(),
+        other @ (CellRef::Null | CellRef::Text(_) | CellRef::Bytes(_) | _) => {
+            csv_quote(&cell_copy(other))
+        }
     }
 }
 

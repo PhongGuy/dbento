@@ -171,3 +171,19 @@ fn the_strip_export_needs_rows_like_the_menu(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!cx.did_prompt_for_new_path(), "no rows, no export dialog");
 }
+
+#[test]
+fn csv_export_quotes_empty_text_and_leaves_null_bare() {
+    let s = store(
+        "SELECT 1 AS a, '' AS b, NULL AS c \
+         UNION ALL SELECT 2, 'a,\"b\"' || char(10) || 'c', 'æø 日本'",
+    );
+    assert_eq!(
+        export_text(&s, ExportFormat::Csv),
+        "a,b,c\n1,\"\",\n2,\"a,\"\"b\"\"\nc\",æø 日本"
+    );
+    assert_eq!(
+        export_text(&s, ExportFormat::Json),
+        "[\n  {\"a\": 1, \"b\": \"\", \"c\": null},\n  {\"a\": 2, \"b\": \"a,\\\"b\\\"\\nc\", \"c\": \"æø 日本\"}\n]"
+    );
+}
