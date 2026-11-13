@@ -33,7 +33,7 @@ use crate::confirm::{self, ChoiceStyle};
 use crate::copy::{
     CopyCells, CopyFormat, copy_as, insert_maps_nothing, insert_target, insert_unwritable,
 };
-use crate::export::{chosen_path, export_format, export_text, write_export};
+use crate::export::{Rest, chosen_path, export_format, export_notice, export_text, write_export};
 use crate::grid::{ColumnView, ResultsDelegate, data_col, loaded_selection};
 use crate::grid_menu::{
     GridTarget, MenuEntry, MenuSection, filter_clause, filter_label, insert_table, menu_sections,
@@ -1334,7 +1334,7 @@ impl ResultsPane {
 
     /// Asks for a file in the workspace folder and writes result `stmt`'s loaded rows there,
     /// as the file's extension asks (`export::export_format`), off the main thread; a notice
-    /// says how it went. Nothing re-runs, and a run that replaced the rows meanwhile fails it.
+    /// says how it went and whether the result has rows the export left out. Nothing re-runs, and a run that replaced the rows meanwhile fails it.
     fn export_result(&mut self, stmt: usize, window: &mut Window, cx: &mut Context<Self>) {
         let m = self.model.read(cx);
         if m.results()
@@ -1364,21 +1364,27 @@ impl ResultsPane {
                 }
             };
             // Only the snapshot is taken here; rendering a large result would stall the window.
+            // A parked stream can Fetch all; a cut-short end or rows still arriving leave rows out too.
             let Ok(snapshot) = this.update(cx, |this, cx| {
                 let m = this.model.read(cx);
                 let store = &m.results().get(stmt).filter(|_| m.run_id() == run)?.store;
-                Some(store.snapshot())
+                let rest = match (m.cap_view(stmt), store.end()) {
+                    (Some(CapView::Parked { .. }), _) => Rest::Fetchable,
+                    (_, None | Some(StatementEnd::Truncated(_))) => Rest::Withheld,
+                    _ => Rest::None,
+                };
+                Some((store.snapshot(), rest))
             }) else {
                 return;
             };
             let written = match snapshot {
-                Some(store) => {
+                Some((store, rest)) => {
                     let (to, rows) = (path.clone(), store.rows());
                     cx.background_spawn(async move {
                         write_export(&to, &export_text(&store, export_format(&to)))
                     })
                     .await
-                    .map(|()| rows)
+                    .map(|()| (rows, rest))
                     .map_err(|e| e.to_string())
                 }
                 None => Err("the result changed while choosing the file".to_owned()),
@@ -1388,9 +1394,12 @@ impl ResultsPane {
                 |f| f.to_string_lossy().into_owned(),
             );
             let notice = match written {
-                Ok(rows) => ui::Notice {
-                    text: format!("Exported {} to {file}", format_rows(rows)),
-                    kind: ui::NoticeKind::Success,
+                Ok((rows, rest)) => ui::Notice {
+                    text: export_notice(rows, &file, rest),
+                    kind: match rest {
+                        Rest::None => ui::NoticeKind::Success,
+                        Rest::Fetchable | Rest::Withheld => ui::NoticeKind::Warning,
+                    },
                 },
                 Err(e) => ui::Notice {
                     text: format!("Export failed: {e}"),
