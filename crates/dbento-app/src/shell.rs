@@ -148,9 +148,10 @@ fn poll_approvals(dir: PathBuf, window: &mut Window, cx: &mut Context<Shell>) ->
 }
 
 // Every APPROVAL_POLL, starting at once, shows the oldest pending MCP request when no other
-// dialog is open, waits for its answer and records it; one request is on screen at a time.
+// dialog is open, waits for its answer and records it, then looks again without waiting; one
+// request is on screen at a time.
 // When another window answered first, the dialog closes or the answer loses, and the notice
-// shows what won. Any other failed record goes to stderr and shows again later.
+// shows what won. Any other failed record goes to stderr and the request shows again.
 fn ask_approvals(dir: PathBuf, window: &mut Window, cx: &mut Context<Shell>) -> Task<()> {
     cx.spawn_in(window, async move |this, cx| {
         let free = |cx: &mut gpui_kit::AsyncWindowContext| {
@@ -170,9 +171,16 @@ fn ask_approvals(dir: PathBuf, window: &mut Window, cx: &mut Context<Shell>) -> 
                     // Another dialog may have opened during the read; then the next poll asks.
                     if let (Some(shown), Ok(true)) = (shown, free(cx)) {
                         let request = shown.request.clone();
-                        let Ok(asked) =
-                            this.update_in(cx, |_, window, cx| ask_approval(shown, window, cx))
-                        else {
+                        // The count reads the same list as the rail badge, so the two agree.
+                        let Ok(asked) = this.update_in(cx, |_, window, cx| {
+                            let shell = cx.weak_entity();
+                            let queued = move |cx: &App| {
+                                shell
+                                    .upgrade()
+                                    .map_or(0, |s| s.read(cx).approvals_pending())
+                            };
+                            ask_approval(shown, queued, window, cx)
+                        }) else {
                             return;
                         };
                         let bg = cx.background_executor().clone();
@@ -196,6 +204,7 @@ fn ask_approvals(dir: PathBuf, window: &mut Window, cx: &mut Context<Shell>) -> 
                         if let Some(answered) = answered {
                             record_answer(&this, &dir, request, answered, cx).await;
                         }
+                        continue;
                     }
                 }
             }

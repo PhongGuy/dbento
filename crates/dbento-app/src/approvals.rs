@@ -36,16 +36,16 @@ pub struct Shown {
     pub production: bool,
     /// Whether the name no longer resolves in its workspace, or the workspace will not open.
     pub unknown: bool,
-    /// How many requests were pending when it was read, itself included.
-    pub queued: usize,
 }
 
 /// The oldest pending request under `dir` (pruning as `pending()` does), or None when there
 /// is none or the folder cannot be opened. Blocking: call it off the main thread.
 pub fn next_pending(dir: &Path) -> Option<Shown> {
-    let pending = ApprovalStore::open(dir).ok()?.pending();
-    let queued = pending.len();
-    let request = pending.into_iter().next()?;
+    let request = ApprovalStore::open(dir)
+        .ok()?
+        .pending()
+        .into_iter()
+        .next()?;
     // The tag comes from the request's own workspace; a name it cannot resolve, or a workspace
     // that will not open, fails closed and reads as production.
     let tag = Workspace::open(request.workspace()).ok().and_then(|ws| {
@@ -59,7 +59,6 @@ pub fn next_pending(dir: &Path) -> Option<Shown> {
         color,
         production,
         unknown,
-        queued,
     })
 }
 
@@ -341,8 +340,14 @@ impl Asked {
     }
 }
 
-/// Opens the modal; `answer` yields the user's decision once.
-pub fn ask_approval(shown: Shown, window: &mut Window, cx: &mut App) -> Asked {
+/// Opens the modal; `answer` yields the user's decision once. `queued` counts the pending
+/// requests, this one included, and is read on every frame so "1 of N" stays live.
+pub fn ask_approval(
+    shown: Shown,
+    queued: impl Fn(&App) -> usize + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> Asked {
     let (tx, rx) = async_channel::bounded(1);
     // The content's own focus keeps the keys inside the dialog, away from any button, so no
     // key can answer it; the dialog itself ignores Enter, Escape and the backdrop.
@@ -365,8 +370,6 @@ pub fn ask_approval(shown: Shown, window: &mut Window, cx: &mut App) -> Asked {
         .workspace()
         .file_name()
         .map_or(path.clone(), |n| n.to_string_lossy().into_owned().into());
-    let queue: Option<SharedString> =
-        (shown.queued > 1).then(|| format!("1 of {}", shown.queued).into());
     let danger = approve_is_danger(shown.production, r.unguarded());
     let (color, production, unknown) = (shown.color, shown.production, shown.unknown);
     window.defer(cx, move |window, cx| {
@@ -384,6 +387,8 @@ pub fn ask_approval(shown: Shown, window: &mut Window, cx: &mut App) -> Asked {
                     window.close_dialog(cx);
                 })
             };
+            let queued = queued(cx);
+            let queue: Option<SharedString> = (queued > 1).then(|| format!("1 of {queued}").into());
             let theme = cx.theme();
             let (warning, border, radius) = (theme.warning, theme::code_edge(cx), theme.radius);
             let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
@@ -500,7 +505,7 @@ pub fn ask_approval(shown: Shown, window: &mut Window, cx: &mut App) -> Asked {
                         )
                         .child(
                             footer(cx)
-                                .children(queue.clone().map(|q| text("approval-queue", q)))
+                                .children(queue.map(|q| text("approval-queue", q)))
                                 .child(div().flex_1())
                                 .child(
                                     ui::secondary(answer("approval-deny", Decision::Deny))

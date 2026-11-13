@@ -316,6 +316,67 @@ fn several_waiting_requests_show_one_of_n(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui_kit::test]
+fn an_answer_opens_the_next_request_at_once(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 3);
+    file(&s, "calm", "INSERT INTO t VALUES (2)", vec![], 2);
+    file(&s, "calm", "INSERT INTO t VALUES (3)", vec![], 1);
+    tick(cx);
+    click_id(cx, s.win, "approval-approve");
+    // No poll interval passes: the queue moves on as soon as the answer is recorded.
+    cx.run_until_parked();
+    assert_eq!(
+        label_of(cx, s.win, "approval-sql").as_deref(),
+        Some("INSERT INTO t VALUES (2)")
+    );
+    click_id(cx, s.win, "approval-deny");
+    cx.run_until_parked();
+    assert_eq!(
+        label_of(cx, s.win, "approval-sql").as_deref(),
+        Some("INSERT INTO t VALUES (3)")
+    );
+}
+
+#[gpui_kit::test]
+fn the_count_follows_the_badge_while_the_dialog_waits(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 3);
+    tick(cx);
+    assert!(!present(cx, s.win, "approval-queue"));
+    file(&s, "calm", "INSERT INTO t VALUES (2)", vec![], 2);
+    file(&s, "calm", "INSERT INTO t VALUES (3)", vec![], 1);
+    tick(cx);
+    assert_eq!(
+        label_of(cx, s.win, "rail-approvals-badge").as_deref(),
+        Some("3")
+    );
+    assert_eq!(
+        label_of(cx, s.win, "approval-queue").as_deref(),
+        Some("1 of 3")
+    );
+    click_id(cx, s.win, "approval-approve");
+    cx.run_until_parked();
+    assert_eq!(
+        label_of(cx, s.win, "rail-approvals-badge").as_deref(),
+        Some("2")
+    );
+    assert_eq!(
+        label_of(cx, s.win, "approval-queue").as_deref(),
+        Some("1 of 2")
+    );
+    click_id(cx, s.win, "approval-deny");
+    cx.run_until_parked();
+    assert_eq!(
+        label_of(cx, s.win, "rail-approvals-badge").as_deref(),
+        Some("1")
+    );
+    assert!(
+        !present(cx, s.win, "approval-queue"),
+        "a lone request has no count"
+    );
+}
+
 #[test]
 fn pending_count_counts_live_requests() {
     let dir = tempfile::tempdir().unwrap();
