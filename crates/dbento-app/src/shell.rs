@@ -76,7 +76,7 @@ use crate::settings_store::{self, SettingsEvent, SettingsStore};
 use crate::sidebar::{Sidebar, SidebarEvent, color_name, engine_label, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
-use crate::tab_model::{Closing, TabModel};
+use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 
@@ -2562,12 +2562,12 @@ impl Shell {
 
     /// Switches `tab` to connection `name` of the current dbento.toml without asking: the old
     /// session closes in the background, the tab and explorer follow and the session is saved.
-    /// A refused switch changes nothing.
+    /// A refused switch changes nothing; one refused for a running statement says so.
     pub fn switch_tab_connection(
         &mut self,
         tab: &Entity<QueryTab>,
         name: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.closing {
@@ -2578,8 +2578,17 @@ impl Shell {
         };
         let model = tab.read(cx).model().clone();
         let switched = model.update(cx, |m, cx| m.switch_connection(name, Arc::clone(&ws), cx));
-        let Ok(closing) = switched else {
-            return;
+        let closing = match switched {
+            Ok(closing) => closing,
+            Err(SwitchBlocked::Running) => {
+                let notice = ui::Notice {
+                    text: SWITCH_WHILE_RUNNING.to_owned(),
+                    kind: ui::NoticeKind::Warning,
+                };
+                ui::notice(window, cx, notice);
+                return;
+            }
+            Err(_) => return,
         };
         self.keep_closing(closing.wait(), cx);
         tab.update(cx, |t, cx| t.follow_connection(cx));

@@ -2,7 +2,7 @@
 use crate::support;
 use crate::support::{LONG, Opened, fixture, label_of, launched, opened, present, wait_real};
 use dbento_app::query_tab::connection_chip_text;
-use dbento_app::tab_model::SwitchBlocked;
+use dbento_app::tab_model::{SWITCH_WHILE_RUNNING, SwitchBlocked};
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, TestAppContext};
@@ -47,7 +47,7 @@ fn the_chip_and_badges_lead_the_toolbar(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn picking_a_connection_switches_and_keeps_the_sql_and_results(cx: &mut TestAppContext) {
+fn picking_a_connection_switches_keeps_the_sql_and_drops_the_results(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     o.run(cx, "SELECT 1 AS a");
     o.idle(cx);
@@ -65,7 +65,29 @@ fn picking_a_connection_switches_and_keeps_the_sql_and_results(cx: &mut TestAppC
         let t = s.tab().unwrap().read(cx);
         (t.sql(cx), t.model().read(cx).results().len())
     });
-    assert_eq!((sql.as_str(), results), ("SELECT 1 AS a", 1));
+    assert_eq!((sql.as_str(), results), ("SELECT 1 AS a", 0));
+}
+
+#[gpui_kit::test]
+fn a_switch_drops_the_old_connections_error(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let m = o.model(cx);
+    o.run(cx, "SELECT nope");
+    o.idle(cx);
+    assert!(m.read_with(cx, |m, _| m.error().is_some() || !m.results().is_empty()));
+    let ws = m.read_with(cx, |m, _| Arc::clone(&m.spec().workspace));
+    assert!(
+        m.update(cx, |m, cx| m.switch_connection("nopg", ws, cx))
+            .is_ok()
+    );
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.error(), None);
+        assert!(
+            m.results().is_empty(),
+            "no SQLite result under the Postgres chip"
+        );
+    });
+    assert!(!present(cx, o.win, "result-error-code"));
 }
 
 #[gpui_kit::test]
@@ -85,7 +107,7 @@ fn picker_rows_carry_the_tag_dot_and_engine(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_switch_cuts_a_running_statement_and_keeps_its_result(cx: &mut TestAppContext) {
+fn a_switch_is_refused_while_a_statement_runs(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     let m = o.model(cx);
     o.run(cx, LONG);
@@ -93,13 +115,35 @@ fn a_switch_cuts_a_running_statement_and_keeps_its_result(cx: &mut TestAppContex
         m.read_with(cx, |m, _| m.running() && !m.results().is_empty())
     });
     let ws = m.read_with(cx, |m, _| Arc::clone(&m.spec().workspace));
-    let switched = m.update(cx, |m, cx| m.switch_connection("nopg", ws, cx));
-    assert!(switched.is_ok());
+    let switched = m.update(cx, |m, cx| m.switch_connection("nopg", ws, cx).err());
+    assert_eq!(switched, Some(SwitchBlocked::Running));
     m.read_with(cx, |m, _| {
-        assert!(!m.running(), "the run ends");
-        assert_eq!(m.results().len(), 1, "its result stays until the next run");
-        assert_eq!(m.spec().connection, "nopg");
+        assert!(m.running(), "the run goes on");
+        assert_eq!(m.results().len(), 1);
+        assert_eq!(m.spec().connection, "lite");
     });
+}
+
+#[gpui_kit::test]
+fn picking_a_connection_while_running_says_to_cancel_first(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let m = o.model(cx);
+    o.run(cx, LONG);
+    wait_real(cx, "the statement to start", |cx| {
+        m.read_with(cx, |m, _| m.running() && !m.results().is_empty())
+    });
+    click(cx, &o, "query-connection");
+    click(cx, &o, ("query-connection-pick", 1usize));
+    assert_eq!(connection(cx, &o), "lite");
+    assert_eq!(
+        label_of(cx, o.win, "notice").as_deref(),
+        Some(SWITCH_WHILE_RUNNING)
+    );
+    assert_eq!(
+        label_of(cx, o.win, "query-connection").as_deref(),
+        Some(LITE)
+    );
+    assert!(m.read_with(cx, |m, _| m.running()), "the run goes on");
 }
 
 #[gpui_kit::test]
@@ -157,7 +201,9 @@ fn a_switch_after_a_reload_opens_the_session_dbento_toml_now_describes(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn a_kept_sqlite_result_keeps_its_engine_after_a_switch_to_postgres(cx: &mut TestAppContext) {
+fn a_kept_sqlite_result_keeps_its_engine_after_its_connection_turns_postgres(
+    cx: &mut TestAppContext,
+) {
     let o = opened(
         cx,
         r"CREATE TABLE t(c BLOB, s TEXT); INSERT INTO t VALUES (x'01ff', 'a\b');",
@@ -165,17 +211,23 @@ fn a_kept_sqlite_result_keeps_its_engine_after_a_switch_to_postgres(cx: &mut Tes
         0,
     );
     let m = o.model(cx);
-    let switch = |cx: &mut TestAppContext, name: &str| {
-        let ws = m.read_with(cx, |m, _| Arc::clone(&m.spec().workspace));
-        assert!(
-            m.update(cx, |m, cx| m.switch_connection(name, ws, cx))
-                .is_ok()
-        );
+    // Editing the connection and reconnecting keeps the result, unlike a switch.
+    let reconnect_as = |cx: &mut TestAppContext, engine: &str| {
+        let toml = o.fx.dir.path().join("dbento.toml");
+        if engine == "postgres" {
+            let pg = "dbento = 1\n[connections.lite]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\n\
+                      port = 9\ndatabase = \"x\"\nuser = \"x\"\n";
+            std::fs::write(&toml, pg).unwrap();
+        } else {
+            support::rewrite(&o.fx, "", "");
+        }
+        let ws = Arc::new(dbento_core::Workspace::open(o.fx.dir.path()).unwrap());
+        drop(m.update(cx, |m, cx| m.reconnect(ws, cx)));
         cx.run_until_parked();
     };
     o.run(cx, "SELECT * FROM t");
     o.idle(cx);
-    switch(cx, "nopg");
+    reconnect_as(cx, "postgres");
     let pane = o
         .shell
         .read_with(cx, |s, cx| s.tab().unwrap().read(cx).results_pane().clone());
@@ -193,10 +245,10 @@ fn a_kept_sqlite_result_keeps_its_engine_after_a_switch_to_postgres(cx: &mut Tes
         cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
         Some(r"INSERT INTO main.t (c, s) VALUES (X'01ff', 'a\b');")
     );
-    switch(cx, "lite");
+    reconnect_as(cx, "sqlite");
     o.run(cx, "SELECT nope FROM t");
     o.idle(cx);
-    switch(cx, "nopg");
+    reconnect_as(cx, "postgres");
     assert_eq!(
         label_of(cx, o.win, "result-error-code").as_deref(),
         Some("code 1")

@@ -210,7 +210,12 @@ pub enum SwitchBlocked {
     Unknown,
     /// The tab browses a table, whose staged edits belong to its connection.
     Browse,
+    /// A statement runs; its results belong to the connection it runs on.
+    Running,
 }
+
+/// What a connection pick says when the tab's statement still runs.
+pub const SWITCH_WHILE_RUNNING: &str = "Cancel the running statement before switching connection.";
 
 /// Why a stream parked at its row cap was closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -828,9 +833,9 @@ impl TabModel {
         closing
     }
 
-    /// Retires the runner as `reconnect` does (cancelling a run, keeping SQL and results until
-    /// the next run), points the spec at `name` in `workspace`, the current dbento.toml, and
-    /// connects a new runner.
+    /// Retires the runner as `reconnect` does, drops the old connection's results, error and
+    /// notice (the SQL stays), points the spec at `name` in `workspace`, the current
+    /// dbento.toml, and connects a new runner. Refused while a statement runs.
     pub fn switch_connection(
         &mut self,
         name: &str,
@@ -849,7 +854,14 @@ impl TabModel {
         if self.browses() {
             return Err(SwitchBlocked::Browse);
         }
+        if self.running() {
+            return Err(SwitchBlocked::Running);
+        }
         let closing = self.retire_runner(cx);
+        // Nothing the old connection produced may show under the new one's chip.
+        self.results.clear();
+        self.notice = None;
+        self.cap = None;
         self.spec.workspace = workspace;
         self.spec.connection = name.to_owned();
         self.epoch += 1;
