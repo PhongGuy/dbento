@@ -168,6 +168,7 @@ mod runner_stream;
 mod runner_surreal;
 mod save_disk;
 mod save_keys;
+mod saved_open;
 mod saved_queries;
 mod schema_tree;
 mod schema_tree_pg;

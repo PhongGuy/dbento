@@ -526,6 +526,28 @@ mod binding {
     }
 
     #[test]
+    fn a_folder_names_its_connection_whether_or_not_it_resolves() {
+        let (_d, ws) = open(TOML);
+        for (rel, want) in [
+            ("queries/stayzy/q.sql", Some("stayzy")),
+            ("queries/stayzy/booking/deep/q.sql", Some("stayzy/booking")),
+            ("queries/stayzy/reports/q.sql", Some("stayzy/reports")),
+            ("queries/wide/my.db/q.sql", Some("wide/my.db")),
+            ("queries/plain/sub/q.sql", Some("plain")),
+            ("queries/nope/q.sql", Some("nope")),
+            ("queries/nope/sub/q.sql", Some("nope")),
+            ("queries/q.sql", None),
+            ("other/plain/q.sql", None),
+        ] {
+            assert_eq!(
+                ws.folder_connection(Path::new(rel)).as_deref(),
+                want,
+                "{rel}"
+            );
+        }
+    }
+
+    #[test]
     fn saved_queries_bind_by_the_same_rule() {
         let (_d, ws) = open(TOML);
         for rel in [
