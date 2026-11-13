@@ -3,6 +3,7 @@ use crate::support::{Opened, click_id, label_of, launched, present, wait_real};
 use dbento_app::explorer::part_id;
 use dbento_app::keymap::{EXPLORER_OPEN_KEYS, chip_keys};
 use dbento_app::keys::KeyItem;
+use dbento_app::link::LinkState;
 use dbento_app::schema_tree::{ObjectGroup, RowKind, catalog_entries, count_text, insert_sql};
 use dbento_app::sidebar::{SidebarEvent, menu_icon, relation_tooltip};
 use dbento_app::ui::Icons;
@@ -620,4 +621,33 @@ fn redis_rows_offer_key_actions_and_no_sql(cx: &mut TestAppContext) {
             assert!(!table.contains(&id), "{id}");
         }
     });
+}
+
+// A row's Refresh reloads its own connection; another expanded one keeps its tree and dot.
+#[gpui_kit::test]
+fn a_schema_rows_refresh_leaves_other_connections_alone(cx: &mut TestAppContext) {
+    let second = "[connections.lite2]\nengine = \"sqlite\"\npath = \"data/app.db\"";
+    let o = launched(cx, T, second);
+    click_id(cx, o.win, part_id("connection-toggle", "lite"));
+    wait_tree(cx, o.win, &MAIN_OPEN);
+    click_id(cx, o.win, part_id("connection-toggle", "lite2"));
+    let both: Vec<String> = MAIN_OPEN
+        .iter()
+        .map(|l| l.to_string())
+        .chain(MAIN_OPEN.iter().map(|l| l.replacen("lite", "lite2", 1)))
+        .collect();
+    let both: Vec<&str> = both.iter().map(String::as_str).collect();
+    wait_tree(cx, o.win, &both);
+    right(cx, &o, ("tree-row", 0usize));
+    let sidebar = o.shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
+    // Read the links in the click's own turn, before any reload can land.
+    let links = cx
+        .update_window(o.win, |_, w, cx| {
+            w.click("tree-menu-refresh", cx);
+            let s = sidebar.read(cx);
+            (s.link("lite"), s.link("lite2"))
+        })
+        .unwrap();
+    assert_eq!(links, (LinkState::Connecting, LinkState::Connected));
+    wait_tree(cx, o.win, &both);
 }

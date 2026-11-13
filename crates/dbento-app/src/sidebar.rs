@@ -583,14 +583,15 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Drops `conn`'s cached levels and reloads the expanded ones; other connections keep theirs.
+    /// Drops the cached levels of `conn` and its derived children and reloads the expanded
+    /// ones; other connections keep theirs.
     pub fn refresh_connection(&mut self, conn: &str, cx: &mut Context<Self>) {
         for request in self.tree.refresh_connection(conn) {
             self.send(request, cx);
         }
-        // A waiting Generate INSERT on `conn` reloads its columns, as in `refresh`.
+        // A waiting Generate INSERT under `conn` reloads its columns, as in `refresh`.
         if let Some((pending, rel, _)) = self.pending_insert.clone()
-            && pending == conn
+            && crate::shell::runs_on(&pending, conn)
         {
             self.ensure_loaded(&pending, &[CatalogQuery::Columns { rel }], cx);
         }
@@ -2585,7 +2586,10 @@ fn catalog_menu(
                 }
                 None => continue,
             },
-            "tree-menu-refresh" => item.on_click(on_sidebar(weak, |s, cx| s.refresh(cx))),
+            // A row reloads its own connection; the header's button reloads them all.
+            "tree-menu-refresh" => item.on_click(on_sidebar(weak, move |s, cx| {
+                s.refresh_connection(&conn, cx)
+            })),
             "tree-menu-retry" => {
                 item.on_click(on_sidebar(weak, move |s, cx| s.retry(node.clone(), cx)))
             }

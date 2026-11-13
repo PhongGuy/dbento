@@ -318,10 +318,17 @@ impl CatalogTree {
         self.generation
     }
 
-    /// Whether a reply for `conn` at `generation` is from after that connection's last
-    /// refresh; older replies are ignored.
+    /// Whether a reply for `conn` at `generation` is from after the last refresh of that
+    /// connection or its parent; older replies are ignored.
     pub fn is_current(&self, conn: &str, generation: u64) -> bool {
-        generation >= self.floor.max(self.floors.get(conn).copied().unwrap_or(0))
+        let parent = conn.split_once('/').map(|(p, _)| p);
+        let floor = [Some(conn), parent]
+            .into_iter()
+            .flatten()
+            .filter_map(|c| self.floors.get(c).copied())
+            .max()
+            .unwrap_or(0);
+        generation >= self.floor.max(floor)
     }
 
     /// Whether `key` is expanded. Kind groups start expanded.
@@ -1116,32 +1123,36 @@ impl CatalogTree {
                 .is_some_and(|w| w.resolve(conn).is_err())
     }
 
-    /// Drops `conn`'s cached levels and returns a load for each of its expanded levels. Only
-    /// `conn`'s loads in flight go stale; other connections' still land.
+    /// Drops the cached levels of `conn` and its derived children and returns a load for each
+    /// of their expanded levels. Only their loads in flight go stale; others' still land.
     pub fn refresh_connection(&mut self, conn: &str) -> Vec<LoadRequest> {
+        let ours = |c: &str| {
+            c.strip_prefix(conn)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        };
         self.generation += 1;
         self.floors.insert(conn.to_owned(), self.generation);
-        self.schemas.remove(conn);
-        self.databases.remove(conn);
-        self.relations.retain(|(c, _), _| c != conn);
-        self.columns.retain(|(c, _), _| c != conn);
-        self.sample_errors.retain(|(c, _), _| c != conn);
-        self.keys.retain(|(c, _), _| c != conn);
-        self.command_docs.remove(conn);
+        self.schemas.retain(|c, _| !ours(c));
+        self.databases.retain(|c, _| !ours(c));
+        self.relations.retain(|(c, _), _| !ours(c));
+        self.columns.retain(|(c, _), _| !ours(c));
+        self.sample_errors.retain(|(c, _), _| !ours(c));
+        self.keys.retain(|(c, _), _| !ours(c));
+        self.command_docs.retain(|c, _| !ours(c));
         let rels = self
             .relation_objects
-            .extract_if(|(c, _), _| c == conn)
+            .extract_if(|(c, _), _| ours(c))
             .map(|(k, _)| k)
             .collect();
         let schemas = self
             .schema_objects
-            .extract_if(|(c, _), _| c == conn)
+            .extract_if(|(c, _), _| ours(c))
             .map(|(k, _)| k)
             .collect();
         let keys: Vec<NodeKey> = self
             .expanded
             .iter()
-            .filter(|k| node_connection(k) == conn)
+            .filter(|k| ours(node_connection(k)))
             .cloned()
             .collect();
         let mut loads: Vec<_> = keys.iter().filter_map(|k| self.start(k)).collect();
