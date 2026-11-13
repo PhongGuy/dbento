@@ -248,7 +248,7 @@ pub fn filter_clause(m: &TabModel, stmt: usize, target: GridTarget, id: &str) ->
     let spec = m.spec();
     let engine = spec.workspace.connection(&spec.connection)?.engine();
     let oid = info.pg_type_oid();
-    let literal = sql_literal(
+    let mut literal = sql_literal(
         engine,
         cell,
         info.type_name(),
@@ -262,6 +262,11 @@ pub fn filter_clause(m: &TabModel, stmt: usize, target: GridTarget, id: &str) ->
         FilterOp::Eq | FilterOp::Ne => {
             if engine == Engine::Postgres && oid.is_some_and(|o| PG_NO_EQUALITY.contains(&o)) {
                 column.push_str("::text");
+            }
+            // `real = numeric` widens the column to double precision, which no longer equals
+            // the real's shortest text, so the literal is narrowed to real instead.
+            if engine == Engine::Postgres && oid == Some(PG_FLOAT4) {
+                literal.push_str("::real");
             }
             let cmp = if op == FilterOp::Eq { "=" } else { "<>" };
             format!("{column} {cmp} {literal}")
@@ -278,6 +283,9 @@ const PG_NO_EQUALITY: [u32; 23] = [
     114, 199, 142, 143, 600, 1017, 602, 1019, 603, 1020, 604, 1027, 718, 719, 4072, 4073, 22, 1006,
     194, 2970, 2949, 5038, 5039,
 ];
+
+/// Postgres `real` (float4).
+const PG_FLOAT4: u32 = 700;
 
 /// Whether the browse's applied filter, which the Filter entries build on, takes a clause.
 fn filter_joinable(m: &TabModel) -> bool {

@@ -403,6 +403,26 @@ fn a_sqlite_cell_filter_follows_the_cell_storage_class(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn a_sqlite_real_cell_filter_finds_its_row(cx: &mut TestAppContext) {
+    let fx = fixture(
+        "CREATE TABLE f(id INTEGER PRIMARY KEY, r REAL); \
+         INSERT INTO f VALUES (1, 1.0 / 3), (2, 1e20), (3, 0.1), (4, -1e-7);",
+        "",
+    );
+    let m = ready(cx, &fx, "f");
+    let clauses: Vec<String> = m.read_with(cx, |m, _| {
+        (0..4)
+            .map(|row| {
+                filter_clause(m, 0, GridTarget::Cell(row, 2), "grid-menu-filter-eq").unwrap()
+            })
+            .collect()
+    });
+    for (sql, id) in clauses.iter().zip(["1", "2", "3", "4"]) {
+        assert_eq!(kept_ids(cx, &m, sql), [id], "{sql}");
+    }
+}
+
+#[gpui_kit::test]
 fn a_postgres_cell_filter_follows_the_column_type(cx: &mut TestAppContext) {
     support::init(cx);
     support::init_tokio(cx);
@@ -413,10 +433,11 @@ fn a_postgres_cell_filter_follows_the_column_type(cx: &mut TestAppContext) {
         db.admin()
             .await
             .batch_execute(
-                r#"CREATE TABLE p(id int PRIMARY KEY, n numeric, j json, pt point, "T" text, b bytea);
+                r#"CREATE TABLE p(id int PRIMARY KEY, n numeric, j json, pt point, "T" text, b bytea,
+                                  r real, d double precision);
                    INSERT INTO p VALUES
-                     (1, 1.50, '{"a": 1}', '(1,2)', 'x\y', '\x01ff'),
-                     (2, 2, '[1]', '(3,4)', 'it''s', '\x02');"#,
+                     (1, 1.50, '{"a": 1}', '(1,2)', 'x\y', '\x01ff', 1/3::real, 0.1),
+                     (2, 2, '[1]', '(3,4)', 'it''s', '\x02', 1e20, 'NaN');"#,
             )
             .await
             .unwrap()
@@ -458,6 +479,16 @@ fn a_postgres_cell_filter_follows_the_column_type(cx: &mut TestAppContext) {
         (clause(cx, 0, 5, eq), "\"T\" = E'x\\\\y'", &["1"]),
         (clause(cx, 1, 5, eq), "\"T\" = 'it''s'", &["2"]),
         (clause(cx, 1, 6, eq), "b = E'\\\\x02'", &["2"]),
+        // A real widened to double precision would no longer equal its own shortest text.
+        (clause(cx, 0, 7, eq), "r = 0.33333334::real", &["1"]),
+        (clause(cx, 1, 7, eq), "r = 1e+20::real", &["2"]),
+        (
+            clause(cx, 1, 7, "grid-menu-filter-ne"),
+            "r <> 1e+20::real",
+            &["1"],
+        ),
+        (clause(cx, 0, 8, eq), "d = 0.1", &["1"]),
+        (clause(cx, 1, 8, eq), "d = 'NaN'", &["2"]),
         (clause(cx, 0, 3, "grid-menu-filter-null"), "j IS NULL", &[]),
     ];
     for (got, sql, ids) in want {
