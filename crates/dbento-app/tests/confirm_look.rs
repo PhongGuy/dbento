@@ -192,3 +192,72 @@ fn a_mongodb_prompt_previews_in_javascript() {
         "deleteMany with an empty filter on 'shop'"
     );
 }
+
+// Whether `id` holds the keyboard focus, read after a fresh frame.
+fn focused(cx: &mut TestAppContext, o: &support::Opened, id: &'static str) -> bool {
+    cx.update_window(o.win, |_, w, cx| {
+        w.render_frame(cx);
+        w.find(id).focused() == Some(true)
+    })
+    .unwrap()
+}
+
+fn press(cx: &mut TestAppContext, o: &support::Opened, key: &str) {
+    cx.update_window(o.win, |_, w, cx| w.press(key, cx))
+        .unwrap();
+}
+
+fn asked(cx: &mut TestAppContext, o: &support::Opened) {
+    o.run(cx, "UPDATE t SET x = 0");
+    wait_real(cx, "the dialog", |cx| present(cx, o.win, "confirm-dialog"));
+}
+
+#[gpui_kit::test]
+fn enter_with_the_initial_focus_cancels(cx: &mut TestAppContext) {
+    let o = opened(cx, "CREATE TABLE t(x); INSERT INTO t VALUES (1);", "", 0);
+    asked(cx, &o);
+    assert!(focused(cx, &o, "confirm-skip"));
+    press(cx, &o, "enter");
+    o.idle(cx);
+    assert_eq!(o.fx.count("SELECT count(*) FROM t WHERE x = 0"), 0);
+}
+
+#[gpui_kit::test]
+fn tab_then_enter_runs_the_focused_run_anyway(cx: &mut TestAppContext) {
+    let o = opened(cx, "CREATE TABLE t(x); INSERT INTO t VALUES (1);", "", 0);
+    asked(cx, &o);
+    press(cx, &o, "tab");
+    assert!(focused(cx, &o, "confirm-run"));
+    assert!(!focused(cx, &o, "confirm-skip"));
+    press(cx, &o, "enter");
+    o.idle(cx);
+    assert_eq!(o.fx.count("SELECT count(*) FROM t WHERE x = 0"), 1);
+}
+
+#[gpui_kit::test]
+fn escape_cancels_even_with_run_anyway_focused(cx: &mut TestAppContext) {
+    let o = opened(cx, "CREATE TABLE t(x); INSERT INTO t VALUES (1);", "", 0);
+    asked(cx, &o);
+    press(cx, &o, "tab");
+    assert!(focused(cx, &o, "confirm-run"));
+    press(cx, &o, "escape");
+    o.idle(cx);
+    assert_eq!(o.fx.count("SELECT count(*) FROM t WHERE x = 0"), 0);
+    assert!(!present(cx, o.win, "confirm-dialog"));
+}
+
+// A dialog whose Enter answers a later choice keeps the first button focused for Space and
+// Enter on its default, even with that first button focused.
+#[gpui_kit::test]
+fn a_later_default_keeps_enter_while_the_first_choice_holds_focus(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let rx = cx
+        .update_window(o.win, |_, w, cx| {
+            dbento_app::confirm::ask(ask([("no", false), ("yes", false)], 1), w, cx)
+        })
+        .unwrap();
+    wait_real(cx, "the dialog", |cx| present(cx, o.win, "confirm-dialog"));
+    assert!(focused(cx, &o, "no"));
+    press(cx, &o, "enter");
+    assert_eq!(rx.try_recv().ok(), Some(1));
+}
