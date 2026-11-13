@@ -680,10 +680,13 @@ fn a_postgres_insert_copy_resolves_aliases_through_the_catalog(cx: &mut TestAppC
     }
 }
 
-/// A kept Postgres result copies and labels its error as Postgres after the tab switches to
-/// SQLite, and asks the SQLite session for no catalog lookup on its behalf.
+/// A kept Postgres result copies and labels its error as Postgres after its connection is
+/// edited into SQLite and the tab reconnects, and asks the SQLite session for no catalog
+/// lookup on its behalf.
 #[gpui_kit::test]
-fn a_kept_postgres_result_keeps_its_engine_after_a_switch_to_sqlite(cx: &mut TestAppContext) {
+fn a_kept_postgres_result_keeps_its_engine_after_its_connection_turns_sqlite(
+    cx: &mut TestAppContext,
+) {
     support::init(cx);
     support::init_tokio(cx);
     let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
@@ -700,10 +703,8 @@ fn a_kept_postgres_result_keeps_its_engine_after_a_switch_to_sqlite(cx: &mut Tes
             .unwrap()
     });
     let toml = dir.path().join("dbento.toml");
-    let both = std::fs::read_to_string(&toml).unwrap()
-        + "\n[connections.lite]\nengine = \"sqlite\"\npath = \"app.db\"\n";
-    std::fs::write(&toml, both).unwrap();
-    let ws = std::sync::Arc::new(dbento_core::Workspace::open(dir.path()).unwrap());
+    let as_pg = std::fs::read_to_string(&toml).unwrap();
+    let as_lite = "dbento = 1\n[connections.pg]\nengine = \"sqlite\"\npath = \"app.db\"\n";
     let model = cx.new(|_| TabModel::new(spec));
     let m = model.clone();
     let (win, pane) = cx
@@ -713,14 +714,19 @@ fn a_kept_postgres_result_keeps_its_engine_after_a_switch_to_sqlite(cx: &mut Tes
             })
         })
         .unwrap();
-    let run_then_switch = |cx: &mut TestAppContext, sql: &str| {
-        model.update(cx, |m, cx| m.run(sql.into(), cx));
-        support::wait_real(cx, "the run", |cx| model.read_with(cx, |m, _| !m.running()));
-        let switched = model.update(cx, |m, cx| m.switch_connection("lite", Arc::clone(&ws), cx));
-        assert!(switched.is_ok());
+    // A reconnect after an edit keeps the result, where a switch would drop it.
+    let reconnect_as = |cx: &mut TestAppContext, text: &str| {
+        std::fs::write(&toml, text).unwrap();
+        let ws = Arc::new(dbento_core::Workspace::open(dir.path()).unwrap());
+        drop(model.update(cx, |m, cx| m.reconnect(ws, cx)));
         cx.run_until_parked();
     };
-    run_then_switch(cx, "SELECT a AS n, b, c FROM t");
+    let run_then_reconnect = |cx: &mut TestAppContext, sql: &str| {
+        model.update(cx, |m, cx| m.run(sql.into(), cx));
+        support::wait_real(cx, "the run", |cx| model.read_with(cx, |m, _| !m.running()));
+        reconnect_as(cx, as_lite);
+    };
+    run_then_reconnect(cx, "SELECT a AS n, b, c FROM t");
     pane.update(cx, |p, cx| {
         p.table()
             .update(cx, |t, cx| t.set_selection(TableSelection::Row(0), cx))
@@ -733,9 +739,8 @@ fn a_kept_postgres_result_keeps_its_engine_after_a_switch_to_sqlite(cx: &mut Tes
     // bytea as its hex text, which an escape literal carries back.
     let want = r"INSERT INTO public.t (n, b, c) VALUES (1, E'x\\y', E'\\x01ff');";
     support::wait_real(cx, "the copy", |cx| clipboard(cx).as_deref() == Some(want));
-    let back = model.update(cx, |m, cx| m.switch_connection("pg", Arc::clone(&ws), cx));
-    assert!(back.is_ok());
-    run_then_switch(cx, "SELECT nope FROM t");
+    reconnect_as(cx, &as_pg);
+    run_then_reconnect(cx, "SELECT nope FROM t");
     assert_eq!(
         support::label_of(cx, win, "result-error-code").as_deref(),
         Some("SQLSTATE 42703")
@@ -796,24 +801,8 @@ fn copy_after_repointing(
     support::wait_real(cx, "the copy", |cx| clipboard(cx).as_deref() == Some(want));
 }
 
-/// A kept Postgres result copies under its own labels after the tab switches to another
-/// Postgres connection, whose catalog says nothing about the first one's OIDs.
-#[gpui_kit::test]
-fn a_kept_postgres_result_skips_the_lookup_after_a_switch_to_another_postgres(
-    cx: &mut TestAppContext,
-) {
-    copy_after_repointing(cx, |cx, model, dir, b| {
-        let toml = dir.join("dbento.toml");
-        let both = std::fs::read_to_string(&toml).unwrap() + &b.connection_toml("pg2", "");
-        std::fs::write(&toml, both).unwrap();
-        let ws = std::sync::Arc::new(dbento_core::Workspace::open(dir).unwrap());
-        let switched = model.update(cx, |m, cx| m.switch_connection("pg2", ws, cx));
-        assert!(switched.is_ok());
-    });
-}
-
-/// The same holds when the connection keeps its name but its database is edited and the
-/// tab reconnects.
+/// A kept Postgres result copies under its own labels after its connection is edited to
+/// another database and the tab reconnects, since the new catalog says nothing of its OIDs.
 #[gpui_kit::test]
 fn a_kept_postgres_result_skips_the_lookup_after_its_connection_is_edited(cx: &mut TestAppContext) {
     copy_after_repointing(cx, |cx, model, dir, b| {
