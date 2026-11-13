@@ -141,17 +141,19 @@ fn a_second_close_request_while_the_question_is_open_asks_nothing_more(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn a_window_close_while_a_tab_question_is_open_waits_for_its_answer(cx: &mut TestAppContext) {
+fn a_window_close_while_a_tab_question_is_open_withdraws_it_as_keep(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     click(cx, &o, "tab-new");
     set(cx, &o, 0, "SELECT 42");
     click(cx, &o, ("tab-close", 0usize));
     wait_real(cx, "the dialog", |cx| present(cx, o.win, "confirm-dialog"));
+    // The SQL is kept as a draft, so the close asks nothing; the tab question never says Close.
     let mut v = VisualTestContext::from_window(o.win, cx);
-    assert!(!v.simulate_close(), "the open question holds the window");
-    click(cx, &o, "discard-keep");
-    assert!(!present(cx, o.win, "confirm-dialog"));
+    v.simulate_close();
     assert_eq!(count(cx, &o), 2);
+    wait_real(cx, "the window to close", |cx| {
+        cx.update(|cx| cx.windows().is_empty())
+    });
 }
 
 #[gpui_kit::test]

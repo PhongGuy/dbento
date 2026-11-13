@@ -239,16 +239,42 @@ pub fn sql_box(
         )
 }
 
+/// An open [`ask_closable`] question: its answer, and a way to take it off screen unanswered.
+pub struct Asked {
+    /// Yields the chosen index once; errs when the dialog goes away unanswered.
+    pub answer: async_channel::Receiver<usize>,
+    buttons: Rc<Vec<FocusHandle>>,
+}
+
+impl Asked {
+    /// Closes the dialog while one of its buttons holds focus. Focus elsewhere means another
+    /// dialog sits on top, and closing then would take the wrong one.
+    pub fn close(&self, window: &mut Window, cx: &mut App) {
+        if self.buttons.iter().any(|h| h.is_focused(window)) {
+            window.close_dialog(cx);
+        }
+    }
+}
+
 /// Opens the modal over `window` on the next effect cycle, so a popup menu that restores focus
 /// after its click handler cannot pull focus out of it. The receiver yields the chosen index
 /// once; it errs when the dialog goes away unanswered (window closed).
 pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Receiver<usize> {
+    ask_closable(spec, window, cx).answer
+}
+
+/// [`ask`], also returning a way to close the dialog unanswered.
+pub fn ask_closable(spec: Ask, window: &mut Window, cx: &mut App) -> Asked {
     // A one-slot channel and try_send: whichever answer lands first wins, later ones drop.
     let (tx, rx) = async_channel::bounded(1);
     let focused = Rc::new(Cell::new(false));
     // One focus handle per button for the dialog's life, so Enter can tell which one holds focus.
     let handles: Rc<Vec<FocusHandle>> =
         Rc::new(spec.choices.iter().map(|_| cx.focus_handle()).collect());
+    let asked = Asked {
+        answer: rx,
+        buttons: Rc::clone(&handles),
+    };
     window.defer(cx, move |window, cx| {
         // The builder runs every frame, so the preview's editor is made once, here, and each
         // handler clones what it captures.
@@ -358,7 +384,7 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
                 )
         });
     });
-    rx
+    asked
 }
 
 /// What the connection picker shows: a title, a dim detail, the SQL boxed, and one row per
