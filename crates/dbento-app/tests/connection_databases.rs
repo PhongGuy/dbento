@@ -169,19 +169,27 @@ fn sql_server_keeps_database_optional(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn sql_server_refuses_two_names_that_differ_only_in_case(cx: &mut TestAppContext) {
+fn sql_server_ticks_names_that_differ_only_in_case_as_one(cx: &mut TestAppContext) {
     let (win, f) = open(cx, Some(("ms", ms())));
     listed(cx, &f, &["App", "app", "billing"]);
     choose(cx, win, DatabasesChoice::Choose);
     tick(cx, win, 0);
+    assert_eq!(databases(cx, &f), Some(names(&["App"])));
+    // `app` shows ticked as the same database, so clicking it unticks `App`.
     tick(cx, win, 1);
+    assert!(f.read_with(cx, |f, _| f.chosen_databases().is_empty()));
+}
+
+#[gpui_kit::test]
+fn sql_server_refuses_a_stored_pair_that_differs_only_in_case(cx: &mut TestAppContext) {
+    let mut spec = ms();
+    spec.databases = Some(names(&["App", "app"]));
+    let (_, f) = open(cx, Some(("ms", spec)));
     let refused = edit(cx, &f).unwrap_err();
     assert!(
         refused.contains("App and app are one database on SQL Server"),
         "{refused}"
     );
-    tick(cx, win, 1);
-    assert_eq!(databases(cx, &f), Some(names(&["App"])));
 }
 
 #[gpui_kit::test]
@@ -314,4 +322,57 @@ fn a_parent_offers_no_database_suggestions(cx: &mut TestAppContext) {
         present(cx, win, "conn-database-suggestions"),
         "back to one database, Database offers the list again"
     );
+}
+
+#[gpui_kit::test]
+fn a_test_waits_for_save_to_check_databases(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, Some(("srv", pg())));
+    choose(cx, win, DatabasesChoice::Choose);
+    set(cx, win, &f, Field::Database, "");
+    assert!(edit(cx, &f).is_err(), "Save still refuses both");
+    let (_, tested) = f.read_with(cx, |f, cx| f.test_edit(cx)).unwrap();
+    assert_eq!(
+        (tested.database, tested.databases),
+        (None, None),
+        "Test connects the connection itself, with its own empty-Database fallback"
+    );
+}
+
+#[gpui_kit::test]
+fn sql_server_shows_a_stored_name_on_the_servers_row_ignoring_case(cx: &mut TestAppContext) {
+    let mut spec = ms();
+    spec.databases = Some(names(&["Sales"]));
+    let (win, f) = open(cx, Some(("ms", spec)));
+    listed(cx, &f, &["sales", "billing"]);
+    assert_eq!(
+        f.read_with(cx, |f, _| f.database_items()),
+        ["sales", "billing"],
+        "one row, the server's"
+    );
+    assert!(!present(cx, win, ("conn-databases-gone", 0usize)));
+    tick(cx, win, 1);
+    assert_eq!(
+        databases(cx, &f),
+        Some(names(&["Sales", "billing"])),
+        "the stored spelling stays when another row is ticked"
+    );
+    tick(cx, win, 0);
+    assert_eq!(
+        databases(cx, &f),
+        Some(names(&["billing"])),
+        "the server's row is the stored name's"
+    );
+}
+
+#[gpui_kit::test]
+fn postgres_keeps_names_that_differ_in_case_apart(cx: &mut TestAppContext) {
+    let mut spec = pg();
+    spec.databases = Some(names(&["Sales"]));
+    let (win, f) = open(cx, Some(("srv", spec)));
+    listed(cx, &f, &["sales"]);
+    assert_eq!(
+        f.read_with(cx, |f, _| f.database_items()),
+        ["sales", "Sales"]
+    );
+    assert!(present(cx, win, ("conn-databases-gone", 1usize)));
 }

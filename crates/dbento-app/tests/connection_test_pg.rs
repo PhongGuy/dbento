@@ -263,3 +263,57 @@ fn a_test_then_all_on_the_server_saves_a_parent(cx: &mut TestAppContext) {
         "the fixture's database is a child connection"
     );
 }
+
+#[gpui_kit::test]
+fn choose_with_nothing_ticked_still_tests_and_lists(cx: &mut TestAppContext) {
+    support::init(cx);
+    support::init_tokio(cx);
+    let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
+    // The container's drop needs a runtime, and it outlives `db`.
+    let _enter = rt.enter();
+    let db = rt.block_on(dbento_testkit::pg_db());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dbento.toml"), "dbento = 1\n").unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let services = Services {
+        paths: AppPaths::in_dir(files.path()),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(|_| None),
+        secrets_in_memory: false,
+    };
+    let (win, shell) = cx
+        .update(|cx| start(services, Some(dir.path().into()), cx))
+        .unwrap();
+    support::click_id(cx, win, "connection-new");
+    support::wait_real(cx, "the dialog", |cx| {
+        support::present(cx, win, "conn-name")
+    });
+    let f = shell.read_with(cx, |s, _| s.connection_form().cloned().unwrap());
+    let set = |cx: &mut TestAppContext, field: Field, text: String| {
+        let state = f.read_with(cx, |f, _| f.input(field).clone());
+        cx.update_window(win, |_, w, cx| {
+            state.update(cx, |s, cx| s.set_value(text, w, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    set(cx, Field::Name, "srv".into());
+    set(cx, Field::Host, db.host().to_owned());
+    set(cx, Field::Port, db.port().to_string());
+    set(cx, Field::User, db.user().to_owned());
+    set(cx, Field::Password, db.password().to_owned());
+    // Choose before any Test, with nothing to tick yet and Database cleared again.
+    cx.update_window(win, |_, w, cx| {
+        w.within("conn-databases")
+            .click(DatabasesChoice::Choose as usize, cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    set(cx, Field::Database, String::new());
+    support::click_id(cx, win, "conn-test");
+    support::wait_real(cx, "connected", |cx| {
+        support::label_of(cx, win, "conn-test-result").as_deref() == Some("Connected")
+    });
+    let items = f.read_with(cx, |f, _| f.database_items());
+    assert!(items.iter().any(|d| d == db.database()), "{items:?}");
+}

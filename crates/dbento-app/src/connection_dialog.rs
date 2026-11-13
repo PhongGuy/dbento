@@ -647,11 +647,26 @@ impl ConnectionForm {
         let stored = Shown::of(&self.loaded).chosen;
         let mut items = self.databases.clone();
         for name in stored.iter().chain(&self.chosen) {
-            if !items.contains(name) {
+            if !items.iter().any(|d| self.same_database(d, name)) {
                 items.push(name.clone());
             }
         }
         items
+    }
+
+    // Whether two names are one database: SQL Server compares them ignoring case, so a stored
+    // `Sales` is the server's `sales`.
+    fn same_database(&self, a: &str, b: &str) -> bool {
+        if self.engine == Engine::Mssql {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    }
+
+    // Whether the Choose list's row `item` is ticked, by a name spelled either way on SQL Server.
+    fn is_chosen(&self, item: &str) -> bool {
+        self.chosen.iter().any(|d| self.same_database(d, item))
     }
 
     // A parent on Postgres lists its databases from the one it names, so picking All or Choose
@@ -675,12 +690,32 @@ impl ConnectionForm {
 
     // Ticking keeps the list's order, so the file lists them as the dialog shows them.
     fn tick_database(&mut self, name: &str, on: bool, cx: &mut Context<Self>) {
-        if on {
-            let ticked = |d: &String| d == name || self.chosen.contains(d);
-            self.chosen = self.database_items().into_iter().filter(ticked).collect();
+        // A ticked name keeps the spelling it was stored with, so ticking another row never
+        // rewrites it to the server's.
+        let ticked = |item: &String| {
+            let kept = self.chosen.iter().find(|d| self.same_database(d, item));
+            match kept {
+                Some(d) => Some(d.clone()),
+                None => self.same_database(item, name).then(|| item.clone()),
+            }
+        };
+        self.chosen = if on {
+            // Two rows that are one database on SQL Server tick as one name.
+            let mut chosen: Vec<String> = Vec::new();
+            for name in self.database_items().iter().filter_map(ticked) {
+                if !chosen.iter().any(|d| self.same_database(d, &name)) {
+                    chosen.push(name);
+                }
+            }
+            chosen
         } else {
-            self.chosen.retain(|d| d != name);
-        }
+            let unticked = |d: &String| self.same_database(d, name);
+            self.chosen
+                .iter()
+                .filter(|d| !unticked(d))
+                .cloned()
+                .collect()
+        };
         cx.notify();
     }
 
@@ -758,8 +793,20 @@ impl ConnectionForm {
         self.engine
     }
 
-    /// The name and the loaded spec with only the controls the user changed applied.
+    /// The name and the loaded spec with only the controls the user changed applied, checked
+    /// as Save writes it.
     pub fn edit(&self, cx: &App) -> Result<(String, ConnectionSpec), String> {
+        self.spec(cx, true)
+    }
+
+    /// As [`Self::edit`] for Test, which connects the connection itself: which databases become
+    /// children doesn't change that, and a Test is how the Choose list fills, so the Databases
+    /// checks wait for Save and the spec carries no `databases`.
+    pub fn test_edit(&self, cx: &App) -> Result<(String, ConnectionSpec), String> {
+        self.spec(cx, false)
+    }
+
+    fn spec(&self, cx: &App, saving: bool) -> Result<(String, ConnectionSpec), String> {
         let text = |field: Field| self.input(field).read(cx).value().trim().to_owned();
         let name = text(Field::Name);
         if name.is_empty() {
@@ -822,6 +869,7 @@ impl ConnectionForm {
                         };
                     }
                 }
+                FieldKind::Databases if !saving => spec.databases = None,
                 FieldKind::Databases => {
                     let now = self.databases_value()?;
                     if now != spec.databases {
@@ -1298,11 +1346,11 @@ impl ConnectionForm {
             .enumerate()
             .map(|(ix, name)| {
                 let valid = valid_database_name(&name);
-                let gone = listed && !self.databases.contains(&name);
+                let gone = listed && !self.databases.iter().any(|d| self.same_database(d, &name));
                 let mut check = Checkbox::new(("conn-databases-item", ix))
                     .small()
                     .label(SharedString::from(name.clone()))
-                    .checked(self.chosen.contains(&name))
+                    .checked(self.is_chosen(&name))
                     .disabled(!valid);
                 if !valid {
                     check = check.tooltip(BAD_DATABASE_NAME);

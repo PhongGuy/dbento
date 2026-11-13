@@ -3163,7 +3163,7 @@ impl Shell {
         let typed = f.password(cx);
         let typed_passphrase = f.key_passphrase(cx);
         let previous = f.previous().map(str::to_owned);
-        let planned = f.edit(cx).and_then(|(name, mut spec)| {
+        let planned = f.test_edit(cx).and_then(|(name, mut spec)| {
             // Postgres needs a database to connect to, but the database is what a Test lists:
             // with Database left empty, the test opens the server's own `postgres` instead, so
             // Host, User and Password are enough to pick from the list. Save still needs one.
