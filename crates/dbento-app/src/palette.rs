@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use dbento_core::{RelationKind, RelationRef, SavedQuery, Workspace};
 use gpui_kit::assets::IconName;
-use gpui_kit::base::actions::Cancel;
+use gpui_kit::base::actions::{Cancel, SelectDown, SelectUp};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::component::{ActiveTheme as _, IndexPath, WindowExt as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -527,6 +527,9 @@ pub struct Palette {
     pinned: Option<String>,
     // The row the pointer rests on, whose hover the pin turned back.
     under: Option<IndexPath>,
+    // The user moved the highlight by key or pointer under the current query; until then
+    // changed rows hand the highlight to the first row.
+    chose: bool,
     _sidebar: Subscription,
 }
 
@@ -616,7 +619,7 @@ impl Palette {
         cx.emit(event);
     }
 
-    // Rows that changed keep the highlighted entry, or the first row once it is gone, until
+    // Rows that changed keep the entry the user highlighted, or else the first row, until
     // the pointer moves. Under an unchanged query the kit's selection follows the kept row
     // once it has installed the new rows, since a vanished path resets it to the first row.
     fn pin(
@@ -640,8 +643,12 @@ impl Palette {
                 });
             });
         }
+        if query != self.shown_query {
+            self.chose = false;
+        }
         self.shown_query = query;
         let was = (self.state.read(cx).selected_index())
+            .filter(|_| self.chose)
             .and_then(|ix| self.shown.get(ix.section)?.get(ix.row).cloned());
         let mut labels = shown.iter().flatten();
         self.pinned = match was {
@@ -680,6 +687,7 @@ impl Palette {
     // denied, since moving within that row raises no new hover.
     fn moved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pinned = None;
+        self.chose = true;
         if let Some(ix) = self.under.take() {
             self.state
                 .update(cx, |s, cx| s.set_selected_index(Some(ix), window, cx));
@@ -765,6 +773,8 @@ impl Render for Palette {
             .id("palette")
             .test_support()
             .on_mouse_move(cx.listener(|p, _, window, cx| p.moved(window, cx)))
+            .capture_action(cx.listener(|p, _: &SelectUp, _, _| p.chose = true))
+            .capture_action(cx.listener(|p, _: &SelectDown, _, _| p.chose = true))
             .capture_action(move |_: &Cancel, window, cx| {
                 let query = state.read(cx).query(cx);
                 if !query.is_empty() && parse_query(&query).1.is_empty() {
@@ -804,6 +814,7 @@ pub fn open(init: PaletteInit, mode: Mode, window: &mut Window, cx: &mut App) ->
         shown_query: SharedString::default(),
         pinned: None,
         under: None,
+        chose: false,
         _sidebar: cx.observe(&sidebar, |p: &mut Palette, _, cx| p.pump(cx)),
     });
     palette.update(cx, |p, cx| p.pump(cx));
