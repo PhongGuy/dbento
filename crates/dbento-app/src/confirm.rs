@@ -1,5 +1,6 @@
 //! A themed in-app confirmation dialog that replaces the platform prompt: Enter answers the
-//! default, Escape the cancel choice, and each button carries an id the pilot can see.
+//! focused button where the default holds the first focus, else the default; Escape the cancel
+//! choice. Each button carries an id the pilot can see.
 // Copied from Apinata (crates/apinata-app/src/confirm.rs), MIT OR Apache-2.0, without its
 // dialog placement helper.
 
@@ -13,9 +14,9 @@ use gpui_kit::component::input::{Editor, EditorState, Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Size, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    App, AppContext as _, Div, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled, TestSupportExt,
-    Window, div, px,
+    App, AppContext as _, Div, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled,
+    TestSupportExt, Window, div, px,
 };
 
 use crate::staged::PREVIEW_LINES;
@@ -41,7 +42,8 @@ pub struct Choice {
     pub danger: bool,
 }
 
-/// `default` is the index Enter answers; `cancel` the index Escape answers. Buttons are painted
+/// `default` is the index Enter answers; when it is the first choice, which starts focused,
+/// Enter follows the focus instead. `cancel` is the index Escape answers. Buttons are painted
 /// by [`choice_style`], so beside a `danger` choice the destructive one is the only red button.
 #[derive(Clone)]
 pub struct Ask {
@@ -55,7 +57,7 @@ pub struct Ask {
     pub language: &'static str,
     /// The buttons, left to right.
     pub choices: Vec<Choice>,
-    /// Index into `choices` that Enter answers.
+    /// Index into `choices` that Enter answers; at 0, Enter follows the focus instead.
     pub default: usize,
     /// Index into `choices` that Escape answers.
     pub cancel: usize,
@@ -244,6 +246,9 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
     // A one-slot channel and try_send: whichever answer lands first wins, later ones drop.
     let (tx, rx) = async_channel::bounded(1);
     let focused = Rc::new(Cell::new(false));
+    // One focus handle per button for the dialog's life, so Enter can tell which one holds focus.
+    let handles: Rc<Vec<FocusHandle>> =
+        Rc::new(spec.choices.iter().map(|_| cx.focus_handle()).collect());
     window.defer(cx, move |window, cx| {
         // The builder runs every frame, so the preview's editor is made once, here, and each
         // handler clones what it captures.
@@ -253,14 +258,34 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
             .as_ref()
             .map(|sql| code_preview(sql, language, window, cx));
         window.open_dialog(cx, move |dialog, window, cx| {
-            // Once the first frame holding the buttons is drawn, step focus from the dialog to
-            // its first button (Cancel beside a danger choice), so Space never answers Run.
+            // Once the first frame holding the buttons is drawn, focus the first button (Cancel
+            // beside a danger choice), so Space never answers Run.
             if !focused.replace(true) {
-                window.defer(cx, |window, cx| window.focus_next(cx));
+                let first = handles.first().cloned();
+                window.defer(cx, move |window, cx| {
+                    if let Some(handle) = first {
+                        handle.focus(window, cx);
+                    }
+                });
             }
             let key = |ix: usize| {
                 let tx = tx.clone();
                 move |_: &_, _: &mut Window, _: &mut App| {
+                    let _ = tx.try_send(ix);
+                    true
+                }
+            };
+            // Where the default is the first focus, Enter answers whichever button holds focus,
+            // so the ring is always on what Enter presses. A later default (Commit beside a
+            // focused Roll back) keeps Enter on itself.
+            let ok = {
+                let (tx, handles, default) = (tx.clone(), Rc::clone(&handles), spec.default);
+                move |_: &_, window: &mut Window, _: &mut App| {
+                    let focused = handles.iter().position(|h| h.is_focused(window));
+                    let ix = match focused {
+                        Some(ix) if default == 0 => ix,
+                        _ => default,
+                    };
                     let _ = tx.try_send(ix);
                     true
                 }
@@ -272,7 +297,10 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
                 .map(|(ix, c)| {
                     let tx = tx.clone();
                     let style = choice_style(&spec, ix);
-                    let button = Button::new(c.id).label(c.label.clone()).h(px(32.));
+                    let button = Button::new(c.id)
+                        .label(c.label.clone())
+                        .h(px(32.))
+                        .track_focus(&handles[ix]);
                     let button = match style {
                         ChoiceStyle::Neutral => ui::secondary(button),
                         ChoiceStyle::Primary => button.primary(),
@@ -292,7 +320,7 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
             // tab strip and the toolbar's production chip instead of covering them.
             frame(dialog, DIALOG_WIDTH, Some(danger), cx)
                 .margin_top(dialog_top(window))
-                .on_ok(key(spec.default))
+                .on_ok(ok)
                 .on_cancel(key(spec.cancel))
                 .child(
                     v_flex()
