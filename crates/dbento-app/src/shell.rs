@@ -72,7 +72,7 @@ use crate::runner::RunnerSpec;
 use crate::schema_tree::{NodeKey, select_text};
 use crate::settings_dialog::{SettingsView, SettingsViewEvent};
 use crate::settings_store::{self, SettingsEvent, SettingsStore};
-use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
+use crate::sidebar::{Sidebar, SidebarEvent, color_name, engine_label, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, TabModel};
@@ -993,6 +993,57 @@ impl Shell {
             t.set_sql(sql, window, cx);
             t.mark_saved(cx);
         });
+    }
+
+    /// A history row's `sql` in a new tab on `connection` when that name still resolves.
+    /// Else nothing opens: a warning names the missing connection and a picker asks which
+    /// connection the SQL opens on, so a row never lands silently on another one.
+    pub fn open_history(
+        &mut self,
+        connection: &str,
+        sql: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        if ws.connection(connection).is_some() {
+            return self.open_sql(connection, sql, window, cx);
+        }
+        let text = format!("{connection} no longer exists; pick a connection to run this.");
+        let notice = ui::Notice {
+            text,
+            kind: ui::NoticeKind::Warning,
+        };
+        ui::notice(window, cx, notice);
+        let names: Vec<String> = ws
+            .connections()
+            .iter()
+            .map(|c| c.name().to_owned())
+            .collect();
+        let spec = confirm::PickAsk {
+            title: format!("{connection} no longer exists").into(),
+            detail: "Pick a connection to open this on.".into(),
+            sql: sql.to_owned().into(),
+            rows: (ws.connections().iter())
+                .map(|c| (c.name().to_owned().into(), engine_label(c.engine())))
+                .collect(),
+        };
+        let picked = confirm::pick(spec, window, cx);
+        let sql = sql.to_owned();
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(ix) = picked.recv().await else {
+                return;
+            };
+            let Some(name) = names.get(ix) else {
+                return;
+            };
+            let _ = this.update_in(cx, |shell, window, cx| {
+                shell.open_sql(name, &sql, window, cx)
+            });
+        })
+        .detach();
     }
 
     /// The active query tab, if any.
@@ -2346,7 +2397,7 @@ impl Shell {
                     window,
                     |this, _, event, window, cx| match event {
                         HistoryPanelEvent::Open { connection, sql } => {
-                            this.open_sql(connection, sql, window, cx)
+                            this.open_history(connection, sql, window, cx)
                         }
                     },
                 ));

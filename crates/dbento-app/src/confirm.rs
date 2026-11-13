@@ -361,6 +361,89 @@ pub fn ask(spec: Ask, window: &mut Window, cx: &mut App) -> async_channel::Recei
     rx
 }
 
+/// What the connection picker shows: a title, a dim detail, the SQL boxed, and one row per
+/// connection as `(name, engine label)`.
+pub struct PickAsk {
+    /// The dialog title.
+    pub title: SharedString,
+    /// A dim line under the title.
+    pub detail: SharedString,
+    /// The SQL the pick will open, boxed in mono.
+    pub sql: SharedString,
+    /// The connections offered, in order.
+    pub rows: Vec<(SharedString, &'static str)>,
+}
+
+/// The connection picker: `pick-connection-dialog` holding rows `("pick-connection", n)`, each
+/// labelled by its name, and `pick-cancel`. The receiver yields the picked row's index once;
+/// Cancel or Escape closes it with nothing sent.
+pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::Receiver<usize> {
+    let (tx, rx) = async_channel::bounded(1);
+    window.defer(cx, move |window, cx| {
+        // Made once here: the builder runs every frame and must not rebuild the preview.
+        let preview = sql_preview(&spec.sql, window, cx);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let dim = theme::dim(cx);
+            let rows: Vec<_> = (spec.rows.iter().enumerate())
+                .map(|(ix, (name, engine))| {
+                    let tx = tx.clone();
+                    Button::new(("pick-connection", ix))
+                        .ghost()
+                        .w_full()
+                        .h(px(28.))
+                        .accessibility_label(name.clone())
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(div().flex_1().child(name.clone()))
+                                .child(div().text_sm().text_color(dim).child(*engine)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            let _ = tx.try_send(ix);
+                            window.close_dialog(cx);
+                        })
+                })
+                .collect();
+            let cancel = ui::secondary(Button::new("pick-cancel"))
+                .label("Cancel")
+                .h(px(32.))
+                .on_click(|_, window, cx| window.close_dialog(cx));
+            let warning = cx.theme().warning;
+            frame(dialog, DIALOG_WIDTH, Some(warning), cx)
+                .margin_top(dialog_top(window))
+                .child(
+                    v_flex()
+                        .id("pick-connection-dialog")
+                        .test_support()
+                        .child(title_row(
+                            Some((ui::Icons::TriangleAlert, warning)),
+                            spec.title.clone(),
+                            cx,
+                        ))
+                        .child(
+                            v_flex()
+                                .gap_3()
+                                .px_4()
+                                .pt_2()
+                                .pb_4()
+                                .child(div().text_sm().text_color(dim).child(spec.detail.clone()))
+                                .child(sql_box(spec.sql.clone(), &preview, cx))
+                                .child(
+                                    v_flex()
+                                        .id("pick-connection-list")
+                                        .max_h(px(240.))
+                                        .overflow_y_scroll()
+                                        .children(rows),
+                                ),
+                        )
+                        .child(footer(cx).child(div().flex_1()).child(cancel)),
+                )
+        });
+    });
+    rx
+}
+
 /// Why a name dialog's trimmed text cannot be used; None accepts it.
 pub type TextCheck = Rc<dyn Fn(&str) -> Option<SharedString>>;
 
