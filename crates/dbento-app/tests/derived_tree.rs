@@ -308,3 +308,53 @@ fn revealing_on_a_listed_child_opens_the_parent_without_a_load() {
         "not listed"
     );
 }
+
+/// `srv` lists `app` and `web`, each expanded with its schemas loaded.
+fn two_children() -> (tempfile::TempDir, CatalogTree) {
+    let (dir, mut t) = srv_listing(&["app", "web"]);
+    for child in ["srv/app", "srv/web"] {
+        let req = t.toggle(&conn(child)).unwrap();
+        answer(&mut t, req, Ok(schemas(&["public"])));
+    }
+    (dir, t)
+}
+
+#[test]
+fn refreshing_a_child_reloads_it_alone() {
+    let (_d, mut t) = two_children();
+    let loads = t.refresh_connection("srv/app");
+    let got: Vec<_> = loads.iter().map(|r| (r.conn.as_str(), &r.query)).collect();
+    assert_eq!(got, [("srv/app", &CatalogQuery::Schemas)]);
+    assert_eq!(t.link("srv/app"), LinkState::Connecting);
+    assert_eq!(t.link("srv"), LinkState::Connected);
+    assert_eq!(t.link("srv/web"), LinkState::Connected);
+}
+
+#[test]
+fn refreshing_a_parent_reloads_its_children_too() {
+    let (_d, mut t) = two_children();
+    let before = t.generation();
+    let mut got: Vec<_> = t
+        .refresh_connection("srv")
+        .into_iter()
+        .map(|r| (r.conn, r.query))
+        .collect();
+    got.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        got,
+        [
+            ("srv".to_owned(), CatalogQuery::Databases),
+            ("srv/app".to_owned(), CatalogQuery::Schemas),
+            ("srv/web".to_owned(), CatalogQuery::Schemas),
+        ]
+    );
+    assert_eq!(t.link("srv/web"), LinkState::Connecting);
+    assert!(
+        !t.is_current("srv/web", before),
+        "a child's late reply is stale"
+    );
+    assert!(
+        t.is_current("listed", before),
+        "another connection's still lands"
+    );
+}
