@@ -198,7 +198,7 @@ fn cancelled_by(cx: &mut TestAppContext, focus: fn(&mut TestAppContext, &Opened)
     press(cx, &o, "ctrl-.");
     o.idle(cx);
     let text = label_of(cx, o.win, ("statement-result", 0usize)).unwrap();
-    assert!(text.contains("cancelled"), "{text}");
+    assert!(text.contains("(stopped)"), "{text}");
 }
 
 #[gpui_kit::test]

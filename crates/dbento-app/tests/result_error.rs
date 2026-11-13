@@ -193,19 +193,19 @@ fn a_failed_run_fills_the_body_and_jump_moves_the_caret(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
-fn a_later_failure_keeps_the_earlier_grid_until_its_tab_is_picked(cx: &mut TestAppContext) {
+fn a_later_failure_opens_on_its_error_until_the_earlier_tab_is_picked(cx: &mut TestAppContext) {
     let o = opened(cx, "CREATE TABLE t(a);", "", 0);
     o.run(cx, "SELECT 5 AS a; SELECT nope_col FROM t");
     o.idle(cx);
-    assert_eq!(label_of(cx, o.win, "cell-0-0").as_deref(), Some("5"));
-    assert!(!present(cx, o.win, "result-error"));
-    cx.update_window(o.win, |_, w, cx| w.click(("statement-result", 1usize), cx))
-        .unwrap();
-    cx.run_until_parked();
     assert_eq!(
         label_of(cx, o.win, "result-error").as_deref(),
         Some("Query failed")
     );
+    cx.update_window(o.win, |_, w, cx| w.click(("statement-result", 0usize), cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(label_of(cx, o.win, "cell-0-0").as_deref(), Some("5"));
+    assert!(!present(cx, o.win, "result-error"));
 }
 
 #[gpui_kit::test]

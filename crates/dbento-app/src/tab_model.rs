@@ -1103,6 +1103,10 @@ impl TabModel {
                         }
                         StatementEnd::Planned
                     }
+                    Err(ExecuteError::Cancelled) => StatementEnd::Stopped {
+                        rows: 0,
+                        reason: StopReason::User,
+                    },
                     Err(e) => StatementEnd::Failed(e),
                 };
                 entry.store.finish(end);
@@ -1146,6 +1150,7 @@ impl TabModel {
                     cap.fetching = false;
                 }
                 self.stopping = false;
+                let end = self.as_user_stop(stmt, end);
                 let end = match self.append.is_some() {
                     true => self.appended_end(stmt, end),
                     false => {
@@ -3201,6 +3206,18 @@ impl TabModel {
                 StatementEnd::Truncated(t)
             }
             _ => StatementEnd::Stopped { rows, reason },
+        }
+    }
+
+    /// Only this tab's Cancel fires the session's cancel handle, so a cancelled statement is
+    /// the user's stop: it keeps the rows it sent instead of reading as a failure.
+    fn as_user_stop(&mut self, stmt: usize, end: StatementEnd) -> StatementEnd {
+        if !matches!(end, StatementEnd::Failed(ExecuteError::Cancelled)) {
+            return end;
+        }
+        StatementEnd::Stopped {
+            rows: self.entry(stmt).store.rows(),
+            reason: StopReason::User,
         }
     }
 

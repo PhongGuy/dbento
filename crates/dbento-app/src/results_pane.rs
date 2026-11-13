@@ -184,6 +184,8 @@ pub enum ResultMark {
     Waiting,
     /// The stream is parked at the fetch window with these rows.
     Paused(u64),
+    /// The statement never ran: its run stopped at its confirmation.
+    Skipped,
 }
 
 /// The mark for `r`, given the statement waiting on its question and the parked one.
@@ -196,6 +198,8 @@ pub fn result_mark(
         ResultMark::Waiting
     } else if matches!(r.store.end(), Some(StatementEnd::Failed(_))) {
         ResultMark::Failed
+    } else if matches!(r.store.end(), Some(StatementEnd::Skipped)) {
+        ResultMark::Skipped
     } else if paused == Some(r.stmt) {
         ResultMark::Paused(r.store.rows())
     } else if let Some(StatementEnd::Complete(o)) = r.store.end()
@@ -256,10 +260,13 @@ pub fn shown(results: &[StatementResult]) -> Option<usize> {
     results.iter().rposition(|r| !r.store.columns().is_empty())
 }
 
-/// The result the grid shows: `selected` when it indexes `results`, else [`shown`].
+/// The result the grid shows: `selected` when it indexes `results`, else the first failed
+/// one, so a script that stopped on an error opens on it, else [`shown`].
 pub fn displayed(results: &[StatementResult], selected: Option<usize>) -> Option<usize> {
+    let failed = |r: &StatementResult| matches!(r.store.end(), Some(StatementEnd::Failed(_)));
     selected
         .filter(|&ix| ix < results.len())
+        .or_else(|| results.iter().position(failed))
         .or_else(|| shown(results))
 }
 
@@ -376,7 +383,7 @@ pub struct ResultsPane {
     /// Grid or record view of the displayed result; never Plan, which follows the result.
     view: ResultView,
     /// The plan view of the displayed plan result, keyed by run, result and whether it has output.
-    plan: Option<((u64, usize, bool), Entity<PlanView>)>,
+    plan: Option<(PlanKey, Entity<PlanView>)>,
     // The shell's dock state, mirrored so the footer's inspector toggle can show it.
     inspector_open: bool,
     // The run id current when a hop asked for its single landed row to be selected.
@@ -1884,12 +1891,18 @@ impl ResultsPane {
             self.plan = None;
             return;
         };
-        let key = (m.run_id(), ix, plan.output.is_some());
+        let waiting = m.confirm().is_some_and(|p| p.stmt == results[ix].stmt);
+        let key = PlanKey {
+            run: m.run_id(),
+            ix,
+            has_output: plan.output.is_some(),
+            waiting,
+        };
         if self.plan.as_ref().is_some_and(|(k, _)| *k == key) {
             return;
         }
         let plan = plan.clone();
-        let view = cx.new(|cx| PlanView::new(&plan, window, cx));
+        let view = cx.new(|cx| PlanView::new(&plan, window, cx).waiting(waiting));
         self.plan = Some((key, view));
     }
 
@@ -2535,7 +2548,10 @@ impl Render for ResultsPane {
             let text = match mark {
                 ResultMark::Waiting => "waiting for confirmation".to_owned(),
                 ResultMark::Paused(n) => paused_label(n),
-                ResultMark::Rows(_) | ResultMark::Changed(_) | ResultMark::Failed => summary(r),
+                ResultMark::Rows(_)
+                | ResultMark::Changed(_)
+                | ResultMark::Failed
+                | ResultMark::Skipped => summary(r),
             };
             let tip: SharedString = match first_line(&r.sql) {
                 Some(sql) => format!("{text}\n{sql}").into(),
@@ -2559,6 +2575,7 @@ impl Render for ResultsPane {
                     ui::icon(ui::Icons::CircleX, px(14.), danger).into_any_element()
                 }
                 ResultMark::Waiting => word("waiting".into()).into_any_element(),
+                ResultMark::Skipped => word("skipped".into()).into_any_element(),
                 ResultMark::Paused(n) => div()
                     .flex()
                     .items_center()
@@ -2606,8 +2623,10 @@ impl Render for ResultsPane {
         // a failed or write-only run still shows its error or count.
         let body = result_body(results, self.selected);
         let failed = body == ResultBody::Failed;
-        let dml = match &body {
-            ResultBody::Dml(text) => Some(text.clone()),
+        let status = match &body {
+            ResultBody::Dml(text) => Some(("result-dml", text.clone())),
+            ResultBody::Skipped => Some(("result-skipped", "Skipped".to_owned())),
+            ResultBody::Stopped => Some(("result-stopped", "Stopped".to_owned())),
             ResultBody::Grid | ResultBody::Failed => None,
         };
         // The empty text never covers rows the user is inserting into an empty table.
@@ -2651,6 +2670,10 @@ impl Render for ResultsPane {
                 }
                 Some(StatementEnd::Complete(o)) => outcome_note(o).map(|n| (n, dim)),
                 Some(StatementEnd::Failed(e)) => Some((e.to_string(), danger)),
+                Some(StatementEnd::Stopped {
+                    reason: StopReason::User,
+                    ..
+                }) => Some(("stopped".to_owned(), dim)),
                 _ => None,
             };
             let read_only = (m.read_only() == Some(true)).then(|| {
@@ -2814,8 +2837,8 @@ impl Render for ResultsPane {
                         .min_w_0()
                         .items_center()
                         .gap_3()
-                        // A failure or a write has no rows to count; its note says what happened.
-                        .when(!failed && dml.is_none() && plan_shown.is_none(), |d| {
+                        // A failure, a write or a statement that never ran has no rows to count.
+                        .when(!failed && status.is_none() && plan_shown.is_none(), |d| {
                             d.child(
                                 div()
                                     .flex()
@@ -2978,9 +3001,9 @@ impl Render for ResultsPane {
                         // Capture clears the target and, on a right-click, schedules our menu;
                         // the cell and header handlers aim it before it is built.
                         .capture_any_mouse_down(cx.listener(Self::grid_mouse_down))
-                        .map(|d| match (error, dml) {
+                        .map(|d| match (error, status) {
                             (Some((v, engine)), _) => d.child(self.error_body(v, engine, cx)),
-                            (None, Some(text)) => d.child(status_body("result-dml", text)),
+                            (None, Some((id, text))) => d.child(status_body(id, text)),
                             (None, None) => d
                                 .child(smooth_scroll::layer(
                                     self.scroll_handle.clone(),
@@ -3026,6 +3049,16 @@ fn status_body(id: &'static str, text: String) -> impl IntoElement {
         .justify_center()
         .text_sm()
         .child(text)
+}
+
+/// What the plan view was built from; any change rebuilds it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PlanKey {
+    run: u64,
+    ix: usize,
+    has_output: bool,
+    /// Its ANALYZE confirmation is still open.
+    waiting: bool,
 }
 
 /// Where a context menu opened and the row layout it saw.

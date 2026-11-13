@@ -95,7 +95,7 @@ fn cancel_stops_a_long_statement(cx: &mut TestAppContext) {
         .unwrap();
     o.idle(cx);
     let text = label_of(cx, o.win, ("statement-result", 0usize)).unwrap();
-    assert!(text.contains("cancelled"), "{text}");
+    assert!(text.contains("(stopped)"), "{text}");
 }
 #[test]
 fn the_dialog_names_the_kind_and_the_connection() {
