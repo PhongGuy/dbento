@@ -83,12 +83,43 @@ pub fn truncation_text(end: Option<&StatementEnd>, cap: Option<CapView>) -> Opti
 }
 
 /// The statement the status chip describes: the run's first failed statement, else the
-/// shown one, else the last; None for an empty run.
+/// skipped one its run stopped at, else the shown one, else the last; None for an empty run.
 pub fn status_subject(results: &[StatementResult], shown: Option<usize>) -> Option<usize> {
     let failed = |r: &StatementResult| matches!(r.store.end(), Some(StatementEnd::Failed(_)));
+    let skipped = |r: &StatementResult| matches!(r.store.end(), Some(StatementEnd::Skipped));
     (results.iter().position(failed))
+        .or_else(|| results.iter().position(skipped))
         .or(shown)
         .or(results.len().checked_sub(1))
+}
+
+/// The status chip's icon for its statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusMark {
+    /// The statement failed.
+    Failed,
+    /// The run is still going.
+    Running,
+    /// The statement was skipped or stopped by the user: neither a failure nor a success.
+    Neutral,
+    /// It finished.
+    Done,
+}
+
+/// The mark for a statement that ended as `end`, while the run is `running` or not.
+pub fn status_mark(end: Option<&StatementEnd>, running: bool) -> StatusMark {
+    match end {
+        Some(StatementEnd::Failed(_)) => StatusMark::Failed,
+        _ if running => StatusMark::Running,
+        Some(
+            StatementEnd::Skipped
+            | StatementEnd::Stopped {
+                reason: StopReason::User,
+                ..
+            },
+        ) => StatusMark::Neutral,
+        _ => StatusMark::Done,
+    }
 }
 
 /// The run's time: the sum of its ended statements' times; None until one has ended.
@@ -173,12 +204,11 @@ pub fn status_bar(
     // A failure names its own statement; else the grid's result, else what ran last.
     if let Some(ix) = status_subject(results, shown_ix) {
         let r = &results[ix];
-        let mark = if matches!(r.store.end(), Some(StatementEnd::Failed(_))) {
-            ui::icon(ui::Icons::CircleX, px(12.), danger)
-        } else if model.running() {
-            ui::icon(ui::Icons::Clock, px(12.), dim)
-        } else {
-            ui::icon(ui::Icons::CircleCheck, px(12.), success)
+        let mark = match status_mark(r.store.end(), model.running()) {
+            StatusMark::Failed => ui::icon(ui::Icons::CircleX, px(12.), danger),
+            StatusMark::Running => ui::icon(ui::Icons::Clock, px(12.), dim),
+            StatusMark::Neutral => ui::icon(ui::Icons::CircleStop, px(12.), dim),
+            StatusMark::Done => ui::icon(ui::Icons::CircleCheck, px(12.), success),
         };
         let mut last = ui::chip_base(cx)
             .gap_2()

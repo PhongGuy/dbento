@@ -1,7 +1,7 @@
 use crate::support;
 use crate::support::{LONG, fixture, init_tokio, spec, wait_real};
 use dbento_app::link::LinkState;
-use dbento_app::runner::{Event, SETTINGS_LOST, StatementEnd};
+use dbento_app::runner::{Event, SETTINGS_LOST, StatementEnd, StopReason};
 use dbento_app::tab_model::TabModel;
 use dbento_core::{CellRef, ExecuteError};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
@@ -244,7 +244,10 @@ fn a_long_statement_is_listed_while_it_runs_and_keeps_its_text(cx: &mut TestAppC
         assert!(
             matches!(
                 r.store.end(),
-                Some(StatementEnd::Failed(ExecuteError::Cancelled))
+                Some(StatementEnd::Stopped {
+                    reason: StopReason::User,
+                    ..
+                })
             ),
             "{:?}",
             r.store.end()
@@ -311,7 +314,10 @@ fn a_run_after_a_withdrawn_one_can_cancel_its_live_statement(cx: &mut TestAppCon
     m.read_with(cx, |m, _| {
         assert!(matches!(
             m.results()[0].store.end(),
-            Some(StatementEnd::Failed(ExecuteError::Cancelled))
+            Some(StatementEnd::Stopped {
+                reason: StopReason::User,
+                ..
+            })
         ))
     });
 }

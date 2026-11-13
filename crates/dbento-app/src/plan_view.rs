@@ -269,6 +269,8 @@ pub struct PlanView {
     /// The tree over a plan that parsed; None while pending or when the output did not parse.
     tree: Option<PlanTree>,
     note: Option<&'static str>,
+    /// Pending on its ANALYZE confirmation, so nothing is being explained yet.
+    waiting: bool,
     shown: Shown,
     raw: Option<Entity<EditorState>>,
     focus: FocusHandle,
@@ -311,11 +313,18 @@ impl PlanView {
             output,
             tree,
             note,
+            waiting: false,
             shown,
             raw,
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
         }
+    }
+
+    /// Marks a pending view as waiting on its ANALYZE confirmation rather than explaining.
+    pub fn waiting(mut self, waiting: bool) -> Self {
+        self.waiting = waiting;
+        self
     }
 
     /// The tree over the plan; None while pending or when the output did not parse.
@@ -542,7 +551,10 @@ impl Render for PlanView {
             .min_h_0()
             .text_sm();
         let Some(output) = self.output.clone() else {
-            let text: SharedString = "Explaining…".into();
+            let text: SharedString = match self.waiting {
+                true => "Waiting for confirmation".into(),
+                false => "Explaining…".into(),
+            };
             return root.child(
                 div()
                     .id("plan-pending")

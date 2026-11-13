@@ -4,7 +4,7 @@ use dbento_core::{Engine, ExecuteError, leading_keyword};
 
 use crate::keymap::plus_keys;
 use crate::results_pane::{displayed, format_rows};
-use crate::runner::StatementEnd;
+use crate::runner::{StatementEnd, StopReason};
 use crate::tab_model::StatementResult;
 
 /// What fills the area under the statement tabs.
@@ -16,6 +16,10 @@ pub enum ResultBody {
     Failed,
     /// The subject completed without columns: what it changed, as `dml_text` words it.
     Dml(String),
+    /// The subject never ran: its run stopped at its confirmation.
+    Skipped,
+    /// The user stopped the subject before it reported any columns.
+    Stopped,
 }
 
 /// The statement the body and footer describe: the selected one when valid, else the last
@@ -31,6 +35,11 @@ pub fn result_body(results: &[StatementResult], selected: Option<usize>) -> Resu
     };
     match r.store.end() {
         Some(StatementEnd::Failed(_)) => ResultBody::Failed,
+        Some(StatementEnd::Skipped) => ResultBody::Skipped,
+        Some(StatementEnd::Stopped {
+            reason: StopReason::User,
+            ..
+        }) if r.store.columns().is_empty() => ResultBody::Stopped,
         Some(StatementEnd::Complete(o)) if r.store.columns().is_empty() => {
             ResultBody::Dml(dml_text(&r.sql, o.rows_affected))
         }

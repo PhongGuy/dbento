@@ -83,7 +83,7 @@ fn a_select_shows_columns_cells_and_a_summary(cx: &mut TestAppContext) {
     assert!(!support::present(cx, win, "result-message"));
 }
 #[gpui_kit::test]
-fn a_script_lists_each_statement_and_shows_the_last_result(cx: &mut TestAppContext) {
+fn a_script_lists_each_statement_and_opens_on_its_failure(cx: &mut TestAppContext) {
     let sql =
         "INSERT INTO u VALUES (1); INSERT INTO u VALUES (2),(3); SELECT x FROM u ORDER BY x; SELEC";
     let win = pane(cx, "CREATE TABLE u(x);", sql);
@@ -101,6 +101,9 @@ fn a_script_lists_each_statement_and_shows_the_last_result(cx: &mut TestAppConte
     );
     let failed = support::label_of(cx, win, ("statement-result", 3usize)).unwrap();
     assert!(failed.contains("syntax error"), "{failed}");
+    assert!(support::present(cx, win, "result-error"));
+    cx.update_window(win, |_, w, cx| w.click(("statement-result", 2usize), cx))
+        .unwrap();
     assert_eq!(support::label_of(cx, win, "cell-1-0").as_deref(), Some("2"));
 }
 #[test]
