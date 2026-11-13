@@ -34,7 +34,7 @@ fn a_run_fills_the_store(cx: &mut TestAppContext) {
     });
 }
 #[gpui_kit::test]
-fn skip_and_confirm_answer_the_pending_statement(cx: &mut TestAppContext) {
+fn cancel_and_confirm_answer_the_pending_statement(cx: &mut TestAppContext) {
     let fx = fixture(T, "");
     let m = model(cx, &fx);
     m.update(cx, |m, cx| m.run("UPDATE t SET x = 0".into(), cx));
@@ -58,7 +58,28 @@ fn skip_and_confirm_answer_the_pending_statement(cx: &mut TestAppContext) {
     assert_eq!(fx.count("SELECT count(*) FROM t WHERE x = 0"), 3);
 }
 #[gpui_kit::test]
-// Cancel at a question ends the run like any other Cancel; the dialog's Skip skips one statement.
+fn the_dialogs_cancel_ends_the_whole_run(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    let sql = "SELECT 1; UPDATE t SET x = 0; INSERT INTO t VALUES (9)";
+    m.update(cx, |m, cx| m.run(sql.into(), cx));
+    wait_real(cx, "the question", |cx| {
+        m.read_with(cx, |m, _| m.confirm().is_some())
+    });
+    m.update(cx, |m, cx| m.answer(false, cx));
+    wait_real(cx, "the stop", |cx| m.read_with(cx, |m, _| !m.running()));
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.results().len(), 2, "the third statement never ran");
+        assert!(matches!(
+            m.results()[1].store.end(),
+            Some(StatementEnd::Skipped)
+        ));
+    });
+    assert_eq!(fx.count("SELECT count(*) FROM t WHERE x = 9"), 0);
+    assert_eq!(fx.count("SELECT count(*) FROM t WHERE x = 0"), 0);
+}
+#[gpui_kit::test]
+// Cancel at a question ends the run like any other Cancel, including the dialog's own Cancel.
 fn cancel_while_confirming_skips_the_statement_and_ends_the_script(cx: &mut TestAppContext) {
     let fx = fixture(T, "");
     let m = model(cx, &fx);

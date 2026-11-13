@@ -693,17 +693,19 @@ impl TabModel {
         self.save == SaveState::Finishing && !self.edits.is_empty()
     }
 
-    /// Runs (`run`) or skips the statement waiting on a confirmation.
+    /// Runs (`run`) the statement waiting on a confirmation, or cancels: the statement is
+    /// skipped and the whole run stops, as Cancel does everywhere else.
     pub fn answer(&mut self, run: bool, cx: &mut Context<Self>) {
         let (Some(p), Some(r)) = (self.confirm.take(), &self.runner) else {
             return;
         };
         let (run_id, stmt) = (p.run_id, p.stmt);
-        r.send(if run {
-            Command::Confirm { run_id, stmt }
+        if run {
+            r.send(Command::Confirm { run_id, stmt });
         } else {
-            Command::Skip { run_id, stmt }
-        });
+            r.send(Command::Stop { run_id });
+            self.withdrawn = true;
+        }
         cx.notify();
     }
 
