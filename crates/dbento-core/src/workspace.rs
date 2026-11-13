@@ -1061,6 +1061,14 @@ impl Workspace {
     /// directly in its folder binds the parent and a second folder must name one of its
     /// children; a folder that resolves to no child binds nothing rather than the parent.
     pub fn bound_connection(&self, rel: &Path) -> Option<String> {
+        self.folder_connection(rel)
+            .filter(|name| self.resolve(name).is_ok())
+    }
+
+    /// The connection the folder of a saved query at `rel` names, whether or not it still
+    /// resolves: the first folder, or `parent/database` under a declared parent with
+    /// `databases`. None for a file directly in `queries/` or outside it.
+    pub fn folder_connection(&self, rel: &Path) -> Option<String> {
         let parts = rel
             .components()
             .map(|c| match c {
@@ -1077,13 +1085,11 @@ impl Workspace {
         if *queries != "queries" || rest.is_empty() {
             return None;
         }
-        let parent = self.declared(first)?;
+        let has_children = self
+            .declared(first)
+            .is_some_and(|parent| parent.databases().is_some());
         match rest {
-            [_file] => Some((*first).to_owned()),
-            [database, ..] if parent.databases().is_some() => {
-                let child = format!("{first}/{database}");
-                self.resolve(&child).is_ok().then_some(child)
-            }
+            [database, _, ..] if has_children => Some(format!("{first}/{database}")),
             _ => Some((*first).to_owned()),
         }
     }

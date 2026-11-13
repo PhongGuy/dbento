@@ -1032,7 +1032,29 @@ impl Shell {
         if ws.connection(connection).is_some() {
             return self.open_sql(connection, sql, window, cx);
         }
-        let text = format!("{connection} no longer exists; pick a connection to run this.");
+        let owned = sql.to_owned();
+        self.ask_connection(
+            &ws,
+            connection,
+            sql,
+            window,
+            cx,
+            move |shell, name, window, cx| shell.open_sql(name, &owned, window, cx),
+        );
+    }
+
+    // Warns that `gone` no longer exists and asks which declared connection to use instead,
+    // handing the pick to `open`; Cancel opens nothing.
+    fn ask_connection(
+        &mut self,
+        ws: &Workspace,
+        gone: &str,
+        sql: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        open: impl FnOnce(&mut Self, &str, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let text = format!("{gone} no longer exists; pick a connection to run this.");
         let notice = ui::Notice {
             text,
             kind: ui::NoticeKind::Warning,
@@ -1044,7 +1066,7 @@ impl Shell {
             .map(|c| c.name().to_owned())
             .collect();
         let spec = confirm::PickAsk {
-            title: format!("{connection} no longer exists").into(),
+            title: format!("{gone} no longer exists").into(),
             detail: "Pick a connection to open this on.".into(),
             sql: sql.to_owned().into(),
             rows: (ws.connections().iter())
@@ -1052,7 +1074,6 @@ impl Shell {
                 .collect(),
         };
         let picked = confirm::pick(spec, window, cx);
-        let sql = sql.to_owned();
         cx.spawn_in(window, async move |this, cx| {
             let Ok(ix) = picked.recv().await else {
                 return;
@@ -1060,9 +1081,7 @@ impl Shell {
             let Some(name) = names.get(ix) else {
                 return;
             };
-            let _ = this.update_in(cx, |shell, window, cx| {
-                shell.open_sql(name, &sql, window, cx)
-            });
+            let _ = this.update_in(cx, |shell, window, cx| open(shell, name, window, cx));
         })
         .detach();
     }
@@ -1761,7 +1780,8 @@ impl Shell {
     }
 
     /// Activates the tab holding `q`, else opens it in a new tab on its folder's connection
-    /// (unbound: the active tab's, else the first). A failed read shows "Cannot open".
+    /// (no folder: the active tab's, else the first). A folder whose connection is gone asks
+    /// which to use. A failed read shows "Cannot open".
     pub fn open_saved(&mut self, q: &SavedQuery, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ws) = self.workspace.clone() else {
             return;
@@ -1777,11 +1797,38 @@ impl Shell {
             Ok(text) => text,
             Err(e) => return show_error("Cannot open", e.to_string(), window, cx),
         };
+        // A folder naming a connection that is gone asks rather than landing on another one.
+        if q.connection().is_none()
+            && let Some(gone) = ws.folder_connection(q.path())
+        {
+            let q = q.clone();
+            let sql = text.clone();
+            return self.ask_connection(
+                &ws,
+                &gone,
+                &sql,
+                window,
+                cx,
+                move |shell, name, window, cx| shell.open_saved_on(&q, name, text, window, cx),
+            );
+        }
         let Some(conn) = self.fallback_connection(&ws, q.connection(), cx) else {
             return;
         };
-        // Nothing opens while the window closes.
-        let Some(tab) = self.open_unnumbered(&conn, window, cx) else {
+        self.open_saved_on(q, &conn, text, window, cx);
+    }
+
+    // Opens `q`, read as `text`, in a new tab on `conn`, bound to its file. Nothing opens
+    // while the window closes.
+    fn open_saved_on(
+        &mut self,
+        q: &SavedQuery,
+        conn: &str,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.open_unnumbered(conn, window, cx) else {
             return;
         };
         tab.update(cx, |t, cx| {
