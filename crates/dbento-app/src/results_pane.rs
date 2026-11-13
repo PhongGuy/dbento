@@ -74,6 +74,11 @@ pub fn format_rows(n: u64) -> String {
     )
 }
 
+/// A statement's tab and footer text before its first rows: "Running… 3.2 s".
+pub fn running_label(elapsed: Duration) -> String {
+    format!("Running\u{2026} {:.1} s", elapsed.as_secs_f64())
+}
+
 /// The Save button's label: "Saving…" from the moment a save starts until it ends, so
 /// the prompt's wait reads as a question rather than as work.
 pub fn save_label(state: SaveState) -> &'static str {
@@ -2545,14 +2550,16 @@ impl Render for ResultsPane {
         // its mark (`result_mark`), and the tooltip carries the summary and the SQL.
         let tabs = results.iter().enumerate().map(|(ix, r)| {
             let mark = result_mark(r, asking, paused);
-            let text = match mark {
+            // Until its first rows land, a running statement counts its time, not its rows.
+            let running = m.awaiting_rows(r.stmt).map(running_label);
+            let text = running.clone().unwrap_or_else(|| match &mark {
                 ResultMark::Waiting => "waiting for confirmation".to_owned(),
-                ResultMark::Paused(n) => paused_label(n),
+                ResultMark::Paused(n) => paused_label(*n),
                 ResultMark::Rows(_)
                 | ResultMark::Changed(_)
                 | ResultMark::Failed
                 | ResultMark::Skipped => summary(r),
-            };
+            });
             let tip: SharedString = match first_line(&r.sql) {
                 Some(sql) => format!("{text}\n{sql}").into(),
                 None => text.clone().into(),
@@ -2567,8 +2574,10 @@ impl Render for ResultsPane {
             };
             let word = |w: SharedString| div().text_color(dim).child(w);
             // A plan has no rows to count, so its tab carries only a failure or a wait.
-            let shows_mark = r.plan.is_none() || !matches!(mark, ResultMark::Rows(_));
+            let shows_mark =
+                running.is_some() || r.plan.is_none() || !matches!(mark, ResultMark::Rows(_));
             let mark = match mark {
+                _ if running.is_some() => word(text.clone().into()).into_any_element(),
                 ResultMark::Rows(n) => count(n).into_any_element(),
                 ResultMark::Changed(text) => word(text.into()).into_any_element(),
                 ResultMark::Failed => {
@@ -2693,9 +2702,11 @@ impl Render for ResultsPane {
                 Some(CapView::Fetching) => Some(true),
                 _ => None,
             };
-            let rows = match at_cap {
-                Some(_) => more_rows(r.store.rows()),
-                None => format_rows(r.store.rows()),
+            let running = m.awaiting_rows(r.stmt).map(running_label);
+            let rows = match (&running, at_cap) {
+                (Some(text), _) => text.clone(),
+                (None, Some(_)) => more_rows(r.store.rows()),
+                (None, None) => format_rows(r.store.rows()),
             };
             let model = self.model.clone();
             let fetch = at_cap.map(|fetching| {
@@ -2806,18 +2817,21 @@ impl Render for ResultsPane {
                     .text_color(dim)
                     .child(t)
             });
-            let elapsed = m.elapsed_at(r.stmt, Instant::now()).map(|t| {
-                let t = format_elapsed(t);
-                div()
-                    .id("footer-elapsed")
-                    .aria_label(t.clone())
-                    .test_support()
-                    .flex_none()
-                    .font_family(mono.clone())
-                    .text_size(mono_size)
-                    .text_color(dim)
-                    .child(t)
-            });
+            // The running text already carries the time.
+            let elapsed = (m.elapsed_at(r.stmt, Instant::now()))
+                .filter(|_| running.is_none())
+                .map(|t| {
+                    let t = format_elapsed(t);
+                    div()
+                        .id("footer-elapsed")
+                        .aria_label(t.clone())
+                        .test_support()
+                        .flex_none()
+                        .font_family(mono.clone())
+                        .text_size(mono_size)
+                        .text_color(dim)
+                        .child(t)
+                });
             div()
                 .id("result-footer")
                 .test_support()

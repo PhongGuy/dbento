@@ -362,6 +362,8 @@ pub struct TabModel {
     banner: Option<String>,
     /// The statement a Fetch or continuation is loading more of, and when it began.
     ticking: Option<(usize, Instant)>,
+    /// The statement the runner last began executing, and when.
+    executing: Option<(usize, Instant)>,
     /// The result row of each change of the batch in flight, in batch order.
     save_rows: Vec<GridRow>,
     /// The run id when the prompt was answered; a newer run skips the commit's re-run.
@@ -517,6 +519,7 @@ impl TabModel {
             prompts: 0,
             banner: None,
             ticking: None,
+            executing: None,
             save_rows: Vec::new(),
             finish_run: 0,
             discard: None,
@@ -656,6 +659,7 @@ impl TabModel {
         self.running = true;
         self.append = None;
         self.ticking = None;
+        self.executing = None;
         self.results.clear();
         // Only the commit's own re-run checks its candidates; any other run drops them.
         self.kept.clear();
@@ -891,6 +895,7 @@ impl TabModel {
         self.finish_unfinished(StopReason::Closed);
         self.append = None;
         self.ticking = None;
+        self.executing = None;
         self.flush_history(cx);
         cx.notify();
         Closing(events)
@@ -1032,6 +1037,7 @@ impl TabModel {
                 if run_id == self.run_id && self.append.is_none() =>
             {
                 self.mark_started(stmt);
+                self.executing = Some((stmt, Instant::now()));
                 // A plan result names the user's statement, not the EXPLAIN text sent.
                 let entry = self.entry(stmt);
                 if entry.plan.is_none() {
@@ -2928,18 +2934,41 @@ impl TabModel {
     }
 
     /// `stmt`'s time as of `now`: its last reported time, plus the time since a Fetch or
-    /// continuation of it began while that is still loading. None until it first reports.
+    /// continuation of it began while that is still loading. Before it first reports, the
+    /// time since it began executing while the run goes on; else None.
     pub fn elapsed_at(&self, stmt: usize, now: Instant) -> Option<Duration> {
-        let reported = self.results.iter().find(|r| r.stmt == stmt)?.elapsed?;
+        let Some(reported) = self.results.iter().find(|r| r.stmt == stmt)?.elapsed else {
+            let (_, at) = self
+                .executing
+                .filter(|&(s, _)| s == stmt && self.running())?;
+            return Some(now.saturating_duration_since(at));
+        };
         let since = (self.ticking)
             .filter(|&(s, _)| s == stmt && self.running)
             .map_or(Duration::ZERO, |(_, at)| now.saturating_duration_since(at));
         Some(reported + since)
     }
 
-    /// Whether a Fetch or continuation is loading, so a shown time is still counting.
+    /// `stmt`'s time so far while it executes without a row yet; None once rows land or it ends.
+    pub fn awaiting_rows(&self, stmt: usize) -> Option<Duration> {
+        let r = self.results.iter().find(|r| r.stmt == stmt)?;
+        let waiting = r.elapsed.is_none() && r.store.end().is_none() && r.store.rows() == 0;
+        waiting
+            .then(|| self.elapsed_at(stmt, Instant::now()))
+            .flatten()
+    }
+
+    /// Whether a Fetch, a continuation or a statement that has not reported yet is loading,
+    /// so a shown time is still counting.
     pub fn ticking(&self) -> bool {
-        self.ticking.is_some() && self.running
+        let unreported = self.executing.is_some_and(|(stmt, _)| {
+            self.running()
+                && self
+                    .results
+                    .iter()
+                    .any(|r| r.stmt == stmt && r.elapsed.is_none())
+        });
+        (self.ticking.is_some() && self.running) || unreported
     }
 
     // A continuation's runner times only itself; result 0 shows the whole browse's time.
