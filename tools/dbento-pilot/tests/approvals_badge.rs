@@ -3,7 +3,7 @@
 mod common;
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use common::{Pilot, bounds, find_node, launch_args, sqlite_workspace};
 use dbento_app::app::AppPaths;
@@ -35,13 +35,16 @@ fn badge(tree: &Value) -> Option<&str> {
     find_node(tree, "rail-approvals-badge").and_then(|n| n["name"].as_str())
 }
 
-// Files requests numbered `from..to` against the `lite` connection of `ws`.
+// Files requests numbered `from..to` against the `lite` connection of `ws`, oldest first.
 fn file(state: &Path, ws: &Path, from: usize, to: usize) {
     let store = ApprovalStore::open(&AppPaths::in_dir(state).approvals).unwrap();
     for i in from..to {
         let sql = format!("INSERT INTO t VALUES ({i})");
         store
-            .request(&ApprovalRequest::new(ws, "lite", &sql, Writes::Yes, vec![]))
+            .request(
+                &ApprovalRequest::new(ws, "lite", &sql, Writes::Yes, vec![])
+                    .with_time(SystemTime::now() - Duration::from_secs((to - i) as u64)),
+            )
             .unwrap();
     }
 }
@@ -78,5 +81,57 @@ async fn the_badge_follows_the_queue_behind_the_dialog_and_caps_at_99_plus() {
     assert!(
         pill.x >= button.x,
         "the pill {pill:?} sticks out of the button {button:?}"
+    );
+}
+
+fn label<'a>(tree: &'a Value, id: &str) -> Option<&'a str> {
+    find_node(tree, id).and_then(|n| n["name"].as_str())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn answering_one_request_opens_the_next_with_a_live_count() {
+    let ws = sqlite_workspace();
+    let state = tempfile::tempdir().unwrap();
+    file(state.path(), ws.path(), 0, 1);
+    let pilot = Pilot::start().await;
+    let mut args = launch_args("headless", ws.path());
+    args["env"] = json!({ "DBENTO_STATE_DIR": state.path() });
+    pilot.ok("launch", args).await;
+    let tree = until(&pilot, "the first request", |t| {
+        label(t, "approval-sql") == Some("INSERT INTO t VALUES (0)") && badge(t) == Some("1")
+    })
+    .await;
+    assert!(
+        find_node(&tree, "approval-queue").is_none(),
+        "a lone request has no count"
+    );
+
+    // Two more land while it waits: the count follows the badge.
+    file(state.path(), ws.path(), 1, 3);
+    until(&pilot, "the count of three", |t| {
+        badge(t) == Some("3") && label(t, "approval-queue") == Some("1 of 3")
+    })
+    .await;
+
+    // Nothing but the answer: the next request opens on its own.
+    pilot
+        .ok("click", json!({ "target": { "id": ["approval-approve"] } }))
+        .await;
+    until(&pilot, "the second request", |t| {
+        label(t, "approval-sql") == Some("INSERT INTO t VALUES (1)")
+            && label(t, "approval-queue") == Some("1 of 2")
+            && badge(t) == Some("2")
+    })
+    .await;
+    pilot
+        .ok("click", json!({ "target": { "id": ["approval-deny"] } }))
+        .await;
+    let tree = until(&pilot, "the last request", |t| {
+        label(t, "approval-sql") == Some("INSERT INTO t VALUES (2)") && badge(t) == Some("1")
+    })
+    .await;
+    assert!(
+        find_node(&tree, "approval-queue").is_none(),
+        "a lone request has no count"
     );
 }
