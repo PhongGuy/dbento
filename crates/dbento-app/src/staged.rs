@@ -507,11 +507,13 @@ pub fn prompt_detail(affected: u64) -> String {
     format!("Affects {affected} {rows}. Locks are held until you choose.")
 }
 
-/// The first `PREVIEW_LINES` statements of `sql` (one per line), then a count of the rest.
+/// The first `PREVIEW_LINES` statements of `sql` (one per line), then a count of the rest,
+/// with built-in casts shown without their `pg_catalog.` schema. Only the shown text changes.
 pub fn preview(sql: &str) -> String {
+    let sql = unqualified_casts(sql);
     let lines: Vec<&str> = sql.lines().collect();
     if lines.len() <= PREVIEW_LINES {
-        return sql.to_owned();
+        return sql;
     }
     let rest = lines.len() - PREVIEW_LINES;
     let noun = if rest == 1 { "statement" } else { "statements" };
@@ -519,4 +521,54 @@ pub fn preview(sql: &str) -> String {
         "{}\n-- and {rest} more {noun}",
         lines[..PREVIEW_LINES].join("\n")
     )
+}
+
+/// Quoted built-in type names that mean the same type unquoted; `"char"` and `"bit"` do not.
+const PLAIN_WHEN_UNQUOTED: [&str; 6] = [
+    "varchar",
+    "numeric",
+    "timestamp",
+    "time",
+    "interval",
+    "json",
+];
+
+// Walks `sql` outside its string literals and quoted names, dropping `pg_catalog.` after each
+// `::`, and the quotes around a type name that reads the same without them.
+fn unqualified_casts(sql: &str) -> String {
+    const CAST: &str = "::pg_catalog.";
+    let mut out = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(c) = rest.chars().next() {
+        if c == '\'' || c == '"' {
+            // A doubled quote stays inside; E'' text doubles both quotes and backslashes.
+            let mut end = 1;
+            loop {
+                match rest[end..].find(c) {
+                    Some(at) if rest[end + at + 1..].starts_with(c) => end += at + 2,
+                    Some(at) => break end += at + 1,
+                    None => break end = rest.len(),
+                }
+            }
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+        } else if let Some(after) = rest.strip_prefix(CAST) {
+            out.push_str("::");
+            rest = after;
+            let plain = PLAIN_WHEN_UNQUOTED.iter().find(|name| {
+                after
+                    .strip_prefix('"')
+                    .and_then(|a| a.strip_prefix(**name))
+                    .is_some_and(|a| a.starts_with('"'))
+            });
+            if let Some(name) = plain {
+                out.push_str(name);
+                rest = &after[name.len() + 2..];
+            }
+        } else {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
 }
