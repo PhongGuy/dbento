@@ -2,7 +2,8 @@
 use crate::support;
 use crate::support::{label_of, opened, present, wait_real};
 use dbento_app::confirm::{
-    Ask, Choice, ChoiceStyle, DIALOG_TOP, chip_colours, choice_keys, choice_style,
+    Ask, Choice, ChoiceStyle, DIALOG_TOP, chip_colours, choice_keys, choice_style, frame,
+    text_frame,
 };
 use dbento_app::query_tab::{confirm_explanation, unguarded_ask};
 use dbento_core::Unguarded;
@@ -56,6 +57,23 @@ fn key_chips_name_only_the_keys_that_answer() {
         [choice_keys(&b, 0), choice_keys(&b, 1)],
         [Some("Esc"), Some("\u{23CE}")]
     );
+}
+// A text prompt is not a warning: it keeps the kit's hairline, unlike the danger edge.
+#[gpui_kit::test]
+fn a_text_prompt_has_no_danger_edge(cx: &mut TestAppContext) {
+    use gpui_kit::Styled as _;
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::component::dialog::Dialog;
+    support::init(cx);
+    cx.update(|cx| {
+        let danger = cx.theme().danger;
+        let mut asked = frame(Dialog::new(cx), px(480.), Some(danger), cx);
+        assert_eq!(asked.style().border_color, Some(danger));
+        let mut text = text_frame(Dialog::new(cx), cx);
+        let style = text.style();
+        assert_eq!(style.border_widths.top, None);
+        assert_eq!(style.border_color, None);
+    });
 }
 // A chip on a filled button takes that button's text, its boxes at 40 %, like Run's chip.
 #[gpui_kit::test]
