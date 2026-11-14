@@ -50,7 +50,7 @@ use crate::rowedit::Param;
 use crate::secrets::{is_encrypted_pem, key_passphrase_env_var};
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError, ExtendError,
-    Limits, OnTruncate, Outcome, Prepared, StreamItem, TruncatedBy, Writes,
+    Limits, OnTruncate, Outcome, Prepared, StreamItem, TruncatedBy, Writes, refused,
 };
 use crate::split::split;
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ColumnSource};
@@ -162,6 +162,14 @@ fn connect_error(conn: &ConnectionConfig, e: tokio_postgres::Error) -> ConnectEr
     if !chain.is_empty() {
         message.push_str(": ");
         message.push_str(&chain);
+    }
+    if refused(&e) {
+        let address = format!(
+            "{}:{}",
+            conn.host().unwrap_or_default(),
+            conn.port().unwrap_or(5432)
+        );
+        return ConnectError::Refused { address, message };
     }
     ConnectError::Open { message }
 }

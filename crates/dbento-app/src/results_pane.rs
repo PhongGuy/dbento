@@ -11,6 +11,7 @@ use dbento_core::{
     quote_ident,
 };
 use gpui_kit::ClipboardItem;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenu;
@@ -42,6 +43,7 @@ use crate::keymap::{
     CancelCellEdit, CommitCellEdit, CommitCellEditRight, DeleteRow, EditCell, RedoEdit,
     RunStatement, SaveEdits, SaveQuery, ToggleRowInspector, UndoEdit, chip_keys, keys_for,
 };
+use crate::link::ConnectFailure;
 use crate::plan_view::PlanView;
 use crate::record::{record_at, record_position};
 use crate::record_form::RecordForm;
@@ -288,6 +290,12 @@ pub fn types_into_cell(keystroke: &Keystroke) -> bool {
 
 /// A request from the read-only note to open its table in a browse tab.
 pub struct OpenTable(pub RelationRef);
+
+/// A request from the connect error to open the tab's session again.
+pub struct RetryConnect;
+
+/// A request from the connect error to edit the tab's connection.
+pub struct EditConnection;
 
 /// The note an edit attempt on a free query result raises; `source` is the one relation the
 /// result's SQL reads, offered to open once the catalog says it is a table.
@@ -1999,6 +2007,72 @@ impl ResultsPane {
             .into_any_element()
     }
 
+    /// The session's failure to open in place of the empty grid: what failed, the error, its
+    /// fix when known, and Retry and Edit connection, styled as the statement error is.
+    fn connect_error_body(
+        &self,
+        connection: &str,
+        f: &ConnectFailure,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let (dim, theme) = (theme::dim(cx), cx.theme());
+        let (danger, fg) = (theme.danger, theme.foreground);
+        let button = |id: &'static str, icon: IconName, text: &'static str| {
+            ui::accessibility_id(Button::new(id), id)
+                .outline()
+                .xsmall()
+                .icon(icon)
+                .label(text)
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .p_3()
+            .overflow_hidden()
+            .text_sm()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(ui::icon(ui::Icons::CircleX, px(16.), danger))
+                    .child(
+                        value_label("connect-error", format!("Can't connect to {connection}"))
+                            .text_color(danger)
+                            .font_weight(FontWeight::SEMIBOLD),
+                    ),
+            )
+            .child(
+                value_label("connect-error-message", f.message.clone())
+                    .max_w(px(640.))
+                    .text_color(fg),
+            )
+            .children(f.fix.clone().map(|fix| {
+                value_label("connect-error-hint", fix)
+                    .max_w(px(640.))
+                    .text_color(dim)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .pt_1()
+                    .child(
+                        button("connect-error-retry", ui::Icons::RotateCw, "Retry")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(RetryConnect))),
+                    )
+                    .child(
+                        button("connect-error-edit", ui::Icons::Settings, "Edit connection")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(EditConnection))),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// The failed statement's error in place of the grid: heading and code, message,
     /// detail, hint and statement, with Copy and (given a position) Jump to error.
     /// The code is labelled by `engine`, the one the statement ran on.
@@ -2006,15 +2080,7 @@ impl ResultsPane {
         let (dim, theme) = (theme::dim(cx), cx.theme());
         let (danger, fg, border) = (theme.danger, theme.foreground, theme.border);
         let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
-        // Labels read by tests and assistive tech carry the shown text, as `footer-rows` does.
-        let label = |id: &'static str, text: String| {
-            ui::accessibility_id(div().id(id), id)
-                .role(Role::Label)
-                .aria_value(text.clone())
-                .aria_label(text.clone())
-                .test_support()
-                .child(text)
-        };
+        let label = value_label;
         let code = code_label(engine, &v);
         let line = |id: &'static str, name: &'static str, text: Option<String>| {
             text.map(|t| {
@@ -2929,7 +2995,13 @@ impl Render for ResultsPane {
                 .children(capacity)
                 .children(elapsed)
         });
-        let message = m.error().map(|e| {
+        // A session that never opened fills the empty body with why and how to get past it;
+        // the line above the results is left for a session lost under them.
+        let failure = m
+            .connect_failure()
+            .filter(|_| results.is_empty() && !busy)
+            .cloned();
+        let message = m.error().filter(|_| failure.is_none()).map(|e| {
             div()
                 .id("result-message")
                 .aria_label(e.to_owned())
@@ -3041,10 +3113,13 @@ impl Render for ResultsPane {
                         // Capture clears the target and, on a right-click, schedules our menu;
                         // the cell and header handlers aim it before it is built.
                         .capture_any_mouse_down(cx.listener(Self::grid_mouse_down))
-                        .map(|d| match (error, status) {
-                            (Some((v, engine)), _) => d.child(self.error_body(v, engine, cx)),
-                            (None, Some((id, text))) => d.child(status_body(id, text)),
-                            (None, None) => d
+                        .map(|d| match (failure, error, status) {
+                            (Some(f), ..) => {
+                                d.child(self.connect_error_body(&m.spec().connection, &f, cx))
+                            }
+                            (None, Some((v, engine)), _) => d.child(self.error_body(v, engine, cx)),
+                            (None, None, Some((id, text))) => d.child(status_body(id, text)),
+                            (None, None, None) => d
                                 .child(smooth_scroll::layer(
                                     self.scroll_handle.clone(),
                                     Rc::clone(&self.wheel),
@@ -3075,6 +3150,18 @@ impl Render for ResultsPane {
 }
 
 impl EventEmitter<OpenTable> for ResultsPane {}
+impl EventEmitter<RetryConnect> for ResultsPane {}
+impl EventEmitter<EditConnection> for ResultsPane {}
+
+/// Text whose label, read by tests and assistive tech, is the shown text, as `footer-rows` is.
+fn value_label(id: &'static str, text: String) -> impl IntoElement + Styled + use<> {
+    ui::accessibility_id(div().id(id), id)
+        .role(Role::Label)
+        .aria_value(text.clone())
+        .aria_label(text.clone())
+        .test_support()
+        .child(text)
+}
 
 /// A centred status line filling the body, labelled by its text.
 fn status_body(id: &'static str, text: String) -> impl IntoElement {

@@ -130,6 +130,7 @@ fn stale_events_are_dropped(cx: &mut TestAppContext) {
         ));
         m.apply(Event::ConnectFailed {
             message: "nope".into(),
+            fix: None,
         });
         assert_eq!(m.error(), Some("nope"));
     });

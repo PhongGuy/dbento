@@ -19,6 +19,7 @@ use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
 use crate::app::EnvLookup;
+use crate::link::{ConnectCause, ConnectFailure, fix_hint};
 use crate::parks::{self, Parked};
 
 /// The answer to `Command::SourceColumns`: per column, the relation's column it reads.
@@ -88,6 +89,8 @@ pub enum Event {
     },
     ConnectFailed {
         message: String,
+        /// How to fix it, when the failure says.
+        fix: Option<String>,
     },
     /// Sent as a statement begins executing, before its columns are known: SQLite reports
     /// them only once its first step ends.
@@ -570,7 +573,7 @@ async fn ensure_open(spec: &RunnerSpec, session: &mut Option<Session>, events: &
     if session.is_some() {
         return;
     }
-    match open(spec, |_| SessionOptions::default()).await {
+    match open_or_fix(spec, |_| SessionOptions::default()).await {
         Ok(s) => {
             let _ = events
                 .send(Event::Connected {
@@ -582,8 +585,8 @@ async fn ensure_open(spec: &RunnerSpec, session: &mut Option<Session>, events: &
                 .await;
             *session = Some(s);
         }
-        Err(message) => {
-            let _ = events.send(Event::ConnectFailed { message }).await;
+        Err(ConnectFailure { message, fix, .. }) => {
+            let _ = events.send(Event::ConnectFailed { message, fix }).await;
         }
     }
 }
@@ -665,19 +668,31 @@ pub(crate) async fn open(
     spec: &RunnerSpec,
     options: impl FnOnce(&ConnectionConfig) -> SessionOptions + Send,
 ) -> Result<Session, String> {
+    open_or_fix(spec, options).await.map_err(|f| f.message)
+}
+
+/// `open`, whose failure also carries `fix_hint`'s fix for the typed error behind it.
+async fn open_or_fix(
+    spec: &RunnerSpec,
+    options: impl FnOnce(&ConnectionConfig) -> SessionOptions + Send,
+) -> Result<Session, ConnectFailure> {
     let Resolved {
         conn,
         secret,
         key_passphrase,
         hint,
-    } = resolve(spec).await?;
+    } = resolve_or_fix(spec).await?;
     let mut options = options(&conn);
     options.key_passphrase = key_passphrase;
     connect(&spec.workspace, &conn, secret, options)
         .await
-        .map_err(|e| match hint {
-            Some(h) => format!("{e}\nhint: {h}"),
-            None => e.to_string(),
+        .map_err(|e| {
+            let fix = fix_hint(ConnectCause::Connect(&e));
+            let message = match hint {
+                Some(h) => format!("{e}\nhint: {h}"),
+                None => e.to_string(),
+            };
+            ConnectFailure::new(message, fix)
         })
 }
 
@@ -693,7 +708,18 @@ pub(crate) struct Resolved {
 /// The spec's connection, its secret, its client key's passphrase and, when there is no
 /// secret, a hint on where one would come from. The keychain lookups run on the blocking pool.
 pub(crate) async fn resolve(spec: &RunnerSpec) -> Result<Resolved, String> {
-    let missing = || format!("no connection `{}` in dbento.toml", spec.connection);
+    resolve_or_fix(spec).await.map_err(|f| f.message)
+}
+
+/// `resolve`, whose failure also carries `fix_hint`'s fix for a secret that could not be read.
+async fn resolve_or_fix(spec: &RunnerSpec) -> Result<Resolved, ConnectFailure> {
+    let plain = |message: String| ConnectFailure::new(message, None);
+    let missing = || {
+        plain(format!(
+            "no connection `{}` in dbento.toml",
+            spec.connection
+        ))
+    };
     let (ws, store, env, name) = (
         Arc::clone(&spec.workspace),
         Arc::clone(&spec.store),
@@ -717,9 +743,9 @@ pub(crate) async fn resolve(spec: &RunnerSpec) -> Result<Resolved, String> {
         })
     })
     .await
-    .map_err(|_| "the secret lookup stopped".to_string())?
+    .map_err(|_| plain("the secret lookup stopped".to_owned()))?
     .ok_or_else(missing)?
-    .map_err(|e| e.to_string())
+    .map_err(|e| ConnectFailure::new(e.to_string(), fix_hint(ConnectCause::Secret(&e))))
 }
 
 /// The registry key of the SQLite file `spec`'s connection opens; None for Postgres.

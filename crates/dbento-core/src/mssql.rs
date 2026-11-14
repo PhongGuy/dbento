@@ -582,6 +582,7 @@ mod tests {
                 other @ (ConnectError::NotFound { .. }
                 | ConnectError::Open { .. }
                 | ConnectError::InvalidTimeout { .. }
+                | ConnectError::Refused { .. }
                 | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
             }
         }
@@ -598,6 +599,7 @@ mod tests {
             other @ (ConnectError::NotFound { .. }
             | ConnectError::Open { .. }
             | ConnectError::InvalidTimeout { .. }
+            | ConnectError::Refused { .. }
             | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
         }
         assert_eq!(
@@ -662,6 +664,7 @@ mod tests {
             other @ (ConnectError::NotFound { .. }
             | ConnectError::Tls { .. }
             | ConnectError::InvalidTimeout { .. }
+            | ConnectError::Refused { .. }
             | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
         }
     }

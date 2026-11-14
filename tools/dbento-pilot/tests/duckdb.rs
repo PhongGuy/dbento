@@ -102,11 +102,11 @@ async fn a_file_held_read_write_by_another_process_says_so() {
     let pilot = launch(ws.path()).await;
     query(&pilot, "SELECT 1").await;
     let tree = until(&pilot, "the lock message", |t| {
-        name(t, "result-message")
+        name(t, "connect-error-message")
             .is_some_and(|m| m.contains("is open read-write in another process"))
     })
     .await;
-    let says = name(&tree, "result-message").unwrap_or_default();
+    let says = name(&tree, "connect-error-message").unwrap_or_default();
     assert!(says.starts_with("cannot open the database:"), "{says}");
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();

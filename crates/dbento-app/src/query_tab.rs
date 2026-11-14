@@ -40,7 +40,7 @@ use crate::keymap::{
     ToggleComment, all_keys_for, chip_keys, keys_for, plus_keys,
 };
 use crate::nav::NavHistory;
-use crate::results_pane::{OpenTable, ResultsPane, skip_notice};
+use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, skip_notice};
 use crate::run_target::run_range;
 use crate::sidebar::{Sidebar, color_name, engine_label, tag_color};
 use crate::status_bar::run_elapsed;
@@ -429,6 +429,10 @@ pub enum QueryTabEvent {
     OpenTable(RelationRef),
     /// The connection picker chose this connection for the tab.
     SwitchConnection(String),
+    /// The connect error asked to open the session again, on the current dbento.toml.
+    Retry,
+    /// The connect error asked to edit the tab's connection.
+    EditConnection,
 }
 
 /// One query tab over a connection.
@@ -483,6 +487,7 @@ pub struct QueryTab {
     _browse: Subscription,
     _open_table: Subscription,
     _catalog: Option<Subscription>,
+    _connect_error: [Subscription; 2],
 }
 
 // What one Format SQL or comment toggle replaced: the text and selection before it, and the
@@ -583,6 +588,14 @@ impl QueryTab {
                     }
                 })
             });
+        let connect_error = [
+            cx.subscribe(&results, |_, _, _: &RetryConnect, cx| {
+                cx.emit(QueryTabEvent::Retry)
+            }),
+            cx.subscribe(&results, |_, _, _: &EditConnection, cx| {
+                cx.emit(QueryTabEvent::EditConnection)
+            }),
+        ];
         let workspace = Arc::clone(&model.read(cx).spec().workspace);
         QueryTab {
             workspace,
@@ -616,6 +629,7 @@ impl QueryTab {
             _browse: browse,
             _open_table: open_table,
             _catalog: catalog,
+            _connect_error: connect_error,
         }
     }
 

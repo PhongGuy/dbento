@@ -205,7 +205,7 @@ async fn connect_failure_is_reported_and_retried() {
     for id in [1, 2] {
         r.send(run(id, "SELECT 1"));
         match next(&ev).await {
-            Event::ConnectFailed { message } => {
+            Event::ConnectFailed { message, .. } => {
                 assert!(message.starts_with("cannot open the database"), "{message}")
             }
             other @ (Event::Connected { .. }
@@ -555,7 +555,7 @@ async fn a_missing_keychain_secret_adds_the_hint() {
     let ev = r.events();
     r.send(run(1, "SELECT 1"));
     match next(&ev).await {
-        Event::ConnectFailed { message } => {
+        Event::ConnectFailed { message, .. } => {
             assert!(message.starts_with("cannot open the database"), "{message}");
             assert!(
                 message.contains("\nhint: no secret was found for 'nopg'"),
