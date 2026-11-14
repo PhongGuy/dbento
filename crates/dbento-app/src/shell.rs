@@ -38,7 +38,7 @@ use gpui_kit::{
 
 use crate::app::{
     BrowseSaved, SavedState, Services, SortSaved, TabState, TableState, WindowState,
-    WorkspaceSession,
+    WorkspaceSession, recent_status,
 };
 use crate::approvals::{
     APPROVAL_POLL, Answer, answered_elsewhere_notice, approved_notice, ask_approval, next_pending,
@@ -313,8 +313,8 @@ pub struct Shell {
     // The saved layout the panels and every new tab start from.
     sidebar_width: Option<f32>,
     editor_height: Option<f32>,
-    // The welcome view's recent workspaces, newest first.
-    recent: Vec<PathBuf>,
+    // The welcome view's recent workspaces, newest first, each with whether it was missing.
+    recent: Vec<(PathBuf, bool)>,
     // The state file as read at start plus this shell's changes since, which also wait in
     // `state_file` for a write; `saving` says a writer is running.
     saved: SavedState,
@@ -489,7 +489,7 @@ impl Shell {
             split: cx.new(|_| ResizableState::default()),
             sidebar_width: saved.sidebar_width,
             editor_height: saved.editor_height,
-            recent: saved.recent_workspaces.clone(),
+            recent: recent_status(&saved.recent_workspaces),
             state_file,
             saved,
             saving: false,
@@ -843,6 +843,7 @@ impl Shell {
                     draft: tab.draft_id().unwrap_or_default().to_owned(),
                     file: tab.file().map(Path::to_path_buf),
                     table: tab.origin().map(|rel| table_state(rel, model)),
+                    number: tab.number(),
                 }
             })
             .collect();
@@ -2546,7 +2547,7 @@ impl Shell {
                 self.forget_if_saved(&dir, cx);
             }
         }
-        self.recent = self.saved.recent_workspaces.clone();
+        self.recent = recent_status(&self.saved.recent_workspaces);
         self.show_approvals(cx);
         cx.notify();
     }
@@ -3871,7 +3872,8 @@ impl Shell {
             Vec::new()
         };
         self.restoring = true;
-        self.next_query = 1;
+        // Saved numbers come back as they were, so a tab opened later counts on past them.
+        self.next_query = plan.iter().filter_map(|t| t.number).max().unwrap_or(0) + 1;
         // A tab the closing window refuses must not drop out of the saved session.
         let mut refused = false;
         for restored in plan {
@@ -3886,6 +3888,9 @@ impl Shell {
             tab.update(cx, |t, cx| {
                 if restored.label.is_some() {
                     t.set_label(restored.label, cx);
+                }
+                if let Some(n) = restored.number {
+                    t.set_number(n);
                 }
                 let bound = file.is_some();
                 if let Some((text, rel)) = file {
@@ -3923,20 +3928,16 @@ impl Shell {
         }
     }
 
-    // A folder that no longer opens leaves the recent list and, when it was the saved one,
-    // the next start, so its error does not greet every later start; a bad argument leaves
-    // the saved folder alone.
+    // A saved folder that no longer opens stops being the next start's, so its error does not
+    // greet every later start; it stays in the recent list, where an unmounted drive or share
+    // can be opened again once it is back.
     fn forget_if_saved(&mut self, dir: &Path, cx: &mut Context<Self>) {
-        let saved = &self.saved;
-        let known = saved.last_workspace.as_deref() == Some(dir)
-            || saved.recent_workspaces.iter().any(|p| p == dir);
-        if !known {
+        if self.saved.last_workspace.as_deref() != Some(dir) {
             return;
         }
         let dir = dir.to_path_buf();
         self.update_saved(
             move |s| {
-                s.forget_workspace(&dir);
                 if s.last_workspace.as_deref() == Some(dir.as_path()) {
                     s.last_workspace = None;
                 }
@@ -4350,9 +4351,19 @@ impl Shell {
             theme.list_hover,
             theme.radius,
         );
-        let recent = self.recent.iter().enumerate().map(|(ix, dir)| {
+        let recent = self.recent.iter().enumerate().map(|(ix, (dir, missing))| {
             let label = SharedString::from(dir.display().to_string());
             let dir = dir.clone();
+            // A missing folder stays listed, dimmed and marked; a click retries it.
+            let mark = missing.then(|| {
+                div()
+                    .id(("recent-missing", ix))
+                    .test_support()
+                    .flex_none()
+                    .pl(px(8.))
+                    .text_xs()
+                    .child("not found")
+            });
             div()
                 .id(("recent-workspace", ix))
                 .aria_label(label.clone())
@@ -4376,6 +4387,8 @@ impl Shell {
                         .text_ellipsis_start()
                         .child(label),
                 )
+                .children(mark)
+                .when(*missing, |row| row.opacity(0.6))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.switch_workspace(dir.clone(), window, cx)
                 }))

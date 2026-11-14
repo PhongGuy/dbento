@@ -10,6 +10,7 @@ fn tab(conn: &str, draft: &str, file: Option<&str>) -> TabState {
         draft: draft.into(),
         file: file.map(PathBuf::from),
         table: None,
+        number: None,
     }
 }
 fn draft(id: &str, conn: &str, sql: &str, at: u64) -> Draft {
@@ -25,6 +26,7 @@ fn restored(conn: &str, id: &str, file: Option<&str>, sql: Option<&str>) -> Rest
         sql: sql.map(str::to_owned),
         label: None,
         table: None,
+        number: None,
     }
 }
 

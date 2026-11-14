@@ -1,6 +1,6 @@
 use crate::support;
 use dbento_app::app::{AppPaths, SavedState, start};
-use dbento_app::persist::{load_json, save_json};
+use dbento_app::persist::load_json;
 use dbento_app::settings_store::SAVE_DELAY;
 use dbento_app::theme::{self, Appearance, mode_for};
 use gpui_kit::component::{Theme, ThemeMode};
@@ -13,9 +13,6 @@ fn mode(cx: &mut TestAppContext) -> ThemeMode {
 }
 fn saved(files: &Path) -> SavedState {
     load_json(&AppPaths::in_dir(files).state).value
-}
-fn save(files: &Path, state: SavedState) {
-    save_json(&AppPaths::in_dir(files).state, &state).unwrap();
 }
 fn started(cx: &mut TestAppContext, files: &Path, dir: Option<&Path>) -> AnyWindowHandle {
     let (win, _) = cx
@@ -141,33 +138,29 @@ fn a_font_change_survives_the_appearance_shortcut(cx: &mut TestAppContext) {
 fn opening_a_workspace_keeps_the_saved_choice(cx: &mut TestAppContext) {
     support::init(cx);
     let (fx, files) = (support::fixture("", ""), tempfile::tempdir().unwrap());
-    save(
-        files.path(),
-        SavedState {
-            appearance: Appearance::Light,
-            ..SavedState::default()
-        },
-    );
+    old_state(files.path(), r#"{"appearance":"light"}"#);
     let win = started(cx, files.path(), Some(fx.dir.path()));
     assert!(support::present(cx, win, "connection-list"));
     let s = saved(files.path());
-    assert_eq!(
-        (s.last_workspace.as_deref(), s.appearance),
-        (Some(fx.dir.path()), Appearance::Light)
-    );
+    assert_eq!(s.last_workspace.as_deref(), Some(fx.dir.path()));
+    // settings.json takes the choice over and is its one home from then on.
+    assert_eq!(settings_appearance(cx, files.path()), Appearance::Light);
+    assert!(!state_names_appearance(files.path()));
+}
+// A state file from before settings.json owned the appearance.
+fn old_state(files: &Path, json: &str) {
+    std::fs::write(AppPaths::in_dir(files).state, json).unwrap();
+}
+fn state_names_appearance(files: &Path) -> bool {
+    let text = std::fs::read_to_string(AppPaths::in_dir(files).state).unwrap();
+    text.contains("\"appearance\"")
 }
 #[gpui_kit::test]
 fn forgetting_a_broken_workspace_keeps_the_saved_choice(cx: &mut TestAppContext) {
     support::init(cx);
     let (empty, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    save(
-        files.path(),
-        SavedState {
-            last_workspace: Some(empty.path().into()),
-            appearance: Appearance::Dark,
-            ..SavedState::default()
-        },
-    );
+    let state = serde_json::json!({"last_workspace": empty.path(), "appearance": "dark"});
+    old_state(files.path(), &state.to_string());
     let win = started(cx, files.path(), None);
     assert!(support::present(cx, win, "welcome-error"));
     assert_eq!(
@@ -175,8 +168,9 @@ fn forgetting_a_broken_workspace_keeps_the_saved_choice(cx: &mut TestAppContext)
         ThemeMode::Dark,
         "the saved choice is restored at start"
     );
-    let s = saved(files.path());
-    assert_eq!((s.last_workspace, s.appearance), (None, Appearance::Dark));
+    assert_eq!(saved(files.path()).last_workspace, None);
+    assert_eq!(settings_appearance(cx, files.path()), Appearance::Dark);
+    assert!(!state_names_appearance(files.path()));
 }
 #[gpui_kit::test]
 fn an_os_change_moves_the_theme_only_under_system(cx: &mut TestAppContext) {

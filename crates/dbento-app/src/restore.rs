@@ -21,6 +21,8 @@ pub struct RestoredTab {
     pub label: Option<String>,
     /// The relation a table tab was opened on, from the session; None for an orphan draft.
     pub table: Option<TableState>,
+    /// The untitled tab's "Query N" number, from the session; None for an orphan draft.
+    pub number: Option<usize>,
 }
 
 /// The tabs to reopen and the index to activate. The session's tabs come first in their
@@ -53,6 +55,7 @@ pub fn plan_restore(
             sql: draft.map(|d| d.sql.clone()),
             label: draft.and_then(|d| d.label.clone()),
             table: tab.table.clone(),
+            number: tab.number,
         });
     }
     // A crash between a draft's write and the next session save leaves a draft no saved tab
@@ -69,6 +72,7 @@ pub fn plan_restore(
                 sql: Some(d.sql),
                 label: d.label,
                 table: None,
+                number: None,
             }),
     );
     let active = active.or((!tabs.is_empty()).then_some(0));

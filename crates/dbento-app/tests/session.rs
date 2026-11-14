@@ -374,3 +374,28 @@ fn a_key_tab_is_left_out_of_the_session_and_the_active_tab_still_maps(cx: &mut T
     assert_eq!(query_tabs(cx, &shell), ["SELECT 1", ""]);
     assert_eq!(shell.read_with(cx, |s, _| s.active()), Some(0));
 }
+
+#[gpui_kit::test]
+fn restored_untitled_tabs_keep_their_numbers_and_a_new_tab_takes_the_next(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    click(cx, o.win, "tab-new");
+    click(cx, o.win, "tab-new");
+    set(cx, o.win, &o.shell, 0, "SELECT 1");
+    set(cx, o.win, &o.shell, 2, "SELECT 3");
+    let shell = o.shell.clone();
+    cx.update_window(o.win, |_, w, cx| {
+        shell.update(cx, |s, cx| s.close_tab_at(1, w, cx))
+    })
+    .unwrap();
+    settle(cx);
+    wait_real(cx, "the drafts", |_| drafts(&o).len() == 2);
+    let (win, _) = restart(cx, &o);
+    let labels = |cx: &mut TestAppContext| -> Vec<String> {
+        (0usize..)
+            .map_while(|i| label_of(cx, win, ("tab", i)))
+            .collect()
+    };
+    assert_eq!(labels(cx), ["Query 1", "Query 3"]);
+    click(cx, win, "tab-new");
+    assert_eq!(labels(cx), ["Query 1", "Query 3", "Query 4"]);
+}
