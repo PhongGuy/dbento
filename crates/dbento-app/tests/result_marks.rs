@@ -8,10 +8,10 @@ const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);";
 
 fn marks(cx: &mut TestAppContext, o: &Opened) -> Vec<ResultMark> {
     o.model(cx).read_with(cx, |m, _| {
-        let (asking, paused) = (m.confirm().map(|p| p.stmt), m.paused());
+        let asking = m.confirm().map(|p| p.stmt);
         m.results()
             .iter()
-            .map(|r| result_mark(r, asking, paused))
+            .map(|r| result_mark(r, asking, m.more_rows(r.stmt)))
             .collect()
     })
 }
@@ -64,7 +64,7 @@ fn a_parked_statement_shows_its_rows_and_paused(cx: &mut TestAppContext) {
     wait_real(cx, "the parked stream", |cx| {
         m.read_with(cx, |m, _| m.has_more())
     });
-    assert_eq!(marks(cx, &o), [ResultMark::Paused(2048)]);
+    assert_eq!(marks(cx, &o), [ResultMark::More(2048)]);
 }
 
 #[gpui_kit::test]

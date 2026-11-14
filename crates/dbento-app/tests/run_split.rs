@@ -1,12 +1,12 @@
 //! The toolbar's split Run holds Run all; Stop shows only while there is something to stop.
 use crate::support::{LONG, label_of, opened, present, wait_real};
-use dbento_app::results_pane::paused_label;
+use dbento_app::results_pane::more_label;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
 
 #[test]
 fn a_paused_result_says_how_many_rows_and_that_more_exist() {
-    assert_eq!(paused_label(1000), "first 1,000 rows · more available");
+    assert_eq!(more_label(1000), "1,000+ rows · More rows available");
 }
 
 #[gpui_kit::test]

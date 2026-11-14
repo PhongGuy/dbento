@@ -1,7 +1,7 @@
 //! The results footer and status bar at the row cap: Fetch next, Fetch all, expiry and raise limit.
 use crate::support::{MANY, Opened, label_of, opened, present, wait_real};
 use dbento_app::results_pane::{
-    expiry_note, fetch_next_label, group_digits, more_rows, raise_label, run_again_label,
+    expiry_note, fetch_next_label, group_digits, raise_label, row_count, run_again_label,
 };
 use dbento_app::runner::{Event, StatementEnd, StopReason};
 use dbento_app::status_bar::truncation_text;
@@ -46,7 +46,7 @@ fn click(cx: &mut TestAppContext, o: &Opened, id: &'static str) {
 fn labels_read_as_the_spec_says() {
     assert_eq!(group_digits(1_000), "1,000");
     assert_eq!(group_digits(999), "999");
-    assert_eq!(more_rows(1_000), "1,000+ rows");
+    assert_eq!(row_count(1_000, true), "1,000+ rows");
     assert_eq!(fetch_next_label(1_000), "Fetch next 1,000");
     assert_eq!(fetch_next_label(250), "Fetch next 250");
     assert_eq!(raise_target(Some(1_000)), Some(10_000));
@@ -65,7 +65,7 @@ fn labels_read_as_the_spec_says() {
         expiry_note(Expiry::Released),
         "Stream closed so another tab could commit"
     );
-    let more = Some("row limit reached at 1,000 rows, more available");
+    let more = Some("More rows available");
     assert_eq!(
         truncation_text(None, Some(CapView::Parked { rows: 1000 })).as_deref(),
         more
@@ -109,11 +109,11 @@ fn the_footer_offers_fetch_at_the_cap_and_fetch_all_completes(cx: &mut TestAppCo
     );
     assert_eq!(
         label_of(cx, o.win, "status-truncated").as_deref(),
-        Some("row limit reached at 1,000 rows, more available")
+        Some("More rows available")
     );
     assert_eq!(
         label_of(cx, o.win, ("statement-result", 0usize)).as_deref(),
-        Some("first 1,000 rows · more available")
+        Some("1,000+ rows · More rows available")
     );
     assert!(!present(cx, o.win, "raise-limit"));
     let m = o.model(cx);
@@ -129,7 +129,7 @@ fn the_footer_offers_fetch_at_the_cap_and_fetch_all_completes(cx: &mut TestAppCo
     );
     assert_eq!(
         label_of(cx, o.win, "status-truncated").as_deref(),
-        Some("row limit reached at 2,000 rows, more available")
+        Some("More rows available")
     );
     click(cx, &o, "fetch-all");
     wait_real(cx, "the end", |cx| {
@@ -152,7 +152,7 @@ fn an_expired_script_offers_to_raise_the_limit_and_runs_nothing(cx: &mut TestApp
     expire(cx, &o);
     assert_eq!(
         label_of(cx, o.win, "footer-rows").as_deref(),
-        Some("1,000 rows")
+        Some("1,000+ rows")
     );
     assert_eq!(
         label_of(cx, o.win, "footer-note").as_deref(),
