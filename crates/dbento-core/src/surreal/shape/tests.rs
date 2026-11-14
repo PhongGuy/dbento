@@ -53,6 +53,7 @@ fn an_unfinished_stream_keeps_a_trailing_column_for_later_fields() {
     let rows = [row(&[("a", Wire::Int(1))])];
     let (shape, columns) = Shape::of(&rows, false, false);
     assert_eq!(names(&columns), ["a", MORE_FIELDS]);
+    assert!(!columns[0].is_overflow() && columns[1].is_overflow());
     assert_eq!(shape.width(), 2);
     let plain = shape.cells(&rows[0]);
     assert_eq!(plain[1], Cell::Null);

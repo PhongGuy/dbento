@@ -62,7 +62,7 @@ impl ColumnModel {
             .map(|(name, kind)| ColumnInfo::new(name, kind, None))
             .collect();
         if more.is_some() {
-            columns.push(ColumnInfo::new(MORE_FIELDS, "object", None));
+            columns.push(ColumnInfo::overflow(MORE_FIELDS));
         }
         Ok((Self { index, more }, columns))
     }

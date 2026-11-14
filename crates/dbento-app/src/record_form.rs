@@ -15,7 +15,7 @@ use gpui_kit::{
 use crate::keymap::{CancelRecordEdit, CommitRecordEdit};
 use crate::record::{
     DOCUMENT_CAP, Marker, RecordField, Was, capped_document, display_text, edit_text,
-    edits_as_bytes, parse_edit, record_at, record_fields,
+    edits_as_bytes, more_fields_text, parse_edit, record_at, record_fields,
 };
 use crate::staged::{self, GridRow};
 use crate::tab_model::{SaveState, TabModel};
@@ -587,6 +587,12 @@ impl Render for RecordForm {
         let m = self.model.read(cx);
         let fields = record_fields(m, self.stmt, self.row);
         let at = record_at(m, self.stmt, self.row);
+        let more = match at {
+            GridRow::Loaded(r) => {
+                (m.results().get(self.stmt)).and_then(|res| more_fields_text(&res.store, r))
+            }
+            GridRow::Inserted(_) => None,
+        };
         // Only a loaded row of an engine with documents offers the mode; the shell text is
         // built only while it is shown.
         let document = match at {
@@ -680,6 +686,20 @@ impl Render for RecordForm {
             );
         }
         let lines: Vec<_> = fields.into_iter().map(|f| self.field(f, cx)).collect();
+        // Fields past the result's columns are a count, read in full under Document.
+        let more = more.map(|text| {
+            div()
+                .id(self.id("more-fields"))
+                .aria_label(text.clone())
+                .test_support()
+                .px_3()
+                .py(px(6.))
+                .pl(px(12.) + MARKER_SLOT + MARKER_GAP)
+                .text_sm()
+                .line_height(LINE)
+                .text_color(dim)
+                .child(text)
+        });
         let heading = |text: &'static str| div().text_xs().text_color(dim).child(text);
         let deleted_mark = deleted.then(|| {
             let fresh = gone.map(|text| {
@@ -740,7 +760,8 @@ impl Render for RecordForm {
                     .min_h_0()
                     .overflow_y_scroll()
                     .when(deleted, |d| d.bg(theme::edit_deleted(cx)).line_through())
-                    .children(lines),
+                    .children(lines)
+                    .children(more),
             )
     }
 }

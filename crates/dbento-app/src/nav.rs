@@ -11,12 +11,23 @@ pub struct Hop {
     pub relation: RelationRef,
     /// The WHERE text of the browse.
     pub filter: String,
+    /// The row to select once the browse lands; None selects a lone row.
+    pub row: Option<usize>,
 }
 
 impl Hop {
     /// The hop to `relation` filtered by `filter`.
     pub fn new(relation: RelationRef, filter: String) -> Self {
-        Hop { relation, filter }
+        Hop {
+            relation,
+            filter,
+            row: None,
+        }
+    }
+
+    /// The same hop, landing on table row `row`.
+    pub fn with_row(self, row: Option<usize>) -> Self {
+        Hop { row, ..self }
     }
 }
 

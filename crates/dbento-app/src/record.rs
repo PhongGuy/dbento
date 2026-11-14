@@ -2,9 +2,10 @@
 //! shown value (staged over loaded), and the display, edit and parse rules of a field.
 //! GPUI-free apart from reading a `TabModel`.
 
-use dbento_core::{CellRef, EditValue, FkDirection, RelationRef, key_filter};
+use dbento_core::{CellRef, ColumnInfo, EditValue, FkDirection, RelationRef, key_filter};
 
 use crate::copy::cell_copy;
+use crate::results::ResultStore;
 use crate::staged::{self, GridRow};
 use crate::tab_model::TabModel;
 
@@ -79,7 +80,8 @@ pub fn record_at(m: &TabModel, stmt: usize, row: usize) -> GridRow {
     }
 }
 
-/// Every column of table row `row` of result `stmt`; empty when there is no such row.
+/// Every column of table row `row` of result `stmt` but a gathering column `more_fields_text`
+/// counts; empty when there is no such row.
 pub fn record_fields(m: &TabModel, stmt: usize, row: usize) -> Vec<RecordField> {
     let Some(result) = m.results().get(stmt) else {
         return Vec::new();
@@ -101,6 +103,7 @@ pub fn record_fields(m: &TabModel, stmt: usize, row: usize) -> Vec<RecordField> 
         .columns()
         .iter()
         .enumerate()
+        .filter(|&(col, _)| !counted(store, col, at))
         .map(|(col, info)| {
             let name = info.name();
             let staged = browse.and(match at {
@@ -154,6 +157,34 @@ pub fn record_fields(m: &TabModel, stmt: usize, row: usize) -> Vec<RecordField> 
             }
         })
         .collect()
+}
+
+/// The record view's muted line for loaded row `row`'s gathering column; None without one.
+/// It counts the document's fields that no other column shows, and is None when the row's
+/// cell is empty or the row keeps no document to count from.
+pub fn more_fields_text(store: &ResultStore, row: u64) -> Option<String> {
+    let columns = store.columns();
+    let col = columns.iter().position(ColumnInfo::is_overflow)?;
+    if matches!(store.cell(row, col)?, CellRef::Null) {
+        return None;
+    }
+    let shown = |name: &str| columns.iter().any(|c| !c.is_overflow() && c.name() == name);
+    let n = (store.document(row)?.field_names().iter())
+        .filter(|name| !shown(name))
+        .count();
+    Some(match n {
+        1 => "1 more field".to_owned(),
+        n => format!("{n} more fields"),
+    })
+}
+
+/// Whether column `col` of loaded row `at` is a gathering column the form shows as a count:
+/// one whose row keeps the document it counts from.
+fn counted(store: &ResultStore, col: usize, at: GridRow) -> bool {
+    let GridRow::Loaded(r) = at else {
+        return false;
+    };
+    store.columns()[col].is_overflow() && store.document(r).is_some()
 }
 
 /// A loaded cell as a value; a kind the editor does not know shows as its debug text,

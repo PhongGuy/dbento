@@ -1518,10 +1518,12 @@ impl Shell {
             t => t,
         };
         let hop = Hop::new(rel.clone(), filter.clone());
+        // The first follow also records where it started, so Back returns to that row.
+        let start = origin.as_ref().and_then(|o| start_hop(o, cx));
         let tab = match target {
             Some(t) => {
                 self.activate(t, window, cx);
-                self.load_hop(t, rel, filter, window, cx);
+                self.load_hop(t, rel, filter, None, window, cx);
                 self.tabs[t].clone()
             }
             None => {
@@ -1543,18 +1545,27 @@ impl Shell {
                 tab
             }
         };
-        tab.update(cx, |t, _| t.nav_mut().push(hop));
+        tab.update(cx, |t, _| {
+            if t.nav().current().is_none()
+                && let Some(start) = start
+            {
+                t.nav_mut().push(start);
+            }
+            t.nav_mut().push(hop);
+        });
         cx.notify();
         true
     }
 
-    // Shows `rel` filtered by `filter` in tab `t`, selecting a single landed row. A hop within
-    // the relation already browsed only swaps the filter, so staged edits get the discard question.
+    // Shows `rel` filtered by `filter` in tab `t`, selecting row `row` or else a single landed
+    // row. A hop within the relation already browsed only swaps the filter, so staged edits get
+    // the discard question.
     fn load_hop(
         &mut self,
         t: usize,
         rel: &RelationRef,
         filter: String,
+        row: Option<usize>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1572,7 +1583,7 @@ impl Shell {
             self.load_relation(t, rel, true, Some(filter), window, cx);
         }
         let pane = tab.read(cx).results_pane().clone();
-        pane.update(cx, |p, cx| p.select_single_landed(cx));
+        pane.update(cx, |p, cx| p.select_landed(row, cx));
     }
 
     /// Steps the active tab back to its previous hop and loads it; false when there is
@@ -1602,7 +1613,7 @@ impl Shell {
         let Some(hop) = tab.update(cx, |t, _| step(t.nav_mut())) else {
             return false;
         };
-        self.load_hop(t, &hop.relation, hop.filter, window, cx);
+        self.load_hop(t, &hop.relation, hop.filter, hop.row, window, cx);
         cx.notify();
         true
     }
@@ -5361,6 +5372,15 @@ impl Render for TabDragPreview {
             .opacity(0.9)
             .child(self.0.clone())
     }
+}
+
+// Where a follow from `tab` starts: the relation it browses, its filter and its current row.
+fn start_hop(tab: &Entity<QueryTab>, cx: &App) -> Option<Hop> {
+    let tab = tab.read(cx);
+    let browse = tab.model().read(cx).browse()?;
+    let filter = browse.browse().filter.clone().unwrap_or_default();
+    let row = tab.results_pane().read(cx).current_row(cx);
+    Some(Hop::new(browse.target().relation().clone(), filter).with_row(row))
 }
 
 #[cfg(test)]

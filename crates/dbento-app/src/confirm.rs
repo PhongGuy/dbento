@@ -30,6 +30,9 @@ const EDITOR_LINE_HEIGHT: f32 = 1.5;
 pub const DIALOG_TOP: Pixels = px(120.);
 /// The width of the confirm, name and approvals dialogs.
 pub const DIALOG_WIDTH: Pixels = px(480.);
+/// The text width inside a dialog's SQL box: the dialog less its 16 px sides, the box's border
+/// and right padding, and the editor's own 12 px inset, plus the 4 px the box pulls it left.
+const PREVIEW_TEXT_WIDTH: Pixels = px(480. - 32. - 2. - 8. - 12. - 12. + 4.);
 
 /// One answer button; `danger` paints it destructive.
 #[derive(Clone)]
@@ -171,26 +174,44 @@ pub fn dialog_top(window: &Window) -> Pixels {
 
 /// A read-only SQL editor holding `sql`: highlighted, no line numbers, folding or soft wrap.
 pub fn sql_preview(sql: &str, window: &mut Window, cx: &mut App) -> Entity<EditorState> {
-    code_preview(sql, "sql", window, cx)
+    preview_editor(sql, "sql", false, window, cx)
 }
 
-/// A read-only editor holding `text` highlighted as `language`, with no line numbers, folding
-/// or soft wrap.
+/// A read-only editor holding `text` highlighted as `language`, with no line numbers or
+/// folding, wrapping long lines at the confirm dialog's width.
 pub fn code_preview(
     text: &str,
     language: &'static str,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<EditorState> {
+    preview_editor(text, language, true, window, cx)
+}
+
+fn preview_editor(
+    text: &str,
+    language: &'static str,
+    wrap: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<EditorState> {
     let text = text.to_owned();
+    let (font, size) = (
+        cx.theme().mono_font_family.clone(),
+        cx.theme().mono_font_size,
+    );
     cx.new(|cx| {
         let mut state = EditorState::new(window, cx)
             .language(language)
             .line_number(false)
             .folding(false)
-            .soft_wrap(false)
+            .soft_wrap(wrap)
             .default_value(text);
         state.set_readonly(true, cx);
+        // Wrapped before the first layout, so the box is as tall as its rows from the start.
+        if wrap {
+            state.prewrap(gpui_kit::font(font), size, PREVIEW_TEXT_WIDTH, cx);
+        }
         state
     })
 }
@@ -204,7 +225,9 @@ pub fn sql_box(
     cx: &App,
 ) -> impl IntoElement + use<> {
     let theme = cx.theme();
-    let lines = sql.lines().count().clamp(1, PREVIEW_LINES + 1);
+    // A wrapping editor counts its wrapped rows; before its first wrap it has none.
+    let rows = state.read(cx).display_map().wrap_row_count();
+    let lines = rows.max(sql.lines().count()).clamp(1, PREVIEW_LINES + 1);
     // The kit's multi-line editor pads its text by the Medium input padding above and below.
     let height =
         theme.mono_font_size * EDITOR_LINE_HEIGHT * lines as f32 + Size::Medium.input_py() * 2.;

@@ -684,3 +684,39 @@ fn an_update_that_writes_a_key_column_returns_the_identity_but_its_preview_does_
     );
     assert!(!bound(&no_key)[0].returning);
 }
+
+// The commit prompt shortens built-in casts for reading; what runs keeps them qualified, so a
+// type of the same name earlier on the search_path can never capture a value.
+#[test]
+fn the_executed_statement_keeps_its_qualified_casts() {
+    let target = EditTarget::new(
+        RelationRef::new("public", "t"),
+        Engine::Postgres,
+        vec![col("s", "pg_catalog.text", true, None)],
+        strings(&["ctid", "xmin"]),
+        strings(&["ctid", "xmin"]),
+        true,
+    );
+    let k = key(&[("ctid", t("(0,2)")), ("xmin", t("750"))]);
+    let b = batch(
+        target,
+        vec![Change::Update {
+            key: k,
+            set: pairs(&[("s", t("a"))]),
+        }],
+    );
+    let run = &bound(&b)[0];
+    assert!(
+        run.sql.starts_with(
+            "UPDATE ONLY public.t SET s = $1::text::pg_catalog.text \
+             WHERE ctid = $2::text::pg_catalog.tid AND xmin = $3::text::pg_catalog.xid"
+        ),
+        "{}",
+        run.sql
+    );
+    assert_eq!(
+        render_sql(&b),
+        "UPDATE ONLY public.t SET s = 'a'::pg_catalog.text \
+         WHERE ctid = '(0,2)'::pg_catalog.tid AND xmin = '750'::pg_catalog.xid;"
+    );
+}

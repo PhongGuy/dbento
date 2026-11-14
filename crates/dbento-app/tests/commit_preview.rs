@@ -1,7 +1,7 @@
 //! The apply prompt's SQL sits in a read-only, highlighted editor with typed literals.
 use crate::support;
 use crate::support::{label_of, launched, opened, present, wait_real};
-use dbento_app::confirm::{sql_box, sql_preview};
+use dbento_app::confirm::{code_preview, sql_box, sql_preview};
 use dbento_core::RelationKind;
 use gpui_kit::component::input::EditorState;
 use gpui_kit::test::TestWindowExt as _;
@@ -133,5 +133,40 @@ fn every_preview_line_fits_inside_the_box(cx: &mut TestAppContext) {
     assert!(
         (inset - px(9.)).abs() <= px(1.),
         "text starts {inset:?} into the box"
+    );
+}
+
+// A statement wider than the dialog wraps inside the box instead of running off its right edge,
+// and the box grows to hold every wrapped row.
+#[gpui_kit::test]
+fn a_long_statement_wraps_inside_the_box(cx: &mut TestAppContext) {
+    support::init(cx);
+    let sql = "UPDATE ONLY public.orders SET note = 'a fairly long note that runs well past the \
+               dialog edge'::text, status = 'shipped'::text WHERE ctid = '(0,2)'::tid AND \
+               xmin = '750'::xid;";
+    let win = cx.add_window(|w, cx| Preview {
+        sql,
+        state: code_preview(sql, "sql", w, cx),
+    });
+    let state = win.update(cx, |p, _, _| p.state.clone()).unwrap();
+    for _ in 0..3 {
+        cx.update_window(win.into(), |_, w, cx| w.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+    let boxed = cx
+        .update_window(win.into(), |_, w, _| w.find("confirm-sql-editor").bounds())
+        .unwrap();
+    let last = state.read_with(cx, |s, _| {
+        s.range_to_bounds(&(sql.len() - 1..sql.len()))
+            .expect("the last character is laid out")
+    });
+    assert!(
+        last.right() <= boxed.right(),
+        "the statement {last:?} runs past the box {boxed:?}"
+    );
+    assert!(
+        last.bottom() <= boxed.bottom(),
+        "the last wrapped row {last:?} falls below the box {boxed:?}"
     );
 }

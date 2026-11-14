@@ -235,3 +235,18 @@ fn the_preview_keeps_the_first_statements_and_counts_the_rest() {
     );
     assert_eq!(preview("A;\nB;"), "A;\nB;");
 }
+
+#[test]
+fn the_preview_shows_built_in_casts_unqualified_and_leaves_literals_alone() {
+    let sql = "UPDATE ONLY public.t SET a = 'x::pg_catalog.text'::pg_catalog.text, \
+               n = '1.5'::pg_catalog.\"numeric\", c = 'y'::pg_catalog.\"char\", \
+               m = 'ok'::public.mood, \"pg_catalog.text\" = E'\\\\'''::pg_catalog.\"varchar\" \
+               WHERE ctid = '(0,2)'::pg_catalog.tid;";
+    assert_eq!(
+        preview(sql),
+        "UPDATE ONLY public.t SET a = 'x::pg_catalog.text'::text, \
+         n = '1.5'::numeric, c = 'y'::\"char\", \
+         m = 'ok'::public.mood, \"pg_catalog.text\" = E'\\\\'''::varchar \
+         WHERE ctid = '(0,2)'::tid;"
+    );
+}

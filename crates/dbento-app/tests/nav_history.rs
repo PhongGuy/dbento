@@ -10,6 +10,7 @@ const T: &str = "CREATE TABLE a(id INTEGER PRIMARY KEY, name TEXT); \
                  CREATE TABLE b(id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES a(id), note TEXT); \
                  INSERT INTO a VALUES (1, 'x'), (2, 'y'); \
                  INSERT INTO b VALUES (1, 1, 'n'), (2, NULL, 'm'), (3, 1, 'o');";
+const B: &str = "SELECT *\nFROM main.b\nORDER BY id ASC";
 const A1: &str = "SELECT *\nFROM main.a\nWHERE (\nid = '1'\n)\nORDER BY id ASC";
 const B_A1: &str = "SELECT *\nFROM main.b\nWHERE (\na_id = '1'\n)\nORDER BY id ASC";
 
@@ -32,7 +33,7 @@ fn follow(cx: &mut TestAppContext, o: &Opened, rel: &str, filter: &str, sql: &st
 fn walked(cx: &mut TestAppContext) -> Opened {
     let o = launched(cx, T, "");
     o.open_relation(cx, "b", RelationKind::Table);
-    o.wait_browse(cx, "SELECT *\nFROM main.b\nORDER BY id ASC");
+    o.wait_browse(cx, B);
     follow(cx, &o, "a", "id = '1'", A1);
     follow(cx, &o, "b", "a_id = '1'", B_A1);
     o
@@ -94,8 +95,13 @@ fn the_inspector_buttons_walk_the_preview_tabs_history(cx: &mut TestAppContext) 
     assert!(disabled(cx, &o, "inspector-forward"));
     click_id(cx, o.win, "inspector-back");
     o.wait_browse(cx, A1);
-    assert!(disabled(cx, &o, "inspector-back"));
+    assert!(!disabled(cx, &o, "inspector-back"), "b, where it started");
     assert!(!disabled(cx, &o, "inspector-forward"));
+    click_id(cx, o.win, "inspector-back");
+    o.wait_browse(cx, B);
+    assert!(disabled(cx, &o, "inspector-back"));
+    click_id(cx, o.win, "inspector-forward");
+    o.wait_browse(cx, A1);
     click_id(cx, o.win, "inspector-forward");
     o.wait_browse(cx, B_A1);
     assert_eq!(o.shell.read_with(cx, |s, _| s.tabs().len()), 2);
@@ -110,9 +116,11 @@ fn a_disabled_inspector_button_takes_no_step(cx: &mut TestAppContext) {
     assert_eq!(browse_sql(cx, &o), B_A1, "no forward hop to take");
     click_id(cx, o.win, "inspector-back");
     o.wait_browse(cx, A1);
+    click_id(cx, o.win, "inspector-back");
+    o.wait_browse(cx, B);
     assert!(disabled(cx, &o, "inspector-back"));
     click_id(cx, o.win, "inspector-back");
-    assert_eq!(browse_sql(cx, &o), A1, "no back hop to take");
+    assert_eq!(browse_sql(cx, &o), B, "no back hop to take");
     assert!(
         !disabled(cx, &o, "inspector-forward"),
         "the forward hop stays"
@@ -183,4 +191,41 @@ fn staging_an_edit_clears_the_history(cx: &mut TestAppContext) {
     m.update(cx, |m, cx| m.add_row(cx));
     cx.run_until_parked();
     assert!(tab.read_with(cx, |t, _| t.nav().current().is_none() && !t.is_preview()));
+}
+
+// The first follow records where it started, so Back returns there with that row selected.
+#[gpui_kit::test]
+fn back_from_the_first_follow_returns_to_the_starting_row(cx: &mut TestAppContext) {
+    let o = launched(cx, T, "");
+    o.open_relation(cx, "b", RelationKind::Table);
+    o.wait_browse(cx, B);
+    let pane = |cx: &mut TestAppContext| {
+        o.shell
+            .read_with(cx, |s, cx| s.tab().unwrap().read(cx).results_pane().clone())
+    };
+    let table = pane(cx).read_with(cx, |p, _| p.table().clone());
+    table.update(cx, |t, cx| t.set_selected_cell(2, 1, cx));
+    cx.run_until_parked();
+    follow(cx, &o, "a", "id = '1'", A1);
+    click_id(cx, o.win, "inspector-toggle");
+    assert!(
+        !disabled(cx, &o, "inspector-back"),
+        "the follow can go back"
+    );
+    let inspector = o.shell.read_with(cx, |s, _| s.inspector().clone());
+    cx.update_window(o.win, |_, w, cx| {
+        inspector.read(cx).focus_handle(cx).focus(w, cx)
+    })
+    .unwrap();
+    press(cx, &o, "alt-left");
+    o.wait_browse(cx, B);
+    wait_real(cx, "the starting row", |cx| {
+        let p = pane(cx);
+        p.read_with(cx, |p, cx| p.current_row(cx)) == Some(2)
+    });
+    assert!(
+        disabled(cx, &o, "inspector-back"),
+        "nothing before the start"
+    );
+    assert!(!disabled(cx, &o, "inspector-forward"));
 }
