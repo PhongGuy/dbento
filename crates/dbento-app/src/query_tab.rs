@@ -37,7 +37,7 @@ use crate::grid_menu::MenuEntry;
 use crate::key_view::KeyView;
 use crate::keymap::{
     CancelQuery, Explain, ExplainAnalyze, FormatSql, RunAll, RunStatement, SaveEdits, SaveQuery,
-    ToggleComment, all_keys_for, chip_keys, keys_for, plus_keys,
+    ToggleComment, all_keys_for, chip_keys, chord_list, keys_for, plus_keys,
 };
 use crate::nav::NavHistory;
 use crate::pick_row::{ConnectionPick, pick_row};
@@ -143,7 +143,7 @@ pub fn format_tooltip(cx: &App) -> String {
     if aliases.is_empty() {
         return "Format SQL".to_owned();
     }
-    format!("Format SQL (also {})", aliases.join(", "))
+    format!("Format SQL (also {})", chord_list(&aliases))
 }
 
 /// The read-only badge's tooltip for `engine`.

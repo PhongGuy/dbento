@@ -632,12 +632,11 @@ impl SettingsView {
                         // The label never shrinks; an id with several chords wraps them
                         // onto further lines instead of squeezing the label.
                         .child(
-                            h_flex()
+                            ui::key_chips(keys.iter().map(|k| chip_keys(k)), cx)
                                 .flex_shrink(1.)
                                 .min_w_0()
                                 .flex_wrap()
                                 .justify_end()
-                                .gap_1()
                                 .when(keys.is_empty(), |d| {
                                     d.child(
                                         div()
@@ -648,8 +647,7 @@ impl SettingsView {
                                             .text_color(theme::dim(cx))
                                             .child("unbound"),
                                     )
-                                })
-                                .children(keys.iter().map(|k| ui::key_chip(chip_keys(k), cx))),
+                                }),
                         )
                         .into_any_element()
                 });

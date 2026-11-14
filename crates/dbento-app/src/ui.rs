@@ -20,7 +20,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled as _, TestSupportExt as _, Window, div, px,
 };
 
-use crate::keymap::chip_keys;
+use crate::keymap::{CHORD_OR, chip_keys};
 use crate::theme;
 
 /// Every icon the app draws, as Lucide catalog names. Nothing outside this list is
@@ -253,6 +253,20 @@ pub fn production_chip(cx: &App) -> Div {
 pub fn key_chip(keys: impl Into<SharedString>, cx: &App) -> Div {
     let (text, edge) = (theme::dim(cx), cx.theme().border);
     key_chip_colored(keys, text, edge, cx)
+}
+
+/// Alternative chords of one command as key chips, a dim "or" between chords so they never
+/// read as one long chord. Each item is chip text from [`chip_keys`].
+pub fn key_chips(chords: impl IntoIterator<Item = String>, cx: &App) -> Div {
+    let dim = theme::dim(cx);
+    let mut row = div().flex().items_center().gap_1();
+    for (n, chord) in chords.into_iter().enumerate() {
+        if n > 0 {
+            row = row.child(div().px_0p5().text_xs().text_color(dim).child(CHORD_OR));
+        }
+        row = row.child(key_chip(chord, cx));
+    }
+    row
 }
 
 /// One menu row: the muted 14 px `icon` as element `"<id>-icon"`, `label`, then `keys` as a

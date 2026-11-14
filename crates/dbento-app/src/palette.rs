@@ -848,7 +848,7 @@ fn entry_icon(entry: &Entry) -> IconName {
 }
 
 /// Row `n`: icon, the label with any " · detail" tail muted, and one chip per chord at the
-/// right, grouped as `("palette-keys", n)` labelled with the chips joined by ", ".
+/// right, grouped as `("palette-keys", n)` labelled with the chords joined by "or".
 fn row(n: usize, label: String, keys: Vec<SharedString>, icon: IconName) -> CommandItem {
     CommandItem::new().label(label.clone()).child(move |_, cx| {
         let (dim, muted) = (theme::dim(cx), cx.theme().muted_foreground);
@@ -871,12 +871,10 @@ fn row(n: usize, label: String, keys: Vec<SharedString>, icon: IconName) -> Comm
             .when(!keys.is_empty(), |el| {
                 let chips: Vec<String> = keys.iter().map(|k| chip_keys(k)).collect();
                 el.child(
-                    h_flex()
+                    ui::key_chips(chips.clone(), cx)
                         .id(("palette-keys", n))
-                        .aria_label(chips.join(", "))
-                        .test_support()
-                        .gap_1()
-                        .children(chips.into_iter().map(|c| ui::key_chip(c, cx))),
+                        .aria_label(keymap::chord_list(&chips))
+                        .test_support(),
                 )
             })
     })

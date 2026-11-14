@@ -1112,9 +1112,7 @@ pub fn plus_keys(keys: &str) -> String {
 }
 
 /// The chip's parts for `keys`: "Ctrl", "Alt", "Shift", "Super" (macOS "⌘"), then the key,
-/// with "enter" as "⏎", the arrows as "←", "→", "↑" and "↓", "tab" as "Tab", the page
-/// keys as "PgUp" and "PgDn", "home" and "end" as "Home" and "End", and any other key
-/// uppercased. Keys that do not parse give nothing.
+/// with the key named by [`key_name`]. Keys that do not parse give nothing.
 pub fn key_hint(keys: &str) -> Vec<String> {
     let Ok(k) = Keystroke::parse_with_os(keys, HOST_OS) else {
         return Vec::new();
@@ -1136,7 +1134,14 @@ pub fn key_hint(keys: &str) -> Vec<String> {
         .filter(|(on, _)| *on)
         .map(|(_, name)| name.to_owned())
         .collect();
-    parts.push(match k.key.as_str() {
+    parts.push(key_name(&k.key));
+    parts
+}
+
+/// The keycap name of one parsed key (no modifiers): glyphs for enter and the arrows, short
+/// title case for named keys ("Esc", "Del", "PgUp"), and letters and F-keys upper case.
+pub fn key_name(key: &str) -> String {
+    match key {
         "enter" => "\u{23CE}".to_owned(),
         "left" => "\u{2190}".to_owned(),
         "right" => "\u{2192}".to_owned(),
@@ -1147,7 +1152,77 @@ pub fn key_hint(keys: &str) -> Vec<String> {
         "tab" => "Tab".to_owned(),
         "pageup" => "PgUp".to_owned(),
         "pagedown" => "PgDn".to_owned(),
-        key => key.to_uppercase(),
-    });
-    parts
+        "escape" => "Esc".to_owned(),
+        "delete" => "Del".to_owned(),
+        key if key.chars().count() == 1 || is_function_key(key) => key.to_uppercase(),
+        key => {
+            let mut chars = key.chars();
+            chars
+                .next()
+                .map(|c| c.to_uppercase().chain(chars).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn is_function_key(key: &str) -> bool {
+    key.strip_prefix('f')
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The word set between alternative chords of one command.
+pub const CHORD_OR: &str = "or";
+
+/// Alternative chords' texts as one phrase, "A or B or C", as [`crate::ui::key_chips`] shows them.
+pub fn chord_list<S: AsRef<str>>(chords: impl IntoIterator<Item = S>) -> String {
+    chords
+        .into_iter()
+        .map(|c| c.as_ref().to_owned())
+        .collect::<Vec<_>>()
+        .join(&format!(" {CHORD_OR} "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{chord_list, key_name};
+
+    #[test]
+    fn named_keys_are_short_title_case() {
+        for (key, want) in [
+            ("escape", "Esc"),
+            ("delete", "Del"),
+            ("tab", "Tab"),
+            ("pageup", "PgUp"),
+            ("pagedown", "PgDn"),
+            ("home", "Home"),
+            ("backspace", "Backspace"),
+            ("space", "Space"),
+        ] {
+            assert_eq!(key_name(key), want, "{key}");
+        }
+    }
+
+    #[test]
+    fn enter_and_the_arrows_are_glyphs() {
+        assert_eq!(key_name("enter"), "\u{23CE}");
+        assert_eq!(key_name("left"), "\u{2190}");
+        assert_eq!(key_name("down"), "\u{2193}");
+    }
+
+    #[test]
+    fn letters_and_function_keys_are_upper_case() {
+        assert_eq!(key_name("f"), "F");
+        assert_eq!(key_name("l"), "L");
+        assert_eq!(key_name("f2"), "F2");
+        assert_eq!(key_name("."), ".");
+    }
+
+    #[test]
+    fn alternative_chords_read_with_or() {
+        assert_eq!(chord_list(["Alt Shift F"]), "Alt Shift F");
+        assert_eq!(
+            chord_list(["Alt Shift F", "Ctrl Alt L", "Ctrl Shift F"]),
+            "Alt Shift F or Ctrl Alt L or Ctrl Shift F"
+        );
+    }
 }

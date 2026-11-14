@@ -166,7 +166,7 @@ fn a_shortcut_with_several_chords_is_one_row_with_every_chip(cx: &mut TestAppCon
     assert_eq!(chips.len(), 3);
     assert_eq!(
         label_of(cx, o.win, ("palette-keys", 0usize)),
-        Some(chips.join(", "))
+        Some(chips.join(" or "))
     );
 }
 
