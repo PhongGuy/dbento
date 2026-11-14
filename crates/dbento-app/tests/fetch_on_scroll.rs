@@ -50,7 +50,7 @@ fn a_parked_statement_says_it_is_paused(cx: &mut TestAppContext) {
     parked(cx, &o, MANY);
     assert_eq!(
         label_of(cx, o.win, ("statement-result", 0usize)).as_deref(),
-        Some("first 2,048 rows · more available")
+        Some("2,048+ rows · More rows available")
     );
 }
 

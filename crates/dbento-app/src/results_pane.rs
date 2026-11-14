@@ -56,7 +56,7 @@ use crate::runner::{PARK_AT_CAP, StatementEnd, StopReason};
 use crate::sidebar::Sidebar;
 use crate::smooth_scroll::{self, Animator};
 use crate::staged::{self, GridRow, pending_label};
-use crate::status_bar::{first_line, format_elapsed};
+use crate::status_bar::{format_elapsed, statement_label};
 use crate::tab_model::{
     CapView, CopyKind, Expiry, SaveState, StatementResult, TabModel, raise_target,
 };
@@ -90,10 +90,20 @@ pub fn save_label(state: SaveState) -> &'static str {
     }
 }
 
-/// The footer's count for a result parked at its cap: "1,000+ rows".
-pub fn more_rows(n: u64) -> String {
-    format!("{}+ rows", group_digits(n))
+/// The row count the tab, footer and status bar all show: "1,000 rows", or "1,000+ rows"
+/// when `more` rows exist past those loaded.
+pub fn row_count(n: u64, more: bool) -> String {
+    match more {
+        true => format!("{}+ rows", group_digits(n)),
+        false => format_rows(n),
+    }
 }
+
+/// The one phrase for rows past those loaded.
+pub const MORE_ROWS: &str = "More rows available";
+
+/// The footer note of an expired browse that Fetch next continues in place.
+pub const MORE_ROWS_RELEASED: &str = "More rows available (connection released)";
 
 /// The footer's consumed capacity for a finished statement: "1 capacity unit",
 /// "12.5 capacity units", or `None` when the engine reported none.
@@ -110,9 +120,9 @@ pub fn capacity_text(end: Option<&StatementEnd>) -> Option<String> {
     Some(format!("{units} capacity {noun}"))
 }
 
-/// A paused or parked result's tab text: "first 1,000 rows · more available".
-pub fn paused_label(rows: u64) -> String {
-    format!("first {} · more available", format_rows(rows))
+/// The tab text of a result with more rows: "1,000+ rows · More rows available".
+pub fn more_label(rows: u64) -> String {
+    format!("{} \u{b7} {MORE_ROWS}", row_count(rows, true))
 }
 
 /// The `fetch-next` button's text for the run's row limit: "Fetch next 1,000".
@@ -120,13 +130,21 @@ pub fn fetch_next_label(limit: u64) -> String {
     format!("Fetch next {}", group_digits(limit))
 }
 
-/// The continuing `fetch-next` text of an expired browse: "Paused to free the connection ·
-/// Fetch next 1,000".
-pub fn continue_label(limit: u64) -> String {
-    format!(
-        "Paused to free the connection \u{b7} {}",
-        fetch_next_label(limit)
-    )
+/// The footer time of `stmt`: "first rows in 14 ms" at a first-rows pause, "14 ms active"
+/// once a statement that parked reports its time without the wait, else the plain time.
+pub fn elapsed_text(m: &TabModel, stmt: usize, now: Instant) -> Option<String> {
+    let reported = m
+        .results()
+        .iter()
+        .any(|r| r.stmt == stmt && r.elapsed.is_some());
+    if !reported && let Some(t) = m.first_rows_time(stmt) {
+        return Some(format!("first rows in {}", format_elapsed(t)));
+    }
+    let t = format_elapsed(m.elapsed_at(stmt, now)?);
+    Some(match m.waited(stmt) {
+        true => format!("{t} active"),
+        false => t,
+    })
 }
 
 /// The `run-again` button's text for the limit it re-runs with: "Run again with 10,000".
@@ -142,22 +160,21 @@ pub fn skip_notice(rows: u64) -> String {
     )
 }
 
-/// A footer fetch button: ghost xsmall with a leading 14 px icon in `foreground`. The kit
-/// sizes a button's own icon to the button, so icon and text go in as children; a disabled
-/// button keeps the kit's dimmed text.
+/// A footer fetch button in the kit's link style, so it reads as clickable, with a leading
+/// 14 px icon in the link colour `link`. The kit sizes a button's own icon to the button, so
+/// icon and text go in as children; a disabled button keeps the kit's dimmed text.
 fn fetch_button(
     id: &'static str,
     icon: gpui_kit::assets::IconName,
     label: String,
-    fg: gpui_kit::Hsla,
+    link: gpui_kit::Hsla,
     disabled: bool,
 ) -> Button {
-    let color = if disabled { fg.opacity(0.5) } else { fg };
+    let color = if disabled { link.opacity(0.5) } else { link };
     Button::new(id)
-        .ghost()
+        .link()
         .xsmall()
         .gap_1()
-        .when(!disabled, |b| b.text_color(fg))
         .disabled(disabled)
         .accessibility_label(label.clone())
         .child(ui::icon(icon, px(14.), color))
@@ -189,26 +206,23 @@ pub enum ResultMark {
     Failed,
     /// The statement waits on its confirmation question.
     Waiting,
-    /// The stream is parked at the fetch window with these rows.
-    Paused(u64),
+    /// These rows are loaded and more exist: paused, parked at its cap or truncated.
+    More(u64),
     /// The statement never ran: its run stopped at its confirmation.
     Skipped,
 }
 
-/// The mark for `r`, given the statement waiting on its question and the parked one.
-pub fn result_mark(
-    r: &StatementResult,
-    asking: Option<usize>,
-    paused: Option<usize>,
-) -> ResultMark {
+/// The mark for `r`, given the statement waiting on its question and whether more rows
+/// exist past those it loaded.
+pub fn result_mark(r: &StatementResult, asking: Option<usize>, more: bool) -> ResultMark {
     if asking == Some(r.stmt) {
         ResultMark::Waiting
     } else if matches!(r.store.end(), Some(StatementEnd::Failed(_))) {
         ResultMark::Failed
     } else if matches!(r.store.end(), Some(StatementEnd::Skipped)) {
         ResultMark::Skipped
-    } else if paused == Some(r.stmt) {
-        ResultMark::Paused(r.store.rows())
+    } else if more {
+        ResultMark::More(r.store.rows())
     } else if let Some(StatementEnd::Complete(o)) = r.store.end()
         && r.store.columns().is_empty()
     {
@@ -241,7 +255,7 @@ pub fn summary(r: &StatementResult) -> String {
     };
     match r.store.end() {
         Some(StatementEnd::Complete(o)) => outcome(o),
-        Some(StatementEnd::Truncated(o)) => format!("{} (row limit)", format_rows(o.rows)),
+        Some(StatementEnd::Truncated(o)) => row_count(o.rows, true),
         Some(StatementEnd::Skipped) => "skipped".into(),
         Some(StatementEnd::Planned) => "plan".into(),
         Some(StatementEnd::Failed(e)) => e.to_string(),
@@ -2633,36 +2647,34 @@ impl Render for ResultsPane {
             (m.browse().is_some() && !m.edits().is_empty()).then(|| pending_label(m.edits().len()));
         let results = m.results();
         let current = displayed(results, self.selected);
-        // A park at the cap reads like a fetch-window pause on its tab.
-        let (asking, paused) = (
-            m.confirm().map(|p| p.stmt),
-            m.paused().or(m.parked_at_cap()),
-        );
+        let asking = m.confirm().map(|p| p.stmt);
+        let link = cx.theme().link;
         // Each tab is named by today's one-line summary; it shows only its number and
         // its mark (`result_mark`), and the tooltip carries the summary and the SQL.
         let tabs = results.iter().enumerate().map(|(ix, r)| {
-            let mark = result_mark(r, asking, paused);
+            let mark = result_mark(r, asking, m.more_rows(r.stmt));
             // Until its first rows land, a running statement counts its time, not its rows.
             let running = m.awaiting_rows(r.stmt).map(running_label);
             let text = running.clone().unwrap_or_else(|| match &mark {
                 ResultMark::Waiting => "waiting for confirmation".to_owned(),
-                ResultMark::Paused(n) => paused_label(*n),
+                ResultMark::More(n) => more_label(*n),
                 ResultMark::Rows(_)
                 | ResultMark::Changed(_)
                 | ResultMark::Failed
                 | ResultMark::Skipped => summary(r),
             });
-            let tip: SharedString = match first_line(&r.sql) {
-                Some(sql) => format!("{text}\n{sql}").into(),
-                None => text.clone().into(),
+            let sql = statement_label(&r.sql, r.engine);
+            let tip: SharedString = match sql.is_empty() {
+                false => format!("{text}\n{sql}").into(),
+                true => text.clone().into(),
             };
             let active = current == Some(ix);
-            let count = |n: u64| {
+            let count = |n: u64, more: bool| {
                 div()
                     .font_family(mono.clone())
                     .text_size(mono_size)
                     .text_color(dim)
-                    .child(format_rows(n))
+                    .child(row_count(n, more))
             };
             let word = |w: SharedString| div().text_color(dim).child(w);
             // A plan has no rows to count, so its tab carries only a failure or a wait.
@@ -2670,20 +2682,14 @@ impl Render for ResultsPane {
                 running.is_some() || r.plan.is_none() || !matches!(mark, ResultMark::Rows(_));
             let mark = match mark {
                 _ if running.is_some() => word(text.clone().into()).into_any_element(),
-                ResultMark::Rows(n) => count(n).into_any_element(),
+                ResultMark::Rows(n) => count(n, false).into_any_element(),
                 ResultMark::Changed(text) => word(text.into()).into_any_element(),
                 ResultMark::Failed => {
                     ui::icon(ui::Icons::CircleX, px(14.), danger).into_any_element()
                 }
                 ResultMark::Waiting => word("waiting".into()).into_any_element(),
                 ResultMark::Skipped => word("skipped".into()).into_any_element(),
-                ResultMark::Paused(n) => div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(count(n))
-                    .child(word("more available".into()))
-                    .into_any_element(),
+                ResultMark::More(n) => count(n, true).into_any_element(),
             };
             div()
                 .id(("statement-result", ix))
@@ -2762,7 +2768,7 @@ impl Render for ResultsPane {
                 .flatten()
                 .and(m.run_limits().max_rows);
             let note = match r.store.end() {
-                _ if continuing.is_some() => None,
+                _ if continuing.is_some() => Some((MORE_ROWS_RELEASED.to_owned(), dim)),
                 Some(StatementEnd::Truncated(_)) if expired.is_some() => {
                     expired.map(|by| (expiry_note(by), warning))
                 }
@@ -2787,39 +2793,53 @@ impl Render for ResultsPane {
                     .child(ui::icon(ui::Icons::Lock, px(12.), dim))
                     .child("read-only")
             });
-            // At the cap the count says more rows wait, and Fetch next and Fetch all continue
-            // the stream; a park that expired offers the next row limit for a later run.
+            // At the cap Fetch next and Fetch all continue the stream; a park that expired
+            // offers the next row limit for a later run.
             let at_cap = match cap {
                 Some(CapView::Parked { .. }) => Some(false),
                 Some(CapView::Fetching) => Some(true),
                 _ => None,
             };
             let running = m.awaiting_rows(r.stmt).map(running_label);
-            let rows = match (&running, at_cap) {
-                (Some(text), _) => text.clone(),
-                (None, Some(_)) => more_rows(r.store.rows()),
-                (None, None) => format_rows(r.store.rows()),
+            let rows = match &running {
+                Some(text) => text.clone(),
+                None => row_count(r.store.rows(), m.more_rows(r.stmt)),
             };
             let model = self.model.clone();
+            // A first-rows pause fills on to the cap, so Fetch next names the rows left to it.
+            let fill = (m.paused() == Some(r.stmt)).then(|| {
+                let label = match m.run_limits().max_rows {
+                    Some(limit) => fetch_next_label(limit.saturating_sub(r.store.rows())),
+                    None => "Fetch all".to_owned(),
+                };
+                let model = model.clone();
+                fetch_button("fetch-next", ui::Icons::ArrowDown, label, link, m.filling()).on_click(
+                    move |_, _, cx| {
+                        model.update(cx, |m, cx| {
+                            m.fetch_next();
+                            cx.notify();
+                        })
+                    },
+                )
+            });
             let fetch = at_cap.map(|fetching| {
                 let next = m.run_limits().max_rows.map(|limit| {
                     let model = model.clone();
                     let label = fetch_next_label(limit);
-                    fetch_button("fetch-next", ui::Icons::ArrowDown, label, fg, fetching).on_click(
-                        move |_, _, cx| {
+                    fetch_button("fetch-next", ui::Icons::ArrowDown, label, link, fetching)
+                        .on_click(move |_, _, cx| {
                             model.update(cx, |m, cx| {
                                 m.fetch_next();
                                 cx.notify();
                             })
-                        },
-                    )
+                        })
                 });
                 let model = model.clone();
                 let all = fetch_button(
                     "fetch-all",
                     ui::Icons::Rows3,
                     "Fetch all".into(),
-                    fg,
+                    link,
                     fetching,
                 )
                 .on_click(move |_, _, cx| {
@@ -2838,8 +2858,8 @@ impl Render for ResultsPane {
             });
             let resume = continuing.map(|limit| {
                 let model = model.clone();
-                let label = continue_label(limit);
-                fetch_button("fetch-next", ui::Icons::ArrowDown, label, fg, false).on_click(
+                let label = fetch_next_label(limit);
+                fetch_button("fetch-next", ui::Icons::ArrowDown, label, link, false).on_click(
                     move |_, _, cx| {
                         model.update(cx, |m, cx| {
                             m.continue_browse(cx);
@@ -2910,10 +2930,9 @@ impl Render for ResultsPane {
                     .child(t)
             });
             // The running text already carries the time.
-            let elapsed = (m.elapsed_at(r.stmt, Instant::now()))
+            let elapsed = elapsed_text(m, r.stmt, Instant::now())
                 .filter(|_| running.is_none())
                 .map(|t| {
-                    let t = format_elapsed(t);
                     div()
                         .id("footer-elapsed")
                         .aria_label(t.clone())
@@ -2985,6 +3004,7 @@ impl Render for ResultsPane {
                                 .text_color(color)
                                 .child(text)
                         }))
+                        .children(fill)
                         .children(fetch)
                         .children(resume)
                         .children(raise)

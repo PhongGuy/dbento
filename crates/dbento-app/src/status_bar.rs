@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use dbento_core::{Engine, QueryLanguage};
 use gpui_kit::base::ObservedElement;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
@@ -12,7 +13,7 @@ use gpui_kit::{
 
 use crate::link::LinkState;
 use crate::query_tab::QueryTab;
-use crate::results_pane::{format_rows, shown};
+use crate::results_pane::{MORE_ROWS, MORE_ROWS_RELEASED, format_rows, row_count, shown};
 use crate::runner::{StatementEnd, StopReason};
 use crate::sidebar::{color_name, tag_color};
 use crate::tab_model::{CapView, StatementResult, TabModel};
@@ -35,11 +36,39 @@ pub fn first_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|l| !l.is_empty())
 }
 
-/// The status bar's statement segment: the SQL's first non-blank line, trimmed; for a
+/// The line that names a statement: its first line once leading blank lines and comments
+/// in `engine`'s language are skipped (Postgres's when None); a statement of comments alone
+/// keeps its first non-blank line, and blank text gives "".
+pub fn statement_label(sql: &str, engine: Option<Engine>) -> String {
+    let language = engine.unwrap_or(Engine::Postgres).capabilities().language;
+    let marker = language.line_comment();
+    // Redis commands have no block comment; every other language takes /* */.
+    let blocks = language != QueryLanguage::RedisCommands;
+    let mut rest = sql;
+    loop {
+        rest = rest.trim_start();
+        if let Some(m) = marker.filter(|m| rest.starts_with(m)) {
+            rest = rest[m.len()..]
+                .split_once('\n')
+                .map_or("", |(_, after)| after);
+        } else if blocks && let Some(body) = rest.strip_prefix("/*") {
+            rest = body.split_once("*/").map_or("", |(_, after)| after);
+        } else {
+            break;
+        }
+    }
+    first_line(rest)
+        .or_else(|| first_line(sql))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The status bar's statement segment: the statement's [`statement_label`]; for a
 /// statement with no SQL that failed (one that failed to prepare), the error's text; else "".
 pub fn statement_text(r: &StatementResult) -> String {
-    if let Some(line) = first_line(&r.sql) {
-        return line.to_owned();
+    let label = statement_label(&r.sql, r.engine);
+    if !label.is_empty() {
+        return label;
     }
     match r.store.end() {
         Some(StatementEnd::Failed(e)) => e.to_string(),
@@ -48,16 +77,14 @@ pub fn statement_text(r: &StatementResult) -> String {
 }
 
 /// The `status-truncated` text for a result that ended as `end` with cap state `cap`.
-/// Parked at the cap it says more rows are available, and while a fetch streams past it
+/// Parked at the cap it says more rows are available (a Fetch next raised the cap, so it
+/// names no limit), and while a fetch streams past it
 /// there is none; after a park it names how the stream closed; else a truncated result
 /// holds its run's cap and a budget stop names the budget.
 pub fn truncation_text(end: Option<&StatementEnd>, cap: Option<CapView>) -> Option<String> {
     match (cap, end) {
         (Some(CapView::Fetching), _) => None,
-        (Some(CapView::Parked { rows }), _) => Some(format!(
-            "row limit reached at {}, more available",
-            format_rows(rows)
-        )),
+        (Some(CapView::Parked { .. }), _) => Some(MORE_ROWS.to_owned()),
         (Some(CapView::Ended { expired: Some(_) }), Some(StatementEnd::Truncated(o))) => Some(
             format!("truncated at {} (stream closed)", format_rows(o.rows)),
         ),
@@ -217,6 +244,9 @@ pub fn status_bar(
             .child(mark)
             .child(
                 div()
+                    .id("status-statement")
+                    .aria_label(statement_text(r))
+                    .test_support()
                     .min_w_0()
                     .truncate()
                     .font_family(mono.clone())
@@ -228,7 +258,7 @@ pub fn status_bar(
         if shown_ix == Some(ix) {
             let rows = match model.awaiting_rows(r.stmt) {
                 Some(_) => "Running\u{2026}".to_owned(),
-                None => format_rows(r.store.rows()),
+                None => row_count(r.store.rows(), model.more_rows(r.stmt)),
             };
             last = last.child(figure("status-rows", rows));
         }
@@ -246,10 +276,10 @@ pub fn status_bar(
                 .child(text),
         );
     }
-    // A browse that can continue lost nothing, so it reads as paused, like its footer.
+    // A browse that can continue lost nothing, so it reads as more rows, like its footer.
     let paused = shown
         .filter(|r| r.stmt == 0 && model.continuation().is_some())
-        .map(|r| format!("paused at {}", format_rows(r.store.rows())));
+        .map(|_| MORE_ROWS_RELEASED.to_owned());
     let cut = truncation_text(
         shown.and_then(|r| r.store.end()),
         shown.and_then(|r| model.cap_view(r.stmt)),

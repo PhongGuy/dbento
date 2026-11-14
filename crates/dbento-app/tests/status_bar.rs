@@ -33,15 +33,16 @@ fn the_bar_shows_rows_elapsed_and_truncation(cx: &mut TestAppContext) {
     });
     assert_eq!(
         label_of(cx, o.win, "status-rows").as_deref(),
-        Some("1,000 rows")
+        Some("1,000+ rows")
     );
     assert_eq!(
         label_of(cx, o.win, "status-truncated").as_deref(),
         Some("truncated at 1,000 rows")
     );
     let elapsed = label_of(cx, o.win, "footer-elapsed").unwrap();
+    // A statement that parked at its cap shows its time without the wait.
     assert!(
-        elapsed.ends_with(" ms") || elapsed.ends_with(" s"),
+        elapsed.ends_with(" ms active") || elapsed.ends_with(" s active"),
         "{elapsed}"
     );
     o.run(cx, "SELECT 1");

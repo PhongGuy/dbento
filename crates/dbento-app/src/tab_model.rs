@@ -312,6 +312,12 @@ pub struct TabModel {
     paused: Option<usize>,
     /// A `Pull` is in flight; the next batch or end clears it, so scrolling sends one at a time.
     pulling: bool,
+    /// Fetch next left a first-rows pause: each batch pulls the next until the cap or the end.
+    filling: bool,
+    /// The statement that has parked in this run, so its time excludes the wait.
+    waited: Option<usize>,
+    /// The statement's time to its first-rows pause.
+    first_rows: Option<(usize, Duration)>,
     /// The statement that has parked at its row cap in this run, and where it stands.
     cap: Option<Cap>,
     /// A read-write Stop of the parked result is draining; a further Cancel fires the handle.
@@ -492,6 +498,9 @@ impl TabModel {
             failure: None,
             paused: None,
             pulling: false,
+            filling: false,
+            waited: None,
+            first_rows: None,
             cap: None,
             stopping: false,
             settling: false,
@@ -675,6 +684,9 @@ impl TabModel {
         self.confirm = None;
         self.paused = None;
         self.pulling = false;
+        self.filling = false;
+        self.waited = None;
+        self.first_rows = None;
         self.cap = None;
         self.stopping = false;
         self.withdrawn = false;
@@ -1007,6 +1019,10 @@ impl TabModel {
             // A continuation fills to its cap like Fetch next, so its first-rows park is pulled.
             Event::Paused { run_id, stmt } if run_id == self.run_id => {
                 self.paused = Some(stmt);
+                self.waited = Some(stmt);
+                if let Some((_, at)) = self.executing.filter(|&(s, _)| s == stmt) {
+                    self.first_rows.get_or_insert((stmt, at.elapsed()));
+                }
                 if self.append.as_ref().is_some_and(|a| !a.drifted) {
                     self.pull();
                 }
@@ -1020,6 +1036,8 @@ impl TabModel {
             } if run_id == self.run_id => {
                 self.paused = None;
                 self.pulling = false;
+                self.filling = false;
+                self.waited = Some(stmt);
                 // A re-run stopped at its cap has not loaded every matching row.
                 self.kept_check.clear();
                 // A continuation's runner counts only its own rows; result 0 holds them all.
@@ -1164,7 +1182,12 @@ impl TabModel {
                         self.entry(stmt).store.push(batch);
                         self.pull();
                     }
-                    None => self.entry(stmt).store.push(batch),
+                    None => {
+                        self.entry(stmt).store.push(batch);
+                        if self.filling {
+                            self.pull();
+                        }
+                    }
                 }
             }
             Event::StatementDone {
@@ -1175,6 +1198,7 @@ impl TabModel {
             } if run_id == self.run_id => {
                 self.pulling = false;
                 self.paused = None;
+                self.filling = false;
                 if let Some(cap) = self.cap.as_mut().filter(|c| c.stmt == stmt) {
                     cap.ended = true;
                     cap.fetching = false;
@@ -2747,16 +2771,54 @@ impl TabModel {
         })
     }
 
-    /// Continues the parked statement by the run's own row limit; a no-op unless parked.
+    /// Continues the parked statement by the run's own row limit; at a first-rows pause it
+    /// pulls on to the cap or the end instead. A no-op unless parked.
     pub fn fetch_next(&mut self) {
-        if let Some(more) = self.limits.max_rows {
+        if self.has_more() {
+            self.filling = true;
+            self.pull();
+        } else if let Some(more) = self.limits.max_rows {
             self.fetch(Some(more));
         }
     }
 
-    /// Continues the parked statement to its end or the memory budget; a no-op unless parked.
+    /// Continues the parked statement to its end or the memory budget; a first-rows pause
+    /// stops at the cap first. A no-op unless parked.
     pub fn fetch_all(&mut self) {
-        self.fetch(None);
+        if self.has_more() {
+            self.filling = true;
+            self.pull();
+        } else {
+            self.fetch(None);
+        }
+    }
+
+    /// Whether Fetch next is pulling a first-rows pause on to its cap or end.
+    pub fn filling(&self) -> bool {
+        self.filling
+    }
+
+    /// Whether `stmt` has rows past those loaded: it is paused, parked at or fetching past its
+    /// cap, or it ended truncated.
+    pub fn more_rows(&self, stmt: usize) -> bool {
+        let truncated = (self.results.iter().find(|r| r.stmt == stmt))
+            .is_some_and(|r| matches!(r.store.end(), Some(StatementEnd::Truncated(_))));
+        self.paused == Some(stmt)
+            || matches!(
+                self.cap_view(stmt),
+                Some(CapView::Parked { .. } | CapView::Fetching)
+            )
+            || truncated
+    }
+
+    /// Whether `stmt` parked in this run, so its reported time leaves out the wait.
+    pub fn waited(&self, stmt: usize) -> bool {
+        self.waited == Some(stmt)
+    }
+
+    /// `stmt`'s time to its first-rows pause, once it has paused there.
+    pub fn first_rows_time(&self, stmt: usize) -> Option<Duration> {
+        self.first_rows.filter(|&(s, _)| s == stmt).map(|(_, t)| t)
     }
 
     /// How result 0 would continue; None unless this tab browses a stable-key target, result 0
@@ -3217,9 +3279,13 @@ impl TabModel {
             .filter(|r| r.store.end().is_none() && r.plan.is_none())
             .map(|r| {
                 let end = self.unfinished_end(r, reason);
-                let elapsed = (self.started.get(&r.stmt))
+                // A parked statement's own time leaves out the wait, as its footer shows it.
+                let wall = (self.started.get(&r.stmt))
                     .and_then(|t| t.elapsed().ok())
                     .unwrap_or_default();
+                let elapsed = (r.elapsed)
+                    .or_else(|| self.first_rows_time(r.stmt))
+                    .unwrap_or(wall);
                 self.history_entry(r.stmt, &r.sql, elapsed, history_outcome(&end))
             })
             .collect();
