@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
-use dbento_app::app::{AppPaths, SavedState, Services, start};
+use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::persist::save_json;
+use dbento_app::settings::Settings;
 use dbento_app::theme::Appearance;
 use dbento_core::MemoryStore;
 use dbento_core::paths::STATE_DIR_VAR;
@@ -14,7 +15,7 @@ use gpui_kit::{App, AssetSource};
 use gpui_pilot_host::{Launch, PilotApp};
 
 /// Set to `dark`, `light` or `system` (through the launch call's `env`) to seed that
-/// appearance into a launch whose state file does not exist yet. The headless host reports
+/// appearance into a launch whose settings file does not exist yet. The headless host reports
 /// a dark system, so `light` is the only way to a light shot.
 pub const THEME_VAR: &str = "DBENTO_PILOT_THEME";
 
@@ -78,7 +79,7 @@ pub fn workspace_arg(args: &[String]) -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(path.to_path_buf()))
 }
 
-/// Writes a state file holding the appearance `value` (`dark`, `light` or `system`) into
+/// Writes a settings file holding the appearance `value` (`dark`, `light` or `system`) into
 /// `data_dir` when none exists, so a `keep_data` relaunch keeps what the app saved. `None`
 /// writes nothing; another value is an error naming [`THEME_VAR`].
 pub fn seed_appearance(data_dir: &Path, value: Option<&str>) -> anyhow::Result<()> {
@@ -91,13 +92,11 @@ pub fn seed_appearance(data_dir: &Path, value: Option<&str>) -> anyhow::Result<(
         "system" => Appearance::System,
         other => bail!("{THEME_VAR} must be dark, light or system, not `{other}`"),
     };
-    let path = AppPaths::in_dir(data_dir).state;
+    let path = AppPaths::in_dir(data_dir).settings;
     if path.exists() {
         return Ok(());
     }
-    let state = SavedState {
-        appearance,
-        ..SavedState::default()
-    };
-    save_json(&path, &state).with_context(|| format!("cannot seed {}", path.display()))
+    let mut settings = Settings::default();
+    settings.appearance = appearance;
+    save_json(&path, &settings).with_context(|| format!("cannot seed {}", path.display()))
 }
