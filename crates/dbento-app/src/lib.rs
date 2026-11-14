@@ -70,3 +70,4 @@ pub mod theme;
 pub mod tokio_bridge;
 pub mod ui;
 pub mod user_keymap;
+pub mod window_controls;
