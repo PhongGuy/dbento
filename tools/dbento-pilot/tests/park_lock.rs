@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::{Pilot, find_node, launch_args, sqlite_workspace};
-use dbento_app::results_pane::continue_label;
+use dbento_app::results_pane::{MORE_ROWS_RELEASED, fetch_next_label};
 use serde_json::{Value, json};
 
 /// Runs every statement of `sql` on the workspace's `lite` connection through core.
@@ -111,9 +111,10 @@ async fn a_commit_frees_a_browse_parked_on_the_same_file_in_another_tab() {
     assert!(find_node(&tree, "edit-banner").is_none(), "{tree}");
 
     click(&pilot, "tab-0").await;
-    let paused = continue_label(1_000);
+    let next = fetch_next_label(1_000);
     until(&pilot, "the continuation offer", |t| {
-        name(t, "fetch-next") == Some(paused.as_str())
+        name(t, "fetch-next") == Some(next.as_str())
+            && name(t, "footer-note") == Some(MORE_ROWS_RELEASED)
     })
     .await;
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
