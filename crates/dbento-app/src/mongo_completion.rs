@@ -1,6 +1,8 @@
 //! Completion for MongoDB shell text: collections, database, collection and cursor methods,
 //! query operators and constructor helpers, decided from the text before the caret.
 
+use dbento_core::RelationKind;
+
 use crate::catalog::CatalogQuery;
 use crate::completion::{Candidate, CandidateKind, Completion, MAX_ITEMS, kind_detail, starts};
 use crate::schema_tree::CatalogTree;
@@ -315,7 +317,7 @@ pub(crate) fn complete_mongo(
                                 .items()
                                 .iter()
                                 .filter(|r| starts(r.name(), word))
-                                .map(|r| collection(r.name(), kind_detail(r.kind())))
+                                .map(|r| collection(r.name(), collection_detail(r.kind())))
                                 .collect();
                             cols.sort_by_cached_key(|c| c.label.to_lowercase());
                             items.extend(cols);
@@ -442,6 +444,18 @@ fn unquote(lit: &str) -> String {
         });
     }
     out
+}
+
+/// What a relation of a MongoDB database is called: a table there is a collection.
+fn collection_detail(kind: RelationKind) -> &'static str {
+    match kind {
+        RelationKind::Table => "collection",
+        RelationKind::View
+        | RelationKind::MaterializedView
+        | RelationKind::ForeignTable
+        | RelationKind::Other
+        | _ => kind_detail(kind),
+    }
 }
 
 /// A collection candidate: an identifier inserts bare, any other name through `getCollection`.

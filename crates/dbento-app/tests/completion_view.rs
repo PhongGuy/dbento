@@ -72,8 +72,8 @@ fn a_relation_completes_once_the_catalog_has_loaded(cx: &mut TestAppContext) {
     let o = opened(cx, T, "", 0);
     place(cx, &o, "SELECT * FROM ", 14);
     typed(cx, &o, "A");
-    // The first keystroke finds nothing cached: it starts the loads and never waits on them.
-    assert!(menu(cx, &o).is_empty());
+    // The first keystroke finds nothing cached: it starts the loads and never waits on them;
+    // its answer fills in once they land.
     wait_real(cx, "main's relations", |cx| {
         cached(cx, &o, |t| {
             t.schemas("lite").is_some() && t.relations("lite", "main").is_some()
@@ -277,4 +277,55 @@ fn each_kind_draws_its_explorer_glyph(_cx: &mut TestAppContext) {
     assert_eq!(kind_icon(CandidateKind::Relation), Icons::Table2);
     assert_eq!(kind_icon(CandidateKind::Schema), Icons::Layers);
     assert_eq!(kind_icon(CandidateKind::Keyword), Icons::FileCode);
+}
+
+// A command's usage line or a long type yields to the label, which keeps its full width.
+#[gpui_kit::test]
+fn a_long_detail_truncates_inside_the_popup_and_the_label_keeps_its_width(cx: &mut TestAppContext) {
+    let ty = format!("T{}", "y".repeat(200));
+    let o = opened(cx, &format!("CREATE TABLE Album(Title {ty});"), "", 0);
+    place(cx, &o, "SELECT  FROM Album", 7);
+    typed(cx, &o, "T");
+    wait_real(cx, "main's relations", |cx| {
+        cached(cx, &o, |t| t.relations("lite", "main").is_some())
+    });
+    typed(cx, &o, "i");
+    let album = RelationRef::new("main", "Album");
+    wait_real(cx, "Album's columns", |cx| {
+        cached(cx, &o, |t| t.columns("lite", &album).is_some())
+    });
+    typed(cx, &o, "t");
+    assert_eq!(menu(cx, &o), ["Title"]);
+    let (pop, label, detail) = cx
+        .update_window(o.win, |_, w, cx| {
+            w.render_frame(cx);
+            (
+                w.find("completion-popup").bounds(),
+                w.find(("completion-label", 0usize)).bounds(),
+                w.find(("completion-detail", 0usize)).bounds(),
+            )
+        })
+        .unwrap();
+    assert!(label.size.width > px(20.), "label squeezed to {label:?}");
+    assert!(detail.size.width > px(0.), "{detail:?}");
+    assert!(
+        detail.right() <= pop.right(),
+        "detail {detail:?} overflows popup {pop:?}"
+    );
+}
+
+// The first keystroke after a dot or FROM finds the catalog unloaded; the answer fills in
+// once the load lands, without waiting for another keystroke.
+#[gpui_kit::test]
+fn an_open_answer_fills_in_when_the_catalog_it_wanted_lands(cx: &mut TestAppContext) {
+    let o = opened(cx, T, "", 0);
+    place(cx, &o, "SELECT * FROM ", 14);
+    typed(cx, &o, "A");
+    wait_real(cx, "main's relations", |cx| {
+        cached(cx, &o, |t| t.relations("lite", "main").is_some())
+    });
+    cx.update_window(o.win, |_, w, cx| w.render_frame(cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(menu(cx, &o), ["Album", "Artist"]);
 }

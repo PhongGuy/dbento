@@ -9,7 +9,7 @@ use dbento_app::query_tab::{
     READ_ONLY_REDIS_UNCONNECTED_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP,
     READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP, READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
     READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_explanation, confirm_title, editor_language,
-    read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
+    prompt_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
 };
 use dbento_app::result_body::{ErrorView, code_label};
 use dbento_core::{Engine, Unguarded};
@@ -413,6 +413,23 @@ fn surrealql_is_not_highlighted_as_sql() {
         Engine::Mssql,
     ] {
         assert_eq!(editor_language(e), "sql", "{e:?}");
+    }
+}
+
+#[test]
+fn the_confirm_prompt_highlights_as_the_editor_does() {
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Duckdb,
+        Engine::Surrealdb,
+        Engine::Mongodb,
+        Engine::Redis,
+        Engine::Dynamodb,
+    ] {
+        assert_eq!(prompt_language(e), editor_language(e), "{e:?}");
     }
 }
 

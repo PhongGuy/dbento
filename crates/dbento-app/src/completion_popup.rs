@@ -36,6 +36,8 @@ pub struct CompletionPopup {
     caret: usize,
     len: usize,
     selected: usize,
+    // The answer named catalog levels it found unloaded.
+    awaiting: bool,
     scroll: ScrollHandle,
     _editor: Subscription,
 }
@@ -51,6 +53,7 @@ impl CompletionPopup {
             caret: 0,
             len: 0,
             selected: 0,
+            awaiting: false,
             scroll: ScrollHandle::new(),
             _editor: cx.observe(editor, |_, _, cx| cx.notify()),
         }
@@ -70,6 +73,7 @@ impl CompletionPopup {
             .map(|c| label_prefix(&c.label, typed).len())
             .collect();
         self.items = answer.items;
+        self.awaiting = !answer.wants.is_empty();
         self.replace = answer.replace;
         (self.caret, self.len, self.selected) = (caret, len, 0);
         self.scroll.scroll_to_item(0);
@@ -78,6 +82,7 @@ impl CompletionPopup {
 
     /// Closes the popup.
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        self.awaiting = false;
         if !self.items.is_empty() {
             self.items.clear();
             cx.notify();
@@ -104,6 +109,16 @@ impl CompletionPopup {
     pub fn is_live(&self, window: &Window, cx: &App) -> bool {
         let e = self.editor.read(cx);
         !self.items.is_empty()
+            && e.focus_handle(cx).is_focused(window)
+            && e.cursor() == self.caret
+            && e.text().len() == self.len
+    }
+
+    /// Whether the last answer lacked catalog levels and still matches the focused editor's
+    /// caret and text, so asking again once they load answers the same keystroke.
+    pub fn awaits_catalog(&self, window: &Window, cx: &App) -> bool {
+        let e = self.editor.read(cx);
+        self.awaiting
             && e.focus_handle(cx).is_focused(window)
             && e.cursor() == self.caret
             && e.text().len() == self.len
@@ -166,13 +181,28 @@ impl CompletionPopup {
             .when(ix == self.selected, |r| r.bg(selected))
             .when(ix != self.selected, |r| r.hover(|r| r.bg(hover)))
             .child(ui::icon(kind_icon(c.kind), px(14.), muted).flex_none())
-            .child(div().min_w_0().flex_1().truncate().child(label))
+            // Both sides may shrink, but the detail's far larger shrink weight spends the
+            // overflow on it first; the label truncates only once the detail is gone.
             .child(
                 div()
-                    .flex_none()
+                    .id(("completion-label", ix))
+                    .min_w_0()
+                    .flex_grow(1.)
+                    .flex_shrink(1.)
+                    .truncate()
+                    .child(label)
+                    .test_support(),
+            )
+            .child(
+                div()
+                    .id(("completion-detail", ix))
+                    .min_w_0()
+                    .flex_shrink(1000.)
+                    .truncate()
                     .pl_2()
                     .text_color(dim)
-                    .child(c.detail.clone()),
+                    .child(c.detail.clone())
+                    .test_support(),
             )
             .on_click(cx.listener(move |p, _, window, cx| p.accept(Some(ix), window, cx)))
             .test_support()
