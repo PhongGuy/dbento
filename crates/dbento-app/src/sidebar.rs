@@ -2302,6 +2302,13 @@ impl Render for Sidebar {
                     to: None,
                 });
             }))
+            // GPUI ends a refused drop without redrawing, which leaves the name chip painted
+            // where the pointer let go; any release during a drag asks for a fresh frame.
+            .capture_any_mouse_up(|_, window, cx| {
+                if cx.has_active_drag() {
+                    window.refresh();
+                }
+            })
             // The menu does not stop propagation, so it is one menu on the body: capture clears
             // the target, a row's bubble handler sets it, and the deferred builder reads it.
             .capture_any_mouse_down(cx.listener(|this, _, _, _| this.menu_target = None))

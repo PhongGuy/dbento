@@ -5,10 +5,11 @@ use std::borrow::Cow;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Colorize, Theme, ThemeMode, ThemeRegistry};
+use gpui_kit::component::{Colorize, Theme, ThemeMode, ThemeRegistry, WindowExt as _};
 use gpui_kit::{
-    AnyView, App, Global, Hsla, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
-    WindowAppearance, actions, div, px, rgb,
+    AnyView, App, AppContext as _, Context, Global, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TestSupportExt as _, Window, WindowAppearance, actions, div, px, rgb,
 };
 use serde::{Deserialize, Serialize};
 
@@ -292,10 +293,29 @@ fn framed<E: IntoElement>(
     cx: &mut App,
 ) -> AnyView {
     let radius = Theme::global(cx).radius_lg;
-    Tooltip::element(content)
+    let tip = Tooltip::element(content)
         .rounded(radius)
         .max_w(px(360.))
-        .build(window, cx)
+        .build(window, cx);
+    cx.new(|_| UnderDialogs(tip)).into()
+}
+
+// A tooltip that draws nothing while a dialog is open. GPUI keeps a shown tooltip until the
+// pointer moves, so one raised before a dialog opened would otherwise sit on top of it.
+struct UnderDialogs(AnyView);
+
+impl Render for UnderDialogs {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if window.has_active_dialog(cx) {
+            return div().into_any_element();
+        }
+        div()
+            .id("tooltip")
+            .role(Role::Tooltip)
+            .test_support()
+            .child(self.0.clone())
+            .into_any_element()
+    }
 }
 
 /// Switches the kit to `mode`, reloads its theme and restores the opaque selected-row fill.
