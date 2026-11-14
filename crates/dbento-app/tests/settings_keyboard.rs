@@ -177,3 +177,50 @@ fn command_rows_keep_their_label_beside_several_chords(cx: &mut TestAppContext) 
     })
     .unwrap();
 }
+
+// The path keeps its file name in view; hovering shows it whole and the copy button takes it.
+#[gpui_kit::test]
+fn the_keymap_path_has_a_tooltip_and_copies(cx: &mut TestAppContext) {
+    let (f, win, _) = opened(cx, None);
+    let path = f.path().join("keymap.json").to_string_lossy().into_owned();
+    assert!(!present(cx, win, "settings-keymap-path-tip"));
+    support::hover(cx, win, "settings-keymap-path");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    cx.run_until_parked();
+    assert!(
+        present(cx, win, "settings-keymap-path-tip"),
+        "hovering shows the whole path"
+    );
+    assert_eq!(
+        label_of(cx, win, "settings-keymap-copy").as_deref(),
+        Some("Copy path")
+    );
+    click_id(cx, win, "settings-keymap-copy");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some(path.as_str())
+    );
+}
+
+#[gpui_kit::test]
+fn an_unbound_command_says_unbound_in_its_keys_column(cx: &mut TestAppContext) {
+    let (_f, win, _) = opened(
+        cx,
+        Some(r#"{"tabs.new": ["f9"], "view.toggle_history": []}"#),
+    );
+    let ix = |id: &str| keymap::command_ids().iter().position(|c| *c == id).unwrap();
+    assert!(present(
+        cx,
+        win,
+        format!(
+            "settings-keymap-command-{}-unbound",
+            ix("view.toggle_history")
+        )
+    ));
+    assert!(!present(
+        cx,
+        win,
+        format!("settings-keymap-command-{}-unbound", ix("tabs.new"))
+    ));
+}

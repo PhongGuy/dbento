@@ -5,9 +5,10 @@ use crate::support::{click_id, label_of, launched, palette_pick, present};
 use dbento_app::app::start;
 use dbento_app::keymap::{self, OpenSettings, SETTINGS_KEYS};
 use dbento_app::palette::{Mode, PaletteCommand};
+use dbento_app::settings_dialog::FontTarget;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, AppContext as _, Role, TestAppContext, px};
+use gpui_kit::{AnyWindowHandle, AppContext as _, Focusable as _, Role, TestAppContext, px};
 
 fn press(cx: &mut TestAppContext, win: AnyWindowHandle, key: &str) {
     cx.update_window(win, |_, w, cx| {
@@ -137,4 +138,32 @@ fn settings_wait_while_another_dialog_is_open(cx: &mut TestAppContext) {
         present(cx, o.win, "conn-name"),
         "the open dialog is left alone"
     );
+}
+
+// Enter in a size field commits the clamped value in place; the dialog stays open. Enter
+// with focus elsewhere in the dialog still confirms and closes it.
+#[gpui_kit::test]
+fn enter_in_a_size_field_clamps_in_place_and_keeps_the_dialog(cx: &mut TestAppContext) {
+    let o = launched(cx, "", "");
+    click_id(cx, o.win, "rail-settings");
+    let view = o
+        .shell
+        .read_with(cx, |s, _| s.settings_view().unwrap().clone());
+    let input = view.read_with(cx, |v, _| v.size_input(FontTarget::Ui).clone());
+    cx.update_window(o.win, |_, w, cx| input.update(cx, |s, cx| s.focus(w, cx)))
+        .unwrap();
+    cx.run_until_parked();
+    press(cx, o.win, "ctrl-a");
+    cx.update_window(o.win, |_, w, cx| w.input("99", cx))
+        .unwrap();
+    cx.run_until_parked();
+    press(cx, o.win, "enter");
+    assert!(present(cx, o.win, "settings-dialog"), "the dialog stayed");
+    assert_eq!(input.read_with(cx, |s, _| s.value().to_string()), "16");
+    let focus = view.read_with(cx, |v, cx| v.focus_handle(cx));
+    cx.update_window(o.win, |_, w, cx| focus.focus(w, cx))
+        .unwrap();
+    cx.run_until_parked();
+    press(cx, o.win, "enter");
+    assert!(!present(cx, o.win, "settings-dialog"));
 }
