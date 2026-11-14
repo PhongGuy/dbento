@@ -122,3 +122,30 @@ fn a_bad_argument_keeps_the_saved_workspace(cx: &mut TestAppContext) {
     let saved: SavedState = load_json(&paths.state).value;
     assert_eq!(saved, state);
 }
+#[gpui_kit::test]
+// An unmounted drive or share comes back; the entry waits, marked, until it does.
+fn an_unreachable_recent_workspace_stays_and_is_marked_missing(cx: &mut TestAppContext) {
+    support::init(cx);
+    let (gone, files, fx) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        support::fixture("", ""),
+    );
+    let paths = AppPaths::in_dir(files.path());
+    let recent = vec![gone.path().to_path_buf(), fx.dir.path().to_path_buf()];
+    let state = SavedState {
+        last_workspace: Some(gone.path().into()),
+        recent_workspaces: recent.clone(),
+        ..SavedState::default()
+    };
+    save_json(&paths.state, &state).unwrap();
+    let (win, _) = cx
+        .update(|cx| start(support::services(files.path()), None, cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(support::present(cx, win, "welcome-error"));
+    let saved: SavedState = load_json(&paths.state).value;
+    assert_eq!(saved.recent_workspaces, recent);
+    assert!(support::present(cx, win, ("recent-missing", 0usize)));
+    assert!(!support::present(cx, win, ("recent-missing", 1usize)));
+}

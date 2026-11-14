@@ -91,7 +91,9 @@ pub struct Services {
 pub struct SavedState {
     /// The workspace folder open when the app last opened one.
     pub last_workspace: Option<PathBuf>,
-    /// The appearance choice; System when never chosen.
+    /// The appearance choice of an older state file, read only to seed settings.json, which
+    /// owns it; never written back.
+    #[serde(skip_serializing)]
     pub appearance: Appearance,
     /// The open tabs of the most recent workspaces, newest first, at most [`MAX_SESSIONS`].
     pub sessions: Vec<WorkspaceSession>,
@@ -192,6 +194,9 @@ pub struct TabState {
     /// The relation a table tab was opened on; absent from sessions saved before it was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<TableState>,
+    /// The N of an untitled tab's "Query N", so it keeps its title across a restart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<usize>,
 }
 
 /// A table tab's relation and, while it still browsed, the browse it ran.
@@ -252,6 +257,15 @@ impl SavedState {
     }
 }
 
+/// Each recent workspace with whether it is missing: its folder holds no `dbento.toml` now,
+/// as when its drive or share is unmounted.
+pub fn recent_status(recent: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+    recent
+        .iter()
+        .map(|dir| (dir.clone(), !dir.join("dbento.toml").is_file()))
+        .collect()
+}
+
 /// The workspace to open at startup: the folder given on the command line, else the last
 /// one opened, else none.
 pub fn initial_workspace(arg: Option<PathBuf>, saved: &SavedState) -> Option<PathBuf> {
@@ -307,12 +321,21 @@ pub fn start(
         eprintln!("dbento: {message}");
     }
     let dir = initial_workspace(dir, &saved.value);
-    // settings.json owns the appearance now; state.json only seeds it when there is no file yet.
+    // settings.json owns the appearance; an older state file's choice moves there at once,
+    // since state.json no longer writes it back.
+    let seeding = saved.value.appearance != Appearance::default()
+        && matches!(services.paths.settings.try_exists(), Ok(false));
     let store = settings_store::install(
         Some(services.paths.settings.clone()),
         saved.value.appearance,
         cx,
     );
+    if seeding {
+        store.update(cx, |s, cx| {
+            s.change(cx, |_| {});
+            s.flush(cx);
+        });
+    }
     let appearance = store.read(cx).get().appearance;
     let keymap_warning = crate::keymap::install_user(Some(services.paths.keymap.clone()), cx);
     let history_open = saved.value.history_open;

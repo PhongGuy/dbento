@@ -1,10 +1,8 @@
 use crate::support;
 use std::time::Duration;
 
-use dbento_app::app::{AppPaths, SavedState, start};
-use dbento_app::persist::save_json;
+use dbento_app::app::{AppPaths, start};
 use dbento_app::settings_store::{self, SAVE_DELAY};
-use dbento_app::theme::Appearance;
 use gpui_kit::TestAppContext;
 use gpui_kit::component::{Theme, ThemeMode};
 
@@ -29,14 +27,7 @@ fn an_existing_settings_file_wins_over_the_state_file(cx: &mut TestAppContext) {
     support::init(cx);
     let files = tempfile::tempdir().unwrap();
     let paths = AppPaths::in_dir(files.path());
-    save_json(
-        &paths.state,
-        &SavedState {
-            appearance: Appearance::Light,
-            ..SavedState::default()
-        },
-    )
-    .unwrap();
+    std::fs::write(&paths.state, r#"{"appearance":"light"}"#).unwrap();
     std::fs::write(&paths.settings, r#"{"appearance":"dark"}"#).unwrap();
     cx.update(|cx| start(support::services(files.path()), None, cx))
         .unwrap();
