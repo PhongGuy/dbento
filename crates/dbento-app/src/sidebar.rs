@@ -2236,6 +2236,23 @@ pub fn engine_label(engine: Engine) -> &'static str {
     engine.name()
 }
 
+/// `c`'s engine as prose names it, MariaDB kept apart from the MySQL driver it runs on.
+pub fn engine_title(c: &ConnectionConfig) -> &'static str {
+    match (c.engine_label(), c.engine()) {
+        ("mariadb", _) => "MariaDB",
+        (_, Engine::Postgres) => "PostgreSQL",
+        (_, Engine::Sqlite) => "SQLite",
+        (_, Engine::Mysql) => "MySQL",
+        (_, Engine::Mssql) => "SQL Server",
+        (_, Engine::Duckdb) => "DuckDB",
+        (_, Engine::Mongodb) => "MongoDB",
+        (_, Engine::Surrealdb) => "SurrealDB",
+        (_, Engine::Redis) => "Redis",
+        (_, Engine::Dynamodb) => "DynamoDB",
+        (label, _) => label,
+    }
+}
+
 impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rebuild(cx);

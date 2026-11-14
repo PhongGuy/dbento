@@ -2170,10 +2170,10 @@ impl ResultsPane {
 
     /// The edit strip at the statement list's right end on a browse tab: why editing is
     /// blocked, or Row, Duplicate, Delete, Undo, Redo, the staged count, Revert and Save,
-    /// each disabled by `strip_actions` when it does not apply.
+    /// each disabled by `strip_actions` when it does not apply. A table tab on an engine
+    /// that cannot edit rows shows only its read-only chip.
     fn edit_strip(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let m = self.model.read(cx);
-        m.browse()?;
         let strip = div()
             .id("edit-strip")
             .test_support()
@@ -2182,6 +2182,14 @@ impl ResultsPane {
             .items_center()
             .gap_1()
             .px_2();
+        if let Some(text) = m.not_editable() {
+            let tip = SharedString::from(text.to_owned());
+            let chip = ui::chip("browse-not-editable", tip.clone(), cx)
+                .text_color(theme::dim(cx))
+                .tooltip(move |window, cx| theme::tooltip(tip.clone(), window, cx));
+            return Some(strip.child(chip).into_any_element());
+        }
+        m.browse()?;
         if let Some(block) = m.edit_block() {
             let chip =
                 ui::chip("browse-not-editable", block.reason(), cx).text_color(theme::dim(cx));

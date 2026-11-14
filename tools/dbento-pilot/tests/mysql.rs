@@ -163,11 +163,10 @@ async fn mysql_refuses_a_read_only_write_then_browses_and_opens_a_table() {
     })
     .await;
     assert_eq!(
-        name(&tree, "notice"),
-        Some(
-            "Opened as a plain query, so rows cannot be edited here: editing rows is not available on mysql yet"
-        )
+        name(&tree, "browse-not-editable"),
+        Some("Read-only: editing is not available on MySQL yet")
     );
+    assert!(find_node(&tree, "notice").is_none(), "{tree}");
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();
 }

@@ -126,6 +126,7 @@ mod menu_rows;
 mod mongo_documents;
 mod nav_history;
 mod new_tab_rule;
+mod not_editable;
 mod notice;
 mod open;
 mod original_value;

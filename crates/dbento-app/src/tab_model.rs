@@ -360,6 +360,8 @@ pub struct TabModel {
     deferred_target: Option<(RelationRef, Browse)>,
     /// A landed description (or why there is none), waiting for `flush_browse` to act on it.
     target_landed: Option<Result<(EditTarget, Vec<ForeignKey>), String>>,
+    /// Why a table tab on an engine that cannot edit rows runs as a plain query.
+    not_editable: Option<String>,
     filter_error: Option<String>,
     /// Staged edits of the browse result, keyed by result row.
     edits: StagedEdits,
@@ -526,6 +528,7 @@ impl TabModel {
             target_queued: false,
             deferred_target: None,
             target_landed: None,
+            not_editable: None,
             filter_error: None,
             edits: StagedEdits::default(),
             edit_history: EditHistory::default(),
@@ -879,6 +882,7 @@ impl TabModel {
         // Nothing the old connection produced may show under the new one's chip.
         self.results.clear();
         self.notice = None;
+        self.not_editable = None;
         self.cap = None;
         self.spec.workspace = workspace;
         self.spec.connection = name.to_owned();
@@ -1434,6 +1438,7 @@ impl TabModel {
         }
         self.target_queued = queued;
         self.target_landed = None;
+        self.not_editable = None;
         self.target_pending = Some(rel);
         self.target_filter = browse.filter;
         self.target_sort = browse.sort;
@@ -1479,6 +1484,11 @@ impl TabModel {
         self.browse.as_ref()
     }
 
+    /// The chip text of a table tab whose engine cannot edit rows yet.
+    pub fn not_editable(&self) -> Option<&str> {
+        self.not_editable.as_deref()
+    }
+
     /// Stores `state`, clears the filter error, emits `BrowseEvent::Run(state.sql())`.
     pub fn set_browse(&mut self, state: BrowseState, cx: &mut Context<Self>) {
         let sql = state.sql().to_owned();
@@ -1499,6 +1509,7 @@ impl TabModel {
             | self.target_filter.take().is_some()
             | self.target_sort.take().is_some()
             | self.target_landed.take().is_some()
+            | self.not_editable.take().is_some()
             | self.filter_error.take().is_some()
             | !self.edits.is_empty()
             | self.banner.take().is_some()
@@ -2645,6 +2656,12 @@ impl TabModel {
             Ok(state) => self.set_browse(state, cx),
             Err(message) => {
                 self.announce_fresh = false;
+                // An engine that cannot edit says so on a lasting chip, not the passing notice.
+                let spec = &self.spec;
+                self.not_editable = spec
+                    .workspace
+                    .connection(&spec.connection)
+                    .and_then(|c| browse::not_editable_text(&c));
                 cx.emit(BrowseEvent::Unavailable(message));
             }
         }
