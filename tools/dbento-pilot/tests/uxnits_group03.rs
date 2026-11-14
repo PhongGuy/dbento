@@ -7,7 +7,9 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{Pilot, Rect, bounds, find_node, launch_args, sqlite_workspace};
+use common::{
+    Pilot, Rect, bounds, find_node, launch_args, sqlite_workspace, sqlite_workspace_named,
+};
 use dbento_app::app::AppPaths;
 use dbento_core::{ApprovalRequest, ApprovalStore, Writes};
 use serde_json::{Value, json};
@@ -193,21 +195,17 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
         assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 
         // The approval dialog's path tooltip opens beside the folder name, clear of the SQL.
-        let ws = sqlite_workspace();
+        // The tooltip opens right of the folder name, so a fixed name keeps its place repeatable; a
+        // scratch name narrower than the headline would put the tooltip's shadow on its line.
+        let (_root, ws) = sqlite_workspace_named("dbento-workspace");
         let state = tempfile::tempdir().unwrap();
         let store = ApprovalStore::open(&AppPaths::in_dir(state.path()).approvals).unwrap();
         let sql = "UPDATE t SET name = 'z' WHERE id = 1";
         store
-            .request(&ApprovalRequest::new(
-                ws.path(),
-                "lite",
-                sql,
-                Writes::Yes,
-                vec![],
-            ))
+            .request(&ApprovalRequest::new(&ws, "lite", sql, Writes::Yes, vec![]))
             .unwrap();
         let pilot = Pilot::start().await;
-        let mut args = launch_args("headless", ws.path());
+        let mut args = launch_args("headless", &ws);
         args["env"] = json!({ "DBENTO_STATE_DIR": state.path(), dbento_pilot::THEME_VAR: theme });
         pilot.ok("launch", args).await;
         let tree = until(&pilot, "the approval dialog", |t| {
