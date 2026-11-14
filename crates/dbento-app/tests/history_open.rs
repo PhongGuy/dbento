@@ -71,3 +71,15 @@ fn a_row_on_a_present_connection_opens_on_it(cx: &mut TestAppContext) {
     assert!(!present(cx, s.win, "pick-connection-dialog"));
     assert!(!present(cx, s.win, "notice"));
 }
+
+#[gpui_kit::test]
+fn the_pick_dialog_rows_keep_the_dot_slot_and_lock_read_only(cx: &mut TestAppContext) {
+    let s = started(cx, TWO);
+    assert_asks_instead(cx, &s, "pg-old");
+    assert_eq!(
+        label_of(cx, s.win, ("pick-connection-lock", 0usize)).as_deref(),
+        Some("read-only")
+    );
+    assert!(!present(cx, s.win, ("pick-connection-lock", 1usize)));
+    assert!(present(cx, s.win, ("pick-connection-slot", 1usize)));
+}

@@ -41,6 +41,7 @@ pub mod nav;
 pub mod palette;
 mod parks;
 pub mod persist;
+pub mod pick_row;
 pub mod plan_view;
 pub mod query_files;
 pub mod query_tab;

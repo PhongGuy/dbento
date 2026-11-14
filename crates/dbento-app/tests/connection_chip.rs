@@ -274,3 +274,45 @@ fn a_mysql_chip_names_its_database_or_its_server() {
         "all \u{b7} mysql \u{b7} u@h:3306"
     );
 }
+
+#[test]
+fn a_mariadb_chip_says_mariadb() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.m]\nengine = \"mariadb\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"sales\"\n",
+    )
+    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    assert_eq!(
+        connection_chip_text(ws.declared("m").unwrap()),
+        "m \u{b7} mariadb \u{b7} sales"
+    );
+}
+
+#[gpui_kit::test]
+fn picker_rows_keep_the_dot_slot_and_lock_a_read_only_connection(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "read_only = true", 0);
+    click(cx, &o, "query-connection");
+    let width = |cx: &mut TestAppContext, n: usize| {
+        cx.update_window(o.win, |_, w, cx| {
+            w.render_frame(cx);
+            w.find(("query-connection-pick-slot", n))
+                .bounds()
+                .size
+                .width
+        })
+        .unwrap()
+    };
+    assert_eq!(width(cx, 0), gpui_kit::px(8.));
+    assert_eq!(
+        width(cx, 1),
+        gpui_kit::px(8.),
+        "an untagged row keeps the slot"
+    );
+    assert_eq!(
+        label_of(cx, o.win, ("query-connection-pick-lock", 0usize)).as_deref(),
+        Some("read-only")
+    );
+    assert!(!present(cx, o.win, ("query-connection-pick-lock", 1usize)));
+}

@@ -19,6 +19,7 @@ use gpui_kit::{
     TestSupportExt, Window, div, px,
 };
 
+use crate::pick_row::{ConnectionPick, pick_row};
 use crate::staged::PREVIEW_LINES;
 use crate::{theme, ui};
 
@@ -420,7 +421,7 @@ pub struct PickAsk {
     /// The SQL the pick will open, boxed in mono.
     pub sql: SharedString,
     /// The connections offered, in order.
-    pub rows: Vec<(SharedString, &'static str)>,
+    pub rows: Vec<ConnectionPick>,
 }
 
 /// The connection picker: `pick-connection-dialog` holding rows `("pick-connection", n)`, each
@@ -434,20 +435,14 @@ pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::
         window.open_dialog(cx, move |dialog, window, cx| {
             let dim = theme::dim(cx);
             let rows: Vec<_> = (spec.rows.iter().enumerate())
-                .map(|(ix, (name, engine))| {
+                .map(|(ix, pick)| {
                     let tx = tx.clone();
                     Button::new(("pick-connection", ix))
                         .ghost()
                         .w_full()
                         .h(px(28.))
-                        .accessibility_label(name.clone())
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(div().flex_1().child(name.clone()))
-                                .child(div().text_sm().text_color(dim).child(*engine)),
-                        )
+                        .accessibility_label(SharedString::from(pick.name.clone()))
+                        .child(pick_row("pick-connection", ix, pick, true, cx).w_full())
                         .on_click(move |_, window, cx| {
                             let _ = tx.try_send(ix);
                             window.close_dialog(cx);
