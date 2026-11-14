@@ -3284,8 +3284,7 @@ fn grid_menu(
                 .flatten();
             let label: SharedString = clause.map_or(label.into(), |c| filter_label(&c).into());
             let weak = weak.clone();
-            let item = ui::menu_item(id, Some(grid_menu_icon(id)), label, keys, cx)
-                .disabled(!enabled)
+            let item = ui::menu_item_if(id, Some(grid_menu_icon(id)), label, keys, enabled, cx)
                 .on_click(move |_, window, cx| {
                     let _ = weak.update(cx, |p, cx| p.menu_action(id, target, window, cx));
                 });

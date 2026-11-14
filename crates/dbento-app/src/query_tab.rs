@@ -40,9 +40,10 @@ use crate::keymap::{
     ToggleComment, all_keys_for, chip_keys, keys_for, plus_keys,
 };
 use crate::nav::NavHistory;
+use crate::pick_row::{ConnectionPick, pick_row};
 use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, skip_notice};
 use crate::run_target::run_range;
-use crate::sidebar::{Sidebar, color_name, engine_label, tag_color};
+use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::status_bar::run_elapsed;
 use crate::tab_model::{Discard, ROW_LIMITS, TabModel};
 use crate::{staged, theme, ui};
@@ -324,11 +325,7 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
         | Engine::Dynamodb
         | _ => c.display_target(),
     };
-    format!(
-        "{} \u{b7} {} \u{b7} {target}",
-        c.name(),
-        engine_label(c.engine())
-    )
+    format!("{} \u{b7} {} \u{b7} {target}", c.name(), c.engine_label())
 }
 
 /// The grammar the run-confirmation prompt highlights `engine`'s statement with: the editor's,
@@ -356,8 +353,9 @@ pub fn editor_language(engine: Engine) -> &'static str {
     }
 }
 
-/// The editor's right-click menu in order: Run, Format and Save with their effective key
-/// chips, then the clipboard items, whose keys the kit binds and the menu does not repeat.
+/// The editor's right-click menu in order: Run, Format, Explain, Toggle comment and Save with
+/// their effective key chips, then the clipboard items, whose keys the kit binds and the menu
+/// does not repeat.
 /// Cut and Copy are enabled only when `selected` (the editor holds a non-empty selection);
 /// both explain entries appear only when `explain` (the engine's `capabilities().explain`),
 /// and Format only when `format` (the engine's query language is SQL).
@@ -397,8 +395,15 @@ pub fn editor_menu_entries(
             keys_for(&ExplainAnalyze, cx),
         ));
     }
+    // Save shows the key the keymap binds first, the one the toolbar's Save tooltip names.
+    let save = all_keys_for(&SaveQuery, cx).into_iter().next();
     entries.extend([
-        entry("editor-menu-save", "Save query", keys_for(&SaveQuery, cx)),
+        entry(
+            "editor-menu-toggle-comment",
+            "Toggle comment",
+            keys_for(&ToggleComment, cx),
+        ),
+        entry("editor-menu-save", "Save query", save),
         entry("editor-menu-cut", "Cut", None),
         entry("editor-menu-copy", "Copy", None),
         entry("editor-menu-paste", "Paste", None),
@@ -1111,6 +1116,7 @@ impl QueryTab {
             "editor-menu-explain-analyze" => {
                 return self.explain(ExplainMode::Analyze, window, cx);
             }
+            "editor-menu-toggle-comment" => return self.toggle_comment(window, cx),
             "editor-menu-save" => Box::new(SaveQuery),
             "editor-menu-cut" => Box::new(Cut),
             "editor-menu-copy" => Box::new(Copy),
@@ -1394,15 +1400,8 @@ impl QueryTab {
                 .child(text)
                 .into_any_element();
         }
-        let rows: Vec<PickRow> = self
-            .workspace
-            .connections()
-            .iter()
-            .map(|c| PickRow {
-                name: c.name().to_owned(),
-                engine: engine_label(c.engine()),
-                dot: c.effective_color().map(tag_color),
-            })
+        let rows: Vec<ConnectionPick> = (self.workspace.connections().iter())
+            .map(ConnectionPick::of)
             .collect();
         let current = m.spec().connection.clone();
         let tab = cx.entity().downgrade();
@@ -1426,13 +1425,6 @@ impl QueryTab {
     }
 }
 
-// One picker row: the connection's name, its engine and its tag colour, as the chip shows them.
-struct PickRow {
-    name: String,
-    engine: &'static str,
-    dot: Option<Hsla>,
-}
-
 // A 28 px square ghost toolbar button holding a 16 px `glyph` in `muted`, named `label`;
 // it matches the split Run's height.
 fn tool_button(
@@ -1453,38 +1445,14 @@ fn tool_button(
 fn connection_menu(
     menu: PopupMenu,
     tab: &WeakEntity<QueryTab>,
-    rows: &[PickRow],
+    rows: &[ConnectionPick],
     current: &str,
 ) -> PopupMenu {
     rows.iter().enumerate().fold(menu, |menu, (n, row)| {
         let label: SharedString = row.name.clone().into();
-        let (engine, dot) = (row.engine, row.dot);
-        let (tab, pick) = (tab.clone(), row.name.clone());
+        let (tab, pick, shown) = (tab.clone(), row.name.clone(), row.clone());
         let item = PopupMenuItem::element(move |_, cx| {
-            let dot = dot.map(|color| {
-                div()
-                    .id(("query-connection-pick-dot", n))
-                    .test_support()
-                    .size(px(8.))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(color)
-            });
-            div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .gap_2()
-                .children(dot)
-                .child(label.clone())
-                .child(
-                    div()
-                        .id(("query-connection-pick-engine", n))
-                        .aria_label(engine)
-                        .test_support()
-                        .text_color(theme::dim(cx))
-                        .child(engine),
-                )
+            pick_row("query-connection-pick", n, &shown, true, cx)
                 .id(("query-connection-pick", n))
                 .aria_label(label.clone())
                 .test_support()
@@ -1934,9 +1902,8 @@ fn editor_menu(
             menu = menu.separator();
         }
         let weak = weak.clone();
-        let item = ui::text_menu_item(id, label, keys, cx)
-            .disabled(!enabled)
-            .on_click(move |_, window, cx| {
+        let item =
+            ui::text_menu_item_if(id, label, keys, enabled, cx).on_click(move |_, window, cx| {
                 let _ = weak.update(cx, |t, cx| t.editor_menu_action(id, window, cx));
             });
         menu = menu.item(item);

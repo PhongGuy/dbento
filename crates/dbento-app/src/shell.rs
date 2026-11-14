@@ -64,6 +64,7 @@ use crate::link::LinkState;
 use crate::nav::{Hop, NavHistory};
 use crate::palette::{self, Mode, PaletteCommand, PaletteEvent, PaletteInit, TableRef};
 use crate::persist::ChangeQueue;
+use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_file_name};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT};
 use crate::recent_tabs::Recent;
@@ -73,7 +74,7 @@ use crate::runner::RunnerSpec;
 use crate::schema_tree::{NodeKey, select_text};
 use crate::settings_dialog::{SettingsView, SettingsViewEvent};
 use crate::settings_store::{self, SettingsEvent, SettingsStore};
-use crate::sidebar::{Sidebar, SidebarEvent, color_name, engine_label, tag_color};
+use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
@@ -1104,9 +1105,7 @@ impl Shell {
             title: format!("{gone} no longer exists").into(),
             detail: "Pick a connection to open this on.".into(),
             sql: sql.to_owned().into(),
-            rows: (ws.connections().iter())
-                .map(|c| (c.name().to_owned().into(), engine_label(c.engine())))
-                .collect(),
+            rows: (ws.connections().iter()).map(ConnectionPick::of).collect(),
         };
         let picked = confirm::pick(spec, window, cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -5181,9 +5180,15 @@ fn tab_menu(menu: PopupMenu, weak: &WeakEntity<Shell>, cx: &mut App) -> PopupMen
         )
         .separator()
         .item(
-            row("tab-menu-rename", Some(Icons::Pencil), "Rename", None)
-                .disabled(file)
-                .on_click(act(Shell::rename_tab)),
+            ui::menu_item_if(
+                "tab-menu-rename",
+                Some(Icons::Pencil),
+                "Rename",
+                None,
+                !file,
+                cx,
+            )
+            .on_click(act(Shell::rename_tab)),
         )
         .item(
             row(

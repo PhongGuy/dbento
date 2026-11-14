@@ -265,7 +265,7 @@ pub fn menu_item(
     keys: Option<SharedString>,
     cx: &App,
 ) -> PopupMenuItem {
-    menu_row(id, Some(icon), label.into(), keys, cx)
+    menu_row(id, Some(icon), label.into(), keys, true, cx)
 }
 
 /// [`menu_item`] without a glyph slot, for a menu none of whose rows has a glyph.
@@ -275,7 +275,39 @@ pub fn text_menu_item(
     keys: Option<SharedString>,
     cx: &App,
 ) -> PopupMenuItem {
-    menu_row(id, None, label.into(), keys, cx)
+    menu_row(id, None, label.into(), keys, true, cx)
+}
+
+/// How faint a disabled menu row draws, against the theme's muted text.
+pub const DISABLED_OPACITY: f32 = 0.5;
+
+/// The text colour a menu row forces: none when `enabled`, so it takes the menu's own, else
+/// the muted text faded to [`DISABLED_OPACITY`], fainter than any enabled row's dim text.
+pub fn menu_row_text(enabled: bool, cx: &App) -> Option<Hsla> {
+    (!enabled).then(|| cx.theme().muted_foreground.opacity(DISABLED_OPACITY))
+}
+
+/// [`menu_item`] that does nothing and draws faded unless `enabled`.
+pub fn menu_item_if(
+    id: &'static str,
+    icon: Option<IconName>,
+    label: impl Into<SharedString>,
+    keys: Option<SharedString>,
+    enabled: bool,
+    cx: &App,
+) -> PopupMenuItem {
+    menu_row(id, Some(icon), label.into(), keys, enabled, cx).disabled(!enabled)
+}
+
+/// [`text_menu_item`] that does nothing and draws faded unless `enabled`.
+pub fn text_menu_item_if(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    keys: Option<SharedString>,
+    enabled: bool,
+    cx: &App,
+) -> PopupMenuItem {
+    menu_row(id, None, label.into(), keys, enabled, cx).disabled(!enabled)
 }
 
 // The row draws its own glyph: the kit forces menu icons to 12 px whatever their size.
@@ -284,14 +316,19 @@ fn menu_row(
     slot: Option<Option<IconName>>,
     label: SharedString,
     keys: Option<SharedString>,
+    enabled: bool,
     cx: &App,
 ) -> PopupMenuItem {
-    let muted = cx.theme().muted_foreground;
+    let faded = menu_row_text(enabled, cx);
+    let muted = faded.unwrap_or(cx.theme().muted_foreground);
     PopupMenuItem::element(move |_, cx| {
         let chip = keys.as_ref().map(|keys| {
             let text = chip_keys(keys);
-            key_chip(text.clone(), cx)
-                .id(SharedString::from(format!("{id}-keys")))
+            let chip = match faded {
+                Some(fg) => key_chip_colored(text.clone(), fg, cx.theme().border, cx),
+                None => key_chip(text.clone(), cx),
+            };
+            chip.id(SharedString::from(format!("{id}-keys")))
                 .aria_label(text)
                 .test_support()
         });
@@ -319,6 +356,7 @@ fn menu_row(
                     .child(label.clone())
                     .children(chip),
             )
+            .when_some(faded, |row, fg| row.text_color(fg))
             .id(id)
             .aria_label(label.clone())
             .test_support()

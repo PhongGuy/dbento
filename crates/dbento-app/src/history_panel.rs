@@ -22,12 +22,15 @@ use gpui_kit::{
 };
 
 use crate::history::HistoryLog;
+use crate::pick_row::{ConnectionPick, dot_slot, pick_row};
 use crate::results_pane::format_rows;
 use crate::sidebar::{color_name, tag_color};
 use crate::status_bar::{first_line, format_elapsed};
 use crate::theme;
 use crate::ui::{self, Icons};
 
+// The id prefix of the filter menu's rows and their parts.
+const FILTER: &str = "history-filter";
 // The filter's label and first menu row when no connection is chosen.
 const ALL_CONNECTIONS: &str = "all connections";
 
@@ -372,30 +375,37 @@ fn tag_dot(ix: usize, tag: Tag) -> AnyElement {
         .into_any_element()
 }
 
-// The filter menu: "all connections" at 0, then each connection in workspace order, the
-// current choice checked.
+// The filter menu: "all connections" at 0, then each connection in workspace order as the
+// other connection pickers draw it, the current choice checked.
 fn filter_menu(
     menu: PopupMenu,
     panel: &WeakEntity<HistoryPanel>,
-    names: &[Option<String>],
+    picks: &[Option<ConnectionPick>],
     current: Option<&str>,
 ) -> PopupMenu {
-    names.iter().enumerate().fold(menu, |menu, (n, name)| {
+    picks.iter().enumerate().fold(menu, |menu, (n, pick)| {
+        let name = pick.as_ref().map(|p| p.name.clone());
         let label: SharedString = name.as_deref().unwrap_or(ALL_CONNECTIONS).to_owned().into();
-        let (panel, pick) = (panel.clone(), name.clone());
-        let row = PopupMenuItem::element(move |_, _| {
-            div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .child(label.clone())
-                .id(("history-filter", n))
+        let (panel, shown, chosen) = (panel.clone(), pick.clone(), name.clone());
+        let row = PopupMenuItem::element(move |_, cx| {
+            let content = match &shown {
+                Some(p) => pick_row(FILTER, n, p, false, cx),
+                None => div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .gap_2()
+                    .child(dot_slot(FILTER, n, None))
+                    .child(label.clone()),
+            };
+            content
+                .id((FILTER, n))
                 .aria_label(label.clone())
                 .test_support()
         })
         .checked(name.as_deref() == current)
         .on_click(move |_, _, cx| {
-            let _ = panel.update(cx, |p, cx| p.set_connection_filter(pick.clone(), cx));
+            let _ = panel.update(cx, |p, cx| p.set_connection_filter(chosen.clone(), cx));
         });
         menu.item(row)
     })
@@ -466,13 +476,8 @@ impl Render for HistoryPanel {
             .connection
             .clone()
             .unwrap_or_else(|| ALL_CONNECTIONS.into());
-        let names: Vec<Option<String>> = std::iter::once(None)
-            .chain(
-                self.workspace
-                    .connections()
-                    .iter()
-                    .map(|c| Some(c.name().to_owned())),
-            )
+        let picks: Vec<Option<ConnectionPick>> = std::iter::once(None)
+            .chain((self.workspace.connections().iter()).map(|c| Some(ConnectionPick::of(c))))
             .collect();
         let (panel, current) = (cx.entity().downgrade(), self.connection.clone());
         let header = ui::panel_header("History", cx).gap_2().child(
@@ -482,7 +487,7 @@ impl Render for HistoryPanel {
                 .label(filter_label)
                 .dropdown_caret(true)
                 .dropdown_menu(move |menu, _, _| {
-                    filter_menu(menu, &panel, &names, current.as_deref())
+                    filter_menu(menu, &panel, &picks, current.as_deref())
                 }),
         );
         let search = ui::search_input("history-search", &self.search, cx);

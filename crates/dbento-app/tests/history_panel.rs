@@ -574,3 +574,33 @@ fn a_filter_on_a_child_lasts_while_the_child_resolves(cx: &mut TestAppContext) {
         "once nopg has no databases the child is gone and the filter resets"
     );
 }
+
+#[gpui_kit::test]
+fn the_filter_menu_rows_carry_tag_dots_slots_and_locks(cx: &mut TestAppContext) {
+    let (_fx, _files, win, _) = started_on(cx, "color = \"red\"\nread_only = true");
+    cx.update_window(win, |_, w, cx| w.click("history-connection", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        label_of(cx, win, ("history-filter-dot", 1usize)).as_deref(),
+        Some("red")
+    );
+    assert!(
+        !present(cx, win, ("history-filter-dot", 2usize)),
+        "nopg is untagged"
+    );
+    let width = |cx: &mut TestAppContext, n: usize| {
+        cx.update_window(win, |_, w, cx| {
+            w.render_frame(cx);
+            w.find(("history-filter-slot", n)).bounds().size.width
+        })
+        .unwrap()
+    };
+    assert_eq!(width(cx, 1), px(8.));
+    assert_eq!(width(cx, 2), px(8.), "an untagged row keeps the slot");
+    assert_eq!(
+        label_of(cx, win, ("history-filter-lock", 1usize)).as_deref(),
+        Some("read-only")
+    );
+    assert!(!present(cx, win, ("history-filter-lock", 2usize)));
+}

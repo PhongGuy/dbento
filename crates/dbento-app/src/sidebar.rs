@@ -2132,7 +2132,7 @@ pub fn engine_icon(engine: Engine) -> IconName {
 pub fn connection_tooltip(c: &ConnectionConfig) -> String {
     format!(
         "{} \u{b7} {} \u{b7} Double-click to open a query tab",
-        engine_label(c.engine()),
+        c.engine_label(),
         c.display_target()
     )
 }
