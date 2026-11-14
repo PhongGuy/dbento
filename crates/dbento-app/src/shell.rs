@@ -1102,6 +1102,7 @@ impl Shell {
             .map(|c| c.name().to_owned())
             .collect();
         let spec = confirm::PickAsk {
+            tone: confirm::PickTone::Warning,
             title: format!("{gone} no longer exists").into(),
             detail: "Pick a connection to open this on.".into(),
             sql: Some(sql.to_owned().into()),
@@ -1294,6 +1295,7 @@ impl Shell {
             .map(|c| c.name().to_owned())
             .collect();
         let spec = confirm::PickAsk {
+            tone: confirm::PickTone::Plain,
             title: "New tab".into(),
             detail: "Pick a connection for the new tab.".into(),
             sql: None,

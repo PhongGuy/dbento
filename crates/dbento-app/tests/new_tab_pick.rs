@@ -41,6 +41,10 @@ fn assert_asks(cx: &mut TestAppContext, s: &Started) {
         "there is no SQL to show"
     );
     assert!(!present(cx, s.win, "notice"), "no warning notice");
+    assert!(
+        !present(cx, s.win, "pick-warning"),
+        "a new tab is no warning, so the picker is plain"
+    );
 }
 
 #[gpui_kit::test]
