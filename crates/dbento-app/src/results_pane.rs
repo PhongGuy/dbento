@@ -391,8 +391,8 @@ pub struct ResultsPane {
     plan: Option<(PlanKey, Entity<PlanView>)>,
     // The shell's dock state, mirrored so the footer's inspector toggle can show it.
     inspector_open: bool,
-    // The run id current when a hop asked for its single landed row to be selected.
-    select_single: Option<u64>,
+    // The run id current when a hop asked for a landed row to be selected, and which row.
+    select_single: Option<(u64, Option<usize>)>,
     /// The record view's form; it keeps its row while the grid shows.
     record: Entity<RecordForm>,
     /// Other forms over this pane's model (the inspector's); a save stages their open field
@@ -556,7 +556,13 @@ impl ResultsPane {
 
     /// Asks for the next run's statement 0 to select its row once it ends with exactly one.
     pub fn select_single_landed(&mut self, cx: &App) {
-        self.select_single = Some(self.model.read(cx).run_id());
+        self.select_landed(None, cx);
+    }
+
+    /// Asks for the next run's statement 0 to select table row `row` once it stops, when it
+    /// holds that row; None selects a lone row as `select_single_landed` does.
+    pub fn select_landed(&mut self, row: Option<usize>, cx: &App) {
+        self.select_single = Some((self.model.read(cx).run_id(), row));
     }
 
     /// The record view's form.
@@ -1871,12 +1877,14 @@ impl ResultsPane {
         let m = self.model.read(cx);
         let landed = self
             .select_single
-            .filter(|&run| m.run_id() != run && !m.running());
-        if landed.is_some() {
-            let single = m.results().first().is_some_and(|r| r.store.rows() == 1);
+            .filter(|&(run, _)| m.run_id() != run && !m.running());
+        if let Some((_, row)) = landed {
+            let rows = m.results().first().map_or(0, |r| r.store.rows());
             self.select_single = None;
-            if single {
-                self.select_row(0, window, cx);
+            match row {
+                Some(row) if (row as u64) < rows => self.select_row(row, window, cx),
+                None if rows == 1 => self.select_row(0, window, cx),
+                _ => {}
             }
         }
         cx.notify();
