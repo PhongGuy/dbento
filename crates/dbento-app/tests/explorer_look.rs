@@ -1,10 +1,11 @@
 //! The explorer's look: header, filter, row pitch, indent and node glyphs.
 use crate::support::{TREE, fixture, started};
 use dbento_app::explorer::{connection_id, folder_id, part_id};
+use dbento_app::keys::KeyItem;
 use dbento_app::schema_tree::{ObjectGroup, RowKind};
 use dbento_app::sidebar::{connection_tooltip, engine_icon, node_icon};
 use dbento_app::ui::Icons;
-use dbento_core::{Engine, FolderPath, ObjectRef, RelationKind, RelationRef};
+use dbento_core::{Engine, FolderPath, KeyKind, KeyTtl, ObjectRef, RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Bounds, ElementId, Pixels, TestAppContext, px};
 
@@ -55,6 +56,34 @@ fn every_node_kind_has_its_glyph() {
     assert_eq!(node_icon(&RowKind::Loading), None);
     assert_eq!(node_icon(&RowKind::Empty), None);
     assert_eq!(node_icon(&RowKind::Truncated), None);
+}
+#[test]
+fn redis_keys_lead_with_their_type_glyph_and_folders_with_the_folder() {
+    let key = |kind| {
+        RowKind::Key(KeyItem {
+            name: b"k".to_vec(),
+            kind,
+            ttl: KeyTtl::Persistent,
+        })
+    };
+    let glyphs = [
+        (KeyKind::String, Icons::FileText),
+        (KeyKind::Hash, Icons::Hash),
+        (KeyKind::List, Icons::Rows3),
+        (KeyKind::Set, Icons::Shapes),
+        (KeyKind::SortedSet, Icons::ArrowUp),
+        (KeyKind::Stream, Icons::FastForward),
+        (KeyKind::Other("ReJSON-RL".into()), Icons::Key),
+    ];
+    for (kind, icon) in glyphs {
+        assert_eq!(node_icon(&key(kind.clone())), Some(icon), "{kind:?}");
+    }
+    let folder = RowKind::KeyFolder {
+        prefix: b"user:".to_vec(),
+        keys: 3,
+        complete: true,
+    };
+    assert_eq!(node_icon(&folder), Some(Icons::Folder));
 }
 #[test]
 fn engines_get_generic_glyphs_never_logos() {

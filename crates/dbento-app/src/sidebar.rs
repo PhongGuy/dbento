@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dbento_core::{
-    Color, ConnectionConfig, Definition, Engine, FolderPath, ObjectRef, RelationKind, RelationRef,
-    Workspace, WorkspaceItem, quote_ident,
+    Color, ConnectionConfig, Definition, Engine, FolderPath, KeyKind, ObjectRef, RelationKind,
+    RelationRef, Workspace, WorkspaceItem, quote_ident,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -38,7 +38,9 @@ use crate::keymap::{
     NewConnection, OpenSelected, ReloadWorkspace, TreeCollapse, TreeExpand, TreeSelectFirst,
     TreeSelectLast, TreeSelectNext, TreeSelectPrev, keys_for,
 };
-use crate::keys::{KeyFilter, display_key, parse_key_filter, ttl_text, type_name};
+use crate::keys::{
+    KeyFilter, display_key, filter_text, folder_count_text, parse_key_filter, ttl_text, type_name,
+};
 use crate::link::{LinkState, shows_read_only};
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
@@ -422,6 +424,20 @@ impl Sidebar {
             Some(Selection::Object { conn, object }) => Some((conn.clone(), object.clone())),
             _ => None,
         }
+    }
+
+    /// The selected Redis key's connection, DB and name, if the selection is one.
+    pub fn selected_key(&self) -> Option<(String, u32, Vec<u8>)> {
+        match &self.selection {
+            Some(Selection::Key { conn, db, key }) => Some((conn.clone(), *db, key.clone())),
+            _ => None,
+        }
+    }
+
+    /// Selects Redis key `key` of DB `db` on `conn`, as a click on its row does.
+    pub fn select_key(&mut self, conn: &str, db: u32, key: Vec<u8>, cx: &mut Context<Self>) {
+        let conn = conn.to_owned();
+        self.set_selection(Selection::Key { conn, db, key }, cx);
     }
 
     /// The selected folder, if the selection is one.
@@ -1085,12 +1101,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let now = self.tree.key_filter(&conn, db);
-        let initial = [now.pattern.unwrap_or_else(|| "*".into())]
-            .into_iter()
-            .chain(now.kind.map(|k| format!("type:{k}")))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let initial = filter_text(&self.tree.key_filter(&conn, db));
         let spec = TextAsk {
             title: "Filter keys".into(),
             hint: format!("A pattern such as user:*, and optionally type:hash, in db{db}").into(),
@@ -1853,7 +1864,24 @@ impl Sidebar {
             base
         };
         match &row.kind {
-            RowKind::Schema => base.child(name(row.label.clone())),
+            // A Redis DB trails its key count, dimmed with the name when it holds none.
+            RowKind::Schema => match &row.key {
+                NodeKey::Schema { conn, schema } => match self.tree.key_count(conn, schema) {
+                    Some(keys) => base
+                        .when(keys == 0, |row| row.text_color(dim))
+                        .child(name(row.label.clone()))
+                        .child(div().flex_1())
+                        .child(mono_dim(keys.to_string())),
+                    None => base.child(name(row.label.clone())),
+                },
+                NodeKey::Connection(_)
+                | NodeKey::Kind { .. }
+                | NodeKey::Relation { .. }
+                | NodeKey::RelationGroup { .. }
+                | NodeKey::SchemaGroup { .. }
+                | NodeKey::Objects(_)
+                | NodeKey::KeyFolder { .. } => base.child(name(row.label.clone())),
+            },
             RowKind::Key(item) => {
                 let detail = format!("{} {}", type_name(&item.kind), ttl_text(&item.ttl))
                     .trim()
@@ -1867,10 +1895,10 @@ impl Sidebar {
                             .test_support(),
                     )
             }
-            RowKind::KeyFolder { keys, .. } => base
+            RowKind::KeyFolder { keys, complete, .. } => base
                 .child(name(row.label.clone()))
                 .child(div().flex_1())
-                .child(mono_dim(keys.to_string())),
+                .child(mono_dim(folder_count_text(*keys, *complete))),
             RowKind::LoadMore => base.text_color(accent).child(name(row.label.clone())),
             RowKind::Relation(_) => {
                 let tip: Option<SharedString> = match &row.key {
@@ -2088,6 +2116,16 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
     match kind {
         RowKind::Schema => Some(Icons::Layers),
         RowKind::Database { .. } => Some(Icons::Database),
+        RowKind::KeyFolder { .. } => Some(Icons::Folder),
+        RowKind::Key(item) => Some(match &item.kind {
+            KeyKind::String => Icons::FileText,
+            KeyKind::Hash => Icons::Hash,
+            KeyKind::List => Icons::Rows3,
+            KeyKind::Set => Icons::Shapes,
+            KeyKind::SortedSet => Icons::ArrowUp,
+            KeyKind::Stream => Icons::FastForward,
+            KeyKind::Other(_) | _ => Icons::Key,
+        }),
         RowKind::Kind(k) | RowKind::Relation(k) => Some(relation(k)),
         RowKind::Column {
             primary_key: true, ..
@@ -2105,8 +2143,6 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
         | RowKind::Failed { .. }
         | RowKind::Truncated
         | RowKind::Empty
-        | RowKind::KeyFolder { .. }
-        | RowKind::Key(_)
         | RowKind::LoadMore => None,
     }
 }
@@ -2298,6 +2334,7 @@ pub fn menu_icon(id: &str) -> Option<IconName> {
         "tree-menu-view-definition" => Icons::FileText,
         "tree-menu-open-key" => Icons::FileText,
         "tree-menu-filter-keys" => Icons::Search,
+        "tree-menu-clear-key-filter" => Icons::X,
         _ => return None,
     })
 }
@@ -2480,6 +2517,10 @@ fn catalog_menu(
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
         }
     };
+    let filtered = |conn: &str, db: u32, cx: &App| {
+        weak.upgrade()
+            .is_some_and(|s| s.read(cx).tree.key_filter(conn, db) != KeyFilter::default())
+    };
     let mut menu = menu.min_w(px(180.));
     for entry in catalog_entries(&t.kind, engine, cx) {
         let item = ui::menu_item(
@@ -2531,22 +2572,27 @@ fn catalog_menu(
                     })
                 }))
             }
-            // A key copies its full name, a folder its prefix as a pattern.
-            "tree-menu-copy-name" => item.on_click(copy(match &t.kind {
-                RowKind::Key(k) => display_key(&k.name),
-                RowKind::KeyFolder { prefix, .. } => format!("{}*", display_key(prefix)),
-                RowKind::Schema
-                | RowKind::Kind(_)
-                | RowKind::Relation(_)
-                | RowKind::Column { .. }
-                | RowKind::Group(_)
-                | RowKind::Object { .. }
-                | RowKind::Loading
-                | RowKind::Failed { .. }
-                | RowKind::Truncated
-                | RowKind::Empty
-                | RowKind::LoadMore
-                | RowKind::Database { .. } => t.label.clone(),
+            // A key copies its full name, a folder its prefix as a pattern, and a schema its
+            // name without the key filter its label may carry.
+            "tree-menu-copy-name" => item.on_click(copy(match (&t.kind, &t.node) {
+                (RowKind::Key(k), _) => display_key(&k.name),
+                (RowKind::KeyFolder { prefix, .. }, _) => format!("{}*", display_key(prefix)),
+                (RowKind::Schema, NodeKey::Schema { schema, .. }) => schema.clone(),
+                (
+                    RowKind::Schema
+                    | RowKind::Kind(_)
+                    | RowKind::Relation(_)
+                    | RowKind::Column { .. }
+                    | RowKind::Group(_)
+                    | RowKind::Object { .. }
+                    | RowKind::Loading
+                    | RowKind::Failed { .. }
+                    | RowKind::Truncated
+                    | RowKind::Empty
+                    | RowKind::LoadMore
+                    | RowKind::Database { .. },
+                    _,
+                ) => t.label.clone(),
             })),
             "tree-menu-open-key" => match (&t.kind, node_db(&t.node)) {
                 (RowKind::Key(k), Some(db)) => {
@@ -2566,6 +2612,14 @@ fn catalog_menu(
                     })
                 }
                 None => continue,
+            },
+            // Offered only while a filter hides keys; clearing reuses the filter path.
+            "tree-menu-clear-key-filter" => match node_db(&t.node) {
+                Some(db) if filtered(&conn, db, cx) => item
+                    .on_click(on_sidebar(weak, move |s, cx| {
+                        s.filter_keys(&conn, db, KeyFilter::default(), cx)
+                    })),
+                _ => continue,
             },
             "tree-menu-copy-qualified" => match &qualified {
                 Some(q) => item.on_click(copy(q.clone())),

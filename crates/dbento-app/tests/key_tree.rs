@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::keys::{
-    KeyBatch, KeyFilter, KeyItem, KeyToken, display_key, key_levels, kind_of, parse_key_filter,
-    ttl_text, type_name,
+    KeyBatch, KeyFilter, KeyItem, KeyToken, display_key, filter_text, folder_count_text,
+    key_levels, kind_of, natural_cmp, parse_key_filter, ttl_text, type_name,
 };
 use dbento_app::schema_tree::{CatalogTree, LoadRequest, NodeKey, RowKind, db_index};
 use dbento_core::{KeyCursor, KeyKind, KeyTtl, SchemaInfo};
@@ -122,7 +122,8 @@ fn a_db_opens_on_its_first_key_page_and_lists_folders_keys_and_load_more() {
         rows[1].kind,
         RowKind::KeyFolder {
             prefix: b"user:".to_vec(),
-            keys: 2
+            keys: 2,
+            complete: false
         }
     );
     assert_eq!(
@@ -390,4 +391,103 @@ fn a_failed_later_page_keeps_the_keys_and_retry_asks_that_page_again() {
     );
     answer(&mut t, again, batch(vec![s("b")], None));
     assert_eq!(arias(&t, ""), ["rd.db0", "rd.db0.a", "rd.db0.b", "rd.db1"]);
+}
+
+#[test]
+fn numeric_runs_compare_as_numbers() {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let mut names: Vec<&[u8]> = vec![b"n:180", b"n:235", b"n:43", b"n:439"];
+    names.sort_by(|a, b| natural_cmp(a, b));
+    assert_eq!(names, [&b"n:43"[..], b"n:180", b"n:235", b"n:439"]);
+    assert_eq!(natural_cmp(b"a2", b"a10"), Less);
+    assert_eq!(natural_cmp(b"a10b", b"a10a"), Greater);
+    assert_eq!(natural_cmp(b"a", b"b"), Less);
+    assert_eq!(natural_cmp(b"x", b"x"), Equal);
+    // Leading zeros tie on value, so the bytes break the tie and the order stays total.
+    assert_ne!(natural_cmp(b"7", b"007"), Equal);
+    assert_eq!(
+        natural_cmp(b"7", b"007"),
+        natural_cmp(b"007", b"7").reverse()
+    );
+    assert_eq!(natural_cmp(b"07", b"8"), Less);
+    // A run longer than any integer still compares by value.
+    assert_eq!(
+        natural_cmp(b"99999999999999999999999", b"100000000000000000000000"),
+        Less
+    );
+}
+
+#[test]
+fn key_levels_sort_folders_and_leaves_naturally() {
+    let names: Vec<&[u8]> = vec![b"n:439", b"n:43", b"n:180", b"n:235", b"s:10:x", b"s:9:x"];
+    assert_eq!(key_levels(&names, b"n:").leaves, vec![1, 2, 3, 0]);
+    let top = key_levels(&names, b"s:");
+    assert_eq!(
+        top.folders,
+        vec![(b"s:9:".to_vec(), 1), (b"s:10:".to_vec(), 1)]
+    );
+}
+
+#[test]
+fn a_folder_count_is_partial_until_the_scan_ends() {
+    let (mut t, req) = opened();
+    let token = KeyToken::new(KeyCursor::start());
+    answer(&mut t, req, batch(vec![s("u:1"), s("u:2")], Some(token)));
+    let partial = |t: &CatalogTree| {
+        t.rows("rd", 0, "").into_iter().find_map(|r| match r.kind {
+            RowKind::KeyFolder { keys, complete, .. } => Some((keys, complete)),
+            _ => None,
+        })
+    };
+    assert_eq!(partial(&t), Some((2, false)));
+    let more = t.load_more_keys("rd", 0).unwrap();
+    answer(&mut t, more, batch(vec![s("u:3")], None));
+    assert_eq!(partial(&t), Some((3, true)));
+    assert_eq!(folder_count_text(982, false), "982+");
+    assert_eq!(folder_count_text(1_958, true), "1958");
+}
+
+#[test]
+fn a_filtered_db_shows_its_filter_in_its_label() {
+    let (mut t, _) = opened();
+    let label = |t: &CatalogTree, aria: &str| {
+        t.rows("rd", 0, "")
+            .into_iter()
+            .find(|r| r.aria == aria)
+            .map(|r| r.label)
+    };
+    assert_eq!(label(&t, "rd.db0").as_deref(), Some("db0"));
+    t.filter_keys("rd", 0, parse_key_filter("* type:zset").unwrap());
+    assert_eq!(
+        label(&t, "rd.db0").as_deref(),
+        Some("db0 \u{B7} * type:zset")
+    );
+    t.filter_keys("rd", 1, parse_key_filter("user:*").unwrap());
+    assert_eq!(label(&t, "rd.db1").as_deref(), Some("db1 \u{B7} user:*"));
+    // Clearing goes back to every key and the bare name.
+    t.filter_keys("rd", 0, KeyFilter::default());
+    assert_eq!(label(&t, "rd.db0").as_deref(), Some("db0"));
+    assert_eq!(filter_text(&KeyFilter::default()), "*");
+    assert_eq!(
+        filter_text(&parse_key_filter("a* type:hash").unwrap()),
+        "a* type:hash"
+    );
+}
+
+#[test]
+fn db_rows_carry_the_key_count_the_schema_load_read() {
+    let mut t = CatalogTree::new();
+    t.set_key_browser("rd");
+    let req = t.toggle(&NodeKey::Connection("rd".into())).unwrap();
+    answer(
+        &mut t,
+        req,
+        CatalogData::Schemas(vec![
+            SchemaInfo::new("db0").with_key_count(98_765),
+            SchemaInfo::new("db1").with_key_count(0),
+        ]),
+    );
+    assert_eq!(t.key_count("rd", "db0"), Some(98_765));
+    assert_eq!(t.key_count("rd", "db1"), Some(0));
+    assert_eq!(t.key_count("rd", "db2"), None);
 }
