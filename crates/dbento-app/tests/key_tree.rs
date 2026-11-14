@@ -434,9 +434,12 @@ fn a_folder_count_is_partial_until_the_scan_ends() {
     let token = KeyToken::new(KeyCursor::start());
     answer(&mut t, req, batch(vec![s("u:1"), s("u:2")], Some(token)));
     let partial = |t: &CatalogTree| {
-        t.rows("rd", 0, "").into_iter().find_map(|r| match r.kind {
-            RowKind::KeyFolder { keys, complete, .. } => Some((keys, complete)),
-            _ => None,
+        t.rows("rd", 0, "").into_iter().find_map(|r| {
+            if let RowKind::KeyFolder { keys, complete, .. } = r.kind {
+                Some((keys, complete))
+            } else {
+                None
+            }
         })
     };
     assert_eq!(partial(&t), Some((2, false)));
