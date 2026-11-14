@@ -368,14 +368,17 @@ pub fn start(
             )
         })
     })?;
+    // The kit stacks toasts as overlapping cards, so the startup warnings share one toast
+    // that names every unusable file.
     let settings_warning = store.update(cx, |s, _| s.take_startup_warning());
-    for text in settings_warning.into_iter().chain(keymap_warning) {
+    let warnings: Vec<String> = settings_warning.into_iter().chain(keymap_warning).collect();
+    if !warnings.is_empty() {
         opened.0.update(cx, |_, window, cx| {
             ui::notice(
                 window,
                 cx,
                 Notice {
-                    text,
+                    text: warnings.join("\n"),
                     kind: NoticeKind::Warning,
                 },
             )

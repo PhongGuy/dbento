@@ -130,6 +130,7 @@ mod not_editable;
 mod notice;
 mod open;
 mod original_value;
+mod overlays;
 mod palette;
 mod palette_catalog;
 mod palette_commands;
