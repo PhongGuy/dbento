@@ -4,6 +4,7 @@
 
 use crate::edit::ConnectionSpec;
 use crate::folder::{FolderPath, parse_written};
+use crate::objects::{ConstraintKind, DefinitionKind};
 use crate::session::{Capabilities, QueryLanguage, ReadOnlyEnforcement};
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -137,6 +138,27 @@ impl Engine {
                 language: QueryLanguage::PartiQl,
                 ..none
             },
+        }
+    }
+
+    /// Whether a definition of `kind` can be read on this engine, so a shell offers it only
+    /// where it can answer. Tables follow `table_definition`.
+    pub fn defines(self, kind: DefinitionKind) -> bool {
+        use DefinitionKind as K;
+        if kind == K::Table {
+            return self.capabilities().table_definition;
+        }
+        match self {
+            Engine::Postgres => true,
+            Engine::Sqlite => !matches!(kind, K::Routine | K::Type),
+            Engine::Mysql => kind != K::Type,
+            // SQL Server stores text only for views, triggers, routines and checks.
+            Engine::Mssql => matches!(
+                kind,
+                K::View | K::Trigger | K::Routine | K::Constraint(ConstraintKind::Check)
+            ),
+            Engine::Duckdb | Engine::Surrealdb => kind == K::View,
+            Engine::Mongodb | Engine::Redis | Engine::Dynamodb => false,
         }
     }
 

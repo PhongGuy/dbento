@@ -1308,8 +1308,8 @@ impl Session {
     }
 
     /// The current definition of `object`, at most DEFINITION_CAP bytes. SQL Server answers for
-    /// views, triggers, routines, checks and synonyms; it stores no text for the rest, which are
-    /// Unsupported.
+    /// views, triggers, routines, checks and synonyms, SurrealDB for tables and views; the rest
+    /// are Unsupported.
     pub async fn definition(&mut self, object: &ObjectRef) -> Result<Definition, DefinitionError> {
         match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_definition(d, object).await,
@@ -1319,9 +1319,7 @@ impl Session {
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(d) => crate::duckdb::catalog::definition(d, object).await,
             #[cfg(feature = "surrealdb")]
-            SessionInner::Surreal(_) => Err(DefinitionError::Unsupported {
-                what: object.label(),
-            }),
+            SessionInner::Surreal(d) => d.definition(object).await,
             #[cfg(feature = "mongodb")]
             SessionInner::Mongodb(_) => Err(DefinitionError::Unsupported {
                 what: object.label(),

@@ -13,6 +13,8 @@ use crate::objects::{IndexInfo, RelationObjects, TriggerInfo, TriggerState};
 pub(crate) const INFO_NS: &str = "INFO FOR NS";
 pub(crate) const INFO_DB: &str = "INFO FOR DB STRUCTURE";
 pub(crate) const INFO_TABLE: &str = "INFO FOR TABLE $t STRUCTURE";
+// The plain form keeps each table's DEFINE TABLE text, which the structure form takes apart.
+pub(crate) const INFO_DB_TEXT: &str = "INFO FOR DB";
 
 /// A catalog question for the serving task.
 pub(crate) enum Ask {
@@ -20,6 +22,8 @@ pub(crate) enum Ask {
     Relations(String),
     Columns(RelationRef),
     Objects(RelationRef),
+    /// The DEFINE TABLE text of one table or view.
+    Definition(RelationRef),
     /// Where RPC `use` has put the session.
     Place,
 }
@@ -30,6 +34,8 @@ pub(crate) enum Answer {
     Relations(RelationList),
     Columns(Vec<ColumnMeta>),
     Objects(RelationObjects),
+    /// The DEFINE TABLE text; None when the database or table is not there.
+    Definition(Option<String>),
     /// The namespace and database.
     Place(String, String),
 }
@@ -130,6 +136,18 @@ pub(crate) fn table_info(db: &Wire, name: &str) -> Result<Option<TableInfo>, Int
         }));
     }
     Ok(None)
+}
+
+/// `INFO FOR DB` `tables`: the DEFINE TABLE text of table `name`; None when there is none.
+pub(crate) fn table_text(db: &Wire, name: &str) -> Result<Option<String>, IntrospectError> {
+    let Some(Wire::Object(tables)) = field(db, "tables") else {
+        return Err(changed(INFO_DB_TEXT, "tables", "an object"));
+    };
+    match tables.iter().find(|(table, _)| table.as_str() == name) {
+        None => Ok(None),
+        Some((_, Wire::Text(text))) => Ok(Some(text.clone())),
+        Some(_) => Err(changed(INFO_DB_TEXT, name, "text")),
+    }
 }
 
 /// `INFO FOR TABLE $t STRUCTURE` `fields` of table `name`: `id` first as the primary key, typed

@@ -579,6 +579,41 @@ impl RoutineInfo {
     }
 }
 
+/// The kind of schema object a definition is asked for, as the schema tree tells them apart.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DefinitionKind {
+    /// A table.
+    Table,
+    /// A view or materialized view.
+    View,
+    /// An index.
+    Index,
+    /// A constraint of this kind.
+    Constraint(ConstraintKind),
+    /// A trigger.
+    Trigger,
+    /// A function or procedure.
+    Routine,
+    /// A user-defined type.
+    Type,
+}
+
+impl DefinitionKind {
+    /// The kind of a listed object; None for a relation, whose reference does not say whether
+    /// it is a table or a view.
+    pub fn of(object: &ObjectRef) -> Option<Self> {
+        match object {
+            ObjectRef::Relation(_) => None,
+            ObjectRef::Index { .. } => Some(Self::Index),
+            ObjectRef::Constraint { kind, .. } => Some(Self::Constraint(*kind)),
+            ObjectRef::Trigger { .. } => Some(Self::Trigger),
+            ObjectRef::Type { .. } => Some(Self::Type),
+            ObjectRef::Routine { .. } => Some(Self::Routine),
+        }
+    }
+}
+
 /// The text that recreates one object, as the engine reports it.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]

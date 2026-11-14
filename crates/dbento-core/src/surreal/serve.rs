@@ -10,7 +10,9 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::cancel::{Stop, SurrealCancel};
-use super::catalog::{self, Answer, Ask, INFO_DB, INFO_NS, INFO_TABLE, Statement, TableInfo};
+use super::catalog::{
+    self, Answer, Ask, INFO_DB, INFO_DB_TEXT, INFO_NS, INFO_TABLE, Statement, TableInfo,
+};
 use super::classify::surreal_classification;
 use super::decode::Wire;
 use super::lex::quote_ident;
@@ -1057,6 +1059,13 @@ impl Served {
                     return Ok(Answer::Objects(empty));
                 };
                 Ok(Answer::Objects(catalog::relation_objects(&rel, &reply[1])?))
+            }
+            Ask::Definition(rel) => {
+                let Some(prefix) = self.reach(rel.schema()).await? else {
+                    return Ok(Answer::Definition(None));
+                };
+                let reply = self.catalog_query(&prefix, INFO_DB_TEXT, 1, None, None).await?;
+                Ok(Answer::Definition(catalog::table_text(&reply[0], rel.name())?))
             }
             Ask::Place => Ok(Answer::Place(
                 self.place.namespace.clone(),

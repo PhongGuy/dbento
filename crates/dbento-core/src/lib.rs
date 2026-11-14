@@ -71,8 +71,8 @@ mod format;
 pub use format::{FormatOptions, KeywordCase, format_sql, line_comment_starts, splits_token};
 mod objects;
 pub use objects::{
-    ConstraintInfo, ConstraintKind, DEFINITION_CAP, Definition, DefinitionError, IndexInfo,
-    ObjectRef, RelationObjects, RoutineInfo, RoutineKind, SchemaObjects, TriggerInfo, TriggerState,
+    ConstraintInfo, ConstraintKind, DEFINITION_CAP, Definition, DefinitionError, DefinitionKind,
+    IndexInfo, ObjectRef, RelationObjects, RoutineInfo, RoutineKind, SchemaObjects, TriggerInfo, TriggerState,
     TypeInfo, TypeKind,
 };
 mod mongo;
