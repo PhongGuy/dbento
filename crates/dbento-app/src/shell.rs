@@ -4619,7 +4619,7 @@ impl Render for Shell {
             .flex_col()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(self.title_bar(cx))
+            .child(self.title_bar(window, cx))
             .child(
                 div().flex_1().min_h_0().flex().children(rail).child(
                     div()
@@ -4637,17 +4637,21 @@ impl Render for Shell {
 impl Shell {
     // The 40 px bar on the frame: the app icon at left and, with a workspace open, the
     // Open-query pill centred on the window rather than on the space the controls leave.
-    fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // Linux draws its own close button, which otherwise removes the window directly.
+    fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // Linux draws its own close button, which otherwise removes the window directly. The
+        // copy drawn above an open dialog closes the same way.
         let this = cx.weak_entity();
+        let close: crate::window_controls::CloseAction = Rc::new(move |window, cx| {
+            let _ = this.update(cx, |shell, cx| shell.title_close(window, cx));
+        });
+        let kit_close = Rc::clone(&close);
         let bar = TitleBar::new()
             .h(TITLE_BAR)
             .border_b_0()
-            .on_close_window(move |_, window, cx| {
-                let _ = this.update(cx, |shell, cx| shell.title_close(window, cx));
-            })
+            .on_close_window(move |_, window, cx| kit_close(window, cx))
             .child(img(ui::APP_ICON).size(px(16.)).flex_none());
         let pill = self.sidebar.as_ref().map(|_| self.title_pill(cx));
+        let controls = crate::window_controls::Controls::drawn(window);
         div()
             .relative()
             .flex_none()
@@ -4666,6 +4670,9 @@ impl Shell {
                     .justify_center()
                     .child(pill)
             }))
+            .children(crate::window_controls::over_dialogs(
+                controls, close, window, cx,
+            ))
     }
 
     fn title_pill(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
