@@ -411,27 +411,38 @@ pub fn ask_closable(spec: Ask, window: &mut Window, cx: &mut App) -> Asked {
     asked
 }
 
+/// How the connection picker presents itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickTone {
+    /// Something went wrong first: a warning glyph and an amber top edge.
+    Warning,
+    /// An ordinary choice: no glyph, the plain dialog edge.
+    Plain,
+}
+
 /// What the connection picker shows: a title, a dim detail, the SQL boxed, and one row per
 /// connection as `(name, engine label)`.
 pub struct PickAsk {
+    /// Whether the picker reads as a warning or a plain choice.
+    pub tone: PickTone,
     /// The dialog title.
     pub title: SharedString,
     /// A dim line under the title.
     pub detail: SharedString,
-    /// The SQL the pick will open, boxed in mono.
-    pub sql: SharedString,
+    /// The SQL the pick will open, boxed in mono; None shows no box.
+    pub sql: Option<SharedString>,
     /// The connections offered, in order.
     pub rows: Vec<ConnectionPick>,
 }
 
-/// The connection picker: `pick-connection-dialog` holding rows `("pick-connection", n)`, each
-/// labelled by its name, and `pick-cancel`. The receiver yields the picked row's index once;
-/// Cancel or Escape closes it with nothing sent.
+/// The connection picker: `pick-connection-dialog` labelled by its title, `pick-warning` in
+/// the warning tone, `pick-detail`, rows `("pick-connection", n)` each labelled by its name, and `pick-cancel`. The receiver
+/// yields the picked row's index once; Cancel or Escape closes it with nothing sent.
 pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::Receiver<usize> {
     let (tx, rx) = async_channel::bounded(1);
     window.defer(cx, move |window, cx| {
         // Made once here: the builder runs every frame and must not rebuild the preview.
-        let preview = sql_preview(&spec.sql, window, cx);
+        let preview = (spec.sql.clone()).map(|sql| (sql_preview(&sql, window, cx), sql));
         window.open_dialog(cx, move |dialog, window, cx| {
             let dim = theme::dim(cx);
             let rows: Vec<_> = (spec.rows.iter().enumerate())
@@ -453,26 +464,44 @@ pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::
                 .label("Cancel")
                 .h(px(32.))
                 .on_click(|_, window, cx| window.close_dialog(cx));
-            let warning = cx.theme().warning;
-            frame(dialog, DIALOG_WIDTH, Some(warning), cx)
+            let warning = (spec.tone == PickTone::Warning).then_some(cx.theme().warning);
+            let glyph = warning.map(|color| (ui::Icons::TriangleAlert, color));
+            let title = title_row(glyph, spec.title.clone(), cx);
+            frame(dialog, DIALOG_WIDTH, warning, cx)
                 .margin_top(dialog_top(window))
                 .child(
                     v_flex()
                         .id("pick-connection-dialog")
+                        .aria_label(spec.title.clone())
                         .test_support()
-                        .child(title_row(
-                            Some((ui::Icons::TriangleAlert, warning)),
-                            spec.title.clone(),
-                            cx,
-                        ))
+                        .map(|el| match warning {
+                            Some(_) => el.child(
+                                div()
+                                    .id("pick-warning")
+                                    .aria_label("Warning")
+                                    .test_support()
+                                    .child(title),
+                            ),
+                            None => el.child(title),
+                        })
                         .child(
                             v_flex()
                                 .gap_3()
                                 .px_4()
                                 .pt_2()
                                 .pb_4()
-                                .child(div().text_sm().text_color(dim).child(spec.detail.clone()))
-                                .child(sql_box(spec.sql.clone(), &preview, cx))
+                                .child(
+                                    div()
+                                        .id("pick-detail")
+                                        .aria_label(spec.detail.clone())
+                                        .test_support()
+                                        .text_sm()
+                                        .text_color(dim)
+                                        .child(spec.detail.clone()),
+                                )
+                                .when_some(preview.clone(), |el, (state, sql)| {
+                                    el.child(sql_box(sql, &state, cx))
+                                })
                                 .child(
                                     v_flex()
                                         .id("pick-connection-list")

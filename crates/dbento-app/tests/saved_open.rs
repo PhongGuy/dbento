@@ -49,6 +49,10 @@ fn assert_asks_instead(cx: &mut TestAppContext, s: &Started, q: &SavedQuery, gon
         present(cx, s.win, "pick-connection-dialog"),
         "the picker asks which connection to use"
     );
+    assert!(
+        present(cx, s.win, "pick-warning"),
+        "a missing connection keeps the warning look"
+    );
 }
 
 #[gpui_kit::test]

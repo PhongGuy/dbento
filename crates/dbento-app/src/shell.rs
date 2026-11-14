@@ -1102,9 +1102,10 @@ impl Shell {
             .map(|c| c.name().to_owned())
             .collect();
         let spec = confirm::PickAsk {
+            tone: confirm::PickTone::Warning,
             title: format!("{gone} no longer exists").into(),
             detail: "Pick a connection to open this on.".into(),
-            sql: sql.to_owned().into(),
+            sql: Some(sql.to_owned().into()),
             rows: (ws.connections().iter()).map(ConnectionPick::of).collect(),
         };
         let picked = confirm::pick(spec, window, cx);
@@ -1276,7 +1277,43 @@ impl Shell {
             });
         if let Some(name) = new_tab_connection(tab, selected, moved) {
             self.open_connection_named(&name, window, cx);
+        } else {
+            self.pick_new_tab(window, cx);
         }
+    }
+
+    // With nothing to open on, asks which connection to use, or offers to make the first one
+    // when the workspace has none; Cancel opens nothing.
+    fn pick_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        if ws.connections().is_empty() {
+            return self.new_connection(window, cx);
+        }
+        let names: Vec<String> = (ws.connections().iter())
+            .map(|c| c.name().to_owned())
+            .collect();
+        let spec = confirm::PickAsk {
+            tone: confirm::PickTone::Plain,
+            title: "New tab".into(),
+            detail: "Pick a connection for the new tab.".into(),
+            sql: None,
+            rows: (ws.connections().iter()).map(ConnectionPick::of).collect(),
+        };
+        let picked = confirm::pick(spec, window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(ix) = picked.recv().await else {
+                return;
+            };
+            let Some(name) = names.get(ix) else {
+                return;
+            };
+            let _ = this.update_in(cx, |shell, window, cx| {
+                shell.open_connection_named(name, window, cx)
+            });
+        })
+        .detach();
     }
 
     /// Opens a new tab on the workspace's connection `ix` and activates it. Its session
@@ -4335,7 +4372,7 @@ impl Shell {
     }
 
     // The no-tab column: four start actions, each calling the same method as its key binding.
-    // New tab keeps Ctrl T's meaning, so with no tab and no selection it opens nothing.
+    // New tab keeps Ctrl T's meaning, so with no tab and no selection it asks for a connection.
     fn start_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
         type Action = fn(&mut Shell, &mut Window, &mut Context<Shell>);
         let actions: [(&str, IconName, Option<SharedString>, Action); 4] = [
