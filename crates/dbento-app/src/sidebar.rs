@@ -32,7 +32,7 @@ use crate::catalog::{
 use crate::confirm::{TextAsk, ask_text};
 use crate::explorer::{
     DraggedItem, DropBar, ExplorerRow, connection_a11y_id, connection_id, drop_allowed, drop_bar,
-    explorer_rows, folder_id, part_id, shown_depth,
+    explorer_rows, folder_id, part_a11y_id, part_id, shown_depth,
 };
 use crate::keymap::{
     NewConnection, OpenSelected, ReloadWorkspace, TreeCollapse, TreeExpand, TreeSelectFirst,
@@ -179,8 +179,20 @@ enum Selection {
     Folder(FolderPath),
     Connection(String),
     Node(NodeKey),
-    Object { conn: String, object: ObjectRef },
-    Key { conn: String, db: u32, key: Vec<u8> },
+    Object {
+        conn: String,
+        object: ObjectRef,
+    },
+    Key {
+        conn: String,
+        db: u32,
+        key: Vec<u8>,
+    },
+    /// A Load more or failed row, by the node it sits under and its own dotted path.
+    Status {
+        key: NodeKey,
+        aria: String,
+    },
 }
 
 /// What opens or closes a row: a folder's collapse flag or a node of the catalog tree.
@@ -189,8 +201,9 @@ enum RowToggle {
     Node(NodeKey),
 }
 
-// The selection a row takes from a click or a tree key; columns and status rows take none.
-// An object row shares its group's key, so it selects by its object instead.
+// The selection a row takes from a click or a tree key; columns and passive status rows take
+// none. An object row shares its group's key, so it selects by its object instead, and an
+// actionable status row by its own path.
 fn row_selection(row: &SidebarRow) -> Option<Selection> {
     match row {
         SidebarRow::Explorer(r) => match &r.item {
@@ -215,12 +228,14 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
                 db: node_db(&r.key)?,
                 key: item.name.clone(),
             }),
+            RowKind::Failed { .. } | RowKind::LoadMore => Some(Selection::Status {
+                key: r.key.clone(),
+                aria: r.aria.clone(),
+            }),
             RowKind::Column { .. }
             | RowKind::Loading
-            | RowKind::Failed { .. }
             | RowKind::Truncated
             | RowKind::Empty
-            | RowKind::LoadMore
             | RowKind::Database { invalid: Some(_) } => None,
         },
     }
@@ -370,7 +385,7 @@ impl Sidebar {
     pub fn selected_name(&self) -> Option<String> {
         let name = match self.selection.as_ref()? {
             Selection::Connection(name) => name,
-            Selection::Node(key) => node_connection(key),
+            Selection::Node(key) | Selection::Status { key, .. } => node_connection(key),
             Selection::Object { conn, .. } | Selection::Key { conn, .. } => conn,
             Selection::Folder(_) => return None,
         };
@@ -1121,9 +1136,13 @@ impl Sidebar {
     }
 
     // Enter opens a selected relation as its double click does and asks for a selected
-    // object's definition (a DynamoDB index runs instead); any other selection lets the key go on
-    // to whatever binds it above.
+    // object's definition (a DynamoDB index runs instead); on Load more or a failed row it does
+    // what a click on the row or its Retry does. Any other selection lets the key go on.
     fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Selection::Status { key, aria }) = self.selection.clone() {
+            self.activate_status(&key, &aria, cx);
+            return;
+        }
         if let Some((connection, object)) = self.selected_object() {
             self.open_object(connection, object, cx);
             return;
@@ -1148,8 +1167,30 @@ impl Sidebar {
         }
     }
 
-    // The tree keys walk the rows a click can select, so columns and status rows are passed
-    // over. Each one rebuilds first, so a key pressed before the next frame sees fresh rows.
+    // Load more fetches the next key page and a failed row retries its load; the row is
+    // looked up again, since it may have changed kind since it was selected.
+    fn activate_status(&mut self, key: &NodeKey, aria: &str, cx: &mut Context<Self>) {
+        self.rebuild(cx);
+        let kind = self.rows.iter().find_map(|row| match row {
+            SidebarRow::Catalog(r, ..) if r.aria == aria => Some(r.kind.clone()),
+            SidebarRow::Catalog(..) | SidebarRow::Explorer(_) => None,
+        });
+        match kind {
+            Some(RowKind::LoadMore) => {
+                if let Some(db) = node_db(key)
+                    && let Some(request) = self.tree.load_more_keys(node_connection(key), db)
+                {
+                    self.send(request, cx);
+                }
+                cx.notify();
+            }
+            Some(RowKind::Failed { .. }) => self.retry(key.clone(), cx),
+            _ => {}
+        }
+    }
+
+    // The tree keys walk the rows a click can select or Enter can act on, so columns and
+    // passive status rows are passed over. Each one rebuilds first, so a key pressed before the next frame sees fresh rows.
     fn select_prev(&mut self, _: &TreeSelectPrev, _: &mut Window, cx: &mut Context<Self>) {
         self.step(false, cx);
     }
@@ -1489,6 +1530,7 @@ impl Sidebar {
                     }));
                 let row_el = base
                     .id(folder_id(path))
+                    .role(Role::TreeItem)
                     .aria_label(path.as_str().to_owned())
                     .aria_selected(selected)
                     .test_support()
@@ -1569,6 +1611,8 @@ impl Sidebar {
                 let gear = theme::affordance(cx);
                 let edit = (selected || hovered).then(|| {
                     Button::new(part_id("edit-connection", c.name()))
+                        .accessibility_id(part_a11y_id("edit-connection", c.name()))
+                        .accessibility_label("Edit connection")
                         .ghost()
                         .xsmall()
                         .child(
@@ -1584,10 +1628,13 @@ impl Sidebar {
                             cx.emit(SidebarEvent::Edit(name.clone()));
                         }))
                 });
-                // The hovered row alone offers a blank query tab on its connection.
+                // The hovered or selected row offers a blank query tab on its connection, so the
+                // keyboard's selection reaches it without a pointer.
                 let query_name = c.name().to_owned();
-                let new_query = hovered.then(|| {
+                let new_query = (selected || hovered).then(|| {
                     Button::new(part_id("connection-new-query", c.name()))
+                        .accessibility_id(part_a11y_id("connection-new-query", c.name()))
+                        .accessibility_label("New query")
                         .ghost()
                         .xsmall()
                         .child(ui::icon(Icons::Plus, px(GLYPH), gear))
@@ -1749,17 +1796,17 @@ impl Sidebar {
             RowKind::Key(item) => matches!(&self.selection,
                 Some(Selection::Key { conn, db, key })
                     if *conn == conn_name && Some(*db) == node_db(&row.key) && *key == item.name),
+            RowKind::Failed { .. } | RowKind::LoadMore => matches!(&self.selection,
+                Some(Selection::Status { aria, .. }) if *aria == row.aria),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
             | RowKind::Column { .. }
             | RowKind::Group(_)
             | RowKind::Loading
-            | RowKind::Failed { .. }
             | RowKind::Truncated
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
-            | RowKind::LoadMore
             | RowKind::Database { .. } => {
                 expandable && self.selection.as_ref() == Some(&Selection::Node(row.key.clone()))
             }
@@ -1767,6 +1814,7 @@ impl Sidebar {
         let bg = if selected { active } else { chrome };
         let base = Self::row_base(row.depth, guide, settings::active_metrics(cx).tree_row)
             .id(("tree-row", visible))
+            .role(Role::TreeItem)
             .aria_label(row.aria.clone())
             .aria_selected(selected)
             .test_support()
@@ -1999,6 +2047,7 @@ impl Sidebar {
                     .child(name(row.label.clone()).flex_1())
                     .child(
                         Button::new(("tree-retry", visible))
+                            .accessibility_id(format!("tree-retry-{visible}"))
                             .outline()
                             .xsmall()
                             .label("Retry")
@@ -2196,6 +2245,8 @@ impl Render for Sidebar {
         let header = ui::panel_header("Explorer", cx)
             .child(
                 Button::new("connection-new")
+                    .accessibility_id("connection-new")
+                    .accessibility_label("New connection")
                     .ghost()
                     .with_size(px(24.))
                     .icon(Icons::Plus)
@@ -2204,6 +2255,8 @@ impl Render for Sidebar {
             )
             .child(
                 Button::new("schema-refresh")
+                    .accessibility_id("schema-refresh")
+                    .accessibility_label("Refresh")
                     .ghost()
                     .with_size(px(24.))
                     .icon(Icons::RotateCw)

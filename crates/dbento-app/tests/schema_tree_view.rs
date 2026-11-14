@@ -841,6 +841,45 @@ fn retry_on_a_failed_objects_row_reloads_them(cx: &mut TestAppContext) {
     wait_tree(cx, win, &want);
 }
 
+// The arrow keys stop on a failed row as on any other, and Enter there retries it.
+#[gpui_kit::test]
+fn the_keyboard_reaches_a_failed_row_and_enter_retries_it(cx: &mut TestAppContext) {
+    let (_fx, _files, win, shell) = index_open(cx);
+    let sidebar = shell.read_with(cx, |s, _| s.sidebar().cloned().unwrap());
+    let generation = sidebar.read_with(cx, |s, _| s.tree().generation());
+    let failed = CatalogReply {
+        generation,
+        query: CatalogQuery::RelationObjects {
+            rel: RelationRef::new("main", "Album"),
+        },
+        result: Err("permission denied".into()),
+    };
+    sidebar.update(cx, |s, cx| s.apply_replies("lite", vec![failed], cx));
+    cx.run_until_parked();
+    let rows = tree(cx, win);
+    let ix = rows
+        .iter()
+        .position(|r| r == "lite.main.Album/objects:error")
+        .unwrap_or_else(|| panic!("no objects error row in {rows:?}"));
+    click(cx, win, ("tree-row", 2usize));
+    cx.update_window(win, |_, w, cx| w.press("down", cx))
+        .unwrap();
+    cx.run_until_parked();
+    let selected = cx
+        .update_window(win, |_, w, cx| {
+            w.render_frame(cx);
+            w.find(("tree-row", ix)).selected()
+        })
+        .unwrap();
+    assert_eq!(selected, Some(true), "Down lands on the failed row");
+    cx.update_window(win, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    cx.run_until_parked();
+    let mut want = ALBUM_GROUPS.to_vec();
+    want.insert(7, INDEX_ROW);
+    wait_tree(cx, win, &want);
+}
+
 #[gpui_kit::test]
 fn a_selected_catalog_node_survives_a_filter_that_hides_it(cx: &mut TestAppContext) {
     let (_fx, _files, win, shell) = expanded_main(cx);

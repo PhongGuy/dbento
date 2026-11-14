@@ -4029,6 +4029,8 @@ impl Shell {
         let bar = theme.tab_bar;
         let strip = div()
             .id("tab-bar")
+            .role(Role::TabList)
+            .aria_label("Open tabs")
             .test_support()
             .flex()
             .flex_none()
@@ -4067,6 +4069,8 @@ impl Shell {
                     .border_color(cx.theme().border)
                     .child(
                         Button::new("tab-new")
+                            .accessibility_id("tab-new")
+                            .accessibility_label("New tab")
                             .ghost()
                             .compact()
                             .icon(Icons::Plus)
@@ -4228,6 +4232,9 @@ impl Shell {
         // Transparent rather than hidden while idle, so the button keeps its place and hitbox.
         let close = div()
             .id(("tab-close", ix))
+            .role(Role::Button)
+            .accessibility_id(format!("tab-close-{ix}"))
+            .aria_label("Close tab")
             .test_support()
             .relative()
             .flex()
@@ -4255,6 +4262,8 @@ impl Shell {
         let handle = div()
             .id(("tab", ix))
             .group(group)
+            .role(Role::Tab)
+            .accessibility_id(format!("tab-{ix}"))
             .aria_label(title.clone())
             .aria_selected(active)
             .test_support()
@@ -4360,6 +4369,8 @@ impl Shell {
             .map(|(ix, (label, glyph, keys, act))| {
                 div()
                     .id(("start-action", ix))
+                    .role(Role::Button)
+                    .accessibility_id(format!("start-action-{ix}"))
                     .aria_label(label)
                     .test_support()
                     .flex()
@@ -4710,7 +4721,7 @@ impl Shell {
     // Open-query pill centred on the window rather than on the space the controls leave.
     fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Linux draws its own close button, which otherwise removes the window directly. The
-        // copy drawn above an open dialog closes the same way.
+        // named copy drawn over it, and above an open dialog, closes the same way.
         let this = cx.weak_entity();
         let close: crate::window_controls::CloseAction = Rc::new(move |window, cx| {
             let _ = this.update(cx, |shell, cx| shell.title_close(window, cx));
@@ -4741,6 +4752,12 @@ impl Shell {
                     .justify_center()
                     .child(pill)
             }))
+            .children(crate::window_controls::over_kit(
+                controls,
+                Rc::clone(&close),
+                window,
+                cx,
+            ))
             .children(crate::window_controls::over_dialogs(
                 controls, close, window, cx,
             ))
@@ -4751,6 +4768,8 @@ impl Shell {
         let theme = cx.theme();
         div()
             .id("title-search")
+            .role(Role::Button)
+            .accessibility_id("title-search")
             .aria_label(PALETTE_LABEL)
             .test_support()
             .flex()

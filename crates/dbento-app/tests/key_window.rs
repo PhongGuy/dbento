@@ -173,3 +173,75 @@ fn a_filtered_key_listing_pages_and_a_key_opens_in_its_own_value_tab(cx: &mut Te
         .read_with(cx, |sb, _| sb.tree().key_filter("rd", n));
     assert_eq!(filter, KeyFilter::default());
 }
+
+/// The explorer label of the selected rendered row, among the first `upto` rows.
+fn selected_row(cx: &mut TestAppContext, s: &Started, upto: usize) -> Option<String> {
+    cx.update_window(s.win, |_, w, cx| {
+        w.render_frame(cx);
+        (0..upto).find_map(|i| {
+            let e = w.try_find(("tree-row", i))?;
+            (e.selected() == Some(true)).then(|| e.label().map(str::to_owned))?
+        })
+    })
+    .unwrap()
+}
+
+// A db whose scan has more pages lists Load more, which the arrow keys reach and Enter runs.
+#[gpui_kit::test]
+fn the_keyboard_reaches_load_more_and_enter_fetches_the_next_page(cx: &mut TestAppContext) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _enter = rt.enter();
+    let db = rt.block_on(redis_db());
+    let n = db.index();
+    // Enough keys that the first page stops short of the scan's end.
+    let many: Vec<String> = (0..3000)
+        .flat_map(|i| [format!("kb{i:04}"), "v".into()])
+        .collect();
+    rt.block_on(async {
+        let mset: Vec<&str> = ["MSET"]
+            .into_iter()
+            .chain(many.iter().map(String::as_str))
+            .collect();
+        db.cmd(&mset).await;
+    });
+    let password = db.password(RdUser::Reader).unwrap().to_owned();
+    let toml = format!(
+        "dbento = 1\n{}",
+        db.connection_toml("rd", RdUser::Reader, "read_only = true")
+    );
+    let s = started_custom(cx, &toml, move |sv| {
+        sv.env = std::sync::Arc::new(move |v| (v == RD_SECRET_VAR).then(|| password.clone()))
+    });
+    let (dbrow, more) = (format!("rd.db{n}"), format!("rd.db{n}:more"));
+    click_id(cx, s.win, part_id("connection-toggle", "rd"));
+    wait_real(cx, "the db row", |cx| row_ix(cx, &s, &dbrow).is_some());
+    let ix = row_ix(cx, &s, &dbrow).unwrap();
+    click_id(cx, s.win, ("tree-toggle", ix));
+    let keys = |cx: &mut TestAppContext| {
+        model_rows(cx, &s)
+            .iter()
+            .filter(|r| matches!(r.kind, RowKind::Key(_)))
+            .count()
+    };
+    wait_real(cx, "Load more", |cx| {
+        model_rows(cx, &s).iter().any(|r| r.aria == more)
+    });
+    let first = keys(cx);
+    click_id(cx, s.win, ("tree-row", ix));
+    let press = |cx: &mut TestAppContext, k: &str| {
+        cx.update_window(s.win, |_, w, cx| w.press(k, cx)).unwrap();
+        cx.run_until_parked();
+    };
+    // The other dbs list below this one, so Up from the last row walks back to Load more.
+    let upto = model_rows(cx, &s).len() + 8;
+    press(cx, "end");
+    for _ in 0..32 {
+        if selected_row(cx, &s, upto).as_deref() == Some(more.as_str()) {
+            break;
+        }
+        press(cx, "up");
+    }
+    assert_eq!(selected_row(cx, &s, upto), Some(more.clone()));
+    press(cx, "enter");
+    wait_real(cx, "the next page", |cx| keys(cx) > first);
+}

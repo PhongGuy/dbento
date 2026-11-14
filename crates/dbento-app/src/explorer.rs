@@ -28,11 +28,7 @@ pub fn connection_id(name: &str) -> ElementId {
 
 /// The AT-SPI id of connection `name`'s explorer row, spelled as the pilot sees `connection_id`.
 pub fn connection_a11y_id(name: &str) -> String {
-    if name.contains('-') {
-        format!("connection[{name}]")
-    } else {
-        format!("connection-{name}")
-    }
+    part_a11y_id("connection", name)
 }
 
 /// The element id of the folder row at `path`.
@@ -43,6 +39,15 @@ pub fn folder_id(path: &FolderPath) -> ElementId {
 /// The element id of a part of connection `name`'s row, such as `connection-toggle`.
 pub fn part_id(part: &'static str, name: &str) -> ElementId {
     keyed(part, name)
+}
+
+/// The AT-SPI id of `part_id(part, name)`, spelled as the pilot sees that element id.
+pub fn part_a11y_id(part: &str, name: &str) -> String {
+    if name.contains('-') {
+        format!("{part}[{name}]")
+    } else {
+        format!("{part}-{name}")
+    }
 }
 
 /// The left bar a row shows while a dragged item hovers it.

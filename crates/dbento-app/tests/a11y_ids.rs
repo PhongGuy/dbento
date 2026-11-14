@@ -5,7 +5,7 @@
 use crate::support;
 use crate::support::opened;
 use dbento_app::definition_panel::DefinitionPanel;
-use dbento_app::explorer::{connection_a11y_id, connection_id};
+use dbento_app::explorer::{connection_a11y_id, connection_id, part_id};
 use dbento_app::query_tab::row_limit_label;
 use dbento_core::{Definition, ObjectRef, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
@@ -121,4 +121,74 @@ fn the_definition_panel_ids_carry_roles(cx: &mut gpui_kit::TestAppContext) {
             "definition-reload",
         ],
     );
+}
+
+// Asserts `id` carries a role and, when given, the name assistive technology reads.
+fn assert_named(
+    cx: &mut gpui_kit::TestAppContext,
+    win: AnyWindowHandle,
+    id: impl Into<ElementId>,
+    name: &str,
+) {
+    let id = id.into();
+    let (role, label) = cx
+        .update_window(win, |_, w, cx| {
+            w.render_frame(cx);
+            let e = w
+                .try_find(id.clone())
+                .unwrap_or_else(|| panic!("no {id:?}"));
+            (e.role(), e.label().map(str::to_owned))
+        })
+        .unwrap();
+    assert!(
+        role.is_some_and(|r| r != Role::GenericContainer),
+        "{id:?} has no accessibility role: {role:?}"
+    );
+    assert_eq!(label.as_deref(), Some(name), "{id:?}");
+}
+
+#[gpui_kit::test]
+fn the_start_card_and_explorer_controls_carry_roles_and_names(cx: &mut gpui_kit::TestAppContext) {
+    let o = support::launched(cx, "", "");
+    for (ix, name) in ["New tab", "Open query", "New connection", "History"]
+        .into_iter()
+        .enumerate()
+    {
+        assert_named(cx, o.win, ("start-action", ix), name);
+    }
+    assert_named(cx, o.win, "connection-new", "New connection");
+    assert_named(cx, o.win, "schema-refresh", "Refresh");
+    support::click_id(cx, o.win, connection_id("lite"));
+    // The selected row keeps its actions once the pointer leaves it, so no hover is needed.
+    support::hover(cx, o.win, "schema-refresh");
+    assert_named(
+        cx,
+        o.win,
+        part_id("edit-connection", "lite"),
+        "Edit connection",
+    );
+    assert_named(
+        cx,
+        o.win,
+        part_id("connection-new-query", "lite"),
+        "New query",
+    );
+}
+
+#[gpui_kit::test]
+fn the_tab_strip_carries_roles_and_names(cx: &mut gpui_kit::TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let title = o
+        .shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).title());
+    assert_named(cx, o.win, ("tab", 0usize), &title);
+    assert_named(cx, o.win, ("tab-close", 0usize), "Close tab");
+    assert_named(cx, o.win, "tab-new", "New tab");
+    let role = cx
+        .update_window(o.win, |_, w, cx| {
+            w.render_frame(cx);
+            w.find(("tab", 0usize)).role()
+        })
+        .unwrap();
+    assert_eq!(role, Some(Role::Tab));
 }

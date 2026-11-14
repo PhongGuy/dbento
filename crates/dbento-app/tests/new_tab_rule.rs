@@ -50,7 +50,8 @@ fn a_hovered_connection_row_offers_a_new_query(cx: &mut TestAppContext) {
     assert!(!present(cx, o.win, plus("nopg")));
     support::hover(cx, o.win, connection_id("nopg"));
     assert!(present(cx, o.win, plus("nopg")));
-    assert!(!present(cx, o.win, plus("lite")));
+    // The opened row stays selected, so it keeps its + for the keyboard.
+    assert!(present(cx, o.win, plus("lite")));
     click_id(cx, o.win, plus("nopg"));
     assert_eq!(
         (count(cx, &o), active_connection(cx, &o).as_str()),
