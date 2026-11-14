@@ -380,12 +380,16 @@ pub fn ask_approval(
             // Only a denial carries the typed reason; an approval needs none.
             let answer = |id: &'static str, decision: Decision| {
                 let (tx, input) = (tx.clone(), reason_input.clone());
-                Button::new(id).h(px(32.)).on_click(move |_, window, cx| {
-                    let typed = input.read(cx).value().trim().to_owned();
-                    let reason = (decision == Decision::Deny && !typed.is_empty()).then_some(typed);
-                    let _ = tx.try_send(Answer { decision, reason });
-                    window.close_dialog(cx);
-                })
+                Button::new(id)
+                    .accessibility_id(id)
+                    .h(px(32.))
+                    .on_click(move |_, window, cx| {
+                        let typed = input.read(cx).value().trim().to_owned();
+                        let reason =
+                            (decision == Decision::Deny && !typed.is_empty()).then_some(typed);
+                        let _ = tx.try_send(Answer { decision, reason });
+                        window.close_dialog(cx);
+                    })
             };
             let queued = queued(cx);
             let queue: Option<SharedString> = (queued > 1).then(|| format!("1 of {queued}").into());
@@ -464,6 +468,7 @@ pub fn ask_approval(
                                 .child(
                                     h_flex().child(
                                         Button::new("approval-workspace")
+                                            .accessibility_id("approval-workspace")
                                             .custom(
                                                 ButtonCustomVariant::new(cx)
                                                     .color(transparent)

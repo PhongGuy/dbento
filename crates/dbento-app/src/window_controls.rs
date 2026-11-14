@@ -1,13 +1,14 @@
-//! A copy of the title bar's minimise, maximise and close buttons that stays clickable while
-//! a dialog is open. The kit's dialog backdrop covers the whole window, title bar included,
-//! and offers no inset, so this copy is painted above every dialog layer over the kit's own.
+//! A copy of the title bar's minimise, maximise and close buttons, drawn over the kit's own.
+//! The kit's carry no accessibility role or name, so the copy is what assistive technology
+//! sees; while a dialog is open it is painted above every dialog layer, since the kit's
+//! backdrop covers the whole window, title bar included.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, TITLE_BAR_HEIGHT, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Decorations, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, WindowControlArea,
-    deferred, div,
+    Role, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window,
+    WindowControlArea, deferred, div,
 };
 use std::rc::Rc;
 
@@ -70,13 +71,49 @@ pub fn over_dialogs(
     cx: &mut App,
 ) -> Option<impl IntoElement + use<>> {
     let controls = controls.filter(|_| window.has_active_dialog(cx))?;
+    let row = row(
+        "window-controls-over-dialogs",
+        controls,
+        &on_close,
+        window,
+        cx,
+    );
+    Some(deferred(row).with_priority(ABOVE_DIALOGS))
+}
+
+/// Without a dialog, the `controls` pinned over the kit's own in the caller's relative title
+/// bar, as `over_dialogs` draws them. None while a dialog is open or without controls.
+pub fn over_kit(
+    controls: Option<Controls>,
+    on_close: CloseAction,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<impl IntoElement + use<>> {
+    let controls = controls.filter(|_| !window.has_active_dialog(cx))?;
+    Some(row(
+        "window-controls-over-kit",
+        controls,
+        &on_close,
+        window,
+        cx,
+    ))
+}
+
+// The controls in a row at the top right, taking the pointer from whatever lies beneath.
+fn row(
+    id: &'static str,
+    controls: Controls,
+    on_close: &CloseAction,
+    window: &Window,
+    cx: &App,
+) -> impl IntoElement + use<> {
     let zoom = if window.is_maximized() {
         Button::Restore
     } else {
         Button::Maximize
     };
-    let row = div()
-        .id("window-controls-over-dialogs")
+    div()
+        .id(id)
         .test_support()
         .absolute()
         .top_0()
@@ -85,34 +122,37 @@ pub fn over_dialogs(
         .flex()
         .occlude()
         .when(controls.minimize, |d| {
-            d.child(button(Button::Minimize, &on_close, cx))
+            d.child(button(Button::Minimize, on_close, cx))
         })
-        .when(controls.maximize, |d| d.child(button(zoom, &on_close, cx)))
-        .child(button(Button::Close, &on_close, cx));
-    Some(deferred(row).with_priority(ABOVE_DIALOGS))
+        .when(controls.maximize, |d| d.child(button(zoom, on_close, cx)))
+        .child(button(Button::Close, on_close, cx))
 }
 
 // One control styled as the kit's, acting as the kit's does on each platform.
-fn button(kind: Button, on_close: &CloseAction, cx: &App) -> impl IntoElement {
+fn button(kind: Button, on_close: &CloseAction, cx: &App) -> impl IntoElement + use<> {
     let theme = cx.theme();
-    let (id, icon, area) = match kind {
+    let (id, name, icon, area) = match kind {
         Button::Minimize => (
             "window-minimize",
+            "Minimize",
             IconName::WindowMinimize,
             WindowControlArea::Min,
         ),
         Button::Maximize => (
             "window-maximize",
+            "Maximize",
             IconName::WindowMaximize,
             WindowControlArea::Max,
         ),
         Button::Restore => (
             "window-restore",
+            "Restore",
             IconName::WindowRestore,
             WindowControlArea::Max,
         ),
         Button::Close => (
             "window-close",
+            "Close",
             IconName::WindowClose,
             WindowControlArea::Close,
         ),
@@ -128,6 +168,9 @@ fn button(kind: Button, on_close: &CloseAction, cx: &App) -> impl IntoElement {
     let on_close = Rc::clone(on_close);
     div()
         .id(id)
+        .role(Role::Button)
+        .accessibility_id(id)
+        .aria_label(name)
         .test_support()
         .flex()
         .flex_shrink_0()
