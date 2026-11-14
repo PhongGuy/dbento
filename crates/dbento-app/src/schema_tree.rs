@@ -14,7 +14,7 @@ use gpui_kit::App;
 
 use crate::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use crate::keymap::{OpenSelected, keys_for};
-use crate::keys::{KeyFilter, KeyItem, KeyToken, display_key, key_levels};
+use crate::keys::{KeyFilter, KeyItem, KeyToken, display_key, filter_text, key_levels};
 use crate::labels::{MenuEntry, group_digits};
 use crate::link::LinkState;
 use crate::redis_completion::RedisDoc;
@@ -141,6 +141,8 @@ pub enum RowKind {
         prefix: Vec<u8>,
         /// How many loaded keys sit below it.
         keys: usize,
+        /// Whether every page has loaded, so `keys` is the folder's whole count.
+        complete: bool,
     },
     /// One Redis key.
     Key(KeyItem),
@@ -290,6 +292,8 @@ struct KeyWalk<'a> {
     db: u32,
     items: &'a [KeyItem],
     names: &'a [&'a [u8]],
+    /// Whether every page has loaded, so folder counts are whole.
+    complete: bool,
     /// The DB row's aria path, `conn.db0`.
     path: &'a str,
 }
@@ -962,6 +966,15 @@ impl CatalogTree {
         self.key_browsers.clear();
     }
 
+    /// How many keys Redis DB row `schema` of `conn` held when its schemas loaded; None
+    /// before that, for a DB not listed, and on every other engine.
+    pub fn key_count(&self, conn: &str, schema: &str) -> Option<u64> {
+        let Some(Load::Ready(schemas)) = self.schemas.get(conn) else {
+            return None;
+        };
+        schemas.iter().find(|s| s.name() == schema)?.key_count()
+    }
+
     /// The DB index of `schema` when `conn` browses keys and the name is a DB row's.
     fn key_db(&self, conn: &str, schema: &str) -> Option<u32> {
         self.key_browsers.contains(conn).then(|| db_index(schema))?
@@ -1346,14 +1359,17 @@ impl CatalogTree {
             };
             if matched || !children.is_empty() {
                 let aria = format!("{conn}.{}", s.name());
-                out.push(row(
-                    RowKind::Schema,
-                    skey,
-                    depth,
-                    expanded,
-                    s.name().to_owned(),
-                    aria,
-                ));
+                // A DB whose keys are filtered says so, since its listing hides the rest.
+                let label = match self
+                    .key_db(conn, s.name())
+                    .map(|db| self.key_filter(conn, db))
+                {
+                    Some(f) if f != KeyFilter::default() => {
+                        format!("{} \u{B7} {}", s.name(), filter_text(&f))
+                    }
+                    _ => s.name().to_owned(),
+                };
+                out.push(row(RowKind::Schema, skey, depth, expanded, label, aria));
                 out.extend(children);
             }
         }
@@ -1454,6 +1470,7 @@ impl CatalogTree {
             db,
             items: &listing.items,
             names: &names,
+            complete: listing.next.is_none(),
             path: &path,
         };
         out.extend(self.key_level(&level, &skey, b"", depth, all));
@@ -1504,6 +1521,7 @@ impl CatalogTree {
                 let kind = RowKind::KeyFolder {
                     prefix: folder,
                     keys,
+                    complete: k.complete,
                 };
                 let aria = format!("{}/{shown}", k.path);
                 out.push(row(kind, fkey, depth, expanded, label, aria));
@@ -2201,10 +2219,12 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         .chain([refresh])
         .collect(),
         // A Redis DB lists keys, so its filter is a key pattern rather than the name filter.
+        // The menu drops Clear filter while the DB lists every key.
         RowKind::Schema if engine.capabilities().key_browser => vec![
             new_query("New query"),
             copy_name,
             entry("tree-menu-filter-keys", "Filter keys…"),
+            entry("tree-menu-clear-key-filter", "Clear filter"),
             refresh,
         ],
         RowKind::Schema => vec![new_query("New query"), copy_name, refresh],

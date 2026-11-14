@@ -68,6 +68,16 @@ impl KeyView {
         }
     }
 
+    /// The DB index the key lives in.
+    pub fn db(&self) -> u32 {
+        self.db
+    }
+
+    /// The key's name, as raw bytes.
+    pub fn key(&self) -> &[u8] {
+        &self.key
+    }
+
     /// The tab's title: the key as text and its DB.
     pub fn title(&self) -> String {
         format!("{} \u{B7} db {}", display_key(&self.key), self.db)

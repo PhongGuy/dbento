@@ -4,6 +4,7 @@ use crate::support::{
     Started, click_id, label_of, name, present, right_click, started_custom, wait_real,
 };
 use dbento_app::explorer::part_id;
+use dbento_app::keys::KeyFilter;
 use dbento_app::schema_tree::{CatalogRow, RowKind};
 use dbento_testkit::{RD_SECRET_VAR, RdUser, redis_db};
 use gpui_kit::test::TestWindowExt as _;
@@ -158,4 +159,17 @@ fn a_filtered_key_listing_pages_and_a_key_opens_in_its_own_value_tab(cx: &mut Te
             .rows()
     });
     assert_eq!(rows, 600);
+
+    // The opened key keeps its explorer selection rather than handing it to the connection.
+    let selected = s.sidebar(cx).read_with(cx, |sb, _| sb.selected_key());
+    assert_eq!(selected, Some(("rd".to_owned(), n, b"kw:l".to_vec())));
+
+    // Clear filter on the db row lists every key again.
+    let ix = row_ix(cx, &s, &dbrow).unwrap();
+    right_click(cx, &s, ("tree-row", ix));
+    click_id(cx, s.win, "tree-menu-clear-key-filter");
+    let filter = s
+        .sidebar(cx)
+        .read_with(cx, |sb, _| sb.tree().key_filter("rd", n));
+    assert_eq!(filter, KeyFilter::default());
 }

@@ -598,6 +598,7 @@ fn redis_rows_offer_key_actions_and_no_sql(cx: &mut TestAppContext) {
                 "tree-menu-new-query",
                 "tree-menu-copy-name",
                 "tree-menu-filter-keys",
+                "tree-menu-clear-key-filter",
                 "tree-menu-refresh"
             ]
         );
@@ -617,7 +618,8 @@ fn redis_rows_offer_key_actions_and_no_sql(cx: &mut TestAppContext) {
             ids(
                 RowKind::KeyFolder {
                     prefix: b"user:".to_vec(),
-                    keys: 2
+                    keys: 2,
+                    complete: true
                 },
                 Engine::Redis
             ),

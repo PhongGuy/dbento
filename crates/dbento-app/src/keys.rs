@@ -1,6 +1,7 @@
 //! Redis key browsing on the app side: mirror types of core's key pages, the key filter, how
 //! a key name, kind and TTL read, and the `:` grouping the key tree draws.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -158,7 +159,7 @@ pub fn kind_of(name: &str) -> KeyKind {
 }
 
 /// One level of the key tree below a prefix: its folders with their key counts, then its
-/// leaves as indexes into the names given, each sorted by bytes.
+/// leaves as indexes into the names given, each in [`natural_cmp`] order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyLevel {
     /// Each folder's full prefix, ending in `:`, and how many keys sit below it.
@@ -181,7 +182,64 @@ pub fn key_levels(names: &[&[u8]], prefix: &[u8]) -> KeyLevel {
             None => leaves.push(i),
         }
     }
-    leaves.sort_by(|&a, &b| names[a].cmp(names[b]));
-    let folders = folders.into_iter().map(|(f, n)| (f.to_vec(), n)).collect();
+    leaves.sort_by(|&a, &b| natural_cmp(names[a], names[b]));
+    let mut folders: Vec<(Vec<u8>, usize)> =
+        folders.into_iter().map(|(f, n)| (f.to_vec(), n)).collect();
+    folders.sort_by(|a, b| natural_cmp(&a.0, &b.0));
     KeyLevel { folders, leaves }
+}
+
+/// Orders key names so runs of ASCII digits compare by value: `n:43` before `n:180`. Names
+/// that tie on value (`7` and `007`) fall back to their bytes, so the order stays total.
+pub fn natural_cmp(a: &[u8], b: &[u8]) -> Ordering {
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
+            let (ra, rb) = (digit_run(&a[i..]), digit_run(&b[j..]));
+            // Without leading zeros, a longer run is a larger number; equal lengths compare
+            // digit by digit, so no run is ever parsed and none can overflow.
+            let (va, vb) = (trim_zeros(ra), trim_zeros(rb));
+            let by_value = va.len().cmp(&vb.len()).then_with(|| va.cmp(vb));
+            if by_value != Ordering::Equal {
+                return by_value;
+            }
+            (i, j) = (i + ra.len(), j + rb.len());
+        } else if a[i] != b[j] {
+            return a[i].cmp(&b[j]);
+        } else {
+            (i, j) = (i + 1, j + 1);
+        }
+    }
+    (a.len() - i).cmp(&(b.len() - j)).then_with(|| a.cmp(b))
+}
+
+fn digit_run(s: &[u8]) -> &[u8] {
+    let end = s
+        .iter()
+        .position(|b| !b.is_ascii_digit())
+        .unwrap_or(s.len());
+    &s[..end]
+}
+
+fn trim_zeros(run: &[u8]) -> &[u8] {
+    let start = run.iter().position(|&b| b != b'0').unwrap_or(run.len());
+    &run[start..]
+}
+
+/// A key filter as the filter prompt reads it: `<pattern> [type:<kind>]`, `*` for every key.
+pub fn filter_text(filter: &KeyFilter) -> String {
+    [filter.pattern.clone().unwrap_or_else(|| "*".into())]
+        .into_iter()
+        .chain(filter.kind.as_ref().map(|k| format!("type:{k}")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A folder's key count; one counted from a partial listing reads `982+`.
+pub fn folder_count_text(keys: usize, complete: bool) -> String {
+    if complete {
+        keys.to_string()
+    } else {
+        format!("{keys}+")
+    }
 }

@@ -32,8 +32,8 @@ impl SchemaInfo {
         self.key_count
     }
 
-    #[cfg_attr(not(feature = "redis"), allow(dead_code))] // only the Redis catalog counts keys
-    pub(crate) fn with_key_count(self, n: u64) -> Self {
+    /// This schema as a Redis DB holding `n` keys.
+    pub fn with_key_count(self, n: u64) -> Self {
         SchemaInfo {
             key_count: Some(n),
             ..self

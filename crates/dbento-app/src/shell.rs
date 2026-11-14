@@ -1207,24 +1207,27 @@ impl Shell {
         }
     }
 
-    // A table tab reveals its relation in the explorer; any other tab selects its connection.
+    // A table tab reveals its relation in the explorer, a key tab selects its key, and any
+    // other tab selects its connection.
     fn show_in_explorer(&self, ix: usize, cx: &mut Context<Self>) {
         let (Some(tab), Some(sidebar), Some(ws)) =
             (self.tabs.get(ix), &self.sidebar, &self.workspace)
         else {
             return;
         };
-        let (name, origin) = {
+        let (name, origin, key) = {
             let tab = tab.read(cx);
-            let name = tab.model().read(cx).spec().connection.clone();
-            (name, tab.origin().cloned())
+            let model = tab.model().read(cx);
+            let key = model.key_view().map(|v| (v.db(), v.key().to_vec()));
+            (model.spec().connection.clone(), tab.origin().cloned(), key)
         };
         // Explorer rows are declared connections, so a child tab without an origin selects none.
         let row = ws.connections().iter().position(|c| c.name() == name);
-        sidebar.update(cx, |s, cx| match (origin, row) {
-            (Some(rel), _) => s.reveal(NodeKey::Relation { conn: name, rel }, cx),
-            (None, Some(ix)) => s.select(ix, cx),
-            (None, None) => {}
+        sidebar.update(cx, |s, cx| match (origin, row, key) {
+            (_, Some(_), Some((db, key))) => s.select_key(&name, db, key, cx),
+            (Some(rel), _, _) => s.reveal(NodeKey::Relation { conn: name, rel }, cx),
+            (None, Some(ix), None) => s.select(ix, cx),
+            (None, None, _) => {}
         });
     }
 
@@ -1685,6 +1688,13 @@ impl Shell {
         };
         if let Some(tab) = self.open_unnumbered(&name, window, cx) {
             tab.update(cx, |t, cx| t.open_key(db, key, cx));
+            // Opening selected the bare connection before the tab became the key's.
+            if let Some(ix) = self.active.filter(|&ix| self.tabs.get(ix) == Some(&tab)) {
+                self.show_in_explorer(ix, cx);
+                if let Some(sidebar) = &self.sidebar {
+                    self.activated_serial = sidebar.read(cx).selection_serial();
+                }
+            }
             // Opening recorded the tab while it still had a draft; it now has none to keep.
             self.save_session(cx);
         }
