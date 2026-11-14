@@ -84,6 +84,7 @@ impl ColumnInfo {
     }
 
     /// The trailing `object` column named `name` that gathers fields the other columns lack.
+    #[cfg(any(feature = "mongodb", feature = "surrealdb"))]
     pub(crate) fn overflow(name: impl Into<String>) -> Self {
         Self {
             overflow: true,
