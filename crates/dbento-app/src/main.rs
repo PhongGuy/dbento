@@ -6,40 +6,41 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![warn(clippy::wildcard_enum_match_arm)]
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use dbento_app::app::{AppPaths, Services, start};
+use dbento_app::launch::{self, Launch, LaunchError};
 use dbento_core::paths::STATE_DIR_VAR;
 use dbento_core::{KeychainStore, MemoryStore, SecretStore, TimedStore};
 use gpui_kit::AppContext;
 
 fn main() {
-    // Answer a version query before GPUI starts, so packaging checks work without a display.
-    if std::env::args()
-        .skip(1)
-        .any(|a| a == "--version" || a == "-V")
-    {
-        println!("dbento-app {}", env!("CARGO_PKG_VERSION"));
-        return;
+    // The command line is settled before GPUI starts, so help, version and a bad path all
+    // answer without a display.
+    let dir = match launch::parse(std::env::args_os().skip(1)) {
+        Ok(Launch::Help) => return println!("{}", launch::USAGE),
+        Ok(Launch::Version) => return println!("dbento-app {}", env!("CARGO_PKG_VERSION")),
+        Ok(Launch::Open(dir)) => dir,
+        Err(e @ LaunchError::UnknownFlag(_)) => {
+            eprintln!("dbento-app: {e}\n\n{}", launch::USAGE);
+            std::process::exit(2);
+        }
+        Err(e) => {
+            eprintln!("dbento-app: {e}");
+            std::process::exit(2);
+        }
+    };
+    // GPUI waits forever for a Linux display that is not there, so say so and stop.
+    #[cfg(target_os = "linux")]
+    if !launch::has_display(|v| std::env::var_os(v)) {
+        eprintln!("dbento-app needs a graphical display (WAYLAND_DISPLAY or DISPLAY is not set)");
+        std::process::exit(1);
     }
     // `xtask app-bench` hands the app a job file; the bench then owns the whole process.
     #[cfg(feature = "bench")]
     if let Some(config) = std::env::var_os("DBENTO_APP_BENCH") {
         dbento_app::bench::main(config.into());
     }
-    // An optional workspace folder; a relative one is resolved now, before anything can
-    // change the working directory.
-    let dir = match std::env::args_os().nth(1).map(PathBuf::from) {
-        Some(d) => match std::path::absolute(&d) {
-            Ok(abs) => Some(abs),
-            Err(e) => {
-                eprintln!("dbento: cannot resolve {}: {e}", d.display());
-                std::process::exit(2);
-            }
-        },
-        None => None,
-    };
     gpui_kit::application()
         .with_assets(dbento_app::ui::AppAssets)
         .run(move |cx| {

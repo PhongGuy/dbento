@@ -34,6 +34,7 @@ pub mod key_view;
 pub mod keymap;
 pub mod keys;
 pub mod labels;
+pub mod launch;
 pub mod link;
 mod mongo_completion;
 pub mod nav;
