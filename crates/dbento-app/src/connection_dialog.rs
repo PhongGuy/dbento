@@ -576,8 +576,11 @@ impl ConnectionForm {
         }
     }
 
-    /// The typed password, when non-empty. Never prefilled.
+    /// The typed password, when non-empty and its row is shown. Never prefilled.
     pub fn password(&self, cx: &App) -> Option<Secret> {
+        if self.secret_waits(cx) {
+            return None;
+        }
         let typed = self.password.read(cx).value();
         (!typed.is_empty()).then(|| Secret::new(typed.to_string()))
     }
@@ -698,6 +701,9 @@ impl ConnectionForm {
                         spec.port = v.map(|p| parse_port(&p)).transpose()?;
                     }
                 }
+                // A DynamoDB secret only pairs with an access key; without one the environment
+                // supplies every credential, so whatever the hidden rows held is not written.
+                FieldKind::Secret if self.secret_waits(cx) => spec.secret = None,
                 FieldKind::Secret => {
                     let env = text(Field::EnvVar);
                     if self.secret != shown.secret
@@ -1000,6 +1006,11 @@ impl ConnectionForm {
             .into_any_element()
     }
 
+    // True while a DynamoDB form has no access key ID, so the secret rows give way to a hint.
+    fn secret_waits(&self, cx: &App) -> bool {
+        self.engine == Engine::Dynamodb && self.access_key_id.read(cx).value().trim().is_empty()
+    }
+
     // The Password row and the rows that say where the secret comes from.
     fn secret_rows(
         &self,
@@ -1007,6 +1018,13 @@ impl ConnectionForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        if self.secret_waits(cx) {
+            return vec![Self::help_line(
+                "conn-secret-from-env".into(),
+                "No secret needed: credentials come from the AWS_* environment variables.",
+                cx,
+            )];
+        }
         let mut rows = vec![self.text_row(label, "conn-password", Field::Password, cx)];
         let secret = ui::segmented(
             "conn-secret",

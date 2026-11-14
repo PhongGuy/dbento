@@ -4,7 +4,7 @@ use crate::support::present;
 use dbento_app::connection_dialog::{ConnectionForm, Field};
 use dbento_app::sidebar::engine_icon;
 use dbento_app::ui::Icons;
-use dbento_core::{ConnectionSpec, Engine};
+use dbento_core::{ConnectionSpec, Edit, Engine, SecretSource, Workspace, plan_edit};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
 
@@ -151,6 +151,64 @@ fn leaving_dynamodb_drops_its_keys_and_coming_back_restores_them(cx: &mut TestAp
     );
     radio(cx, win, "conn-engine", 8);
     assert_eq!(edit(cx, &f), Ok(("orders".into(), dy())));
+}
+
+#[gpui_kit::test]
+fn the_secret_rows_wait_for_an_access_key_id(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    radio(cx, win, "conn-engine", 8);
+    assert!(present(cx, win, "conn-secret-from-env"));
+    assert!(!present(cx, win, "conn-secret"));
+    assert!(!present(cx, win, "conn-password"));
+    set(cx, win, &f, Field::AccessKeyId, "AKIDEXAMPLE");
+    assert!(present(cx, win, "conn-secret"));
+    assert!(present(cx, win, "conn-password"));
+    assert!(!present(cx, win, "conn-secret-from-env"));
+}
+
+#[gpui_kit::test]
+fn an_empty_access_key_id_writes_no_secret_and_the_workspace_takes_it(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    radio(cx, win, "conn-engine", 8);
+    set(cx, win, &f, Field::Name, "orders");
+    set(cx, win, &f, Field::Region, "eu-west-1");
+    set(cx, win, &f, Field::AccessKeyId, "AKIDEXAMPLE");
+    set(cx, win, &f, Field::Password, "typed-then-hidden");
+    radio(cx, win, "conn-secret", 2);
+    set(cx, win, &f, Field::AccessKeyId, "");
+    let (name, spec) = edit(cx, &f).unwrap();
+    assert_eq!(
+        (spec.access_key_id.as_deref(), spec.secret.as_ref()),
+        (None, None)
+    );
+    assert!(f.read_with(cx, |f, cx| f.password(cx)).is_none());
+    // The written connection validates and draws every credential from the environment.
+    let dir = tempfile::tempdir().unwrap();
+    Workspace::init(dir.path()).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let plan = plan_edit(
+        &ws,
+        &Edit::PutConnection {
+            previous: None,
+            name: name.clone(),
+            spec,
+        },
+    )
+    .unwrap();
+    let conn = plan.workspace().connection(&name).unwrap();
+    assert_eq!(conn.secret_source(), &SecretSource::None);
+}
+
+#[gpui_kit::test]
+fn clearing_a_loaded_access_key_id_drops_its_secret(cx: &mut TestAppContext) {
+    let mut loaded = dy();
+    loaded.secret = Some(SecretSource::Env("ORDERS_SECRET".into()));
+    let (win, f) = open(cx, Some(("orders", loaded)));
+    assert!(present(cx, win, "conn-secret"));
+    set(cx, win, &f, Field::AccessKeyId, "");
+    let mut want = dy();
+    want.access_key_id = None;
+    assert_eq!(edit(cx, &f), Ok(("orders".into(), want)));
 }
 
 #[test]
