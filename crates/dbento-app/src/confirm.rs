@@ -418,20 +418,20 @@ pub struct PickAsk {
     pub title: SharedString,
     /// A dim line under the title.
     pub detail: SharedString,
-    /// The SQL the pick will open, boxed in mono.
-    pub sql: SharedString,
+    /// The SQL the pick will open, boxed in mono; None shows no box.
+    pub sql: Option<SharedString>,
     /// The connections offered, in order.
     pub rows: Vec<ConnectionPick>,
 }
 
-/// The connection picker: `pick-connection-dialog` holding rows `("pick-connection", n)`, each
-/// labelled by its name, and `pick-cancel`. The receiver yields the picked row's index once;
-/// Cancel or Escape closes it with nothing sent.
+/// The connection picker: `pick-connection-dialog` labelled by its title, `pick-detail`,
+/// rows `("pick-connection", n)` each labelled by its name, and `pick-cancel`. The receiver
+/// yields the picked row's index once; Cancel or Escape closes it with nothing sent.
 pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::Receiver<usize> {
     let (tx, rx) = async_channel::bounded(1);
     window.defer(cx, move |window, cx| {
         // Made once here: the builder runs every frame and must not rebuild the preview.
-        let preview = sql_preview(&spec.sql, window, cx);
+        let preview = (spec.sql.clone()).map(|sql| (sql_preview(&sql, window, cx), sql));
         window.open_dialog(cx, move |dialog, window, cx| {
             let dim = theme::dim(cx);
             let rows: Vec<_> = (spec.rows.iter().enumerate())
@@ -459,6 +459,7 @@ pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::
                 .child(
                     v_flex()
                         .id("pick-connection-dialog")
+                        .aria_label(spec.title.clone())
                         .test_support()
                         .child(title_row(
                             Some((ui::Icons::TriangleAlert, warning)),
@@ -471,8 +472,18 @@ pub fn pick(spec: PickAsk, window: &mut Window, cx: &mut App) -> async_channel::
                                 .px_4()
                                 .pt_2()
                                 .pb_4()
-                                .child(div().text_sm().text_color(dim).child(spec.detail.clone()))
-                                .child(sql_box(spec.sql.clone(), &preview, cx))
+                                .child(
+                                    div()
+                                        .id("pick-detail")
+                                        .aria_label(spec.detail.clone())
+                                        .test_support()
+                                        .text_sm()
+                                        .text_color(dim)
+                                        .child(spec.detail.clone()),
+                                )
+                                .when_some(preview.clone(), |el, (state, sql)| {
+                                    el.child(sql_box(sql, &state, cx))
+                                })
                                 .child(
                                     v_flex()
                                         .id("pick-connection-list")
