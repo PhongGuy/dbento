@@ -1064,8 +1064,13 @@ impl Served {
                 let Some(prefix) = self.reach(rel.schema()).await? else {
                     return Ok(Answer::Definition(None));
                 };
-                let reply = self.catalog_query(&prefix, INFO_DB_TEXT, 1, None, None).await?;
-                Ok(Answer::Definition(catalog::table_text(&reply[0], rel.name())?))
+                let reply = self
+                    .catalog_query(&prefix, INFO_DB_TEXT, 1, None, None)
+                    .await?;
+                Ok(Answer::Definition(catalog::table_text(
+                    &reply[0],
+                    rel.name(),
+                )?))
             }
             Ask::Place => Ok(Answer::Place(
                 self.place.namespace.clone(),

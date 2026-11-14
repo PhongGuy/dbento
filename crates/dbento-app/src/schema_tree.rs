@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dbento_core::{
-    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Databases, DefinitionKind, Engine, FormatOptions,
-    IndexInfo, ObjectRef, QueryLanguage, RELATION_CAP, RelationKind, RelationList, RelationObjects,
-    RelationRef, RoutineKind, SchemaInfo, SchemaObjects, TriggerState, TypeKind, Workspace,
-    format_sql, quote_ident,
+    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Databases, DefinitionKind,
+    Engine, FormatOptions, IndexInfo, ObjectRef, QueryLanguage, RELATION_CAP, RelationKind,
+    RelationList, RelationObjects, RelationRef, RoutineKind, SchemaInfo, SchemaObjects,
+    TriggerState, TypeKind, Workspace, format_sql, quote_ident,
 };
 use gpui_kit::App;
 

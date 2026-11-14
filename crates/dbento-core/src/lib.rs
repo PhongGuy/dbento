@@ -72,8 +72,8 @@ pub use format::{FormatOptions, KeywordCase, format_sql, line_comment_starts, sp
 mod objects;
 pub use objects::{
     ConstraintInfo, ConstraintKind, DEFINITION_CAP, Definition, DefinitionError, DefinitionKind,
-    IndexInfo, ObjectRef, RelationObjects, RoutineInfo, RoutineKind, SchemaObjects, TriggerInfo, TriggerState,
-    TypeInfo, TypeKind,
+    IndexInfo, ObjectRef, RelationObjects, RoutineInfo, RoutineKind, SchemaObjects, TriggerInfo,
+    TriggerState, TypeInfo, TypeKind,
 };
 mod mongo;
 mod mssql;

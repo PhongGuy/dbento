@@ -277,7 +277,11 @@ impl Render for DefinitionPanel {
         };
         let source = match (&self.state, &self.target) {
             (State::Ready { definition, .. }, Some((_, object))) => source_note(object, definition)
-                .map(|n| label("definition-source", n.to_owned()).text_xs().text_color(muted)),
+                .map(|n| {
+                    label("definition-source", n.to_owned())
+                        .text_xs()
+                        .text_color(muted)
+                }),
             _ => None,
         };
         let body: AnyElement = match &self.state {

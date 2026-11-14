@@ -212,7 +212,16 @@ fn view_definition_shows_on_objects_views_and_sqlite_tables(cx: &mut TestAppCont
         ));
         let object = RowKind::Object {
             group: ObjectGroup::Indexes,
-            object: ObjectRef::relation(RelationRef::new("main", "t")),
+            object: IndexInfo::new(
+                RelationRef::new("main", "t"),
+                "t_a",
+                vec![],
+                false,
+                false,
+                false,
+                None,
+            )
+            .object_ref(),
             detail: String::new(),
         };
         let entries = catalog_entries(&object, Engine::Sqlite, cx);

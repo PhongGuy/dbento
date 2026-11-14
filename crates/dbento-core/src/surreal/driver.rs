@@ -69,10 +69,11 @@ impl SurrealDriver {
     ) -> Result<RelationObjects, IntrospectError> {
         match self.ask(Ask::Objects(rel.clone())).await? {
             Answer::Objects(objects) => Ok(objects),
-            Answer::Schemas(_) | Answer::Relations(_) | Answer::Columns(_) | Answer::Definition(_)
-            | Answer::Place(..) => {
-                Err(wrong_answer("relation objects"))
-            }
+            Answer::Schemas(_)
+            | Answer::Relations(_)
+            | Answer::Columns(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("relation objects")),
         }
     }
 
@@ -294,30 +295,33 @@ impl Driver for SurrealDriver {
     async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, IntrospectError> {
         match self.ask(Ask::Schemas).await? {
             Answer::Schemas(schemas) => Ok(schemas),
-            Answer::Relations(_) | Answer::Columns(_) | Answer::Objects(_) | Answer::Definition(_)
-            | Answer::Place(..) => {
-                Err(wrong_answer("schemas"))
-            }
+            Answer::Relations(_)
+            | Answer::Columns(_)
+            | Answer::Objects(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("schemas")),
         }
     }
 
     async fn relations(&mut self, schema: &str) -> Result<RelationList, IntrospectError> {
         match self.ask(Ask::Relations(schema.to_owned())).await? {
             Answer::Relations(relations) => Ok(relations),
-            Answer::Schemas(_) | Answer::Columns(_) | Answer::Objects(_) | Answer::Definition(_)
-            | Answer::Place(..) => {
-                Err(wrong_answer("relations"))
-            }
+            Answer::Schemas(_)
+            | Answer::Columns(_)
+            | Answer::Objects(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("relations")),
         }
     }
 
     async fn columns(&mut self, rel: &RelationRef) -> Result<Vec<ColumnMeta>, IntrospectError> {
         match self.ask(Ask::Columns(rel.clone())).await? {
             Answer::Columns(columns) => Ok(columns),
-            Answer::Schemas(_) | Answer::Relations(_) | Answer::Objects(_) | Answer::Definition(_)
-            | Answer::Place(..) => {
-                Err(wrong_answer("columns"))
-            }
+            Answer::Schemas(_)
+            | Answer::Relations(_)
+            | Answer::Objects(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("columns")),
         }
     }
 

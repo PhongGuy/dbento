@@ -338,11 +338,32 @@ fn engines_offer_a_definition_only_for_kinds_they_answer() {
     use DefinitionKind as K;
     let check = K::Constraint(ConstraintKind::Check);
     let unique = K::Constraint(ConstraintKind::Unique);
-    let all = [K::Table, K::View, K::Index, check, unique, K::Trigger, K::Routine, K::Type];
-    let answered = |e: Engine| all.into_iter().filter(|k| e.defines(*k)).collect::<Vec<_>>();
+    let all = [
+        K::Table,
+        K::View,
+        K::Index,
+        check,
+        unique,
+        K::Trigger,
+        K::Routine,
+        K::Type,
+    ];
+    let answered = |e: Engine| {
+        all.into_iter()
+            .filter(|k| e.defines(*k))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
         answered(Engine::Postgres),
-        [K::View, K::Index, check, unique, K::Trigger, K::Routine, K::Type]
+        [
+            K::View,
+            K::Index,
+            check,
+            unique,
+            K::Trigger,
+            K::Routine,
+            K::Type
+        ]
     );
     assert_eq!(
         answered(Engine::Sqlite),
@@ -350,7 +371,15 @@ fn engines_offer_a_definition_only_for_kinds_they_answer() {
     );
     assert_eq!(
         answered(Engine::Mysql),
-        [K::Table, K::View, K::Index, check, unique, K::Trigger, K::Routine]
+        [
+            K::Table,
+            K::View,
+            K::Index,
+            check,
+            unique,
+            K::Trigger,
+            K::Routine
+        ]
     );
     assert_eq!(
         answered(Engine::Mssql),

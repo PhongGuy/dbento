@@ -44,8 +44,8 @@ use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
     RevealStep, RowKind, catalog_entries, column_detail, count_text, db_index, group_title,
-    index_select_sql, insert_sql, offers_definition, lone_schema, node_connection, object_group_title, qualified_name,
-    select_text,
+    index_select_sql, insert_sql, lone_schema, node_connection, object_group_title,
+    offers_definition, qualified_name, select_text,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
 use crate::{settings, theme, tokio_bridge};
