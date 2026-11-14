@@ -122,13 +122,27 @@ pub fn launch_args(mode: &str, ws: &Path) -> Value {
 /// A workspace whose one connection, `lite`, is an empty SQLite file.
 pub fn sqlite_workspace() -> TempDir {
     let ws = tempfile::tempdir().unwrap();
+    write_sqlite_workspace(ws.path());
+    ws
+}
+
+/// [`sqlite_workspace`] in a folder called `name` inside a scratch directory, for a test whose
+/// layout depends on the folder name's width; the directory goes when the guard drops.
+pub fn sqlite_workspace_named(name: &str) -> (TempDir, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let ws = root.path().join(name);
+    std::fs::create_dir(&ws).unwrap();
+    write_sqlite_workspace(&ws);
+    (root, ws)
+}
+
+fn write_sqlite_workspace(ws: &Path) {
     std::fs::write(
-        ws.path().join("dbento.toml"),
+        ws.join("dbento.toml"),
         "dbento = 1\n\n[connections.lite]\nengine = \"sqlite\"\npath = \"app.db\"\n",
     )
     .unwrap();
-    std::fs::write(ws.path().join("app.db"), b"").unwrap();
-    ws
+    std::fs::write(ws.join("app.db"), b"").unwrap();
 }
 
 #[derive(Clone, Copy, Debug)]
