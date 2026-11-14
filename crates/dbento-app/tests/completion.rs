@@ -799,6 +799,24 @@ fn mg(text: &str) -> Vec<String> {
 }
 
 #[test]
+fn a_collection_is_labelled_a_collection_and_a_view_a_view() {
+    let c = mg_at("db.", &mg_tree());
+    let mut got: Vec<(&str, &str)> = (c.items.iter())
+        .filter(|i| i.kind == CandidateKind::Relation)
+        .map(|i| (i.label.as_str(), i.detail.as_str()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("order lines", "collection"),
+            ("orders", "collection"),
+            ("recent", "view")
+        ]
+    );
+}
+
+#[test]
 fn db_dot_offers_the_collections_and_the_database_methods() {
     assert_eq!(mg("db.ord"), ["order lines", "orders"]);
     let all = mg("db.");

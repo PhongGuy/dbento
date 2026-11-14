@@ -55,9 +55,15 @@ impl StatementIndex {
             let settled: Vec<Range<usize>> = ranges.filter(|r| end == len || r.end < end).collect();
             let holds = |r: &Range<usize>| r.start >= offset || offset <= r.end;
             if end == len || settled.iter().any(holds) {
-                // A statement running to the end of the text ends there only until more is typed.
+                // The text's last statement ends there only until more is typed, even when its
+                // range stops at its last token before trailing spaces.
+                let open = if end == len {
+                    settled.len().saturating_sub(1)
+                } else {
+                    settled.len()
+                };
                 self.ends
-                    .extend(settled.iter().map(|r| r.end).filter(|&e| e < len));
+                    .extend(settled[..open].iter().map(|r| r.end).filter(|&e| e < len));
                 let base = statement_base(&settled, offset, len);
                 return base.start.max(from)..base.end;
             }

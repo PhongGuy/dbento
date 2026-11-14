@@ -331,14 +331,10 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
     )
 }
 
-// The prompt previews mongosh text as JavaScript; SurrealQL keeps the SQL grammar, which
-// colours its shared keywords better than plain text.
-fn preview_language(engine: Engine) -> &'static str {
-    match engine.capabilities().language {
-        QueryLanguage::MongoShell => "javascript",
-        QueryLanguage::RedisCommands => "bash",
-        QueryLanguage::Sql | QueryLanguage::SurrealQl | QueryLanguage::PartiQl | _ => "sql",
-    }
+/// The grammar the run-confirmation prompt highlights `engine`'s statement with: the editor's,
+/// so the same text never colours two ways.
+pub fn prompt_language(engine: Engine) -> &'static str {
+    editor_language(engine)
 }
 
 /// Whether Format SQL applies to `engine`: only SQL engines, since the formatter knows no
@@ -486,6 +482,7 @@ pub struct QueryTab {
     _editor_changes: Subscription,
     _browse: Subscription,
     _open_table: Subscription,
+    _catalog: Option<Subscription>,
 }
 
 // What one Format SQL or comment toggle replaced: the text and selection before it, and the
@@ -573,6 +570,19 @@ impl QueryTab {
         let open_table = cx.subscribe(&results, |_, _, e: &OpenTable, cx| {
             cx.emit(QueryTabEvent::OpenTable(e.0.clone()));
         });
+        // A load the open answer asked for re-asks at the same caret, so the first keystroke's
+        // answer fills in without waiting for the next one.
+        let catalog = sidebar
+            .as_ref()
+            .and_then(WeakEntity::upgrade)
+            .map(|sidebar| {
+                cx.observe_in(&sidebar, window, |this, _, window, cx| {
+                    if this.completion.read(cx).awaits_catalog(window, cx) {
+                        this.editor
+                            .update(cx, |e, cx| e.show_completions(window, cx));
+                    }
+                })
+            });
         let workspace = Arc::clone(&model.read(cx).spec().workspace);
         QueryTab {
             workspace,
@@ -605,6 +615,7 @@ impl QueryTab {
             _editor_changes: editor_changes,
             _browse: browse,
             _open_table: open_table,
+            _catalog: catalog,
         }
     }
 
@@ -1151,7 +1162,7 @@ impl QueryTab {
         let spec = if analyze {
             analyze_ask(&kinds, connection, &sql)
         } else {
-            let language = preview_language(self.session_conn.engine());
+            let language = prompt_language(self.session_conn.engine());
             unguarded_ask(kinds.first().copied(), connection, &sql, language)
         };
         let reply = ask(spec, window, cx);

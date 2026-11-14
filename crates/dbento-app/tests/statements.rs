@@ -56,6 +56,30 @@ fn typing_at_the_end_extends_the_last_statement() {
     );
 }
 
+// A statement whose range stops at its last token, before trailing spaces, is still open:
+// the word typed after the space belongs to it, not to a statement of its own.
+#[test]
+fn a_space_after_the_last_word_keeps_the_statement_open() {
+    for engine in [
+        Engine::Dynamodb,
+        Engine::Surrealdb,
+        Engine::Sqlite,
+        Engine::Postgres,
+    ] {
+        let mut ix = StatementIndex::new(engine);
+        let mut text = String::new();
+        for c in "SELECT * FROM O".chars() {
+            text.push(c);
+            let at = text.len();
+            assert_eq!(
+                ix.around(&Rope::from(text.as_str()), at),
+                full(engine, &text, at),
+                "{engine:?} in {text:?}"
+            );
+        }
+    }
+}
+
 // A keystroke in the middle of a big buffer splits the statements around it, not the buffer.
 #[test]
 fn a_keystroke_splits_only_near_the_caret() {
