@@ -548,7 +548,7 @@ impl QueryTab {
         });
         // The editor shows exactly what a browse run executes; `set_sql` emits no Change, so
         // writing it keeps the state. A table that cannot be described runs its plain SQL and
-        // says why on a toast.
+        // says why on a toast, unless its engine's lasting chip already does.
         let browse = cx.subscribe_in(
             &model,
             window,
@@ -559,9 +559,11 @@ impl QueryTab {
                     this.run_all(cx);
                 }
                 BrowseEvent::Unavailable(reason) => {
-                    let text = unavailable_text(reason);
-                    let kind = ui::NoticeKind::Warning;
-                    ui::notice(window, cx, ui::Notice { text, kind });
+                    if this.model.read(cx).not_editable().is_none() {
+                        let text = unavailable_text(reason);
+                        let kind = ui::NoticeKind::Warning;
+                        ui::notice(window, cx, ui::Notice { text, kind });
+                    }
                     this.run_all(cx);
                 }
                 BrowseEvent::Committed { changes, relation } => {

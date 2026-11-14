@@ -213,3 +213,11 @@ pub enum BrowseEvent {
         rows: u64,
     },
 }
+
+/// The lasting chip a table tab on `c` shows when its engine cannot edit rows yet.
+pub fn not_editable_text(c: &dbento_core::ConnectionConfig) -> Option<String> {
+    (!c.engine().capabilities().edit_rows).then(|| {
+        let engine = crate::sidebar::engine_title(c);
+        format!("Read-only: editing is not available on {engine} yet")
+    })
+}

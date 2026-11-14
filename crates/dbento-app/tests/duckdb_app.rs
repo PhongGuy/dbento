@@ -19,8 +19,7 @@ use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
 const SETUP: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, l INTEGER[]); \
                      INSERT INTO t VALUES (1, [1, 2]), (2, NULL);";
 const OPEN: [&str; 3] = ["duck.main", "duck.main/tables", "duck.main.t"];
-const NOTE: &str = "Opened as a plain query, so rows cannot be edited here: \
-                    editing rows is not available on duckdb yet";
+const CHIP: &str = "Read-only: editing is not available on DuckDB yet";
 const DUCKRO: &str =
     "[connections.duckro]\nengine = \"duckdb\"\npath = \"data/app.duckdb\"\nread_only = true\n";
 
@@ -87,11 +86,40 @@ fn a_query_shows_duckdb_values_and_the_path_chip(cx: &mut TestAppContext) {
 fn a_table_opens_as_a_plain_query_without_explain(cx: &mut TestAppContext) {
     let o = duck(cx, SETUP, "", "");
     o.open_relation(cx, "t", RelationKind::Table);
-    wait_real(cx, "the plain-query note", |cx| {
-        label_of(cx, o.win, "notice").as_deref() == Some(NOTE)
-    });
     rows_shown(cx, &o, "2 rows");
     assert!(!present(cx, o.win, "explain") && !present(cx, o.win, "explain-tip"));
+}
+
+#[gpui_kit::test]
+fn a_table_says_it_cannot_be_edited_on_a_lasting_chip_not_a_notice(cx: &mut TestAppContext) {
+    let o = duck(cx, SETUP, "", "");
+    o.open_relation(cx, "t", RelationKind::Table);
+    rows_shown(cx, &o, "2 rows");
+    o.idle(cx);
+    assert_eq!(
+        label_of(cx, o.win, "browse-not-editable").as_deref(),
+        Some(CHIP)
+    );
+    assert!(!present(cx, o.win, "notice"), "no passing notice as well");
+}
+
+#[gpui_kit::test]
+fn typing_over_the_table_query_drops_the_chip(cx: &mut TestAppContext) {
+    let o = duck(cx, SETUP, "", "");
+    o.open_relation(cx, "t", RelationKind::Table);
+    rows_shown(cx, &o, "2 rows");
+    o.idle(cx);
+    assert!(present(cx, o.win, "browse-not-editable"));
+    let e = o
+        .shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).editor().clone());
+    cx.update_window(o.win, |_, w, cx| {
+        e.update(cx, |e, cx| e.focus(w, cx));
+        w.input(" ", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(!present(cx, o.win, "browse-not-editable"));
 }
 
 #[gpui_kit::test]

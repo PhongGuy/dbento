@@ -190,11 +190,10 @@ async fn a_sql_server_connection_made_in_the_dialog_tests_saves_opens_and_browse
     })
     .await;
     assert_eq!(
-        name(&tree, "notice"),
-        Some(
-            "Opened as a plain query, so rows cannot be edited here: editing rows is not available on mssql yet"
-        )
+        name(&tree, "browse-not-editable"),
+        Some("Read-only: editing is not available on SQL Server yet")
     );
+    assert!(find_node(&tree, "notice").is_none(), "{tree}");
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();
 }
