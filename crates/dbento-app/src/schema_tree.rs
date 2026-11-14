@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dbento_core::{
-    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Databases, Engine, FormatOptions,
-    IndexInfo, ObjectRef, QueryLanguage, RELATION_CAP, RelationKind, RelationList, RelationObjects,
-    RelationRef, RoutineKind, SchemaInfo, SchemaObjects, TriggerState, TypeKind, Workspace,
-    format_sql, quote_ident,
+    ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Databases, DefinitionKind,
+    Engine, FormatOptions, IndexInfo, ObjectRef, QueryLanguage, RELATION_CAP, RelationKind,
+    RelationList, RelationObjects, RelationRef, RoutineKind, SchemaInfo, SchemaObjects,
+    TriggerState, TypeKind, Workspace, format_sql, quote_ident,
 };
 use gpui_kit::App;
 
@@ -2158,7 +2158,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
     // Counting, INSERT templates and qualified names are SQL text; a SurrealQL engine gets none.
     let language = engine.capabilities().language;
     let sql = language == QueryLanguage::Sql;
-    // A MongoDB collection opens with a find and keeps no definition to view.
+    // A MongoDB collection opens with a find.
     let mongo = language == QueryLanguage::MongoShell;
     let generate_select = if mongo {
         "Generate find"
@@ -2187,12 +2187,13 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             (sql && *kind == RelationKind::Table)
                 .then(|| entry("tree-menu-generate-insert", "Generate INSERT")),
         )
-        // A table offers its definition only where the engine keeps one (SQLite, MySQL, DuckDB).
+        // Offered only where the engine can answer for this kind of relation.
         .chain(
             match kind {
-                _ if mongo => false,
-                RelationKind::View | RelationKind::MaterializedView => true,
-                RelationKind::Table => engine.capabilities().table_definition,
+                RelationKind::View | RelationKind::MaterializedView => {
+                    engine.defines(DefinitionKind::View)
+                }
+                RelationKind::Table => engine.defines(DefinitionKind::Table),
                 RelationKind::ForeignTable | RelationKind::Other | _ => false,
             }
             .then_some(view_definition),
@@ -2225,13 +2226,14 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             },
             copy_name,
         ],
-        RowKind::Object { .. } => vec![
+        RowKind::Object { object, .. } if offers_definition(engine, object) => vec![
             MenuEntry {
                 keys: keys_for(&OpenSelected, cx),
                 ..view_definition
             },
             copy_name,
         ],
+        RowKind::Object { .. } => vec![copy_name],
         RowKind::Loading | RowKind::Empty | RowKind::Truncated => Vec::new(),
         RowKind::Key(_) => vec![
             MenuEntry {
@@ -2243,6 +2245,12 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         RowKind::KeyFolder { .. } => vec![copy_name],
         RowKind::LoadMore | RowKind::Database { .. } => Vec::new(),
     }
+}
+
+/// Whether `engine` can show the definition of a listed index, constraint, trigger, type or
+/// routine.
+pub fn offers_definition(engine: Engine, object: &ObjectRef) -> bool {
+    DefinitionKind::of(object).is_some_and(|kind| engine.defines(kind))
 }
 
 /// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`

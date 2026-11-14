@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use crate::support::{click_id, label_of, present};
 use dbento_app::definition_panel::{
-    DefinitionPanel, DefinitionPanelEvent, cap_words, definition_note, definition_title,
+    DefinitionPanel, DefinitionPanelEvent, MYSQL_INDEX_NOTE, cap_words, definition_note,
+    definition_title, source_note,
 };
 use dbento_core::{
     ConstraintInfo, ConstraintKind, DEFINITION_CAP, Definition, IndexInfo, ObjectRef, RelationRef,
@@ -354,4 +355,56 @@ fn a_wheel_notch_over_the_editor_eases_like_the_grid(cx: &mut TestAppContext) {
     frame(cx, any, Duration::from_millis(20));
     frame(cx, any, Duration::from_millis(7));
     assert_eq!(editor_y(cx, &panel), line * -3.0);
+}
+
+#[gpui_kit::test]
+fn a_long_line_wraps_inside_the_panel(cx: &mut TestAppContext) {
+    let (win, panel) = hosted(cx);
+    let text = format!("CREATE VIEW v AS SELECT {};", vec!["a"; 400].join(", "));
+    panel.update(cx, |p, cx| p.loading("lite", v(), cx));
+    show(cx, win, "lite", &v(), Ok(def(&text, false, false)));
+    let state = panel.read_with(cx, |p, _| p.editor().cloned()).unwrap();
+    // One stored line: the caret sits lower at its end only when the line wrapped.
+    let top = |cx: &mut TestAppContext, key: &str| {
+        cx.update_window(win.into(), |_, w, cx| {
+            state.read(cx).focus_handle(cx).focus(w, cx);
+            w.press(key, cx);
+            w.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        state.read_with(cx, |s, _| s.cursor_layout().unwrap().0.top())
+    };
+    let first = top(cx, "ctrl-home");
+    let last = top(cx, "ctrl-end");
+    assert!(last > first, "{first:?} {last:?}");
+}
+
+#[gpui_kit::test]
+fn an_index_shown_as_its_create_table_says_why(cx: &mut TestAppContext) {
+    let (win, panel) = hosted(cx);
+    let any: AnyWindowHandle = win.into();
+    let customers = RelationRef::new("shop", "customers");
+    // fixture: core constructor
+    let index = IndexInfo::new(customers, "PRIMARY", vec![], true, true, false, None).object_ref();
+    let table = "CREATE TABLE `customers` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`)\n);";
+    panel.update(cx, |p, cx| p.loading("my", index.clone(), cx));
+    show(cx, win, "my", &index, Ok(def(table, false, false)));
+    assert_eq!(
+        label_of(cx, any, "definition-source").as_deref(),
+        Some(MYSQL_INDEX_NOTE)
+    );
+    cx.update_window(any, |_, w, cx| {
+        w.render_frame(cx);
+        let note = w.find("definition-source").bounds();
+        let editor = w.find("definition-editor").bounds();
+        assert!(note.bottom() <= editor.top(), "{note:?} {editor:?}");
+    })
+    .unwrap();
+    // A stored CREATE INDEX, or a CREATE TABLE for anything but an index, needs no word.
+    let own = "CREATE INDEX i ON t(a);";
+    show(cx, win, "my", &index, Ok(def(own, false, false)));
+    assert!(!present(cx, any, "definition-source"));
+    assert_eq!(source_note(&index, &def(own, false, false)), None);
+    assert_eq!(source_note(&v(), &def(table, false, false)), None);
 }

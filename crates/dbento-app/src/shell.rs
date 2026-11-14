@@ -88,6 +88,9 @@ const TEST_DATABASES_CAP: Duration = Duration::from_secs(5);
 // The narrowest the tab area gets before the side panels give way, and their own minimum.
 const MIN_TAB_AREA: Pixels = px(160.);
 const PANEL_MIN: Pixels = px(100.);
+// The right dock's opening width; a definition gets more, since statements run long.
+const DOCK_WIDTH: Pixels = px(320.);
+const DEFINITION_DOCK_WIDTH: Pixels = px(480.);
 
 // The list `list` answers within `cap`, or empty when it fails; `None` once the cap passes,
 // so the caller abandons the session the list still holds.
@@ -310,6 +313,9 @@ pub struct Shell {
     inspector_open: bool,
     // The sidebar, tab area and dock split; its sizes are what the close saves.
     split: Entity<ResizableState>,
+    // The opening width of the dock last drawn, so a switch to a dock of another width starts
+    // that dock at its own width rather than the one it replaced.
+    dock_width: Option<Pixels>,
     // The saved layout the panels and every new tab start from.
     sidebar_width: Option<f32>,
     editor_height: Option<f32>,
@@ -487,6 +493,7 @@ impl Shell {
             inspector,
             inspector_open: saved.inspector_open && !history_open,
             split: cx.new(|_| ResizableState::default()),
+            dock_width: None,
             sidebar_width: saved.sidebar_width,
             editor_height: saved.editor_height,
             recent: recent_status(&saved.recent_workspaces),
@@ -4557,9 +4564,25 @@ impl Render for Shell {
                 .filter(|_| self.history_open)
                 .map(Into::into)
         };
+        let dock_width = if self.definition_open && !self.approvals_open {
+            DEFINITION_DOCK_WIDTH
+        } else {
+            DOCK_WIDTH
+        };
+        let shown = docked.as_ref().map(|_| dock_width);
+        if let (Some(was), Some(now)) = (self.dock_width, shown)
+            && was != now
+        {
+            self.split.update(cx, |split, cx| {
+                if split.sizes().len() > 2 {
+                    split.remove_panel(2, cx);
+                }
+            });
+        }
+        self.dock_width = shown;
         let dock = docked.map(|panel| {
             resizable_panel()
-                .size(px(320.) + GUTTER)
+                .size(dock_width + GUTTER)
                 .size_range(PANEL_MIN..side_max)
                 .flex_shrink_0()
                 .child(gutter(px(0.), GUTTER).child(panel))

@@ -13,7 +13,10 @@ use super::login::login;
 use super::rpc::{CALL_BOUND, Rpc};
 use super::serve::{Ctl, Event, PARK_BOUND, Request, Rules, serve};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
-use crate::objects::RelationObjects;
+use crate::objects::{
+    DEFINITION_CAP, Definition, DefinitionError, ObjectRef, RelationObjects, definition_error,
+    finish,
+};
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError, ExtendError,
     Flavor, Limits, OnTruncate, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem,
@@ -66,10 +69,37 @@ impl SurrealDriver {
     ) -> Result<RelationObjects, IntrospectError> {
         match self.ask(Ask::Objects(rel.clone())).await? {
             Answer::Objects(objects) => Ok(objects),
-            Answer::Schemas(_) | Answer::Relations(_) | Answer::Columns(_) | Answer::Place(..) => {
-                Err(wrong_answer("relation objects"))
-            }
+            Answer::Schemas(_)
+            | Answer::Relations(_)
+            | Answer::Columns(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("relation objects")),
         }
+    }
+
+    /// A table's or view's DEFINE TABLE text as the server reports it, at most
+    /// [`DEFINITION_CAP`] bytes; every other kind is Unsupported.
+    pub(crate) async fn definition(
+        &mut self,
+        object: &ObjectRef,
+    ) -> Result<Definition, DefinitionError> {
+        let ObjectRef::Relation(rel) = object else {
+            return Err(DefinitionError::Unsupported {
+                what: object.label(),
+            });
+        };
+        let text = match self.ask(Ask::Definition(rel.clone())).await {
+            Ok(Answer::Definition(text)) => text,
+            Ok(
+                Answer::Schemas(_)
+                | Answer::Relations(_)
+                | Answer::Columns(_)
+                | Answer::Objects(_)
+                | Answer::Place(..),
+            ) => return Err(definition_error(wrong_answer("a definition"), object)),
+            Err(e) => return Err(definition_error(e, object)),
+        };
+        finish(text, DEFINITION_CAP, false, object)
     }
 
     /// `ns/db` once RPC `use` has moved the session off where it opened; None on failure.
@@ -265,27 +295,33 @@ impl Driver for SurrealDriver {
     async fn schemas(&mut self) -> Result<Vec<SchemaInfo>, IntrospectError> {
         match self.ask(Ask::Schemas).await? {
             Answer::Schemas(schemas) => Ok(schemas),
-            Answer::Relations(_) | Answer::Columns(_) | Answer::Objects(_) | Answer::Place(..) => {
-                Err(wrong_answer("schemas"))
-            }
+            Answer::Relations(_)
+            | Answer::Columns(_)
+            | Answer::Objects(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("schemas")),
         }
     }
 
     async fn relations(&mut self, schema: &str) -> Result<RelationList, IntrospectError> {
         match self.ask(Ask::Relations(schema.to_owned())).await? {
             Answer::Relations(relations) => Ok(relations),
-            Answer::Schemas(_) | Answer::Columns(_) | Answer::Objects(_) | Answer::Place(..) => {
-                Err(wrong_answer("relations"))
-            }
+            Answer::Schemas(_)
+            | Answer::Columns(_)
+            | Answer::Objects(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("relations")),
         }
     }
 
     async fn columns(&mut self, rel: &RelationRef) -> Result<Vec<ColumnMeta>, IntrospectError> {
         match self.ask(Ask::Columns(rel.clone())).await? {
             Answer::Columns(columns) => Ok(columns),
-            Answer::Schemas(_) | Answer::Relations(_) | Answer::Objects(_) | Answer::Place(..) => {
-                Err(wrong_answer("columns"))
-            }
+            Answer::Schemas(_)
+            | Answer::Relations(_)
+            | Answer::Objects(_)
+            | Answer::Definition(_)
+            | Answer::Place(..) => Err(wrong_answer("columns")),
         }
     }
 

@@ -331,3 +331,107 @@ fn labels_name_the_kind_and_the_qualified_name() {
         "routine public.add(integer, integer)"
     );
 }
+
+#[test]
+fn engines_offer_a_definition_only_for_kinds_they_answer() {
+    use crate::workspace::Engine;
+    use DefinitionKind as K;
+    let check = K::Constraint(ConstraintKind::Check);
+    let unique = K::Constraint(ConstraintKind::Unique);
+    let all = [
+        K::Table,
+        K::View,
+        K::Index,
+        check,
+        unique,
+        K::Trigger,
+        K::Routine,
+        K::Type,
+    ];
+    let answered = |e: Engine| {
+        all.into_iter()
+            .filter(|k| e.defines(*k))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        answered(Engine::Postgres),
+        [
+            K::View,
+            K::Index,
+            check,
+            unique,
+            K::Trigger,
+            K::Routine,
+            K::Type
+        ]
+    );
+    assert_eq!(
+        answered(Engine::Sqlite),
+        [K::Table, K::View, K::Index, check, unique, K::Trigger]
+    );
+    assert_eq!(
+        answered(Engine::Mysql),
+        [
+            K::Table,
+            K::View,
+            K::Index,
+            check,
+            unique,
+            K::Trigger,
+            K::Routine
+        ]
+    );
+    assert_eq!(
+        answered(Engine::Mssql),
+        [K::View, check, K::Trigger, K::Routine]
+    );
+    assert_eq!(answered(Engine::Duckdb), [K::Table, K::View]);
+    assert_eq!(answered(Engine::Surrealdb), [K::View]);
+    for none in [Engine::Mongodb, Engine::Redis, Engine::Dynamodb] {
+        assert!(answered(none).is_empty(), "{none:?}");
+    }
+}
+
+#[test]
+fn a_listed_object_names_its_definition_kind() {
+    let rel = users();
+    let of = |o: ObjectRef| DefinitionKind::of(&o);
+    assert_eq!(of(ObjectRef::relation(rel.clone())), None);
+    assert_eq!(
+        of(ObjectRef::Index {
+            rel: rel.clone(),
+            name: "i".to_owned()
+        }),
+        Some(DefinitionKind::Index)
+    );
+    assert_eq!(
+        of(ObjectRef::Constraint {
+            rel: rel.clone(),
+            name: None,
+            kind: ConstraintKind::Check
+        }),
+        Some(DefinitionKind::Constraint(ConstraintKind::Check))
+    );
+    assert_eq!(
+        of(ObjectRef::Trigger {
+            rel,
+            name: "t".to_owned()
+        }),
+        Some(DefinitionKind::Trigger)
+    );
+    assert_eq!(
+        of(ObjectRef::Type {
+            schema: "public".to_owned(),
+            name: "mood".to_owned()
+        }),
+        Some(DefinitionKind::Type)
+    );
+    assert_eq!(
+        of(ObjectRef::Routine {
+            schema: "public".to_owned(),
+            name: "f".to_owned(),
+            arguments: String::new()
+        }),
+        Some(DefinitionKind::Routine)
+    );
+}

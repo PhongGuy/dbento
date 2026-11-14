@@ -4,7 +4,8 @@ use crate::support;
 
 use crate::support::{run, sr_root, sr_session, text};
 use dbento_core::{
-    ColumnMeta, Limits, RelationKind, RelationRef, Session, SessionOptions, TriggerState,
+    ColumnMeta, DefinitionError, Limits, ObjectRef, RelationKind, RelationRef, Session,
+    SessionOptions, TriggerState,
 };
 use dbento_testkit::{SrDb, surreal_db};
 
@@ -204,5 +205,37 @@ async fn a_namespace_viewer_reads_another_database_in_a_read_only_session() {
         .await
         .unwrap();
     assert_eq!(names(&cols), ["id", "z"]);
+    assert_eq!(current_db(&mut s).await, text("app"));
+}
+
+#[tokio::test]
+async fn a_view_definition_is_its_define_table_statement() {
+    let db = fixture().await;
+    let mut s = sr_root(&db, "", SessionOptions::default()).await;
+    let view = ObjectRef::relation(RelationRef::new("app", "adults"));
+    let shown = s.definition(&view).await.unwrap();
+    let body = shown.text();
+    assert!(body.starts_with("DEFINE TABLE adults"), "{body}");
+    assert!(
+        body.contains("AS SELECT name, age FROM person WHERE age >= 18"),
+        "{body}"
+    );
+    assert!(!shown.truncated() && !shown.composed());
+    let person = RelationRef::new("app", "person");
+    let index = s.relation_objects(&person).await.unwrap().indexes()[0].object_ref();
+    assert!(matches!(
+        s.definition(&index).await,
+        Err(DefinitionError::Unsupported { .. })
+    ));
+    for gone in [("app", "nosuch"), ("nowhere", "adults")] {
+        let gone = ObjectRef::relation(RelationRef::new(gone.0, gone.1));
+        assert!(
+            matches!(
+                s.definition(&gone).await,
+                Err(DefinitionError::Missing { .. })
+            ),
+            "{gone:?}"
+        );
+    }
     assert_eq!(current_db(&mut s).await, text("app"));
 }
