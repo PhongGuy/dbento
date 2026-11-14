@@ -14,10 +14,10 @@ const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);";
 
 fn marks(cx: &mut TestAppContext, o: &Opened) -> Vec<ResultMark> {
     o.model(cx).read_with(cx, |m, _| {
-        let (asking, paused) = (m.confirm().map(|p| p.stmt), m.paused());
+        let asking = m.confirm().map(|p| p.stmt);
         m.results()
             .iter()
-            .map(|r| result_mark(r, asking, paused))
+            .map(|r| result_mark(r, asking, m.more_rows(r.stmt)))
             .collect()
     })
 }
@@ -83,7 +83,7 @@ fn a_skipped_explain_body_says_skipped() {
     let mut r = ended(0, "UPDATE t SET x = 0", Some(StatementEnd::Skipped));
     r.plan = Some(PlanResult::new(ExplainMode::Analyze, false));
     assert_eq!(
-        result_mark(&r, None, None),
+        result_mark(&r, None, false),
         ResultMark::Skipped,
         "the Plan tab shows its mark"
     );
@@ -135,7 +135,7 @@ fn a_statement_timeout_stays_a_failure() {
         "SELECT 1",
         Some(StatementEnd::Failed(ExecuteError::Timeout)),
     );
-    assert_eq!(result_mark(&r, None, None), ResultMark::Failed);
+    assert_eq!(result_mark(&r, None, false), ResultMark::Failed);
     assert_eq!(status_mark(r.store.end(), false), StatusMark::Failed);
     let done = ended(0, "SELECT 1", Some(StatementEnd::Skipped));
     assert_eq!(status_mark(done.store.end(), true), StatusMark::Running);

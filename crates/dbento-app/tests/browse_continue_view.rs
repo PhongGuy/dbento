@@ -1,7 +1,7 @@
 //! The footer of an expired browse offers to continue in place, and a sorted continuation
 //! says rows may have moved.
 use crate::support::{Opened, label_of, launched, present, wait_real};
-use dbento_app::results_pane::{continue_label, skip_notice};
+use dbento_app::results_pane::{MORE_ROWS_RELEASED, fetch_next_label, skip_notice};
 use dbento_app::runner::Event;
 use dbento_core::RelationKind;
 use gpui_kit::test::TestWindowExt as _;
@@ -49,10 +49,10 @@ fn expired_big(cx: &mut TestAppContext, sort: Option<&str>) -> Opened {
 }
 
 #[test]
-fn the_continuing_label_reads_as_the_spec_says() {
+fn the_continuing_note_reads_as_the_spec_says() {
     assert_eq!(
-        continue_label(1_000),
-        "Paused to free the connection \u{b7} Fetch next 1,000"
+        MORE_ROWS_RELEASED,
+        "More rows available (connection released)"
     );
 }
 
@@ -61,9 +61,12 @@ fn fetch_next_continues_an_expired_browse_in_place(cx: &mut TestAppContext) {
     let o = expired_big(cx, None);
     assert_eq!(
         label_of(cx, o.win, "fetch-next").as_deref(),
-        Some(continue_label(1_000).as_str())
+        Some(fetch_next_label(1_000).as_str())
     );
-    assert!(!present(cx, o.win, "footer-note"));
+    assert_eq!(
+        label_of(cx, o.win, "footer-note").as_deref(),
+        Some(MORE_ROWS_RELEASED)
+    );
     assert!(!present(cx, o.win, "raise-limit"));
     assert!(!present(cx, o.win, "run-again"));
     cx.update_window(o.win, |_, w, cx| w.click("fetch-next", cx))
@@ -78,7 +81,7 @@ fn the_status_bar_says_paused_for_a_browse_that_can_continue(cx: &mut TestAppCon
     let o = expired_big(cx, None);
     assert_eq!(
         label_of(cx, o.win, "status-paused").as_deref(),
-        Some("paused at 1,000 rows")
+        Some(MORE_ROWS_RELEASED)
     );
     assert!(!present(cx, o.win, "status-truncated"));
 }

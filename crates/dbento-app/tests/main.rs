@@ -157,6 +157,7 @@ mod result_error;
 mod result_marks;
 mod result_states;
 mod results;
+mod row_counts;
 mod row_limit;
 mod row_view;
 mod run_keys;
