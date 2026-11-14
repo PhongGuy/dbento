@@ -97,6 +97,19 @@ fn a_field_named_like_the_gathering_column_keeps_its_own_cell() {
     let batch = builder.finish();
     assert_eq!(batch.cell(0, 0), CellRef::Text("2"));
     assert_eq!(batch.cell(0, 1), CellRef::Text("{ z: 9 }"));
+    // Only the gathering column says it gathers; the real field of that name is a field.
+    let gathers: Vec<bool> = columns.iter().map(ColumnInfo::is_overflow).collect();
+    assert_eq!(gathers, [false, true]);
+}
+
+#[test]
+fn a_rows_document_names_its_fields_in_order() {
+    let buffer = raws(&[doc! { "_id": 1, "z": 9, "a": { "b": 1 } }]);
+    let (model, columns) = ColumnModel::of(&buffer, true).unwrap();
+    let mut builder = BatchBuilder::new(columns.len());
+    assert!(model.push(&mut builder, &buffer[0]).unwrap().is_none());
+    let batch = builder.finish();
+    assert_eq!(batch.document(0).unwrap().field_names(), ["_id", "z", "a"]);
 }
 
 #[test]

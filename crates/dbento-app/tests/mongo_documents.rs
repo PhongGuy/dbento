@@ -2,6 +2,7 @@
 //! JSON writes the documents themselves.
 #![cfg(feature = "mongodb")]
 use dbento_app::copy::{CopyFormat, copy_rows};
+use dbento_app::record::more_fields_text;
 use dbento_app::results::ResultStore;
 use dbento_core::{Secret, SessionOptions, Workspace};
 use dbento_testkit::{MgDb, MgUser, mongo_db};
@@ -71,4 +72,26 @@ async fn copy_as_json_writes_whole_documents_whatever_columns_are_picked() {
         copy_rows(&s, 0..2, &[2], &CopyFormat::Tsv, false),
         "row 0\nrow 1"
     );
+}
+
+// Past the buffered documents a field lands in the gathering column, which the record view
+// shows as a count of what it holds, and not at all for a row with nothing extra.
+#[tokio::test]
+async fn the_gathering_column_reads_as_a_count_of_the_fields_it_holds() {
+    let db = mongo_db().await;
+    let docs = (0..103)
+        .map(|i| match i {
+            101 => "{_id: 101, q: 1}".to_owned(),
+            102 => "{_id: 102, z: 1, y: [2]}".to_owned(),
+            i => format!("{{_id: {i}}}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = format!("db.gathered.insertMany([{docs}]);\ndb.gathered.find().sort({{_id: 1}})");
+    let s = store(&db, &text).await;
+    assert_eq!(s.rows(), 103);
+    assert!(s.columns().last().unwrap().is_overflow());
+    assert_eq!(more_fields_text(&s, 0), None);
+    assert_eq!(more_fields_text(&s, 101).as_deref(), Some("1 more field"));
+    assert_eq!(more_fields_text(&s, 102).as_deref(), Some("2 more fields"));
 }

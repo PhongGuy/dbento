@@ -67,7 +67,7 @@ impl Shape {
             })
             .collect();
         if !finished {
-            columns.push(ColumnInfo::new(MORE_FIELDS, "object", None));
+            columns.push(ColumnInfo::overflow(MORE_FIELDS));
         }
         let shape = Shape {
             names,

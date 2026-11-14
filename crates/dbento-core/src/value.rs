@@ -31,6 +31,7 @@ pub struct ColumnInfo {
     type_name: String,
     pg_type_oid: Option<u32>,
     source: Option<ColumnSource>,
+    overflow: bool,
 }
 
 /// The table column a result column reads, as the engine reports it; computed columns have none.
@@ -78,6 +79,15 @@ impl ColumnInfo {
             type_name: type_name.into(),
             pg_type_oid,
             source: None,
+            overflow: false,
+        }
+    }
+
+    /// The trailing `object` column named `name` that gathers fields the other columns lack.
+    pub(crate) fn overflow(name: impl Into<String>) -> Self {
+        Self {
+            overflow: true,
+            ..Self::new(name, "object", None)
         }
     }
 
@@ -104,6 +114,11 @@ impl ColumnInfo {
     /// The table column this result column reads; None for a computed one.
     pub fn source(&self) -> Option<&ColumnSource> {
         self.source.as_ref()
+    }
+
+    /// Whether this is a schemaless result's trailing column gathering fields the others lack.
+    pub fn is_overflow(&self) -> bool {
+        self.overflow
     }
 }
 
@@ -191,6 +206,45 @@ impl DocumentRef<'_> {
         match self.format {
             DocFormat::Bson => self.bson_extended_json(canonical),
             DocFormat::DynamoJson => self.dynamo_json(canonical),
+        }
+    }
+
+    /// The document's top-level field names, in stored order.
+    pub fn field_names(self) -> Vec<String> {
+        match self.format {
+            DocFormat::Bson => self.bson_field_names(),
+            DocFormat::DynamoJson => self.dynamo_field_names(),
+        }
+    }
+
+    fn bson_field_names(self) -> Vec<String> {
+        #[cfg(feature = "mongodb")]
+        {
+            let Ok(raw) = bson::RawDocument::from_bytes(self.bytes) else {
+                return Vec::new();
+            };
+            raw.iter()
+                .filter_map(Result::ok)
+                .map(|(name, _)| name.as_str().to_owned())
+                .collect()
+        }
+        #[cfg(not(feature = "mongodb"))]
+        {
+            Vec::new()
+        }
+    }
+
+    fn dynamo_field_names(self) -> Vec<String> {
+        #[cfg(feature = "dynamodb")]
+        {
+            match serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(self.bytes) {
+                Ok(map) => map.into_iter().map(|(name, _)| name).collect(),
+                Err(_) => Vec::new(),
+            }
+        }
+        #[cfg(not(feature = "dynamodb"))]
+        {
+            Vec::new()
         }
     }
 
