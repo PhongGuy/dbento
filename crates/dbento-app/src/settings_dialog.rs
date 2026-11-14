@@ -4,17 +4,18 @@
 
 use std::ops::RangeInclusive;
 
-use gpui_kit::base::actions::Cancel;
+use gpui_kit::base::actions::{Cancel, Confirm};
 use gpui_kit::base::{Decrement, Increment, StepAction, step_value};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, TextAlign,
-    Window, div, px,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, Role,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
+    TextAlign, Window, div, px,
 };
 
 use crate::confirm;
@@ -371,6 +372,11 @@ impl SettingsView {
             .on_action(cx.listener(move |this, _: &Decrement, window, cx| {
                 this.step(t, StepAction::Decrement, window, cx)
             }))
+            // A single-line field passes Enter on as the dialog's Confirm; the size field
+            // keeps it, so Enter commits the clamped value and the dialog stays open.
+            .on_action(
+                cx.listener(move |this, _: &Confirm, window, cx| this.show_stored(t, window, cx)),
+            )
             .flex_none()
             .w(px(112.))
             .h(px(32.))
@@ -495,15 +501,48 @@ impl SettingsView {
             Some(p) => p.to_string_lossy().into_owned().into(),
             None => "not saved: no config folder".into(),
         };
+        // A long path drops its head so the file name stays in view; the tooltip and the
+        // copy button give the whole path.
+        let tip = shown.clone();
         let file = div()
             .id("settings-keymap-path")
             .role(Role::Label)
             .aria_label(shown.clone())
             .test_support()
-            .truncate()
-            .when(path.is_some(), |d| d.font_family(mono.clone()))
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis_start()
+            .when(path.is_some(), |d| {
+                // The app's own tooltips hide under a dialog, so this one is the kit's.
+                d.font_family(mono.clone()).tooltip(move |window, cx| {
+                    let tip = tip.clone();
+                    Tooltip::element(move |_, _| {
+                        div()
+                            .id("settings-keymap-path-tip")
+                            .test_support()
+                            .max_w(px(344.))
+                            .child(tip.clone())
+                    })
+                    .max_w(px(360.))
+                    .build(window, cx)
+                })
+            })
             .when(path.is_none(), |d| d.text_color(theme::dim(cx)))
-            .child(shown);
+            .child(shown.clone());
+        let copy = path.is_some().then(|| {
+            ui::accessibility_id(Button::new("settings-keymap-copy"), "settings-keymap-copy")
+                .ghost()
+                .xsmall()
+                .icon(Icons::Copy)
+                .tooltip("Copy path")
+                .accessibility_label("Copy path")
+                .tab_stop(false)
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(shown.to_string()))
+                })
+        });
+        let file = h_flex().min_w_0().gap_1().child(file).children(copy);
         let buttons = h_flex()
             .gap_2()
             .child(
@@ -599,6 +638,17 @@ impl SettingsView {
                                 .flex_wrap()
                                 .justify_end()
                                 .gap_1()
+                                .when(keys.is_empty(), |d| {
+                                    d.child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "settings-keymap-command-{n}-unbound"
+                                            )))
+                                            .test_support()
+                                            .text_color(theme::dim(cx))
+                                            .child("unbound"),
+                                    )
+                                })
                                 .children(keys.iter().map(|k| ui::key_chip(chip_keys(k), cx))),
                         )
                         .into_any_element()
