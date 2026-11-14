@@ -178,9 +178,10 @@ fn the_window_close_waits_for_a_tab_closed_earlier(cx: &mut TestAppContext) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     // Close the tab and then the window without parking, so the tab's runner is still blocked.
+    // Closing all tabs asks nothing for a run, so no question needs the parking an answer takes.
     let shell = o.shell.clone();
     cx.update_window(o.win, |_, w, cx| {
-        shell.update(cx, |s, cx| s.close_tab_at(0, w, cx))
+        shell.update(cx, |s, cx| s.close_tabs_except(None, w, cx))
     })
     .unwrap();
     assert_eq!(

@@ -666,12 +666,36 @@ impl Shell {
         cx: &mut Context<Self>,
         close: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
+        self.ask_or_save(
+            title,
+            detail,
+            keep,
+            false,
+            window,
+            cx,
+            move |s, _, w, cx| close(s, w, cx),
+        );
+    }
+
+    // `ask_once`, offering Save beside Discard when `save`; `close` learns whether Save
+    // answered.
+    #[allow(clippy::too_many_arguments)] // ask_once's arguments plus the Save switch
+    fn ask_or_save(
+        &mut self,
+        title: impl Into<SharedString>,
+        detail: impl Into<SharedString>,
+        keep: &'static str,
+        save: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        close: impl FnOnce(&mut Self, bool, &mut Window, &mut Context<Self>) + 'static,
+    ) {
         if self.asking.is_some() {
             return;
         }
         self.questions += 1;
         let serial = self.questions;
-        let dialog = ask_discard(title, detail, keep, window, cx);
+        let dialog = ask_discard(title, detail, keep, save, window, cx);
         let reply = dialog.answer.clone();
         self.asking = Some(Question {
             serial,
@@ -685,8 +709,10 @@ impl Shell {
                     return;
                 }
                 shell.asking = None;
-                if answer == Ok(1) {
-                    close(shell, window, cx);
+                match answer {
+                    Ok(1) => close(shell, false, window, cx),
+                    Ok(2) => close(shell, true, window, cx),
+                    _ => {}
                 }
             });
         })
@@ -2072,37 +2098,61 @@ impl Shell {
         cx.notify();
     }
 
-    /// Closes tab `ix`, first asking when it has staged edits or edited SQL, since nothing
-    /// else keeps them; one question names both losses.
+    /// Closes tab `ix`, first asking when it has staged edits, edited SQL or a running
+    /// statement, since closing loses them; one question names every loss. An edited saved
+    /// query is offered Save, which writes the file and closes only once it is written.
     pub fn close_tab_at(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(ix) else {
             return;
         };
         let edited = tab.read(cx).edited(cx);
+        let file = tab.read(cx).file().map(Path::to_path_buf);
         // Closing a tab answers its open apply prompt with a roll back, so it asks nothing more.
         let staged = if tab.read(cx).apply_dialog_open() {
             0
         } else {
             staged_count(tab, cx)
         };
-        let (title, detail) = match (staged, edited) {
-            (0, false) => return self.remove_tab(ix, window, cx),
-            (0, true) => ("Close this tab?".to_owned(), UNSAVED_SQL.to_owned()),
-            (n, false) => (discard_title(n), "Closing the tab drops them.".to_owned()),
-            (n, true) => (
-                discard_title(n),
-                format!("Closing the tab drops them. {UNSAVED_SQL}"),
-            ),
+        let running = running_detail("Closing", &running_titles(std::iter::once(tab), cx));
+        let unsaved = edited.then(|| unsaved_detail(file.as_deref()));
+        if staged == 0 && running.is_none() && unsaved.is_none() {
+            return self.remove_tab(ix, window, cx);
+        }
+        let title = match staged {
+            0 => "Close this tab?".to_owned(),
+            n => discard_title(n),
         };
+        let drops = (staged > 0).then(|| "Closing the tab drops them.".to_owned());
+        let detail = [drops, running, unsaved]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let save = edited && file.is_some();
         let id = tab.entity_id();
-        self.ask_once(
+        self.ask_or_save(
             title,
             detail,
             "Keep",
+            save,
             window,
             cx,
-            move |shell, window, cx| {
+            move |shell, save, window, cx| {
                 // Other tabs may have closed meanwhile, so find this one again by identity.
+                let Some(ix) = shell.tabs.iter().position(|t| t.entity_id() == id) else {
+                    return;
+                };
+                if save {
+                    let tab = shell.tabs[ix].clone();
+                    let Some(rel) = tab.read(cx).file().map(Path::to_path_buf) else {
+                        return;
+                    };
+                    shell.save_bound(&tab, &rel, window, cx);
+                    // A failed write or a conflict question leaves the SQL edited and the tab open.
+                    if tab.read(cx).edited(cx) {
+                        return;
+                    }
+                }
                 if let Some(ix) = shell.tabs.iter().position(|t| t.entity_id() == id) {
                     shell.remove_tab(ix, window, cx);
                 }
@@ -4005,8 +4055,9 @@ impl Shell {
 
     // One tab handle: `("tab", ix)` labelled with its strip label `title`, holding the kind glyph
     // `("tab-connection", ix)` named after the connection, the name (truncated), the tag dot
-    // and `("tab-close", ix)`. Only the active tab's top line is `tab-accent`. A clash suffix is
-    // its own `("tab-suffix", ix)` so the title truncates and the connection stays readable.
+    // and `("tab-close", ix)`, holding `("tab-dirty", ix)` while the SQL is edited. Only the
+    // active tab's top line is `tab-accent`. A clash suffix is its own `("tab-suffix", ix)` so
+    // the title truncates and the connection stays readable.
     fn tab_handle(
         &self,
         ix: usize,
@@ -4115,20 +4166,42 @@ impl Shell {
             name.into_any_element()
         };
         let group = SharedString::from(format!("tab-{ix}"));
+        // Edited SQL shows a dot in the text colour where the X sits, as Zed does; hovering
+        // the tab swaps the X back.
+        let dirty = tab.edited(cx);
+        let unsaved = dirty.then(|| {
+            div()
+                .id(("tab-dirty", ix))
+                .aria_label("Unsaved")
+                .test_support()
+                .absolute()
+                .top(px(5.))
+                .left(px(5.))
+                .size(px(6.))
+                .rounded_full()
+                .bg(fg)
+                .group_hover(group.clone(), |s| s.bg(transparent_black()))
+        });
         // Transparent rather than hidden while idle, so the button keeps its place and hitbox.
         let close = div()
             .id(("tab-close", ix))
             .test_support()
+            .relative()
             .flex()
             .flex_none()
             .items_center()
             .justify_center()
             .size(px(16.))
             .rounded(px(3.))
-            .text_color(if active { muted } else { transparent_black() })
+            .text_color(if active && !dirty {
+                muted
+            } else {
+                transparent_black()
+            })
             .group_hover(group.clone(), |s| s.text_color(muted))
             .hover(|s| s.bg(hover).text_color(fg))
             .child(Icon::new(Icons::X).size_3())
+            .children(unsaved)
             .tooltip(|window, cx| {
                 theme::tooltip_keys("Close tab", keys_for(&CloseTab, cx), window, cx)
             })
@@ -5093,8 +5166,13 @@ fn running_detail(action: &str, titles: &[String]) -> Option<String> {
     ))
 }
 
-// The close-tab question's detail for edited SQL.
-const UNSAVED_SQL: &str = "Its SQL is not saved anywhere.";
+// The close-tab question's sentence for edited SQL: a saved query names its file.
+fn unsaved_detail(file: Option<&Path>) -> String {
+    match file.and_then(Path::file_name) {
+        Some(name) => format!("Changes to {} are not saved.", name.to_string_lossy()),
+        None => "Its SQL is not saved anywhere.".to_owned(),
+    }
+}
 
 // The question's detail when `lost` tabs' drafts could not be written.
 fn lost_detail(lost: usize) -> String {
@@ -5111,12 +5189,13 @@ struct Question {
     dialog: confirm::Asked,
 }
 
-// The Keep-or-Close question before edited SQL is discarded; Keep is the default and the
-// cancel answer, so neither Enter nor Escape loses SQL.
+// The Keep-or-Close question before edited SQL is discarded, or Keep, Discard and Save with
+// `save`; Keep is the default and the cancel answer, so neither Enter nor Escape loses SQL.
 fn ask_discard(
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
     keep: &'static str,
+    save: bool,
     window: &mut Window,
     cx: &mut gpui_kit::App,
 ) -> confirm::Asked {
@@ -5131,10 +5210,18 @@ fn ask_discard(
             detail: Some(detail.into()),
             sql: None,
             language: "sql",
-            choices: vec![
-                choice("discard-keep", keep, false),
-                choice("discard-close", "Close", true),
-            ],
+            choices: if save {
+                vec![
+                    choice("discard-keep", keep, false),
+                    choice("discard-close", "Discard", true),
+                    choice("discard-save", "Save", false),
+                ]
+            } else {
+                vec![
+                    choice("discard-keep", keep, false),
+                    choice("discard-close", "Close", true),
+                ]
+            },
             default: 0,
             cancel: 0,
         },

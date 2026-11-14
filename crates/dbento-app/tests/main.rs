@@ -24,6 +24,7 @@ mod budget;
 mod catalog;
 mod cell_filter;
 mod chrome;
+mod close_tab_ask;
 mod column_drift;
 mod column_view;
 mod comment_toggle;
