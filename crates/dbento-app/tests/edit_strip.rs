@@ -1,6 +1,7 @@
 //! Editable browse grids always show the edit strip; a blocked one says why.
 use crate::support::{Opened, click_id, label_of, launched, present};
-use dbento_app::results_pane::ResultsPane;
+use dbento_app::keymap::{DeleteRow, RedoEdit, UndoEdit, keys_for};
+use dbento_app::results_pane::{ResultsPane, strip_tip};
 use dbento_core::RelationKind;
 use gpui_kit::{AppContext as _, Entity, Focusable as _, TestAppContext};
 
@@ -66,4 +67,41 @@ fn a_read_only_connection_says_why_instead(cx: &mut TestAppContext) {
         Some("read-only connection")
     );
     assert!(!present(cx, o.win, "edit-strip-add"));
+}
+
+// The icon-only buttons name themselves to a screen reader and name their action and keys in
+// the tooltip; Duplicate has no key, so its tooltip is the verb alone.
+#[gpui_kit::test]
+fn the_strip_icons_carry_names_and_keyed_tooltips(cx: &mut TestAppContext) {
+    let o = t(cx, "");
+    for (id, name) in [
+        ("edit-strip-duplicate", "Duplicate row"),
+        ("edit-strip-delete", "Delete row"),
+        ("undo-edits", "Undo"),
+        ("redo-edits", "Redo"),
+    ] {
+        assert_eq!(label_of(cx, o.win, id).as_deref(), Some(name), "{id}");
+    }
+    cx.update(|cx| {
+        assert_eq!(
+            strip_tip("edit-strip-duplicate", cx),
+            Some(("Duplicate row", None))
+        );
+        assert_eq!(
+            strip_tip("edit-strip-delete", cx),
+            Some(("Delete row", keys_for(&DeleteRow, cx)))
+        );
+        assert_eq!(
+            strip_tip("undo-edits", cx),
+            Some(("Undo", keys_for(&UndoEdit, cx)))
+        );
+        assert_eq!(
+            strip_tip("redo-edits", cx),
+            Some(("Redo", keys_for(&RedoEdit, cx)))
+        );
+        assert!(
+            keys_for(&DeleteRow, cx).is_some(),
+            "Delete row has a key to show"
+        );
+    });
 }

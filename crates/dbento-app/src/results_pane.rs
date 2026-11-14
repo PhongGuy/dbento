@@ -309,6 +309,17 @@ pub enum ResultView {
     Plan,
 }
 
+/// An edit-strip icon button's name and the keys its tooltip shows; None for another id.
+pub fn strip_tip(id: &str, cx: &App) -> Option<(&'static str, Option<SharedString>)> {
+    match id {
+        "edit-strip-duplicate" => Some(("Duplicate row", None)),
+        "edit-strip-delete" => Some(("Delete row", keys_for(&DeleteRow, cx))),
+        "undo-edits" => Some(("Undo", keys_for(&UndoEdit, cx))),
+        "redo-edits" => Some(("Redo", keys_for(&RedoEdit, cx))),
+        _ => None,
+    }
+}
+
 /// Which edit-strip buttons apply now; all false off an editable browse result.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StripActions {
@@ -2114,7 +2125,7 @@ impl ResultsPane {
                     .ghost()
                     .xsmall()
                     .icon(icon)
-                    .tooltip(tip)
+                    .accessibility_label(tip)
                     .disabled(!on)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let target = MenuTarget {
@@ -2126,6 +2137,14 @@ impl ResultsPane {
                         this.menu_action(menu, target, window, cx);
                     }))
             };
+        // The kit button takes only a text tooltip, so a keyed one sits on a wrapper.
+        let tipped = |id: &'static str, button: Button| {
+            let (tip, keys) = strip_tip(id, cx).unwrap_or(("", None));
+            div()
+                .id(SharedString::from(format!("{id}-tip")))
+                .tooltip(move |window, cx| theme::tooltip_keys(tip, keys.clone(), window, cx))
+                .child(button)
+        };
         Some(
             strip
                 .child(
@@ -2136,21 +2155,28 @@ impl ResultsPane {
                         "Add row",
                         can.add,
                     )
+                    .tooltip("Add row")
                     .label("Row"),
                 )
-                .child(row_button(
+                .child(tipped(
                     "edit-strip-duplicate",
-                    "grid-menu-duplicate-row",
-                    ui::Icons::CopyPlus,
-                    "Duplicate row",
-                    can.duplicate,
+                    row_button(
+                        "edit-strip-duplicate",
+                        "grid-menu-duplicate-row",
+                        ui::Icons::CopyPlus,
+                        "Duplicate row",
+                        can.duplicate,
+                    ),
                 ))
-                .child(row_button(
+                .child(tipped(
                     "edit-strip-delete",
-                    "grid-menu-delete-row",
-                    ui::Icons::Trash,
-                    "Delete row",
-                    can.delete,
+                    row_button(
+                        "edit-strip-delete",
+                        "grid-menu-delete-row",
+                        ui::Icons::Trash,
+                        "Delete row",
+                        can.delete,
+                    ),
                 ))
                 .child(self.history_button(false, can.undo, cx))
                 .child(self.history_button(true, can.redo, cx))
@@ -2200,21 +2226,12 @@ impl ResultsPane {
     /// The ghost `undo-edits` or (`redo`) `redo-edits` icon button with its keys in the
     /// tooltip; disabled unless `enabled` (`strip_actions`, which waits for open editors).
     fn history_button(&self, redo: bool, enabled: bool, cx: &Context<Self>) -> AnyElement {
-        let (id, tip, icon, keys) = if redo {
-            (
-                "redo-edits",
-                "Redo",
-                ui::Icons::Redo2,
-                keys_for(&RedoEdit, cx),
-            )
+        let (id, icon) = if redo {
+            ("redo-edits", ui::Icons::Redo2)
         } else {
-            (
-                "undo-edits",
-                "Undo",
-                ui::Icons::Undo2,
-                keys_for(&UndoEdit, cx),
-            )
+            ("undo-edits", ui::Icons::Undo2)
         };
+        let (tip, keys) = strip_tip(id, cx).unwrap_or(("", None));
         // The icon is a 14 px child in the affordance colour; disabled, it fades like the
         // kit's own disabled text.
         let color = theme::affordance(cx);
@@ -2232,6 +2249,7 @@ impl ResultsPane {
                 Button::new(id)
                     .ghost()
                     .xsmall()
+                    .accessibility_label(tip)
                     .child(glyph)
                     .disabled(!enabled)
                     .on_click(cx.listener(move |this, _, _, cx| {
