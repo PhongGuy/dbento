@@ -120,6 +120,8 @@ impl DefinitionPanel {
         self.state = match result {
             Ok(definition) => {
                 let editor = sql_preview(definition.text(), window, cx);
+                // The dock is narrower than most statements, so long lines wrap rather than clip.
+                editor.update(cx, |e, cx| e.set_soft_wrap(true, window, cx));
                 if refocus {
                     editor.read(cx).focus_handle(cx).focus(window, cx);
                 }
@@ -200,6 +202,19 @@ pub fn definition_note(definition: &Definition) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
 }
 
+/// Said above a MySQL index's definition, which is its table's CREATE TABLE.
+pub const MYSQL_INDEX_NOTE: &str = "MySQL keeps index definitions in the table's CREATE TABLE.";
+
+/// Why the text is another object's: an index answered with a CREATE TABLE, as MySQL does.
+pub fn source_note(object: &ObjectRef, definition: &Definition) -> Option<&'static str> {
+    let table = definition
+        .text()
+        .trim_start()
+        .get(..12)
+        .is_some_and(|head| head.eq_ignore_ascii_case("CREATE TABLE"));
+    (matches!(object, ObjectRef::Index { .. }) && table).then_some(MYSQL_INDEX_NOTE)
+}
+
 /// "1 MiB" for 1 << 20, "256 KiB" for 1 << 18.
 pub fn cap_words(bytes: usize) -> String {
     const MIB: usize = 1 << 20;
@@ -259,6 +274,11 @@ impl Render for DefinitionPanel {
             State::Ready { definition, .. } => definition_note(definition)
                 .map(|n| label("definition-note", n).text_xs().text_color(dim)),
             State::Empty | State::Loading | State::Failed(_) => None,
+        };
+        let source = match (&self.state, &self.target) {
+            (State::Ready { definition, .. }, Some((_, object))) => source_note(object, definition)
+                .map(|n| label("definition-source", n.to_owned()).text_xs().text_color(muted)),
+            _ => None,
         };
         let body: AnyElement = match &self.state {
             State::Empty => div().into_any_element(),
@@ -330,6 +350,7 @@ impl Render for DefinitionPanel {
             .child(header)
             .children(title.map(|t| t.px_3().text_sm().truncate()))
             .children(note.map(|n| n.px_3()))
+            .children(source.map(|n| n.px_3()))
             .child(body)
             .children(actions)
     }

@@ -44,7 +44,7 @@ use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
     RevealStep, RowKind, catalog_entries, column_detail, count_text, db_index, group_title,
-    index_select_sql, insert_sql, lone_schema, node_connection, object_group_title, qualified_name,
+    index_select_sql, insert_sql, offers_definition, lone_schema, node_connection, object_group_title, qualified_name,
     select_text,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
@@ -1056,7 +1056,7 @@ impl Sidebar {
     }
 
     // A DynamoDB index has no definition, so opening one runs its PartiQL SELECT instead;
-    // every other object shows its definition.
+    // any other object shows its definition where the engine keeps one.
     fn open_object(&mut self, connection: String, object: ObjectRef, cx: &mut Context<Self>) {
         let engine = self.workspace.connection(&connection).map(|c| c.engine());
         match (&object, engine) {
@@ -1064,6 +1064,7 @@ impl Sidebar {
                 let sql = index_select_sql(Engine::Dynamodb, rel, name);
                 cx.emit(SidebarEvent::OpenIndex { connection, sql });
             }
+            (_, Some(engine)) if !offers_definition(engine, &object) => {}
             _ => cx.emit(SidebarEvent::ViewDefinition { connection, object }),
         }
     }

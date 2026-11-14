@@ -184,3 +184,23 @@ fn open_in_tab_uses_the_definitions_connection(cx: &mut TestAppContext) {
         .read_with(cx, |s, cx| s.tab().map(|t| t.read(cx).sql(cx)));
     assert_eq!(sql.as_deref(), Some(TABLE_SQL));
 }
+
+#[gpui_kit::test]
+fn the_definition_dock_opens_wide_enough_to_read(cx: &mut TestAppContext) {
+    let o = launched(cx, OBJ, "");
+    cx.simulate_window_resize(o.win, gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
+    view_album(cx, &o, "lite");
+    let width = |cx: &mut TestAppContext, id: &'static str| {
+        cx.update_window(o.win, |_, w, cx| {
+            w.render_frame(cx);
+            f32::from(w.find(id).bounds().size.width)
+        })
+        .unwrap()
+    };
+    let wide = width(cx, "definition-panel");
+    assert!((wide - 480.).abs() <= 2., "{wide}");
+    // The other docks keep their own narrower width.
+    click_id(cx, o.win, "history-toggle");
+    let history = width(cx, "history-panel");
+    assert!(history < 400., "{history}");
+}

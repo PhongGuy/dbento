@@ -7,7 +7,10 @@ use dbento_app::link::LinkState;
 use dbento_app::schema_tree::{ObjectGroup, RowKind, catalog_entries, count_text, insert_sql};
 use dbento_app::sidebar::{SidebarEvent, menu_icon, relation_tooltip};
 use dbento_app::ui::Icons;
-use dbento_core::{Engine, KeyKind, KeyTtl, ObjectRef, RelationKind, RelationRef};
+use dbento_core::{
+    Engine, IndexInfo, KeyKind, KeyTtl, ObjectRef, RelationKind, RelationRef, TriggerInfo,
+    TriggerState,
+};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, TestAppContext};
 use std::rc::Rc;
@@ -650,4 +653,44 @@ fn a_schema_rows_refresh_leaves_other_connections_alone(cx: &mut TestAppContext)
         .unwrap();
     assert_eq!(links, (LinkState::Connecting, LinkState::Connected));
     wait_tree(cx, o.win, &both);
+}
+
+#[gpui_kit::test]
+fn view_definition_shows_only_where_the_engine_answers(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let has = |k: &RowKind, e: Engine| {
+            catalog_entries(k, e, cx)
+                .iter()
+                .any(|x| x.id == "tree-menu-view-definition")
+        };
+        let view = RowKind::Relation(RelationKind::View);
+        assert!(has(&view, Engine::Surrealdb));
+        assert!(!has(&view, Engine::Mongodb));
+        let rel = RelationRef::new("app", "t");
+        let row = |group, object| RowKind::Object {
+            group,
+            object,
+            detail: String::new(),
+        };
+        let index = row(
+            ObjectGroup::Indexes,
+            IndexInfo::new(rel.clone(), "i", vec![], false, false, false, None).object_ref(),
+        );
+        assert!(has(&index, Engine::Postgres));
+        for none in [Engine::Surrealdb, Engine::Mongodb, Engine::Mssql] {
+            assert!(!has(&index, none), "{none:?}");
+            // The row still copies its name, with Enter on nothing.
+            let entries = catalog_entries(&index, none, cx);
+            assert_eq!(
+                entries.iter().map(|e| e.id).collect::<Vec<_>>(),
+                ["tree-menu-copy-name"]
+            );
+        }
+        let event = row(
+            ObjectGroup::Triggers,
+            TriggerInfo::new(rel, "ev", TriggerState::Enabled).object_ref(),
+        );
+        assert!(has(&event, Engine::Mssql));
+        assert!(!has(&event, Engine::Surrealdb));
+    });
 }

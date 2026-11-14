@@ -88,6 +88,9 @@ const TEST_DATABASES_CAP: Duration = Duration::from_secs(5);
 // The narrowest the tab area gets before the side panels give way, and their own minimum.
 const MIN_TAB_AREA: Pixels = px(160.);
 const PANEL_MIN: Pixels = px(100.);
+// The right dock's opening width; a definition gets more, since statements run long.
+const DOCK_WIDTH: Pixels = px(320.);
+const DEFINITION_DOCK_WIDTH: Pixels = px(480.);
 
 // The list `list` answers within `cap`, or empty when it fails; `None` once the cap passes,
 // so the caller abandons the session the list still holds.
@@ -4557,9 +4560,14 @@ impl Render for Shell {
                 .filter(|_| self.history_open)
                 .map(Into::into)
         };
+        let dock_width = if self.definition_open && !self.approvals_open {
+            DEFINITION_DOCK_WIDTH
+        } else {
+            DOCK_WIDTH
+        };
         let dock = docked.map(|panel| {
             resizable_panel()
-                .size(px(320.) + GUTTER)
+                .size(dock_width + GUTTER)
                 .size_range(PANEL_MIN..side_max)
                 .flex_shrink_0()
                 .child(gutter(px(0.), GUTTER).child(panel))
