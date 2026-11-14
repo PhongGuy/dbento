@@ -33,6 +33,7 @@ mod completion;
 mod completion_view;
 mod confirm_look;
 mod conflict_actions;
+mod connect_failure;
 mod connection_chip;
 mod connection_dialog;
 mod connection_form;

@@ -118,7 +118,7 @@ fn a_second_connection_in_the_other_mode_names_the_conflict(cx: &mut TestAppCont
     o.run(cx, "SELECT 1");
     o.idle(cx);
     wait_real(cx, "the refusal", |cx| {
-        label_of(cx, o.win, "result-message")
+        label_of(cx, o.win, "connect-error-message")
             .is_some_and(|m| m.contains("is already open read-write in this process"))
     });
 }

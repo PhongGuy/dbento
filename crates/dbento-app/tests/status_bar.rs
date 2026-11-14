@@ -54,7 +54,7 @@ fn a_failed_connect_shows_the_message_and_its_hint(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 1);
     o.run(cx, "SELECT 1");
     o.idle(cx);
-    let message = label_of(cx, o.win, "result-message").expect("a message");
+    let message = label_of(cx, o.win, "connect-error-message").expect("a message");
     assert!(message.contains("DBENTO_SECRET_NOPG"), "{message}");
     assert!(
         label_of(cx, o.win, "status-connection")

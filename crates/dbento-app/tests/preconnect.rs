@@ -72,7 +72,7 @@ async fn a_failed_connect_is_reported_and_the_next_run_retries() {
     let ev = r.events();
     r.send(Command::Connect);
     match next_event(&ev).await {
-        Event::ConnectFailed { message } => {
+        Event::ConnectFailed { message, .. } => {
             assert!(message.contains("DBENTO_SECRET_NOPG"), "{message}")
         }
         other @ (Event::Connected { .. }
@@ -194,9 +194,9 @@ fn opening_a_connection_connects_before_the_first_run(cx: &mut TestAppContext) {
 fn a_failed_preconnect_shows_on_the_tab(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 1);
     wait_real(cx, "the message", |cx| {
-        label_of(cx, o.win, "result-message").is_some()
+        label_of(cx, o.win, "connect-error-message").is_some()
     });
-    let message = label_of(cx, o.win, "result-message").unwrap();
+    let message = label_of(cx, o.win, "connect-error-message").unwrap();
     assert!(message.contains("DBENTO_SECRET_NOPG"), "{message}");
 }
 

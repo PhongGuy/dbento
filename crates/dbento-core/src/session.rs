@@ -369,6 +369,15 @@ pub enum ConnectError {
         /// The engine's message.
         message: String,
     },
+    /// Nothing accepted the connection at the server's address: the server is down or
+    /// listens elsewhere. It reads as `Open` does, so only the variant tells them apart.
+    #[error("cannot open the database: {message}")]
+    Refused {
+        /// `host:port` as configured, with the engine's default port when none is set.
+        address: String,
+        /// The target and the driver's error, as `Open` words it.
+        message: String,
+    },
     /// TLS could not be set up or the server's certificate failed verification.
     #[error("TLS with {host} failed: {message}")]
     Tls {
@@ -392,6 +401,20 @@ pub enum ConnectError {
         /// What is unsupported.
         reason: String,
     },
+}
+
+/// Whether a refused TCP connect sits anywhere in `e`'s chain of sources.
+pub(crate) fn refused(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(e);
+    while let Some(c) = cause {
+        if c.downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
+        {
+            return true;
+        }
+        cause = c.source();
+    }
+    false
 }
 
 /// Why a statement failed.

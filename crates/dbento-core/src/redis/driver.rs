@@ -424,6 +424,7 @@ impl Driver for RedisSession {
                     other @ (ConnectError::NotFound { .. }
                     | ConnectError::Tls { .. }
                     | ConnectError::InvalidTimeout { .. }
+                    | ConnectError::Refused { .. }
                     | ConnectError::Unsupported { .. }) => other,
                 })?;
             (Some(found.level), found.unprobeable)

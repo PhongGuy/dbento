@@ -20,7 +20,7 @@ use crate::catalog::catalog_options;
 use crate::grid::{ColumnView, fit_width_at};
 use crate::history::{HistoryLog, history_outcome};
 use crate::key_view::KeyView;
-use crate::link::LinkState;
+use crate::link::{ConnectFailure, LinkState};
 use crate::parks;
 use crate::results::ResultStore;
 use crate::runner::{
@@ -306,6 +306,8 @@ pub struct TabModel {
     results: Vec<StatementResult>,
     confirm: Option<PendingConfirm>,
     error: Option<String>,
+    /// The session's failure to open, with its fix; a session that stopped later has none.
+    failure: Option<ConnectFailure>,
     /// The parked statement's script index; each `pull` releases one more batch of it.
     paused: Option<usize>,
     /// A `Pull` is in flight; the next batch or end clears it, so scrolling sends one at a time.
@@ -487,6 +489,7 @@ impl TabModel {
             results: Vec::new(),
             confirm: None,
             error: None,
+            failure: None,
             paused: None,
             pulling: false,
             cap: None,
@@ -808,6 +811,7 @@ impl TabModel {
         self.read_only = None;
         self.read_only_level = None;
         self.error = None;
+        self.failure = None;
         closing
     }
 
@@ -823,9 +827,11 @@ impl TabModel {
         self.lost_settings |= std::mem::take(&mut self.settings_changed);
         self.spec.workspace = workspace;
         self.epoch += 1;
-        // Unknown until the new session reports whether it opened read-only.
+        // Unknown until the new session reports whether it opened read-only, or fails again.
         self.read_only = None;
         self.read_only_level = None;
+        self.error = None;
+        self.failure = None;
         self.start_runner(cx);
         if let Some(r) = &self.runner {
             r.send(Command::Connect);
@@ -871,6 +877,7 @@ impl TabModel {
         self.read_only = None;
         self.read_only_level = None;
         self.error = None;
+        self.failure = None;
         self.start_runner(cx);
         if let Some(r) = &self.runner {
             r.send(Command::Connect);
@@ -931,8 +938,12 @@ impl TabModel {
                 self.current_database = None;
                 self.cancel = Some(cancel);
                 self.error = None;
+                self.failure = None;
             }
-            Event::ConnectFailed { message } => self.error = Some(message),
+            Event::ConnectFailed { message, fix } => {
+                self.failure = Some(ConnectFailure::new(message.clone(), fix));
+                self.error = Some(message);
+            }
             Event::SettingsChanged { database } => {
                 self.settings_changed = true;
                 self.current_database = database;
@@ -962,6 +973,7 @@ impl TabModel {
                     self.target_landed = Some(Err(message.clone()));
                 }
                 self.error = Some(message);
+                self.failure = None;
                 // No statement of a dead runner ends by itself, so none may stay "running".
                 self.finish_unfinished(StopReason::Lost);
             }
@@ -3144,6 +3156,11 @@ impl TabModel {
     /// The last connection or session error.
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// Why the session could not open, while no session has opened since.
+    pub fn connect_failure(&self) -> Option<&ConnectFailure> {
+        self.failure.as_ref()
     }
 
     /// How many times a cancel handle was fired, for tests.

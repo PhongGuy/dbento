@@ -1380,6 +1380,12 @@ impl Shell {
                 let name = tab.read(cx).model().read(cx).spec().connection.clone();
                 this.open_relation_named(&name, rel, RelationKind::Table, window, cx);
             }
+            // No session opened, so nothing is lost by reconnecting without asking.
+            QueryTabEvent::Retry => this.reconnect_tab(tab, cx),
+            QueryTabEvent::EditConnection => {
+                let name = tab.read(cx).model().read(cx).spec().connection.clone();
+                this.edit_connection(&name, window, cx);
+            }
         });
         // A filter, a sort or leaving the browse changes what the session restores.
         let browse = cx.subscribe(&model, |this, _, e: &BrowseEvent, cx| {
@@ -2606,20 +2612,29 @@ impl Shell {
                 return;
             }
             let _ = this.update(cx, |shell, cx| {
-                let (Some(tab), Some(ws)) = (tab.upgrade(), shell.workspace.clone()) else {
-                    return;
-                };
-                if shell.closing || !shell.tabs.contains(&tab) || ws.connection(&name).is_none() {
-                    return;
+                if let Some(tab) = tab.upgrade() {
+                    shell.reconnect_tab(&tab, cx);
                 }
-                let model = tab.read(cx).model().clone();
-                let closing = model.update(cx, |m, cx| m.reconnect(Arc::clone(&ws), cx));
-                shell.keep_closing(closing.wait(), cx);
-                tab.update(cx, |t, cx| t.set_workspace(&ws, cx));
-                cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Reconnects `tab` on the current dbento.toml; nothing while closing or once the tab
+    /// or its connection is gone.
+    fn reconnect_tab(&mut self, tab: &Entity<QueryTab>, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        let name = tab.read(cx).session_conn().name().to_owned();
+        if self.closing || !self.tabs.contains(tab) || ws.connection(&name).is_none() {
+            return;
+        }
+        let model = tab.read(cx).model().clone();
+        let closing = model.update(cx, |m, cx| m.reconnect(Arc::clone(&ws), cx));
+        self.keep_closing(closing.wait(), cx);
+        tab.update(cx, |t, cx| t.set_workspace(&ws, cx));
+        cx.notify();
     }
 
     /// Switches `tab` to connection `name` of the current dbento.toml without asking: the old

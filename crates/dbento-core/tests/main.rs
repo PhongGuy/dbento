@@ -13,6 +13,7 @@ mod browse_keyset;
 mod byte_limit;
 mod client_cert;
 mod column_source;
+mod connect_refused;
 mod connection_form;
 mod databases;
 mod datagrip_config_dirs;

@@ -30,7 +30,7 @@ use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, 
 use crate::postgres::{TLS_WAYS_OUT, client_auth, tls_error};
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError, ExtendError,
-    Flavor, Limits, OnTruncate, Outcome, Prepared, ServerInfo, StreamItem, TruncatedBy,
+    Flavor, Limits, OnTruncate, Outcome, Prepared, ServerInfo, StreamItem, TruncatedBy, refused,
 };
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ColumnSource, ResultBatch};
 use crate::workspace::{ConnectionConfig, Engine, TlsMode};
@@ -1747,6 +1747,14 @@ fn connect_error(conn: &ConnectionConfig, e: &mysql_async::Error) -> ConnectErro
         | mysql_async::Error::Other(_)
         | mysql_async::Error::Url(_)) => format!("{target}: {other}"),
     };
+    if refused(e) {
+        let address = format!(
+            "{}:{}",
+            conn.host().unwrap_or_default(),
+            conn.port().unwrap_or(3306)
+        );
+        return ConnectError::Refused { address, message };
+    }
     ConnectError::Open { message }
 }
 
