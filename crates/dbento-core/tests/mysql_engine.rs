@@ -50,6 +50,16 @@ fn mariadb_is_an_alias_and_a_local_host_defaults_to_plaintext() {
 }
 
 #[test]
+fn a_connection_written_as_mariadb_is_labelled_mariadb() {
+    let (_dir, ws) = ws_with(&format!(
+        "{MY}[connections.m]\nengine = \"mariadb\"\nhost = \"h\"\nuser = \"u\"\n"
+    ));
+    let ws = ws.unwrap();
+    assert_eq!(ws.declared("m").unwrap().engine_label(), "mariadb");
+    assert_eq!(ws.declared("my").unwrap().engine_label(), "mysql");
+}
+
+#[test]
 fn mysql_refuses_other_engines_keys_and_needs_host_and_user() {
     let base = "dbento = 1\n[connections.my]\nengine = \"mysql\"\n";
     let m = invalid(&format!(

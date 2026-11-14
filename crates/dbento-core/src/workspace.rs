@@ -513,6 +513,8 @@ pub enum Databases {
 pub struct ConnectionConfig {
     name: String,
     engine: Engine,
+    // MariaDB shares MySQL's driver but keeps its own name wherever the engine is shown.
+    mariadb: bool,
     read_only: bool,
     color: Option<Color>,
     folder: Option<FolderPath>,
@@ -1414,6 +1416,7 @@ impl ConnectionConfig {
         let mut config = ConnectionConfig {
             name: name.clone(),
             engine,
+            mariadb: raw.engine == "mariadb",
             read_only: raw.read_only.unwrap_or(false),
             color,
             folder,
@@ -1870,6 +1873,16 @@ impl ConnectionConfig {
     /// The database engine.
     pub fn engine(&self) -> Engine {
         self.engine
+    }
+
+    /// The engine as people name it: `mariadb` for a connection written that way, else
+    /// [`Engine::name`].
+    pub fn engine_label(&self) -> &'static str {
+        if self.mariadb {
+            "mariadb"
+        } else {
+            self.engine.name()
+        }
     }
 
     /// Whether every statement runs read-only.
