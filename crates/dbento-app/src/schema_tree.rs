@@ -1254,6 +1254,34 @@ impl CatalogTree {
         }
     }
 
+    /// The MySQL or MariaDB database `conn` names in its config, once its listing holds it.
+    /// MySQL lists every database as a schema, so the configured one is the default.
+    pub fn default_schema(&self, conn: &str) -> Option<&str> {
+        let config = self.workspace.as_deref()?.declared(conn)?;
+        let database = config
+            .database()
+            .filter(|_| config.engine() == Engine::Mysql)?;
+        let schemas = self.schemas(conn)?;
+        schemas
+            .iter()
+            .map(SchemaInfo::name)
+            .find(|name| *name == database)
+    }
+
+    /// The schema `conn` opens on its own when it loads: a lone schema, else the default one.
+    pub fn auto_open_schema(&self, conn: &str) -> Option<&str> {
+        let schemas = self.schemas(conn)?;
+        lone_schema(schemas).or_else(|| self.default_schema(conn))
+    }
+
+    /// `rel` as the explorer names it: bare under a lone schema, where the schema is noise.
+    pub fn shown_name(&self, conn: &str, rel: &RelationRef) -> String {
+        match self.schemas(conn).and_then(lone_schema) {
+            Some(only) if only == rel.schema() => rel.name().to_owned(),
+            _ => format!("{}.{}", rel.schema(), rel.name()),
+        }
+    }
+
     /// Loaded relations of `schema`, for completion.
     pub fn relations(&self, conn: &str, schema: &str) -> Option<&RelationList> {
         match self.relations.get(&(conn.to_owned(), schema.to_owned())) {
@@ -2346,14 +2374,9 @@ pub fn insert_sql(engine: Engine, rel: &RelationRef, columns: &[&str]) -> String
 }
 
 /// A count's notice text, `"main.Album: 12,345 rows"` (`"1 row"` for one).
-pub fn count_text(rel: &RelationRef, n: u64) -> String {
+pub fn count_text(name: &str, n: u64) -> String {
     let noun = if n == 1 { "row" } else { "rows" };
-    format!(
-        "{}.{}: {} {noun}",
-        rel.schema(),
-        rel.name(),
-        group_digits(n)
-    )
+    format!("{name}: {} {noun}", group_digits(n))
 }
 
 fn relation_objects_query(rel: &RelationRef) -> CatalogQuery {

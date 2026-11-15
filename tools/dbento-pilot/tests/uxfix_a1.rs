@@ -82,7 +82,7 @@ async fn a_table_menu_a_count_notice_and_the_read_only_note() {
     );
     click(&pilot, "tree-menu-count", json!({})).await;
     until(&pilot, "the count notice", |t| {
-        name(t, "notice") == Some("main.t: 2 rows")
+        name(t, "notice") == Some("t: 2 rows")
     })
     .await;
 

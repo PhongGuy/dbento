@@ -200,15 +200,17 @@ fn footer_count(name: &str) -> Option<u64> {
         .ok()
 }
 
-/// Opens connection `lite` with a double click, types `sql`, lifts the row limit when
+/// Selects the connection row with element id `id` and presses Enter, which opens or
+/// activates its query tab; a double click on the row only expands it.
+pub async fn open_connection(pilot: &Pilot, id: &str) {
+    pilot.ok("click", json!({ "target": { "id": [id] } })).await;
+    pilot.ok("key", json!({ "keys": "enter" })).await;
+}
+
+/// Opens connection `lite` from its row, types `sql`, lifts the row limit when
 /// `unlimited`, runs it and waits for the footer to count a first row.
 pub async fn run_query(pilot: &Pilot, sql: &str, unlimited: bool) {
-    pilot
-        .ok(
-            "click",
-            json!({ "target": { "id": ["connection-lite"] }, "count": 2 }),
-        )
-        .await;
+    open_connection(pilot, "connection-lite").await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;

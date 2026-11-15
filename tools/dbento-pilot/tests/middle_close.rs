@@ -32,7 +32,7 @@ async fn a_middle_click_closes_a_clean_tab_and_asks_for_an_edited_one() {
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     pilot.ok("launch", launch_args("headless", ws.path())).await;
-    click(&pilot, "connection-lite", json!({ "count": 2 })).await;
+    common::open_connection(&pilot, "connection-lite").await;
     until(&pilot, "the first tab", |t| find_node(t, "tab-0").is_some()).await;
     click(&pilot, "tab-new", json!({})).await;
     until(&pilot, "the second tab", |t| {

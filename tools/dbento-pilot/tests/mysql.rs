@@ -113,7 +113,7 @@ async fn mysql_refuses_a_read_only_write_then_browses_and_opens_a_table() {
 
     // A write on the read-only connection fails in the database and changes nothing.
     let pilot = launch(ws.path(), db.password()).await;
-    click(&pilot, "connection-ro", json!({ "count": 2 })).await;
+    common::open_connection(&pilot, "connection-ro").await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;

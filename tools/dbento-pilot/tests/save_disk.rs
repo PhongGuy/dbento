@@ -61,12 +61,7 @@ async fn saving_over_a_file_changed_on_disk_asks_then_overwrites() {
     std::fs::write(&file, "SELECT 1").unwrap();
     let pilot = Pilot::start().await;
     pilot.ok("launch", launch_args("headless", ws.path())).await;
-    pilot
-        .ok(
-            "click",
-            json!({ "target": { "id": ["connection-lite"] }, "count": 2 }),
-        )
-        .await;
+    common::open_connection(&pilot, "connection-lite").await;
     until(&pilot, "the editor", |t| find_node(t, "editor").is_some()).await;
     pilot
         .ok("click", json!({ "target": { "id": ["editor"] } }))

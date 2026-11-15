@@ -119,7 +119,7 @@ async fn launch(ws: &Path) -> Pilot {
 }
 
 async fn type_in(pilot: &Pilot, conn: &str, text: &str) {
-    click(pilot, &format!("connection-{conn}"), json!({ "count": 2 })).await;
+    common::open_connection(pilot, &format!("connection-{conn}")).await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;

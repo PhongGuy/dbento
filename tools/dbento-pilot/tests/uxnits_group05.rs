@@ -127,7 +127,7 @@ async fn amber_note_sql_wells_and_secondary_buttons_in_light() {
     exec(ws.path(), TABLE).await;
     let pilot = Pilot::start().await;
     launch_light(&pilot, ws.path(), None).await;
-    click(&pilot, "connection-lite", 2).await;
+    common::open_connection(&pilot, "connection-lite").await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;

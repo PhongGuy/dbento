@@ -36,12 +36,7 @@ async fn shot(pilot: &Pilot, name: &str) {
 }
 
 async fn open_and_type(pilot: &Pilot, conn: &str, sql: &str) {
-    pilot
-        .ok(
-            "click",
-            json!({ "target": { "id": [format!("connection-{conn}")] }, "count": 2 }),
-        )
-        .await;
+    common::open_connection(pilot, &format!("connection-{conn}")).await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;
