@@ -76,6 +76,6 @@ fn arrow_keys_hint_as_arrows_and_other_keys_stay_upper_case() {
     use dbento_app::keymap::{NAV_BACK_KEYS, NAV_FORWARD_KEYS, key_hint, plus_keys};
     assert_eq!(plus_keys(NAV_BACK_KEYS), "Alt+\u{2190}");
     assert_eq!(plus_keys(NAV_FORWARD_KEYS), "Alt+\u{2192}");
-    assert_eq!(key_hint("ctrl-delete"), ["Ctrl", "DELETE"]);
+    assert_eq!(key_hint("ctrl-delete"), ["Ctrl", "Del"]);
     assert_eq!(key_hint("f2"), ["F2"]);
 }

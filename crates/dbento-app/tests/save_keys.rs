@@ -74,7 +74,7 @@ fn hints_spell_keys_with_plus(cx: &mut TestAppContext) {
     cx.update(|cx| {
         assert_eq!(
             format_tooltip(cx),
-            "Format SQL (also Alt+Shift+F, Ctrl+Alt+L)"
+            "Format SQL (also Alt+Shift+F or Ctrl+Alt+L)"
         );
     });
 }
