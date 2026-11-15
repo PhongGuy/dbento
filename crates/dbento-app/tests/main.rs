@@ -222,3 +222,4 @@ mod user_keymap;
 mod version;
 mod widths;
 mod window_identity;
+mod workspace_switch;

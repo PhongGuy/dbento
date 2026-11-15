@@ -20,7 +20,7 @@ use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{ObservedElement, ResizeHandleRenderer, ResizeHandleState};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, ResizableState, Sizable as _, TITLE_BAR_HEIGHT, TitleBar,
@@ -55,10 +55,11 @@ use crate::history::HistoryLog;
 use crate::history_panel::{HistoryPanel, HistoryPanelEvent};
 use crate::inspector::{Inspector, InspectorEvent};
 use crate::keymap::{
-    CloseTab, GoToLastTab, GoToTab1, GoToTab2, GoToTab3, GoToTab4, GoToTab5, GoToTab6, GoToTab7,
-    GoToTab8, MoveTabLeft, MoveTabRight, NavBack, NavForward, NewConnection, NewTab, OpenCommands,
-    OpenPalette, OpenQuery, OpenSettings, RecentTabBack, RecentTabForward, ReloadWorkspace,
-    SaveQuery, ToggleHistory, ToggleRowInspector, chip_keys, keys_for,
+    CloseTab, CloseWorkspace, GoToLastTab, GoToTab1, GoToTab2, GoToTab3, GoToTab4, GoToTab5,
+    GoToTab6, GoToTab7, GoToTab8, MoveTabLeft, MoveTabRight, NavBack, NavForward, NewConnection,
+    NewTab, OpenCommands, OpenPalette, OpenQuery, OpenSettings, OpenWorkspace, RecentTabBack,
+    RecentTabForward, ReloadWorkspace, SaveQuery, ToggleHistory, ToggleRowInspector, chip_keys,
+    keys_for,
 };
 use crate::link::LinkState;
 use crate::nav::{Hop, NavHistory};
@@ -1873,6 +1874,8 @@ impl Shell {
             C::SaveQuery => self.save_active(window, cx),
             C::NewConnection => self.new_connection(window, cx),
             C::ReloadWorkspace => self.reload_workspace(window, cx),
+            C::OpenWorkspace => self.prompt_open(window, cx),
+            C::CloseWorkspace => self.close_workspace(window, cx),
             C::ToggleHistory => self.toggle_history(cx),
             C::ToggleRowInspector => self.toggle_inspector(cx),
             C::CycleAppearance => self.cycle_appearance(cx),
@@ -2440,42 +2443,107 @@ impl Shell {
     /// edits are staged or a statement runs. Does nothing while the window is closing, so the
     /// saved session stays as it was.
     pub fn switch_workspace(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.switch_to(Some(dir), window, cx);
+    }
+
+    /// `switch_workspace` to no workspace: once asked as for a switch, closes the open one,
+    /// shows the welcome view and forgets it as the next start's. Nothing without one.
+    pub fn close_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace.is_some() {
+            self.switch_to(None, window, cx);
+        }
+    }
+
+    // The one way a workspace changes in a window: `Some` opens that folder, `None` returns
+    // to the welcome view, both behind the same keep or discard question.
+    fn switch_to(&mut self, target: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
+        // From an open workspace, the same folder (by any path) is a no-op and one that cannot
+        // open is refused before anything closes; the welcome view shows its own error instead.
+        if let (Some(dir), Some(ws)) = (&target, &self.workspace) {
+            if std::fs::canonicalize(dir).is_ok_and(|real| real == ws.dir()) {
+                return;
+            }
+            if let Err(e) = Workspace::open(dir) {
+                self.recent = recent_status(&self.saved.recent_workspaces);
+                cx.notify();
+                return show_error("Cannot open workspace", e.to_string(), window, cx);
+            }
+        }
+        let verb = match target {
+            Some(_) => "Switching workspaces",
+            None => "Closing the workspace",
+        };
         let lost = self.flush_drafts(cx);
         let staged = self.staged_total(cx);
         let running = running_titles(self.tabs.iter(), cx);
         if staged == 0 && lost == 0 && running.is_empty() {
-            return self.open_workspace(dir, window, cx);
+            return self.enter(target, window, cx);
         }
         let (title, mut parts) = match staged {
             0 => ("Close the open tabs?".to_owned(), Vec::new()),
-            n => (
-                discard_title(n),
-                vec!["Switching workspaces drops them.".to_owned()],
-            ),
+            n => (discard_title(n), vec![format!("{verb} drops them.")]),
         };
         parts.extend((lost > 0).then(|| lost_detail(lost)));
-        parts.extend(running_detail("Switching workspaces", &running));
+        parts.extend(running_detail(verb, &running));
         self.ask_once(
             title,
             parts.join(" "),
             "Keep",
             window,
             cx,
-            move |shell, window, cx| shell.open_workspace(dir, window, cx),
+            move |shell, window, cx| shell.enter(target, window, cx),
         );
+    }
+
+    fn enter(&mut self, target: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        match target {
+            Some(dir) => self.open_workspace(dir, window, cx),
+            None => self.leave_workspace(window, cx),
+        }
+    }
+
+    // Closes the workspace's tabs and catalog sessions, keeping their drafts and saved
+    // session, and drops what names its objects: the step before any workspace change.
+    fn shut_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_all_tabs(cx);
+        if let Some(sidebar) = &self.sidebar {
+            for closing in sidebar.update(cx, |s, _| s.close_catalogs()) {
+                self.keep_closing(closing.wait(), cx);
+            }
+        }
+        self.follow_active(window, cx);
+        // The dock names an object of the old workspace, whose sidebar would answer its load.
+        self.definition_open = false;
+        self.definition_panel.update(cx, |p, cx| p.clear(cx));
+    }
+
+    fn clear_workspace(&mut self) {
+        self.workspace = None;
+        self.sidebar = None;
+        self._sidebar_events = None;
+        self._sidebar_notify = None;
+        self.history_panel = None;
+        self._history_events = None;
+    }
+
+    // The welcome view, which the next start shows too; the folder stays in the recents.
+    fn leave_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shut_workspace(window, cx);
+        self.clear_workspace();
+        self.error = None;
+        self.update_saved(|s| s.last_workspace = None, cx);
+        self.recent = recent_status(&self.saved.recent_workspaces);
+        self.show_approvals(cx);
+        cx.notify();
     }
 
     /// Opens the workspace in `dir` and remembers it for the next start. On failure the
     /// welcome view shows the error and any open workspace is closed.
     pub fn open_workspace(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_all_tabs(cx);
-        self.follow_active(window, cx);
-        // The dock names an object of the old workspace, whose sidebar would answer its load.
-        self.definition_open = false;
-        self.definition_panel.update(cx, |p, cx| p.clear(cx));
+        self.shut_workspace(window, cx);
         match Workspace::open(&dir) {
             Ok(ws) => {
                 let ws = Arc::new(ws);
@@ -2586,12 +2654,7 @@ impl Shell {
                 self.restore_tabs(window, cx);
             }
             Err(e) => {
-                self.workspace = None;
-                self.sidebar = None;
-                self._sidebar_events = None;
-                self._sidebar_notify = None;
-                self.history_panel = None;
-                self._history_events = None;
+                self.clear_workspace();
                 self.error = Some(e.to_string());
                 self.forget_if_saved(&dir, cx);
             }
@@ -4739,6 +4802,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NavForward, window, cx| {
                 this.nav_forward(window, cx);
             }))
+            .on_action(
+                cx.listener(|this, _: &OpenWorkspace, window, cx| this.prompt_open(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseWorkspace, window, cx| {
+                    this.close_workspace(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ReloadWorkspace, window, cx| {
                 this.reload_workspace(window, cx)
             }))
@@ -4813,8 +4884,20 @@ impl Shell {
         let bar = TitleBar::new()
             .h(TITLE_BAR)
             .border_b_0()
-            .on_close_window(move |_, window, cx| kit_close(window, cx))
-            .child(img(ui::APP_ICON).size(px(16.)).flex_none());
+            .on_close_window(move |_, window, cx| kit_close(window, cx));
+        // The workspace pill follows the icon and stops short of the centred search pill; the
+        // bar spreads its children, so the two share one.
+        let room = ((window.viewport_size().width - SEARCH_PILL_WIDTH) / 2.)
+            .max(TITLE_BAR_HEIGHT * 3.)
+            - px(56.);
+        let bar = bar.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(img(ui::APP_ICON).size(px(16.)).flex_none())
+                .children(self.workspace_pill(room, cx)),
+        );
         let pill = self.sidebar.as_ref().map(|_| self.title_pill(cx));
         let controls = crate::window_controls::Controls::drawn(window);
         div()
@@ -4846,6 +4929,49 @@ impl Shell {
             ))
     }
 
+    // The open workspace's folder name beside the search pill; its menu offers the other
+    // recent workspaces, a folder picker and a way back to the welcome view.
+    fn workspace_pill(
+        &self,
+        room: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let ws = self.workspace.as_ref()?;
+        let name = ws.dir().file_name().map_or_else(
+            || ws.dir().display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let others: Vec<(PathBuf, bool)> = (self.recent.iter())
+            .filter(|(dir, _)| dir != ws.dir())
+            .cloned()
+            .collect();
+        let shell = cx.weak_entity();
+        let (open_keys, close_keys) = (keys_for(&OpenWorkspace, cx), keys_for(&CloseWorkspace, cx));
+        let button = Button::new("title-workspace")
+            .ghost()
+            .small()
+            .label(name)
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, cx| {
+                workspace_menu(
+                    menu,
+                    &shell,
+                    &others,
+                    [open_keys.clone(), close_keys.clone()],
+                    cx,
+                )
+            });
+        // The title bar starts a window move on a press, which a click here must not do.
+        Some(
+            div()
+                .flex_none()
+                .max_w(room.min(px(240.)))
+                .overflow_hidden()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(button),
+        )
+    }
+
     fn title_pill(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (dim, fill) = (theme::dim(cx), theme::editor_fill(cx));
         let theme = cx.theme();
@@ -4858,7 +4984,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap_2()
-            .w(px(420.))
+            .w(SEARCH_PILL_WIDTH)
             .max_w_full()
             .h(px(28.))
             .pl_2()
@@ -5088,8 +5214,71 @@ fn gap_handle() -> ResizeHandleRenderer {
     })
 }
 
+// The workspace pill's menu: each other recent folder (a missing one marked, as on the
+// welcome view, and still tried on a click), then Open workspace and Close workspace.
+fn workspace_menu(
+    menu: PopupMenu,
+    shell: &WeakEntity<Shell>,
+    recent: &[(PathBuf, bool)],
+    [open_keys, close_keys]: [Option<SharedString>; 2],
+    cx: &App,
+) -> PopupMenu {
+    let menu = recent
+        .iter()
+        .enumerate()
+        .fold(menu, |menu, (ix, (dir, missing))| {
+            let label = SharedString::from(dir.display().to_string());
+            let (shell, dir, missing) = (shell.clone(), dir.clone(), *missing);
+            let row = PopupMenuItem::element(move |_, _| {
+                div()
+                    .id(("title-workspace-recent", ix))
+                    .aria_label(label.clone())
+                    .test_support()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .when(missing, |row| row.opacity(0.6))
+                    .child(div().min_w_0().truncate().child(label.clone()))
+                    .children(missing.then(|| {
+                        div()
+                            .id(("title-workspace-missing", ix))
+                            .test_support()
+                            .flex_none()
+                            .pl(px(8.))
+                            .text_xs()
+                            .child("not found")
+                    }))
+            })
+            .on_click(move |_, window, cx| {
+                let _ = shell.update(cx, |s, cx| s.switch_workspace(dir.clone(), window, cx));
+            });
+            menu.item(row)
+        });
+    let (open, close) = (shell.clone(), shell.clone());
+    menu.when(!recent.is_empty(), |menu| menu.separator())
+        .item(
+            ui::text_menu_item(
+                "title-workspace-open",
+                "Open workspace\u{2026}",
+                open_keys,
+                cx,
+            )
+            .on_click(move |_, window, cx| {
+                let _ = open.update(cx, |s, cx| s.prompt_open(window, cx));
+            }),
+        )
+        .item(
+            ui::text_menu_item("title-workspace-close", "Close workspace", close_keys, cx)
+                .on_click(move |_, window, cx| {
+                    let _ = close.update(cx, |s, cx| s.close_workspace(window, cx));
+                }),
+        )
+}
+
 /// The title pill's text and aria label: what the palette searches.
 const PALETTE_LABEL: &str = "Search tables, queries and commands";
+const SEARCH_PILL_WIDTH: Pixels = px(420.);
 const GUTTER: Pixels = px(6.);
 const TITLE_BAR: Pixels = px(40.);
 const TAB_STRIP: Pixels = px(36.);

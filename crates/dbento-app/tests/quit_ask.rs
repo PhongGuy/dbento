@@ -176,8 +176,9 @@ fn a_workspace_switch_asks_while_a_statement_runs_and_keep_keeps_it_running(
 ) {
     let o = running_long(cx);
     let m = o.model(cx);
+    let other_ws = crate::support::fixture("", "");
     let switch = |cx: &mut TestAppContext| {
-        let (shell, other) = (o.shell.clone(), o.files.path().to_path_buf());
+        let (shell, other) = (o.shell.clone(), other_ws.dir.path().to_path_buf());
         cx.update_window(o.win, |_, w, cx| {
             shell.update(cx, |s, cx| s.switch_workspace(other, w, cx))
         })
