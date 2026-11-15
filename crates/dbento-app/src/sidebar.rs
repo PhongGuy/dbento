@@ -1142,13 +1142,20 @@ impl Sidebar {
         .detach();
     }
 
-    // Enter opens a selected connection's tab and a selected relation as its double click
-    // does, and asks for a selected object's definition (a DynamoDB index runs instead); on Load
-    // more or a failed row it does what a click on the row or its Retry does. Any other
-    // selection lets the key go on.
+    // Enter opens a selected connection's or child connection's tab and a selected relation as
+    // its double click does, and asks for a selected object's definition (a DynamoDB index runs
+    // instead); on Load more or a failed row it does what a click on the row or its Retry does.
+    // Any other selection lets the key go on.
     fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
         if let (Some(Selection::Connection(_)), Some(ix)) = (&self.selection, self.selected()) {
             self.open(ix, cx);
+            return;
+        }
+        if let Some(Selection::Node(NodeKey::Connection(child))) = &self.selection {
+            cx.emit(SidebarEvent::NewQuery {
+                connection: child.clone(),
+                sql: String::new(),
+            });
             return;
         }
         if let Some(Selection::Status { key, aria }) = self.selection.clone() {
@@ -1871,13 +1878,9 @@ impl Sidebar {
                         (NodeKey::Relation { conn, rel }, Some(kind), 2) => {
                             this.open_relation(conn, rel, kind, cx);
                         }
-                        // A database row is a child connection; its double click opens a query.
-                        (NodeKey::Connection(child), None, 2) => {
-                            cx.emit(SidebarEvent::NewQuery {
-                                connection: child.clone(),
-                                sql: String::new(),
-                            });
-                        }
+                        // A database row is a child connection, so its double click toggles it
+                        // as on any connection row; Enter opens its query.
+                        (NodeKey::Connection(_), None, 2) => this.toggle_node(key.clone(), cx),
                         _ => {}
                     }
                 }))

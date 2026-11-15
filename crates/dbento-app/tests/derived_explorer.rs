@@ -91,6 +91,13 @@ fn a_child_expands_on_its_own_session_and_opens_a_tab(cx: &mut TestAppContext) {
     cx.update_window(s.win, |_, w, cx| w.double_click(("tree-row", 0usize), cx))
         .unwrap();
     cx.run_until_parked();
+    assert!(
+        tab_conns(cx, &s).is_empty(),
+        "a double click toggles a child connection, like any connection"
+    );
+    cx.update_window(s.win, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    cx.run_until_parked();
     assert_eq!(tab_conns(cx, &s), ["srv/app"]);
 }
 
