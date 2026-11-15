@@ -137,6 +137,21 @@ fn a_search_that_finds_nothing_says_so_and_does_nothing(cx: &mut TestAppContext)
     assert_ne!(highlighted(cx, &o).as_deref(), Some(row));
 }
 
+// A clicked row that keeps the palette open leaves the typing in the search field.
+#[gpui_kit::test]
+fn typing_after_clicking_search_in_goes_to_the_search_field(cx: &mut TestAppContext) {
+    let o = launched(cx, SETUP, "");
+    open(cx, &o);
+    palette_pick(cx, o.win, "Search tables in lite");
+    wait_real(cx, "lite's tables", |cx| {
+        has(cx, &o, "main.orders \u{b7} lite")
+    });
+    cx.update_window(o.win, |_, w, cx| w.input("zz", cx))
+        .unwrap();
+    let row = "No tables in lite match 'ordzz'";
+    wait_real(cx, "the no-match row", |cx| has(cx, &o, row));
+}
+
 /// The kit's rows as (bounds, selected, label), the label read from the row drawn inside.
 fn kit_rows(cx: &mut TestAppContext, o: &Opened) -> Vec<(Bounds<Pixels>, bool, String)> {
     let rows = palette_rows(cx, o.win);
