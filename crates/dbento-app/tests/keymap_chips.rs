@@ -133,3 +133,14 @@ fn the_run_button_chip_follows_an_override(cx: &mut TestAppContext) {
     let chip = label_of(cx, o.win, "run-keys");
     assert_eq!(chip, Some(keymap::chip_keys("f5")));
 }
+
+#[gpui_kit::test]
+fn the_explorer_enter_label_covers_every_row_it_opens(cx: &mut TestAppContext) {
+    support::init(cx);
+    cx.update(|cx| {
+        let label = keymap::commands(cx)
+            .into_iter()
+            .find_map(|(id, label, _)| (id == "explorer.open_selected").then_some(label));
+        assert_eq!(label, Some("Open selected item"));
+    });
+}

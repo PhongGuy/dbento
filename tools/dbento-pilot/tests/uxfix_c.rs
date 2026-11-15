@@ -72,7 +72,7 @@ async fn the_palette_finds_a_table_and_lists_commands() {
     .await;
     click(&pilot, &row_named(&tree, "Search tables in lite").unwrap()).await;
     until(&pilot, "lite's tables", |t| {
-        row_named(t, "main.orders \u{b7} lite").is_some()
+        row_named(t, "orders \u{b7} lite").is_some()
     })
     .await;
     pilot.ok("key", json!({ "keys": "escape" })).await;
@@ -84,7 +84,7 @@ async fn the_palette_finds_a_table_and_lists_commands() {
     until(&pilot, "the palette", |t| find_node(t, "palette").is_some()).await;
     pilot.ok("type", json!({ "text": "ord" })).await;
     until(&pilot, "orders first", |t| {
-        name(t, "palette-row-0") == Some("main.orders \u{b7} lite")
+        name(t, "palette-row-0") == Some("orders \u{b7} lite")
     })
     .await;
     pilot.ok("key", json!({ "keys": "enter" })).await;

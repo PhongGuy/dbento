@@ -31,6 +31,7 @@ fn src() -> Sources {
         ],
         shortcuts: Vec::new(),
         searched: Vec::new(),
+        lone_schemas: Default::default(),
     }
 }
 /// [`src`] with the table's shortcut list, which needs an app to read.
@@ -173,6 +174,32 @@ fn all_mode_caps_tables_and_queries_but_a_single_mode_does_not() {
     assert_eq!(all[0].entries.len(), 50);
     assert_eq!(all[1].entries.len(), 20);
     assert_eq!(sections(&s, "#")[0].entries.len(), 30);
+}
+
+#[test]
+fn a_lone_schema_drops_from_table_rows_but_ranking_keeps_it() {
+    let mut s = src();
+    s.lone_schemas = [("lite".to_owned(), "main".to_owned())].into();
+    assert_eq!(
+        Entry::Table(t("lite", "orders")).label(&s),
+        "orders \u{b7} lite"
+    );
+    assert_eq!(
+        Entry::Recent(t("lite", "orders")).label(&s),
+        "orders \u{b7} lite"
+    );
+    let found = sections(&s, "main.ord");
+    assert_eq!(found[0].entries[0], Entry::Table(t("lite", "orders")));
+    // A table outside the lone schema, or of a connection with several, keeps its prefix.
+    let other = TableRef {
+        rel: RelationRef::new("temp", "scratch"),
+        ..t("lite", "x")
+    };
+    assert_eq!(Entry::Table(other).label(&s), "temp.scratch \u{b7} lite");
+    assert_eq!(
+        Entry::Table(t("pg", "orders")).label(&s),
+        "main.orders \u{b7} pg"
+    );
 }
 
 #[gpui_kit::test]

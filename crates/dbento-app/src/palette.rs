@@ -1,7 +1,7 @@
 //! The command palette: query prefixes, the subsequence ranker, the groups of rows it shows,
 //! and the dialog view that hosts them.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ use crate::catalog::CatalogQuery;
 use crate::confirm::frame;
 use crate::keymap::{self, chip_keys};
 use crate::link::LinkState;
-use crate::schema_tree::NodeKey;
+use crate::schema_tree::{NodeKey, lone_schema};
 use crate::sidebar::Sidebar;
 use crate::theme::{self, CycleAppearance};
 use crate::ui::{self, Icons};
@@ -147,6 +147,15 @@ impl TableRef {
     fn qualified(&self) -> String {
         format!("{}.{}", self.rel.schema(), self.rel.name())
     }
+
+    // The explorer's naming (`CatalogTree::shown_name`): bare under its connection's lone
+    // schema. Ranking keeps the qualified name, so "main.alb" still finds a bare "Album".
+    fn shown(&self, src: &Sources) -> String {
+        match src.lone_schemas.get(&self.connection) {
+            Some(only) if *only == self.rel.schema() => self.rel.name().to_owned(),
+            _ => self.qualified(),
+        }
+    }
 }
 
 /// How far a connection's catalog has loaded.
@@ -187,6 +196,8 @@ pub struct Sources {
     pub shortcuts: Vec<keymap::Shortcut>,
     /// Connections the user asked to search from a Search or Retry row in this palette.
     pub searched: Vec<String>,
+    /// Each connection with exactly one schema, and that schema: its rows drop the prefix.
+    pub lone_schemas: BTreeMap<String, String>,
 }
 
 /// A command the palette runs.
@@ -352,12 +363,13 @@ fn query_label(path: &str) -> String {
 }
 
 impl Entry {
-    /// The row's text: a table as "schema.name · connection", a query by its path, a
-    /// connection or status row by name, a command or shortcut by its label.
+    /// The row's text: a table as "schema.name · connection" ("name · connection" under a
+    /// lone schema), a query by its path, a connection or status row by name, a command or
+    /// shortcut by its label.
     pub fn label(&self, src: &Sources) -> String {
         match self {
             Self::Table(t) | Self::Recent(t) => {
-                format!("{} \u{b7} {}", t.qualified(), t.connection)
+                format!("{} \u{b7} {}", t.shown(src), t.connection)
             }
             Self::Query(i) => src
                 .queries
@@ -617,9 +629,13 @@ impl Palette {
         let tree = self.init.sidebar.read(cx).tree();
         let mut tables = Vec::new();
         let mut connections = Vec::new();
+        let mut lone_schemas = BTreeMap::new();
         for conn in self.init.workspace.connections() {
             let name = conn.name();
             let schemas = tree.schemas(name);
+            if let Some(only) = schemas.and_then(lone_schema) {
+                lone_schemas.insert(name.to_owned(), only.to_owned());
+            }
             for schema in schemas.into_iter().flatten() {
                 let Some(list) = tree.relations(name, schema.name()) else {
                     continue;
@@ -651,6 +667,7 @@ impl Palette {
             connections,
             shortcuts: keymap::shortcuts(cx),
             searched: self.searched.clone(),
+            lone_schemas,
         }
     }
 
