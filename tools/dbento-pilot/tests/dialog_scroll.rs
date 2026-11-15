@@ -93,13 +93,14 @@ async fn a_short_window_scrolls_the_body_and_keeps_the_footer() {
 }
 
 /// A window tall enough for the form shows it whole, with the footer right under the body
-/// rather than stretched apart from it. The new Postgres form needs a little over 800 px.
+/// rather than stretched apart from it. With the Databases field, the new Postgres form needs a
+/// little over 900 px.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tall_window_shows_the_whole_form() {
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     let mut args = launch_args("headless", ws.path());
-    args["height"] = json!(900);
+    args["height"] = json!(1100);
     pilot.ok("launch", args).await;
     pilot
         .ok("click", json!({ "target": { "id": ["connection-new"] } }))
