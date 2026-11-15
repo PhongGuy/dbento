@@ -1,8 +1,8 @@
 //! The palette's groups from a sources snapshot and a query.
 use dbento_app::keymap::{self, NEW_TAB_KEYS, RELOAD_WORKSPACE_KEYS};
 use dbento_app::palette::{
-    CatalogStatus, ConnectionSource, Entry, PaletteCommand, Section, Sources, TableRef,
-    push_recent, sections,
+    CatalogStatus, ConnectionSource, Entry, Mode, PaletteCommand, Section, Sources, TableRef,
+    parse_query, prefix_hints, push_recent, sections,
 };
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::{SharedString, TestAppContext};
@@ -30,6 +30,7 @@ fn src() -> Sources {
             conn("nopg", CatalogStatus::Idle),
         ],
         shortcuts: Vec::new(),
+        searched: Vec::new(),
     }
 }
 /// [`src`] with the table's shortcut list, which needs an app to read.
@@ -185,7 +186,7 @@ fn labels_and_keys(cx: &mut TestAppContext) {
         Entry::Recent(t("lite", "orders")).label(&s),
         "main.orders \u{b7} lite"
     );
-    assert_eq!(Entry::Query(0).label(&s), "queries/a.sql");
+    assert_eq!(Entry::Query(0).label(&s), "a.sql");
     assert_eq!(Entry::Connection("lite".into()).label(&s), "lite");
     assert_eq!(
         Entry::Command(PaletteCommand::ReloadWorkspace).label(&s),
@@ -252,4 +253,94 @@ fn recent_tables_move_to_the_front_and_stop_at_twenty() {
     assert_eq!(list[0], t("lite", "t10"));
     assert_eq!(list.iter().filter(|x| **x == t("lite", "t10")).count(), 1);
     assert_eq!(list.len(), 20);
+}
+
+#[test]
+fn a_saved_query_row_drops_the_queries_folder_but_keeps_deeper_ones() {
+    let mut s = src();
+    s.queries = vec![
+        "queries/reports/monthly.sql".into(),
+        "queries/a.sql".into(),
+        "loose.sql".into(),
+    ];
+    let labels: Vec<_> = (0..3).map(|i| Entry::Query(i).label(&s)).collect();
+    assert_eq!(labels, ["reports/monthly.sql", "a.sql", "loose.sql"]);
+}
+
+#[test]
+fn saved_query_search_still_matches_the_full_path() {
+    let mut s = src();
+    s.queries = vec!["queries/reports/monthly.sql".into(), "loose.sql".into()];
+    // "que" only matches inside the hidden "queries/" part.
+    assert_eq!(sections(&s, "# que")[0].entries, [Entry::Query(0)]);
+}
+
+#[test]
+fn a_searched_connection_without_a_match_says_so() {
+    let mut s = src();
+    s.searched = vec!["lite".into()];
+    let all = sections(&s, "zzz");
+    assert_eq!(all[0].title, "Tables and views");
+    let row = Entry::NoMatch {
+        connection: "lite".into(),
+        query: "zzz".into(),
+    };
+    assert_eq!(all[0].entries, std::slice::from_ref(&row));
+    assert_eq!(row.label(&s), "No tables in lite match 'zzz'");
+}
+
+#[test]
+fn a_searched_connection_with_a_match_shows_no_message() {
+    let mut s = src();
+    s.searched = vec!["lite".into()];
+    assert_eq!(
+        sections(&s, "ord")[0].entries,
+        [Entry::Table(t("lite", "orders"))]
+    );
+}
+
+#[test]
+fn a_connection_never_searched_from_the_palette_shows_no_message() {
+    let s = src();
+    let all = sections(&s, "zzz");
+    assert!(
+        all.iter()
+            .flat_map(|g| &g.entries)
+            .all(|e| !matches!(e, Entry::NoMatch { .. }))
+    );
+}
+
+#[test]
+fn only_the_no_match_row_is_not_selectable() {
+    let row = Entry::NoMatch {
+        connection: "lite".into(),
+        query: "x".into(),
+    };
+    assert!(!row.selectable());
+    assert!(Entry::SearchIn("lite".into()).selectable());
+    assert!(Entry::Query(0).selectable());
+}
+
+#[test]
+fn the_footer_lists_each_prefix_only_without_one() {
+    let hints = prefix_hints("");
+    assert_eq!(
+        hints,
+        [
+            (">", "commands"),
+            ("#", "saved queries"),
+            ("?", "shortcuts")
+        ]
+    );
+    for (prefix, _) in hints {
+        assert_ne!(
+            parse_query(prefix).0,
+            Mode::All,
+            "{prefix} is a real prefix"
+        );
+    }
+    assert_eq!(prefix_hints("orders").len(), 3);
+    assert!(prefix_hints("> ").is_empty());
+    assert!(prefix_hints("#").is_empty());
+    assert!(prefix_hints("? x").is_empty());
 }

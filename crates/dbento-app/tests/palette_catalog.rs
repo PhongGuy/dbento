@@ -97,6 +97,46 @@ fn a_failed_catalog_shows_its_error_and_retry(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui_kit::test]
+fn a_search_that_finds_nothing_says_so_and_does_nothing(cx: &mut TestAppContext) {
+    let o = launched(cx, SETUP, "");
+    open(cx, &o);
+    // By keyboard, so the search field keeps focus for the typing after.
+    let key = |cx: &mut TestAppContext, k: &str| {
+        cx.update_window(o.win, |_, w, cx| w.press(k, cx)).unwrap();
+        cx.run_until_parked();
+    };
+    wait_real(cx, "the idle rows", |cx| {
+        has(cx, &o, "Search tables in lite")
+    });
+    for _ in 0..5 {
+        if highlighted(cx, &o).as_deref() == Some("Search tables in lite") {
+            break;
+        }
+        key(cx, "down");
+    }
+    assert_eq!(
+        highlighted(cx, &o).as_deref(),
+        Some("Search tables in lite")
+    );
+    key(cx, "enter");
+    wait_real(cx, "lite's tables", |cx| {
+        has(cx, &o, "main.orders \u{b7} lite")
+    });
+    cx.update_window(o.win, |_, w, cx| w.input("zz", cx))
+        .unwrap();
+    let row = "No tables in lite match 'ordzz'";
+    wait_real(cx, "the no-match row", |cx| has(cx, &o, row));
+    assert_ne!(highlighted(cx, &o).as_deref(), Some(row));
+    palette_pick(cx, o.win, row);
+    assert!(
+        present(cx, o.win, "palette"),
+        "the row keeps the palette open"
+    );
+    assert_eq!(o.shell.read_with(cx, |s, _| s.tabs().len()), 0);
+    assert_ne!(highlighted(cx, &o).as_deref(), Some(row));
+}
+
 /// The kit's rows as (bounds, selected, label), the label read from the row drawn inside.
 fn kit_rows(cx: &mut TestAppContext, o: &Opened) -> Vec<(Bounds<Pixels>, bool, String)> {
     let rows = palette_rows(cx, o.win);

@@ -9,7 +9,7 @@ use dbento_core::{RelationKind, RelationRef, SavedQuery, Workspace};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::actions::{Cancel, SelectDown, SelectUp};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
-use gpui_kit::component::{ActiveTheme as _, IndexPath, WindowExt as _, h_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, IndexPath, WindowExt as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Action, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
@@ -39,16 +39,28 @@ pub enum Mode {
     Shortcuts,
 }
 
+// Each mode's prefix and what the footer says it searches; the one table parsing reads.
+const PREFIXES: [(&str, Mode, &str); 3] = [
+    (">", Mode::Commands, "commands"),
+    ("#", Mode::Queries, "saved queries"),
+    ("?", Mode::Shortcuts, "shortcuts"),
+];
+
 /// One leading `>`, `#` or `?` picks Commands, Queries or Shortcuts; the rest, trimmed, is the search.
 pub fn parse_query(raw: &str) -> (Mode, &str) {
     let raw = raw.trim();
-    let mode = match raw.chars().next() {
-        Some('>') => Mode::Commands,
-        Some('#') => Mode::Queries,
-        Some('?') => Mode::Shortcuts,
-        _ => return (Mode::All, raw),
-    };
-    (mode, raw[1..].trim())
+    PREFIXES
+        .iter()
+        .find_map(|(p, mode, _)| Some((*mode, raw.strip_prefix(p)?.trim())))
+        .unwrap_or((Mode::All, raw))
+}
+
+/// The footer's prefixes, each with what it searches; empty once a prefix is typed.
+pub fn prefix_hints(raw: &str) -> Vec<(&'static str, &'static str)> {
+    if parse_query(raw).0 != Mode::All {
+        return Vec::new();
+    }
+    PREFIXES.iter().map(|(p, _, what)| (*p, *what)).collect()
 }
 
 /// A row the ranker scores, by its searchable text.
@@ -173,6 +185,8 @@ pub struct Sources {
     pub connections: Vec<ConnectionSource>,
     /// The effective shortcut list, as [`keymap::shortcuts`] gives it.
     pub shortcuts: Vec<keymap::Shortcut>,
+    /// Connections the user asked to search from a Search or Retry row in this palette.
+    pub searched: Vec<String>,
 }
 
 /// A command the palette runs.
@@ -319,6 +333,22 @@ pub enum Entry {
         /// Its chords, in table order.
         keys: Vec<SharedString>,
     },
+    /// A searched connection whose tables do not match the query; shown, never chosen.
+    NoMatch {
+        /// The connection.
+        connection: String,
+        /// The search, prefix dropped.
+        query: String,
+    },
+}
+
+// Every saved query lives under `queries/`, so the row shows the path below it.
+fn query_label(path: &str) -> String {
+    let path = std::path::Path::new(path);
+    path.strip_prefix("queries")
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 impl Entry {
@@ -329,7 +359,11 @@ impl Entry {
             Self::Table(t) | Self::Recent(t) => {
                 format!("{} \u{b7} {}", t.qualified(), t.connection)
             }
-            Self::Query(i) => src.queries.get(*i).cloned().unwrap_or_default(),
+            Self::Query(i) => src
+                .queries
+                .get(*i)
+                .map(|p| query_label(p))
+                .unwrap_or_default(),
             Self::Connection(name) => name.clone(),
             Self::SearchIn(name) => format!("Search tables in {name}"),
             Self::Loading(name) => format!("Loading tables in {name}\u{2026}"),
@@ -339,7 +373,18 @@ impl Entry {
             } => format!("Retry {connection} \u{b7} {message}"),
             Self::Command(c) => c.label().to_owned(),
             Self::Shortcut { label, .. } => (*label).to_owned(),
+            Self::NoMatch { connection, query } if query.is_empty() => {
+                format!("No tables in {connection}")
+            }
+            Self::NoMatch { connection, query } => {
+                format!("No tables in {connection} match '{query}'")
+            }
         }
+    }
+
+    /// Whether the row can be highlighted and confirmed: every row but a no-match message.
+    pub fn selectable(&self) -> bool {
+        !matches!(self, Self::NoMatch { .. })
     }
 
     /// The chip keys, one chord per chip: a command's keys or a shortcut's chords; empty otherwise.
@@ -353,7 +398,8 @@ impl Entry {
             | Self::Connection(_)
             | Self::SearchIn(_)
             | Self::Loading(_)
-            | Self::Failed { .. } => Vec::new(),
+            | Self::Failed { .. }
+            | Self::NoMatch { .. } => Vec::new(),
         }
     }
 }
@@ -372,8 +418,9 @@ const QUERY_CAP: usize = 20;
 const RECENT_CAP: usize = 20;
 
 /// The groups for `raw` (prefix included), empty groups left out. All mode: "Tables and views"
-/// (50), "Saved queries" (20), "Recent tables" (20), "Connections", "Commands", then "Tables not
-/// loaded" (one unranked status row per connection not Ready). `#`: "Saved queries" only, `>`:
+/// (50, then an [`Entry::NoMatch`] per searched connection without a match), "Saved queries"
+/// (20), "Recent tables" (20), "Connections", "Commands", then "Tables not loaded" (one
+/// unranked status row per connection not Ready). `#`: "Saved queries" only, `>`:
 /// "Commands" only, `?`: "Keyboard shortcuts" only, each uncapped. Tables and recent rank by
 /// "schema.name", queries by path, connections by name, commands and shortcuts by label.
 pub fn sections(src: &Sources, raw: &str) -> Vec<Section> {
@@ -390,9 +437,11 @@ pub fn sections(src: &Sources, raw: &str) -> Vec<Section> {
     };
     let tables = |cap| {
         let texts = src.tables.iter().map(TableRef::qualified).collect();
-        group("Tables and views", texts, cap, &|i| {
+        let mut section = group("Tables and views", texts, cap, &|i| {
             Entry::Table(src.tables[i].clone())
-        })
+        });
+        section.entries.extend(no_match(src, query));
+        section
     };
     let queries = |cap| group("Saved queries", src.queries.clone(), cap, &Entry::Query);
     let recent = |cap| {
@@ -449,6 +498,30 @@ pub fn sections(src: &Sources, raw: &str) -> Vec<Section> {
     groups
         .into_iter()
         .filter(|s| !s.entries.is_empty())
+        .collect()
+}
+
+/// A message row per searched, Ready connection none of whose tables match `query`.
+fn no_match(src: &Sources, query: &str) -> Vec<Entry> {
+    let ready = |name: &str| {
+        (src.connections.iter()).any(|c| c.name == name && c.status == CatalogStatus::Ready)
+    };
+    src.searched
+        .iter()
+        .filter(|name| ready(name))
+        .filter(|name| {
+            let own: Vec<Candidate> = (src.tables.iter())
+                .filter(|t| t.connection == **name)
+                .map(|t| Candidate {
+                    text: t.qualified(),
+                })
+                .collect();
+            rank(query, &own).is_empty()
+        })
+        .map(|name| Entry::NoMatch {
+            connection: name.clone(),
+            query: query.to_owned(),
+        })
         .collect()
 }
 
@@ -518,8 +591,11 @@ pub struct Palette {
     init: PaletteInit,
     // Connections whose catalog the palette loads: open ones at open time, plus those asked for.
     wanted: HashSet<String>,
-    // The labels of the last rendered rows, by group, to tell when rows change.
-    shown: Vec<Vec<String>>,
+    // Connections asked for from a Search or Retry row, in the order asked.
+    searched: Vec<String>,
+    // The labels of the last rendered rows, by group, to tell when rows change; None for a
+    // row that can never take the highlight.
+    shown: Vec<Vec<Option<String>>>,
     // The query those rows were rendered for.
     shown_query: SharedString,
     // While rows changed under a pointer that has not moved since, the row that keeps the
@@ -574,6 +650,7 @@ impl Palette {
             recent: self.init.recent.clone(),
             connections,
             shortcuts: keymap::shortcuts(cx),
+            searched: self.searched.clone(),
         }
     }
 
@@ -608,13 +685,13 @@ impl Palette {
             }
             Entry::Command(c) => PaletteEvent::Run(*c),
             Entry::Shortcut { .. } => return window.close_dialog(cx),
-            Entry::SearchIn(name) => return self.want(name.clone(), cx),
+            Entry::SearchIn(name) => return self.search(name.clone(), cx),
             Entry::Failed { connection, .. } => {
                 let key = NodeKey::Connection(connection.clone());
                 self.init.sidebar.update(cx, |s, cx| s.retry(key, cx));
-                return self.want(connection.clone(), cx);
+                return self.search(connection.clone(), cx);
             }
-            Entry::Loading(_) => return,
+            Entry::Loading(_) | Entry::NoMatch { .. } => return,
         };
         cx.emit(event);
     }
@@ -624,7 +701,7 @@ impl Palette {
     // once it has installed the new rows, since a vanished path resets it to the first row.
     fn pin(
         &mut self,
-        shown: Vec<Vec<String>>,
+        shown: Vec<Vec<Option<String>>>,
         query: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -649,8 +726,8 @@ impl Palette {
         self.shown_query = query;
         let was = (self.state.read(cx).selected_index())
             .filter(|_| self.chose)
-            .and_then(|ix| self.shown.get(ix.section)?.get(ix.row).cloned());
-        let mut labels = shown.iter().flatten();
+            .and_then(|ix| self.shown.get(ix.section)?.get(ix.row).cloned().flatten());
+        let mut labels = shown.iter().flatten().flatten();
         self.pinned = match was {
             Some(l) if labels.clone().any(|x| *x == l) => Some(l),
             _ => labels.next().cloned(),
@@ -678,7 +755,7 @@ impl Palette {
     fn pinned_at(&self) -> Option<IndexPath> {
         let pinned = self.pinned.as_deref()?;
         self.shown.iter().enumerate().find_map(|(s, rows)| {
-            let r = rows.iter().position(|l| l == pinned)?;
+            let r = rows.iter().position(|l| l.as_deref() == Some(pinned))?;
             Some(IndexPath::new(r).section(s))
         })
     }
@@ -692,6 +769,14 @@ impl Palette {
             self.state
                 .update(cx, |s, cx| s.set_selected_index(Some(ix), window, cx));
         }
+    }
+
+    // A load the user asked for, whose empty result then says so instead of vanishing.
+    fn search(&mut self, conn: String, cx: &mut Context<Self>) {
+        if !self.searched.contains(&conn) {
+            self.searched.push(conn.clone());
+        }
+        self.want(conn, cx);
     }
 
     fn want(&mut self, conn: String, cx: &mut Context<Self>) {
@@ -717,9 +802,11 @@ impl Render for Palette {
         let src = self.sources(cx);
         let query = self.state.read(cx).query(cx);
         let groups = Rc::new(sections(&src, &query));
-        let shown = groups
-            .iter()
-            .map(|g| g.entries.iter().map(|e| e.label(&src)).collect());
+        let shown = groups.iter().map(|g| {
+            (g.entries.iter())
+                .map(|e| e.selectable().then(|| e.label(&src)))
+                .collect()
+        });
         self.pin(shown.collect(), query.clone(), window, cx);
         let mut command = Command::new(&self.state)
             .bordered(false)
@@ -740,11 +827,16 @@ impl Render for Palette {
                     .child("No saved queries: Ctrl+S saves one under queries/.")
             });
         }
+        let hints = prefix_hints(&query);
+        if !hints.is_empty() {
+            command = command.footer(move |_, _, cx| footer(&hints, cx));
+        }
         let mut n = 0;
         for section in groups.iter() {
             let mut group = CommandGroup::new().label(section.title);
             for entry in &section.entries {
-                group = group.item(row(n, entry.label(&src), entry.keys(cx), entry_icon(entry)));
+                let item = row(n, entry.label(&src), entry.keys(cx), entry_icon(entry));
+                group = group.item(item.disabled(!entry.selectable()));
                 n += 1;
             }
             command = command.group(group);
@@ -789,12 +881,10 @@ impl Render for Palette {
 /// with `mode`'s prefix typed and the input focused.
 pub fn open(init: PaletteInit, mode: Mode, window: &mut Window, cx: &mut App) -> Entity<Palette> {
     let state = cx.new(|cx| CommandState::new(window, cx));
-    let prefix = match mode {
-        Mode::All => "",
-        Mode::Commands => "> ",
-        Mode::Queries => "# ",
-        Mode::Shortcuts => "? ",
-    };
+    let prefix = (PREFIXES.iter())
+        .find(|(_, m, _)| *m == mode)
+        .map(|(p, _, _)| format!("{p} "))
+        .unwrap_or_default();
     state.update(cx, |s, cx| s.set_query(prefix, window, cx));
     // Only connections already open load on their own; the rest wait for a Search row.
     let sidebar = init.sidebar.clone();
@@ -810,6 +900,7 @@ pub fn open(init: PaletteInit, mode: Mode, window: &mut Window, cx: &mut App) ->
         state: state.clone(),
         init,
         wanted,
+        searched: Vec::new(),
         shown: Vec::new(),
         shown_query: SharedString::default(),
         pinned: None,
@@ -832,6 +923,34 @@ pub fn open(init: PaletteInit, mode: Mode, window: &mut Window, cx: &mut App) ->
     palette
 }
 
+/// The quiet line under the rows, `palette-footer`: each prefix as a key chip
+/// `("palette-prefix", i)` beside what it searches.
+fn footer(hints: &[(&'static str, &'static str)], cx: &App) -> impl IntoElement + use<> {
+    let (dim, edge) = (theme::dim(cx), cx.theme().border);
+    let spoken: Vec<String> = hints
+        .iter()
+        .map(|(p, what)| format!("{p} {what}"))
+        .collect();
+    let mut line = h_flex()
+        .id("palette-footer")
+        .aria_label(spoken.join(", "))
+        .test_support()
+        .gap_4()
+        .px_3()
+        .py_1p5()
+        .border_t_1()
+        .border_color(edge)
+        .text_xs()
+        .text_color(dim);
+    for (i, (prefix, what)) in hints.iter().enumerate() {
+        let chip = (ui::key_chip(*prefix, cx).id(("palette-prefix", i)))
+            .aria_label(*prefix)
+            .test_support();
+        line = line.child(h_flex().gap_1p5().child(chip).child(*what));
+    }
+    line
+}
+
 fn entry_icon(entry: &Entry) -> IconName {
     match entry {
         Entry::Table(t) if t.kind == RelationKind::Table => Icons::Table2,
@@ -844,6 +963,7 @@ fn entry_icon(entry: &Entry) -> IconName {
         Entry::Failed { .. } => Icons::TriangleAlert,
         Entry::Command(_) => Icons::ChevronRight,
         Entry::Shortcut { .. } => Icons::KeyRound,
+        Entry::NoMatch { .. } => Icons::Search,
     }
 }
 
