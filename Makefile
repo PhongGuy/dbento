@@ -49,13 +49,15 @@ each-feature:
 	RUSTFLAGS=-Dwarnings $(CARGO) hack check --each-feature --no-dev-deps $(FEATURE_CRATES)
 	$(CARGO) clippy $(LOCKED) --no-default-features --all-targets $(FEATURE_CRATES) -- -Dwarnings
 
-# The pilot package sits outside the workspace because its host crate is private, so CI never builds it.
+# The pilot package sits outside the workspace, with its own lock, so the gate never builds it.
 PILOT := --manifest-path tools/dbento-pilot/Cargo.toml
+# Extra libtest skips; CI passes the session-mode scenarios, which need KDE's KWin and bwrap.
+PILOT_SKIP :=
 pilot-check:
 	$(CARGO) fmt --check $(PILOT)
-	$(CARGO) clippy $(PILOT) --all-targets --all-features -- -Dwarnings
-	$(CARGO) build -p dbento-app --bin dbento-app --profile timing
-	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(PILOT) -- --skip wheel_scroll_headless --skip wheel_scroll_session
+	$(CARGO) clippy $(LOCKED) $(PILOT) --all-targets --all-features -- -Dwarnings
+	$(CARGO) build $(LOCKED) -p dbento-app --bin dbento-app --profile timing
+	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(LOCKED) $(PILOT) -- --skip wheel_scroll_headless --skip wheel_scroll_session $(PILOT_SKIP)
 
 # The two wheel recordings, which wait for a quiet machine and refuse a loaded one. A measured
 # pass stamps the committed tree it ran on, which `timing-guard` asks for.
