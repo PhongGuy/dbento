@@ -3,9 +3,8 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
 
-use dbento_core::{RelationKind, RelationRef, SavedQuery, Workspace};
+use dbento_core::{RelationKind, RelationRef, SavedQuery};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::actions::{Cancel, SelectDown, SelectUp};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
@@ -595,10 +594,8 @@ pub enum PaletteEvent {
 /// What the palette reads, passed by value: `open` runs inside the shell's own update, so it
 /// never reads the `Shell` entity.
 pub struct PaletteInit {
-    /// The explorer, whose catalog lists the tables.
+    /// The explorer, whose catalog lists the connections, children included, and their tables.
     pub sidebar: Entity<Sidebar>,
-    /// The open workspace, for its connections.
-    pub workspace: Arc<Workspace>,
     /// The saved queries, read when the palette opened.
     pub queries: Vec<SavedQuery>,
     /// Tables opened this session, newest first.
@@ -640,7 +637,7 @@ impl Palette {
         let mut tables = Vec::new();
         let mut connections = Vec::new();
         let mut lone_schemas = BTreeMap::new();
-        for conn in self.init.workspace.connections() {
+        for conn in tree.known_connections() {
             let name = conn.name();
             let schemas = tree.schemas(name);
             if let Some(only) = schemas.and_then(lone_schema) {
@@ -926,7 +923,8 @@ pub fn open(init: PaletteInit, mode: Mode, window: &mut Window, cx: &mut App) ->
     state.update(cx, |s, cx| s.set_query(prefix, window, cx));
     // Only connections already open load on their own; the rest wait for a Search row.
     let sidebar = init.sidebar.clone();
-    let wanted = (init.workspace.connections().iter())
+    let known = sidebar.read(cx).tree().known_connections();
+    let wanted = (known.iter())
         .map(|c| c.name())
         .filter(|name| {
             let link = sidebar.read(cx).link(name);

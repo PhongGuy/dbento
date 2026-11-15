@@ -51,6 +51,7 @@ mod definition_panel;
 mod definition_probe;
 mod derived_explorer;
 mod derived_lifecycle;
+mod derived_pickers;
 mod derived_tabs;
 mod derived_tree;
 mod draft_tabs;

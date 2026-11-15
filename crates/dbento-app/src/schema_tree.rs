@@ -1246,6 +1246,27 @@ impl CatalogTree {
         }
     }
 
+    /// Every connection a picker offers: each declared one in workspace order, a parent
+    /// followed by the children the explorer already knows (its list, or the `"all"` listing
+    /// it has cached). Never starts a listing; a name the workspace cannot resolve is left out.
+    pub fn known_connections(&self) -> Vec<ConnectionConfig> {
+        let Some(ws) = self.workspace.as_deref() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for c in ws.connections() {
+            out.push(c.clone());
+            let names = match self.parent(c.name()) {
+                Some(Parent::Listed(names)) => names,
+                Some(Parent::All) => self.databases(c.name()).unwrap_or_default(),
+                None => continue,
+            };
+            let children = names.iter().map(|db| format!("{}/{db}", c.name()));
+            out.extend(children.filter_map(|n| ws.connection(&n).map(|c| c.into_owned())));
+        }
+        out
+    }
+
     /// Loaded schemas of `conn`, for completion.
     pub fn schemas(&self, conn: &str) -> Option<&[SchemaInfo]> {
         match self.schemas.get(conn) {
