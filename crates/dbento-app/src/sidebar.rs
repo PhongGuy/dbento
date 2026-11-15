@@ -629,21 +629,33 @@ impl Sidebar {
         cx.notify();
     }
 
-    /// Closes `conn`'s catalog runner and forgets its levels (collapsing it); None when it had none.
-    pub fn disconnect(&mut self, conn: &str) -> Option<CatalogClosing> {
-        self.tree.forget(conn);
-        self.auto_opened.remove(conn);
-        // A Generate INSERT waiting on this session would never hear back.
-        if self
-            .pending_insert
-            .as_ref()
-            .is_some_and(|(c, ..)| c == conn)
-        {
+    /// Closes the catalog runners of `conn` and of the children it shares credentials with, and
+    /// forgets their levels (collapsing them); one closing per runner that was open.
+    pub fn disconnect(&mut self, conn: &str) -> Vec<CatalogClosing> {
+        let ours = |c: &str| crate::shell::runs_on(c, conn);
+        let mut names: Vec<String> = self.catalogs.keys().filter(|c| ours(c)).cloned().collect();
+        names.extend(
+            self.tree
+                .known_connections()
+                .iter()
+                .map(|c| c.name().to_owned()),
+        );
+        names.retain(|c| ours(c));
+        names.push(conn.to_owned());
+        names.sort();
+        names.dedup();
+        for name in &names {
+            self.tree.forget(name);
+            self.auto_opened.remove(name);
+        }
+        // A Generate INSERT waiting on one of these sessions would never hear back.
+        if self.pending_insert.as_ref().is_some_and(|(c, ..)| ours(c)) {
             self.pending_insert = None;
         }
-        self.catalogs
-            .remove(conn)
+        (names.iter())
+            .filter_map(|name| self.catalogs.remove(name))
             .map(|(runner, _pump)| runner.close())
+            .collect()
     }
 
     /// Whether the explorer's context menu is open; row tooltips are off while it is.

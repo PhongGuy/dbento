@@ -1,13 +1,13 @@
 //! One connection row as every connection picker draws it: the tag dot, the name, the
 //! engine and the read-only lock, so the query toolbar, history filter and pick dialog agree.
 
-use dbento_core::{Color, ConnectionConfig};
+use dbento_core::{Color, ConnectionConfig, Workspace};
 use gpui_kit::{
     App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt, div, px,
+    StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, div, px,
 };
 
-use crate::sidebar::{color_name, tag_color};
+use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::theme;
 use crate::ui::{self, Icons};
 
@@ -34,6 +34,21 @@ impl ConnectionPick {
             color: c.effective_color(),
             read_only: c.read_only(),
         }
+    }
+}
+
+/// The rows a connection picker offers: the explorer's known connections, children included,
+/// or `ws`'s declared ones when there is no explorer.
+pub fn pickable_connections(
+    ws: &Workspace,
+    sidebar: Option<&WeakEntity<Sidebar>>,
+    cx: &App,
+) -> Vec<ConnectionPick> {
+    match sidebar.and_then(WeakEntity::upgrade) {
+        Some(s) => (s.read(cx).tree().known_connections().iter())
+            .map(ConnectionPick::of)
+            .collect(),
+        None => ws.connections().iter().map(ConnectionPick::of).collect(),
     }
 }
 

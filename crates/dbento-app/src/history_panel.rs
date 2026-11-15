@@ -22,9 +22,9 @@ use gpui_kit::{
 };
 
 use crate::history::HistoryLog;
-use crate::pick_row::{ConnectionPick, dot_slot, pick_row};
+use crate::pick_row::{ConnectionPick, dot_slot, pick_row, pickable_connections};
 use crate::results_pane::format_rows;
-use crate::sidebar::{color_name, tag_color};
+use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::status_bar::{first_line, format_elapsed};
 use crate::theme;
 use crate::ui::{self, Icons};
@@ -59,6 +59,8 @@ pub enum HistoryPanelEvent {
 pub struct HistoryPanel {
     log: Entity<HistoryLog>,
     workspace: Arc<Workspace>,
+    // The explorer, whose known connections the filter offers, children included.
+    sidebar: Option<WeakEntity<Sidebar>>,
     search: Entity<InputState>,
     connection: Option<String>,
     rows: Vec<HistoryEntry>,
@@ -78,9 +80,11 @@ impl EventEmitter<HistoryPanelEvent> for HistoryPanel {}
 
 impl HistoryPanel {
     /// A hidden panel over `log` for `workspace`'s entries; it reloads whenever the log writes.
+    /// With `sidebar`, the filter also offers the child connections the explorer knows.
     pub fn new(
         log: Entity<HistoryLog>,
         workspace: Arc<Workspace>,
+        sidebar: Option<WeakEntity<Sidebar>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -94,6 +98,7 @@ impl HistoryPanel {
         HistoryPanel {
             log,
             workspace,
+            sidebar,
             search,
             connection: None,
             rows: Vec::new(),
@@ -476,9 +481,7 @@ impl Render for HistoryPanel {
             .connection
             .clone()
             .unwrap_or_else(|| ALL_CONNECTIONS.into());
-        let picks: Vec<Option<ConnectionPick>> = std::iter::once(None)
-            .chain((self.workspace.connections().iter()).map(|c| Some(ConnectionPick::of(c))))
-            .collect();
+        let (workspace, sidebar) = (Arc::clone(&self.workspace), self.sidebar.clone());
         let (panel, current) = (cx.entity().downgrade(), self.connection.clone());
         let header = ui::panel_header("History", cx).gap_2().child(
             Button::new("history-connection")
@@ -486,7 +489,14 @@ impl Render for HistoryPanel {
                 .xsmall()
                 .label(filter_label)
                 .dropdown_caret(true)
-                .dropdown_menu(move |menu, _, _| {
+                .dropdown_menu(move |menu, _, cx| {
+                    let picks: Vec<Option<ConnectionPick>> = std::iter::once(None)
+                        .chain(
+                            pickable_connections(&workspace, sidebar.as_ref(), cx)
+                                .into_iter()
+                                .map(Some),
+                        )
+                        .collect();
                     filter_menu(menu, &panel, &picks, current.as_deref())
                 }),
         );

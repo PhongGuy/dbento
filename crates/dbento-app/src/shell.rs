@@ -1825,7 +1825,6 @@ impl Shell {
         };
         let init = PaletteInit {
             sidebar,
-            workspace: ws,
             queries,
             recent: self.recent_tables.clone(),
         };
@@ -2621,11 +2620,13 @@ impl Shell {
                     .unwrap_or_default();
                 sidebar.update(cx, |s, cx| s.set_collapsed(collapsed, cx));
                 self._sidebar_notify = Some(cx.observe(&sidebar, |_, _, cx| cx.notify()));
+                let explorer = sidebar.downgrade();
                 self.sidebar = Some(sidebar);
                 let log = self.history_log.clone();
                 let open = self.history_open;
                 let panel = cx.new(|cx| {
-                    let mut panel = HistoryPanel::new(log, Arc::clone(&ws), window, cx);
+                    let mut panel =
+                        HistoryPanel::new(log, Arc::clone(&ws), Some(explorer), window, cx);
                     panel.set_visible(open, cx);
                     panel
                 });
@@ -3198,14 +3199,14 @@ impl Shell {
         self.open_connection_form(FormStart::Copy(copy, spec), window, cx);
     }
 
-    /// Asks once when a tab on `conn` holds staged edits or runs a statement, then disconnects
-    /// its tabs and catalog. Close drops the staged edits and cancels the statements; the tabs
+    /// Asks once when a tab on `conn` or a child of it holds staged edits or runs a statement,
+    /// then disconnects those tabs and catalogs; children share the parent's credentials. Close drops the staged edits and cancels the statements; the tabs
     /// stay open and reconnect on their next run.
     pub fn disconnect(&mut self, conn: &str, window: &mut Window, cx: &mut Context<Self>) {
         let on_conn: Vec<&Entity<QueryTab>> = self
             .tabs
             .iter()
-            .filter(|t| t.read(cx).model().read(cx).spec().connection == conn)
+            .filter(|t| runs_on(&t.read(cx).model().read(cx).spec().connection, conn))
             .collect();
         let staged: usize = on_conn.iter().map(|t| staged_count(t, cx)).sum();
         let running = running_titles(on_conn.into_iter(), cx);
@@ -3231,14 +3232,15 @@ impl Shell {
         );
     }
 
-    // Retires every runner on `conn` and its catalog session, draining each closing like a closed
-    // tab's, then reverts staged edits: disconnecting ends a save in flight, so the revert takes.
+    // Retires every runner on `conn` or its children and their catalog sessions, draining each
+    // closing like a closed tab's, then reverts staged edits: disconnecting ends a save in
+    // flight, so the revert takes.
     fn disconnect_now(&mut self, conn: &str, cx: &mut Context<Self>) {
         let models: Vec<_> = self
             .tabs
             .iter()
             .map(|t| t.read(cx).model().clone())
-            .filter(|m| m.read(cx).spec().connection == conn)
+            .filter(|m| runs_on(&m.read(cx).spec().connection, conn))
             .collect();
         for model in models {
             let closing = model.update(cx, |m, cx| {
@@ -3248,14 +3250,15 @@ impl Shell {
             });
             self.keep_closing(closing.wait(), cx);
         }
-        if let Some(sidebar) = self.sidebar.clone()
-            && let Some(closing) = sidebar.update(cx, |s, cx| {
-                let closing = s.disconnect(conn);
+        if let Some(sidebar) = self.sidebar.clone() {
+            let closings = sidebar.update(cx, |s, cx| {
+                let closings = s.disconnect(conn);
                 cx.notify();
-                closing
-            })
-        {
-            self.keep_closing(closing.wait(), cx);
+                closings
+            });
+            for closing in closings {
+                self.keep_closing(closing.wait(), cx);
+            }
         }
         self.sync_links(cx);
         cx.notify();

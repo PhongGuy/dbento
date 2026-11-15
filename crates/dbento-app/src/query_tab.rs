@@ -40,7 +40,7 @@ use crate::keymap::{
     ToggleComment, all_keys_for, chip_keys, chord_list, keys_for, plus_keys,
 };
 use crate::nav::NavHistory;
-use crate::pick_row::{ConnectionPick, pick_row};
+use crate::pick_row::{ConnectionPick, pick_row, pickable_connections};
 use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, skip_notice};
 use crate::run_target::run_range;
 use crate::sidebar::{Sidebar, color_name, tag_color};
@@ -1402,9 +1402,7 @@ impl QueryTab {
                 .child(text)
                 .into_any_element();
         }
-        let rows: Vec<ConnectionPick> = (self.workspace.connections().iter())
-            .map(ConnectionPick::of)
-            .collect();
+        let (workspace, sidebar) = (Arc::clone(&self.workspace), self.sidebar.clone());
         let current = m.spec().connection.clone();
         let tab = cx.entity().downgrade();
         let theme = cx.theme();
@@ -1422,7 +1420,10 @@ impl QueryTab {
             .children(dot)
             .child(text)
             .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| connection_menu(menu, &tab, &rows, &current))
+            .dropdown_menu(move |menu, _, cx| {
+                let rows = pickable_connections(&workspace, sidebar.as_ref(), cx);
+                connection_menu(menu, &tab, &rows, &current)
+            })
             .into_any_element()
     }
 }
