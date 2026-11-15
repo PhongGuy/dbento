@@ -12,9 +12,9 @@ use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandSt
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, IndexPath, WindowExt as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Action, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    TestSupportExt, Window, div, px,
+    Action, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, TestSupportExt, Window, div, px,
 };
 
 use crate::catalog::CatalogQuery;
@@ -861,10 +861,21 @@ impl Render for Palette {
         // The kit's Escape clears a non-empty query before it closes, and a bare mode prefix
         // counts as one; drop the prefix during capture so that Escape reaches the dialog.
         let state = self.state.clone();
+        let refocus = self.state.clone();
         div()
             .id("palette")
             .test_support()
             .on_mouse_move(cx.listener(|p, _, window, cx| p.moved(window, cx)))
+            // A press on a row focuses the kit's list frame, which takes no text; once the
+            // press settles, hand focus back to the search field so typing carries on there.
+            .on_any_mouse_down(move |_, window, cx| {
+                let state = refocus.clone();
+                window.defer(cx, move |window, cx| {
+                    if !state.focus_handle(cx).is_focused(window) {
+                        state.update(cx, |s, cx| s.focus(window, cx));
+                    }
+                });
+            })
             .capture_action(cx.listener(|p, _: &SelectUp, _, _| p.chose = true))
             .capture_action(cx.listener(|p, _: &SelectDown, _, _| p.chose = true))
             .capture_action(move |_: &Cancel, window, cx| {
