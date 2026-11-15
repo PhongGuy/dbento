@@ -3,7 +3,10 @@ use crate::support;
 use crate::support::{Opened, label_of, opened, present, wait_real};
 use dbento_core::{RelationKind, RelationRef};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AppContext as _, ElementId, TestAppContext, VisualTestContext, px, size};
+use gpui_kit::{
+    AppContext as _, Bounds, ElementId, Pixels, ScrollDelta, TestAppContext, VisualTestContext,
+    point, px, size,
+};
 
 fn click(cx: &mut TestAppContext, o: &Opened, id: impl Into<ElementId>) {
     let id = id.into();
@@ -281,4 +284,83 @@ fn a_table_tab_is_named_after_its_relation_and_opens_mostly_results(cx: &mut Tes
         .unwrap();
     let share = f32::from(editor.size.height) / f32::from(footer.bottom() - editor.top());
     assert!((0.17..=0.23).contains(&share), "editor share {share}");
+}
+
+// Ten tabs in a 900 x 600 window: more than the strip can show at a readable width.
+fn ten_tabs_at_900(cx: &mut TestAppContext) -> Opened {
+    let o = opened(cx, "", "", 0);
+    cx.simulate_window_resize(o.win, size(px(900.), px(600.)));
+    for _ in 0..9 {
+        click(cx, &o, "tab-new");
+    }
+    assert_eq!(
+        (count(cx, &o), active(cx, &o)),
+        (10, Some(9)),
+        "ten tabs, the last active"
+    );
+    o
+}
+fn bounds(cx: &mut TestAppContext, o: &Opened, id: impl Into<ElementId>) -> Bounds<Pixels> {
+    let id = id.into();
+    cx.update_window(o.win, |_, w, cx| {
+        w.render_frame(cx);
+        w.find(id).bounds()
+    })
+    .unwrap()
+}
+// Whether tab `ix` lies wholly inside the visible part of the strip.
+fn in_view(cx: &mut TestAppContext, o: &Opened, ix: usize) -> bool {
+    let (tab, strip) = (bounds(cx, o, ("tab", ix)), bounds(cx, o, "tab-scroll"));
+    tab.left() >= strip.left() && tab.right() <= strip.right()
+}
+
+#[gpui_kit::test]
+fn many_tabs_keep_a_readable_width(cx: &mut TestAppContext) {
+    let o = ten_tabs_at_900(cx);
+    for ix in 0..10usize {
+        let w = bounds(cx, &o, ("tab", ix)).size.width;
+        assert!(w >= px(120.), "tab {ix} is {w:?} wide");
+    }
+}
+
+#[gpui_kit::test]
+fn a_new_tab_scrolls_into_view_and_the_new_button_stays_reachable(cx: &mut TestAppContext) {
+    let o = ten_tabs_at_900(cx);
+    assert!(in_view(cx, &o, 9), "the new active tab is shown");
+    assert!(!in_view(cx, &o, 0), "the first tab has scrolled out");
+    let (new, bar) = (bounds(cx, &o, "tab-new"), bounds(cx, &o, "tab-bar"));
+    assert!(
+        new.right() <= bar.right() && new.left() >= bar.left(),
+        "the new-tab button stays on the strip"
+    );
+}
+
+#[gpui_kit::test]
+fn a_keyboard_switch_scrolls_the_active_tab_into_view(cx: &mut TestAppContext) {
+    let o = ten_tabs_at_900(cx);
+    key(cx, &o, "ctrl-1");
+    assert_eq!(active(cx, &o), Some(0), "Ctrl+1 shows the first tab");
+    assert!(in_view(cx, &o, 0), "the first tab comes back into view");
+    key(cx, &o, "ctrl-9");
+    assert!(in_view(cx, &o, 9), "the last tab comes back into view");
+}
+
+#[gpui_kit::test]
+fn the_wheel_scrolls_the_strip_sideways(cx: &mut TestAppContext) {
+    let o = ten_tabs_at_900(cx);
+    let before = bounds(cx, &o, ("tab", 9usize)).left();
+    cx.update_window(o.win, |_, w, cx| {
+        w.scroll(
+            "tab-scroll",
+            ScrollDelta::Pixels(point(px(0.), px(200.))),
+            cx,
+        )
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let after = bounds(cx, &o, ("tab", 9usize)).left();
+    assert!(
+        after > before,
+        "the tabs moved right: {before:?} -> {after:?}"
+    );
 }

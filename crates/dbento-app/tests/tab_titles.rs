@@ -6,7 +6,7 @@ use crate::support::{label_of, launched, opened, present, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::drafts::{DRAFT_DEBOUNCE, Draft};
 use dbento_app::restore::plan_restore;
-use dbento_app::shell::{tab_labels, tab_line_strength};
+use dbento_app::shell::{tab_labels, tab_line_strength, tab_tooltip};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
 
@@ -42,6 +42,22 @@ fn the_same_title_on_one_connection_is_no_clash() {
             "a.sql \u{B7} shop",
             "a.sql \u{B7} prod"
         ]
+    );
+}
+
+#[test]
+fn a_tab_tooltip_shows_the_full_title_its_file_and_its_connection() {
+    assert_eq!(
+        tab_tooltip(
+            "a_very_long_report_name.sql",
+            Some(Path::new("queries/reports/a_very_long_report_name.sql")),
+            "shop-prod"
+        ),
+        "a_very_long_report_name.sql\nqueries/reports/a_very_long_report_name.sql\nConnection: shop-prod"
+    );
+    assert_eq!(
+        tab_tooltip("main.customers", None, "shop"),
+        "main.customers\nConnection: shop"
     );
 }
 
