@@ -189,3 +189,22 @@ fn a_connection_row_opens_a_tab_on_it(cx: &mut TestAppContext) {
     assert!(!present(cx, o.win, "palette"));
     assert_eq!(o.shell.read_with(cx, |s, _| s.tabs().len()), 1);
 }
+
+#[gpui_kit::test]
+fn the_footer_lists_the_prefixes_until_one_is_typed(cx: &mut TestAppContext) {
+    let o = opened(cx, SETUP, "", 0);
+    in_editor(cx, &o, "ctrl-p");
+    wait_real(cx, "the palette", |cx| present(cx, o.win, "palette"));
+    assert_eq!(
+        label_of(cx, o.win, "palette-footer"),
+        Some("> commands, # saved queries, ? shortcuts".to_owned())
+    );
+    assert_eq!(
+        label_of(cx, o.win, ("palette-prefix", 1usize)),
+        Some("#".to_owned())
+    );
+    let before = rows(cx, &o);
+    assert!(!before.iter().any(|r| r.contains("saved queries")));
+    type_text(cx, &o, ">");
+    assert!(!present(cx, o.win, "palette-footer"));
+}

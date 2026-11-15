@@ -21,7 +21,7 @@ fn open_file(cx: &mut TestAppContext, o: &Opened) -> PathBuf {
     .unwrap();
     cx.run_until_parked();
     wait_real(cx, "the list", |cx| palette_rows(cx, o.win).len() == 1);
-    palette_pick(cx, o.win, "queries/lite/a.sql");
+    palette_pick(cx, o.win, "lite/a.sql");
     assert_eq!(
         sql(cx, o),
         "SELECT 1",

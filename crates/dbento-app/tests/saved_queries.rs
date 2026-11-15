@@ -268,11 +268,8 @@ fn ctrl_o_lists_saved_queries_and_opens_each_once(cx: &mut TestAppContext) {
     fs::write(dir.join("queries/misc.sql"), "SELECT 8").unwrap();
     ctrl_o(cx, &o);
     wait_real(cx, "the list", |cx| palette_rows(cx, o.win).len() == 2);
-    assert_eq!(
-        palette_rows(cx, o.win),
-        ["queries/lite/a.sql", "queries/misc.sql"]
-    );
-    palette_pick(cx, o.win, "queries/lite/a.sql");
+    assert_eq!(palette_rows(cx, o.win), ["lite/a.sql", "misc.sql"]);
+    palette_pick(cx, o.win, "lite/a.sql");
     assert_eq!(
         active(cx, &o),
         (2, Some(1), "SELECT 7".into(), "lite".into(), false)
@@ -282,7 +279,7 @@ fn ctrl_o_lists_saved_queries_and_opens_each_once(cx: &mut TestAppContext) {
         Some("a.sql")
     );
     ctrl_o(cx, &o);
-    palette_pick(cx, o.win, "queries/lite/a.sql");
+    palette_pick(cx, o.win, "lite/a.sql");
     assert_eq!(
         active(cx, &o).0,
         2,
@@ -290,7 +287,7 @@ fn ctrl_o_lists_saved_queries_and_opens_each_once(cx: &mut TestAppContext) {
     );
     click(cx, &o, ("tab", 0usize));
     ctrl_o(cx, &o);
-    palette_pick(cx, o.win, "queries/misc.sql");
+    palette_pick(cx, o.win, "misc.sql");
     assert_eq!(
         active(cx, &o),
         (3, Some(2), "SELECT 8".into(), "lite".into(), false)
@@ -320,9 +317,7 @@ fn ctrl_o_in_the_grid_opens_the_queries_mode(cx: &mut TestAppContext) {
         w.press("ctrl-o", cx);
     })
     .unwrap();
-    wait_real(cx, "the list", |cx| {
-        palette_rows(cx, o.win) == ["queries/misc.sql"]
-    });
+    wait_real(cx, "the list", |cx| palette_rows(cx, o.win) == ["misc.sql"]);
 }
 
 #[gpui_kit::test]
@@ -341,7 +336,7 @@ fn replacing_a_file_open_in_another_tab_unbinds_that_tab(cx: &mut TestAppContext
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "SELECT 7").unwrap();
     ctrl_o(cx, &o);
-    palette_pick(cx, o.win, "queries/lite/a.sql"); // tab 1 is bound to a.sql
+    palette_pick(cx, o.win, "lite/a.sql"); // tab 1 is bound to a.sql
     click(cx, &o, "tab-new"); // tab 2
     press_in_editor(cx, &o, "SELECT 2", "ctrl-s");
     name(cx, &o, "a");
