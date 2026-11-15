@@ -118,7 +118,11 @@ gpui_kit::actions!(
         /// Moves the active tab one place right.
         MoveTabRight,
         /// Opens the Settings dialog.
-        OpenSettings
+        OpenSettings,
+        /// Asks for a folder and switches to the workspace in it.
+        OpenWorkspace,
+        /// Closes the workspace and shows the welcome view.
+        CloseWorkspace
     ]
 );
 
@@ -202,6 +206,10 @@ pub const MOVE_TAB_LEFT_KEYS: &str = "secondary-shift-pageup";
 pub const MOVE_TAB_RIGHT_KEYS: &str = "secondary-shift-pagedown";
 /// The keys for `OpenSettings`.
 pub const SETTINGS_KEYS: &str = "secondary-,";
+/// The keys for `OpenWorkspace`: VS Code's Open Folder chord.
+pub const OPEN_WORKSPACE_KEYS: &str = "secondary-k secondary-o";
+/// The keys for `CloseWorkspace`: VS Code's Close Folder chord.
+pub const CLOSE_WORKSPACE_KEYS: &str = "secondary-k f";
 
 /// One registered binding. `label` names it in the shortcut list; None keeps it out.
 #[derive(Clone)]
@@ -434,6 +442,20 @@ pub fn bindings() -> Vec<Binding> {
             || Box::new(ReloadWorkspace),
             None,
             Some("Reload dbento.toml"),
+        ),
+        row(
+            "workspace.open",
+            OPEN_WORKSPACE_KEYS,
+            || Box::new(OpenWorkspace),
+            None,
+            Some("Open workspace\u{2026}"),
+        ),
+        row(
+            "workspace.close",
+            CLOSE_WORKSPACE_KEYS,
+            || Box::new(CloseWorkspace),
+            None,
+            Some("Close workspace"),
         ),
         row(
             "connection.new",

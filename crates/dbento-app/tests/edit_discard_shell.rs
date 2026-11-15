@@ -108,7 +108,9 @@ fn switching_workspaces_with_staged_edits_asks(cx: &mut TestAppContext) {
     let o = t(cx);
     stage_z(cx, &o);
     let shell = o.shell.clone();
-    let other = o.files.path().to_path_buf();
+    // Another workspace, since one that cannot open is refused before anything is asked.
+    let other_ws = support::fixture("", "");
+    let other = other_ws.dir.path().to_path_buf();
     cx.update_window(o.win, |_, w, cx| {
         shell.update(cx, |s, cx| s.switch_workspace(other, w, cx))
     })
@@ -166,7 +168,9 @@ fn quitting_during_an_apply_prompt_asks(cx: &mut TestAppContext) {
 fn switching_workspaces_during_an_apply_prompt_asks(cx: &mut TestAppContext) {
     let o = prompting(cx);
     let shell = o.shell.clone();
-    let other = o.files.path().to_path_buf();
+    // Another workspace, since one that cannot open is refused before anything is asked.
+    let other_ws = support::fixture("", "");
+    let other = other_ws.dir.path().to_path_buf();
     cx.update_window(o.win, |_, w, cx| {
         shell.update(cx, |s, cx| s.switch_workspace(other, w, cx))
     })

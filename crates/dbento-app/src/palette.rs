@@ -227,6 +227,10 @@ pub enum PaletteCommand {
     NewConnection,
     /// Re-reads `dbento.toml`.
     ReloadWorkspace,
+    /// Asks for a folder and switches to its workspace.
+    OpenWorkspace,
+    /// Closes the workspace back to the welcome view.
+    CloseWorkspace,
     /// Shows or hides history.
     ToggleHistory,
     /// Shows or hides the row inspector.
@@ -241,7 +245,7 @@ pub enum PaletteCommand {
 
 impl PaletteCommand {
     /// Every command, in the order the Commands group lists them.
-    pub const ALL: [PaletteCommand; 17] = [
+    pub const ALL: [PaletteCommand; 19] = [
         Self::NewTab,
         Self::CloseTab,
         Self::SaveQuery,
@@ -254,6 +258,8 @@ impl PaletteCommand {
         Self::CancelQuery,
         Self::NewConnection,
         Self::ReloadWorkspace,
+        Self::OpenWorkspace,
+        Self::CloseWorkspace,
         Self::ToggleHistory,
         Self::ToggleRowInspector,
         Self::CycleAppearance,
@@ -276,6 +282,8 @@ impl PaletteCommand {
             Self::CancelQuery => "Cancel query",
             Self::NewConnection => "New connection",
             Self::ReloadWorkspace => "Reload dbento.toml",
+            Self::OpenWorkspace => "Open workspace\u{2026}",
+            Self::CloseWorkspace => "Close workspace",
             Self::ToggleHistory => "Toggle history",
             Self::ToggleRowInspector => "Toggle row inspector",
             Self::CycleAppearance => "Toggle appearance",
@@ -299,6 +307,8 @@ impl PaletteCommand {
             Self::CancelQuery => Box::new(keymap::CancelQuery),
             Self::NewConnection => Box::new(keymap::NewConnection),
             Self::ReloadWorkspace => Box::new(keymap::ReloadWorkspace),
+            Self::OpenWorkspace => Box::new(keymap::OpenWorkspace),
+            Self::CloseWorkspace => Box::new(keymap::CloseWorkspace),
             Self::ToggleHistory => Box::new(keymap::ToggleHistory),
             Self::ToggleRowInspector => Box::new(keymap::ToggleRowInspector),
             Self::CycleAppearance => Box::new(CycleAppearance),

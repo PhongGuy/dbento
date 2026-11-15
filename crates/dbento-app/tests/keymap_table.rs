@@ -204,7 +204,7 @@ fn chips_spell_the_vertical_arrows_and_home_and_end() {
     assert_eq!(keymap::chip_keys("end"), "End");
 }
 
-const IDS: [&str; 53] = [
+const IDS: [&str; 55] = [
     "view.cycle_appearance",
     "app.open_settings",
     "grid.copy_cells",
@@ -222,6 +222,8 @@ const IDS: [&str; 53] = [
     "view.toggle_history",
     "view.toggle_row_inspector",
     "workspace.reload",
+    "workspace.open",
+    "workspace.close",
     "connection.new",
     "explorer.open_selected",
     "explorer.select_prev",
