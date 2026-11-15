@@ -81,17 +81,19 @@ test_ci_installs_the_cross_and_notices_tools() {
 }
 
 test_ci_gate_timeout_and_pins() {
-  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
+  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 pilot=90 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
   pinned_uses_only "$CI"
 }
 
-# rust-cache strips the files out of target/duckdb-sources but keeps its folders, so every
-# restore must be followed by removing that tree before anything builds.
+# rust-cache strips the files out of target/duckdb-sources but keeps its folders, so the first
+# run step after every restore must remove that tree before anything builds.
 test_every_cache_restore_drops_the_duckdb_sources() {
   local file restores drops
   for file in "$CI" "$WEEKLY"; do
     restores=$(grep -c 'uses: Swatinem/rust-cache@' "$file")
-    drops=$(grep -A3 'uses: Swatinem/rust-cache@' "$file" | grep -cxF '        run: rm -rf target/duckdb-sources' || true)
+    drops=$(awk '/uses: Swatinem\/rust-cache@/ { want = 1; next }
+      want && /^ +run: / { if ($0 ~ /^        run: rm -rf target\/duckdb-sources( |$)/) n++; want = 0 }
+      END { print n + 0 }' "$file")
     [[ $restores -gt 0 && $restores == "$drops" ]] \
       || fail "$(basename "$file"): $drops of $restores cache restores drop target/duckdb-sources"
   done
