@@ -48,9 +48,7 @@ fn search_in_loads_that_connection_and_keeps_the_palette_open(cx: &mut TestAppCo
     open(cx, &o);
     palette_pick(cx, o.win, "Search tables in lite");
     assert!(present(cx, o.win, "palette"));
-    wait_real(cx, "lite's tables", |cx| {
-        has(cx, &o, "main.orders \u{b7} lite")
-    });
+    wait_real(cx, "lite's tables", |cx| has(cx, &o, "orders \u{b7} lite"));
     assert!(!has(cx, &o, "Search tables in lite"));
     assert!(
         has(cx, &o, "Search tables in nopg"),
@@ -65,9 +63,7 @@ fn a_connection_with_a_session_loads_its_tables_on_open(cx: &mut TestAppContext)
     o.run(cx, "SELECT 1");
     o.idle(cx);
     open(cx, &o);
-    wait_real(cx, "lite's tables", |cx| {
-        has(cx, &o, "main.orders \u{b7} lite")
-    });
+    wait_real(cx, "lite's tables", |cx| has(cx, &o, "orders \u{b7} lite"));
     assert!(!has(cx, &o, "Search tables in lite"));
     assert!(has(cx, &o, "Search tables in nopg"));
 }
@@ -120,9 +116,7 @@ fn a_search_that_finds_nothing_says_so_and_does_nothing(cx: &mut TestAppContext)
         Some("Search tables in lite")
     );
     key(cx, "enter");
-    wait_real(cx, "lite's tables", |cx| {
-        has(cx, &o, "main.orders \u{b7} lite")
-    });
+    wait_real(cx, "lite's tables", |cx| has(cx, &o, "orders \u{b7} lite"));
     cx.update_window(o.win, |_, w, cx| w.input("zz", cx))
         .unwrap();
     let row = "No tables in lite match 'ordzz'";
@@ -143,9 +137,7 @@ fn typing_after_clicking_search_in_goes_to_the_search_field(cx: &mut TestAppCont
     let o = launched(cx, SETUP, "");
     open(cx, &o);
     palette_pick(cx, o.win, "Search tables in lite");
-    wait_real(cx, "lite's tables", |cx| {
-        has(cx, &o, "main.orders \u{b7} lite")
-    });
+    wait_real(cx, "lite's tables", |cx| has(cx, &o, "orders \u{b7} lite"));
     cx.update_window(o.win, |_, w, cx| w.input("zz", cx))
         .unwrap();
     let row = "No tables in lite match 'ordzz'";
@@ -214,7 +206,7 @@ fn loaded_rows_under_a_resting_pointer_keep_the_highlight(cx: &mut TestAppContex
         sidebar.update(cx, |s, cx| {
             s.ensure_loaded("lite", &[CatalogQuery::Schemas, main.clone()], cx)
         });
-        has(cx, &o, "main.orders4 \u{b7} lite")
+        has(cx, &o, "orders4 \u{b7} lite")
     });
     let under = row_at(cx, &o, at).expect("a row under the pointer");
     assert_ne!(
@@ -254,7 +246,7 @@ fn load_lite_in_two_steps(cx: &mut TestAppContext, o: &Opened) {
         sidebar.update(cx, |s, cx| {
             s.ensure_loaded("lite", std::slice::from_ref(&main), cx)
         });
-        has(cx, o, "main.orders4 \u{b7} lite")
+        has(cx, o, "orders4 \u{b7} lite")
     });
 }
 

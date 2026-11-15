@@ -449,7 +449,7 @@ pub fn bindings() -> Vec<Binding> {
             EXPLORER_OPEN_KEYS,
             || Box::new(OpenSelected),
             Some("Explorer && !Input"),
-            Some("Open selected table"),
+            Some("Open selected item"),
         ),
         row(
             "explorer.select_prev",

@@ -81,7 +81,7 @@ fn history_from_the_palette_opens_the_panel(cx: &mut TestAppContext) {
     // The Tables group sits above Commands, so the clicked row is in a later section.
     wait_real(cx, "both groups", |cx| {
         let rows = palette_rows(cx, o.win);
-        rows.iter().any(|r| r == "main.history_log \u{b7} lite")
+        rows.iter().any(|r| r == "history_log \u{b7} lite")
             && rows.iter().any(|r| r == "Toggle history")
     });
     support::palette_pick(cx, o.win, "Toggle history");

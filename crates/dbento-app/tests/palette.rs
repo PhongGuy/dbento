@@ -91,7 +91,7 @@ fn ctrl_p_in_the_editor_finds_a_table_and_enter_browses_it(cx: &mut TestAppConte
     wait_real(cx, "the palette", |cx| present(cx, o.win, "palette"));
     type_text(cx, &o, "ord");
     wait_real(cx, "orders first", |cx| {
-        rows(cx, &o).first().map(String::as_str) == Some("main.orders \u{b7} lite")
+        rows(cx, &o).first().map(String::as_str) == Some("orders \u{b7} lite")
     });
     press(cx, &o, "enter");
     assert!(!present(cx, o.win, "palette"));
@@ -104,6 +104,18 @@ fn ctrl_p_in_the_editor_finds_a_table_and_enter_browses_it(cx: &mut TestAppConte
         (recent[0].connection.as_str(), recent[0].rel.name()),
         ("lite", "orders")
     );
+}
+
+#[gpui_kit::test]
+fn a_lone_schema_table_shows_bare_but_its_qualified_name_still_finds_it(cx: &mut TestAppContext) {
+    let o = opened(cx, SETUP, "", 0);
+    load_lite(cx, &o);
+    in_editor(cx, &o, "ctrl-p");
+    wait_real(cx, "the palette", |cx| present(cx, o.win, "palette"));
+    type_text(cx, &o, "main.ord");
+    wait_real(cx, "orders first", |cx| {
+        rows(cx, &o).first().map(String::as_str) == Some("orders \u{b7} lite")
+    });
 }
 
 #[gpui_kit::test]
