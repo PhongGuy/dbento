@@ -933,10 +933,6 @@ fn an_edit_keeps_a_parents_databases(cx: &mut TestAppContext) {
     let (win, f) = open(cx, Some(("nopg", spec)));
     set(cx, win, &f, Field::User, "me");
     let (_, edited) = edit(cx, &f).unwrap();
-    assert_eq!(
-        edited.databases,
-        Some(listed),
-        "the form has no control for it and keeps it"
-    );
+    assert_eq!(edited.databases, Some(listed), "an edit elsewhere keeps it");
     assert_eq!(edited.user.as_deref(), Some("me"));
 }

@@ -35,6 +35,7 @@ mod confirm_look;
 mod conflict_actions;
 mod connect_failure;
 mod connection_chip;
+mod connection_databases;
 mod connection_dialog;
 mod connection_form;
 mod connection_look;

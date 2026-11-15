@@ -16,6 +16,7 @@ mod workspace;
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, Engine, Folder, InitError, MAX_QUERY_FILE_BYTES,
     OpenError, QueryFileError, ResolveError, SavedQuery, SecretSource, TlsMode, Workspace,
+    valid_database_name,
 };
 
 mod form;

@@ -61,6 +61,19 @@ pub enum FieldKind {
     Uri,
     /// A true-or-false key, shown as a checkbox; absent means false.
     Flag,
+    /// Which of the server's databases become child connections: `"all"` or a list of names;
+    /// absent means only the connection's own database.
+    Databases,
+}
+
+const DATABASES_HELP: &str = "Each database shows as its own connection, <name>/<database>, \
+     with this connection's login and settings.";
+
+// The `databases` key, which only Postgres and SQL Server parents take.
+fn databases_field() -> FormField {
+    let mut f = field("databases", "Databases", FieldKind::Databases, "", false);
+    f.help = Some(DATABASES_HELP);
+    f
 }
 
 const MYSQL_READ_ONLY_HELP: &str = "Read-only blocks writes in each statement's transaction, \
@@ -88,7 +101,10 @@ pub fn connection_form(engine: Engine) -> ConnectionForm {
             read_only_help: None,
         },
         Engine::Postgres => {
-            server_form((5432, "5432"), "e.g. postgres", true, "e.g. postgres", None)
+            let mut form =
+                server_form((5432, "5432"), "e.g. postgres", true, "e.g. postgres", None);
+            form.sections[0].fields.push(databases_field());
+            form
         }
         // A MySQL connection may leave the database out and browse every schema it can see.
         Engine::Mysql => {
@@ -151,6 +167,7 @@ fn mssql_form() -> ConnectionForm {
                         field("database", "Database", FieldKind::Text, "optional", false),
                         "Leave empty to use the login's default database.",
                     ),
+                    databases_field(),
                     field("user", "User", FieldKind::Text, "e.g. sa", true),
                 ],
             ),
