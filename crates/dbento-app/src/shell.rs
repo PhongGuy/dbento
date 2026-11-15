@@ -31,9 +31,9 @@ use gpui_kit::{
     Action as _, AnyView, App, AppContext as _, BackgroundExecutor, ClickEvent, Context,
     DismissEvent, Div, ElementId, Entity, EntityId, FocusHandle, Focusable as _, FontWeight,
     InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton, ParentElement,
-    PathPromptOptions, Pixels, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
-    Styled, Subscription, Task, TestSupportExt, WeakEntity, Window, div, img, px,
-    transparent_black,
+    PathPromptOptions, Pixels, Render, Role, ScrollHandle, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
+    div, img, px, transparent_black,
 };
 
 use crate::app::{
@@ -378,6 +378,8 @@ pub struct Shell {
     tab_menu_target: Option<usize>,
     // The tab menu is open; tab tooltips are off while it is.
     tab_menu_open: bool,
+    // The tab strip's sideways scroll, so the active tab can be brought into view.
+    tab_scroll: ScrollHandle,
     // The root's focus, so window-wide actions reach the shell from any view.
     focus: FocusHandle,
     _os_appearance: Subscription,
@@ -536,6 +538,7 @@ impl Shell {
             activated_serial: 0,
             tab_menu_target: None,
             tab_menu_open: false,
+            tab_scroll: ScrollHandle::new(),
             focus,
             _os_appearance: os_appearance,
             settings,
@@ -1156,6 +1159,7 @@ impl Shell {
             return;
         };
         self.active = Some(ix);
+        self.tab_scroll.scroll_to_item(ix);
         let model = tab.read(cx).model().clone();
         if model.read(cx).events().is_none() {
             model.update(cx, |m, cx| m.connect(cx));
@@ -1202,6 +1206,9 @@ impl Shell {
         let observes = self.tab_observes.remove(from);
         self.tab_observes.insert(to, observes);
         self.active = active.and_then(|id| self.tabs.iter().position(|t| t.entity_id() == id));
+        if let Some(ix) = self.active {
+            self.tab_scroll.scroll_to_item(ix);
+        }
         self.tab_menu_target = None;
         self.save_session(cx);
         cx.notify();
@@ -4089,7 +4096,18 @@ impl Shell {
             .overflow_hidden()
             // One menu on the strip, as in the explorer: capture clears the target, a handle's
             // bubble handler sets it, and the deferred builder reads it.
-            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.tab_menu_target = None))
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.tab_menu_target = None));
+        // Tabs keep a readable minimum width; past that the tabs alone scroll sideways under
+        // the wheel, and the new-tab button stays put beside them.
+        let tabs = div()
+            .id("tab-scroll")
+            .test_support()
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .h_full()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll)
             .children({
                 let titles: Vec<(String, String)> = self
                     .tabs
@@ -4108,7 +4126,9 @@ impl Shell {
                     .enumerate()
                     .map(|(ix, label)| self.tab_handle(ix, label, cx))
                     .collect::<Vec<_>>()
-            })
+            });
+        let strip = strip
+            .child(tabs)
             .child(
                 div()
                     .flex()
@@ -4173,6 +4193,7 @@ impl Shell {
         let (wash, bar) = (theme.drop_target, theme.drag_border);
         let tab = self.tabs[ix].read(cx);
         let conn = SharedString::from(tab.conn().name().to_owned());
+        let tip = SharedString::from(tab_tooltip(&tab.title(), tab.file(), &conn));
         let glyph = if tab.origin().is_some() {
             Icons::Table2
         } else {
@@ -4320,7 +4341,7 @@ impl Shell {
             .relative()
             .flex()
             .flex_shrink(1.)
-            .min_w(px(72.))
+            .min_w(TAB_MIN_WIDTH)
             .max_w(px(280.))
             .items_center()
             .gap_2()
@@ -4339,7 +4360,7 @@ impl Shell {
             .children(dot)
             .child(close)
             .when(!self.tab_menu_open, |h| {
-                h.tooltip(move |window, cx| theme::tooltip(conn.clone(), window, cx))
+                h.tooltip(move |window, cx| theme::tooltip(tip.clone(), window, cx))
             })
             .on_mouse_down(
                 MouseButton::Right,
@@ -4563,6 +4584,18 @@ pub fn tab_labels(tabs: &[(&str, &str)]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// A tab's tooltip: its full title, the saved query's path when it has one, and its connection.
+pub fn tab_tooltip(title: &str, file: Option<&std::path::Path>, conn: &str) -> String {
+    let mut tip = title.to_owned();
+    if let Some(file) = file {
+        tip.push('\n');
+        tip.push_str(&file.display().to_string());
+    }
+    tip.push_str("\nConnection: ");
+    tip.push_str(conn);
+    tip
 }
 
 /// How strongly a tagged tab draws its top line: full when active or production, else half.
@@ -5060,6 +5093,8 @@ const PALETTE_LABEL: &str = "Search tables, queries and commands";
 const GUTTER: Pixels = px(6.);
 const TITLE_BAR: Pixels = px(40.);
 const TAB_STRIP: Pixels = px(36.);
+// Room for the kind icon, about nine characters of title and the close button.
+const TAB_MIN_WIDTH: Pixels = px(136.);
 
 // Whether `a` and `b` name one relation on `m`'s connection; SQLite names match without
 // regard to case, as the database matches them.
