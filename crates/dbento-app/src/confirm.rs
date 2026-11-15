@@ -119,6 +119,12 @@ pub fn frame(dialog: Dialog, width: Pixels, edge: Option<Hsla>, cx: &App) -> Dia
     }
 }
 
+/// The frame of a dialog that asks for text, [`DIALOG_WIDTH`] wide: neutral, since asking
+/// for a name is not a warning.
+pub fn text_frame(dialog: Dialog, cx: &App) -> Dialog {
+    frame(dialog, DIALOG_WIDTH, None, cx)
+}
+
 /// A dialog's title row: an optional 16 px glyph, then the title in SemiBold text.
 pub fn title_row(icon: Option<(IconName, Hsla)>, title: impl Into<SharedString>, cx: &App) -> Div {
     h_flex()
@@ -535,10 +541,32 @@ pub struct TextAsk {
 }
 
 /// The name dialog: `save-name` input, `save-name-error`, `save-cancel`, `save-ok` (Enter).
-/// OK on text `check` refuses keeps the dialog open with the reason in `save-name-error`;
-/// else the receiver yields the trimmed text once.
+/// OK on text `check` refuses keeps the dialog open with the reason in `save-name-error`
+/// until the text is edited; else the receiver yields the trimmed text once.
 pub fn ask_text(
     spec: TextAsk,
+    window: &mut Window,
+    cx: &mut App,
+) -> async_channel::Receiver<String> {
+    ask_text_confirming(spec, Rc::new(|_| None), window, cx)
+}
+
+/// A text the name dialog takes only on a second, explicit choice.
+pub struct TextConfirm {
+    /// Why the text needs the choice, shown in `save-name-error`.
+    pub says: SharedString,
+    /// The label of `save-name-confirm`, which accepts the text anyway.
+    pub accept: SharedString,
+}
+
+/// Which accepted texts need a [`TextConfirm`]; None takes the text as it is.
+pub type TextConfirmCheck = Rc<dyn Fn(&str) -> Option<TextConfirm>>;
+
+/// [`ask_text`], except that OK on a text `confirm` flags keeps the dialog open with its line
+/// and a `save-name-confirm` button, which yields the text.
+pub fn ask_text_confirming(
+    spec: TextAsk,
+    confirm: TextConfirmCheck,
     window: &mut Window,
     cx: &mut App,
 ) -> async_channel::Receiver<String> {
@@ -546,7 +574,7 @@ pub fn ask_text(
     // One input for the dialog's life: the builder runs every frame and must not reset it.
     let input = cx.new(|cx| InputState::new(window, cx).default_value(spec.initial.clone()));
     let focused = Rc::new(Cell::new(false));
-    let problem: Rc<RefCell<Option<SharedString>>> = Rc::default();
+    let problem: Rc<RefCell<Option<Shown>>> = Rc::default();
     window.defer(cx, move |window, cx| {
         window.open_dialog(cx, move |dialog, window, cx| {
             if !focused.replace(true) {
@@ -555,39 +583,72 @@ pub fn ask_text(
                     i.select_all(window, cx);
                 });
             }
+            // A line belongs to the text it judged: any edit drops it, and its button with it.
+            let typed = input.read(cx).value().to_string();
+            if problem.borrow().as_ref().is_some_and(|p| p.text != typed) {
+                *problem.borrow_mut() = None;
+            }
             // Enter reaches the dialog's OK through the single-line input, as does the button.
-            // A refused text stays in the dialog with its reason, and the input keeps the keys.
+            // A refused or flagged text stays in the dialog with its line, and the input keeps
+            // the keys; `confirmed` is the flagged text's own button, which skips the flag only.
             let send = {
                 let (tx, input, problem) = (tx.clone(), input.clone(), Rc::clone(&problem));
-                let check = Rc::clone(&spec.check);
-                move |window: &mut Window, cx: &mut App| -> bool {
-                    let text = input.read(cx).value().trim().to_owned();
-                    let says = check(&text);
-                    let refused = says.is_some();
-                    *problem.borrow_mut() = says;
-                    if refused {
-                        input.update(cx, |i, cx| i.focus(window, cx));
-                        window.refresh();
-                        return false;
-                    }
-                    let _ = tx.try_send(text);
-                    true
+                let (check, confirm) = (Rc::clone(&spec.check), Rc::clone(&confirm));
+                move |confirmed: bool, window: &mut Window, cx: &mut App| -> bool {
+                    let raw = input.read(cx).value().to_string();
+                    let text = raw.trim().to_owned();
+                    let shown = match check(&text) {
+                        Some(says) => Some((says, None)),
+                        None if confirmed => None,
+                        None => confirm(&text).map(|c| (c.says, Some(c.accept))),
+                    };
+                    let Some((says, accept)) = shown else {
+                        *problem.borrow_mut() = None;
+                        let _ = tx.try_send(text);
+                        return true;
+                    };
+                    *problem.borrow_mut() = Some(Shown {
+                        text: raw,
+                        says,
+                        accept,
+                    });
+                    input.update(cx, |i, cx| i.focus(window, cx));
+                    window.refresh();
+                    false
                 }
             };
             let ok = {
                 let send = send.clone();
-                move |_: &_, window: &mut Window, cx: &mut App| send(window, cx)
+                move |_: &_, window: &mut Window, cx: &mut App| send(false, window, cx)
             };
             let dim = theme::dim(cx);
             let danger = cx.theme().danger;
-            let error = problem.borrow().clone().map(|says| {
-                div()
-                    .id("save-name-error")
-                    .aria_label(says.clone())
-                    .test_support()
-                    .text_sm()
-                    .text_color(danger)
-                    .child(says)
+            let error = problem.borrow().as_ref().map(|shown| {
+                let accept = shown.accept.clone().map(|label| {
+                    let send = send.clone();
+                    ui::secondary(Button::new("save-name-confirm"))
+                        .label(label)
+                        .h(px(24.))
+                        .on_click(move |_, window, cx| {
+                            if send(true, window, cx) {
+                                window.close_dialog(cx);
+                            }
+                        })
+                });
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("save-name-error")
+                            .aria_label(shown.says.clone())
+                            .test_support()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(danger)
+                            .child(shown.says.clone()),
+                    )
+                    .children(accept)
             });
             let cancel = ui::secondary(Button::new("save-cancel"))
                 .label("Cancel")
@@ -598,11 +659,11 @@ pub fn ask_text(
                 .label(spec.ok.clone())
                 .h(px(32.))
                 .on_click(move |_, window, cx| {
-                    if send(window, cx) {
+                    if send(false, window, cx) {
                         window.close_dialog(cx);
                     }
                 });
-            frame(dialog, DIALOG_WIDTH, Some(danger), cx)
+            text_frame(dialog, cx)
                 .margin_top(dialog_top(window))
                 .on_ok(ok)
                 .child(
@@ -646,4 +707,11 @@ pub fn ask_text(
         });
     });
     rx
+}
+
+/// The line under a name dialog's input and the exact text it judged.
+struct Shown {
+    text: String,
+    says: SharedString,
+    accept: Option<SharedString>,
 }

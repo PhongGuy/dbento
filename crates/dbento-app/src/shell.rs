@@ -65,7 +65,7 @@ use crate::nav::{Hop, NavHistory};
 use crate::palette::{self, Mode, PaletteCommand, PaletteEvent, PaletteInit, TableRef};
 use crate::persist::ChangeQueue;
 use crate::pick_row::ConnectionPick;
-use crate::query_files::{ask_name, name_problem, query_file_name};
+use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT};
 use crate::recent_tabs::Recent;
 use crate::restore::plan_restore;
@@ -1937,7 +1937,7 @@ impl Shell {
     }
 
     /// Saves the active tab: to its file when it has one, else under a name asked for,
-    /// relative to `queries/<connection>/`, confirming before an existing file is replaced.
+    /// relative to `queries/<connection>/`; the name dialog settles bad paths and overwrites.
     pub fn save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tab().cloned() else {
             return;
@@ -1954,8 +1954,11 @@ impl Shell {
             .capabilities()
             .language
             .file_extension();
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
         let tab = tab.downgrade();
-        let reply = ask_name("untitled", ext, window, cx);
+        let reply = ask_name("untitled", ext, &conn, ws, window, cx);
         cx.spawn_in(window, async move |this, cx| {
             let Ok(name) = reply.recv().await else {
                 return;
@@ -2068,8 +2071,8 @@ impl Shell {
         cx.notify();
     }
 
-    // Saves `tab` as `name` with extension `ext` in `conn`'s folder; an existing file is
-    // replaced only on Replace.
+    // Saves `tab` as `name` with extension `ext` in `conn`'s folder, over any file there: the
+    // name dialog has already asked about it.
     fn save_as(
         &mut self,
         tab: &Entity<QueryTab>,
@@ -2079,63 +2082,15 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ws) = self.workspace.clone() else {
-            return;
-        };
         // The dialog refuses these; a caller that skipped it writes nothing.
         if name_problem(name, ext).is_some() {
             return;
         }
-        let rel = Path::new("queries")
-            .join(conn)
-            .join(query_file_name(name, ext));
-        // Ask about the target itself, not the listing, which skips linked folders; a check
-        // that fails shows its error and writes nothing.
-        match ws.query_exists(&rel) {
-            Ok(false) => return self.write_tab(tab, &rel, window, cx),
-            Ok(true) => {}
-            Err(e) => return show_error("Cannot save", e.to_string(), window, cx),
-        }
-        let reply = ask(
-            Ask {
-                title: "Replace the saved query?".into(),
-                detail: Some(format!("{} already exists.", rel.display()).into()),
-                sql: None,
-                language: "sql",
-                choices: vec![
-                    Choice {
-                        id: "overwrite-keep",
-                        label: "Keep it".into(),
-                        danger: false,
-                    },
-                    Choice {
-                        id: "overwrite-replace",
-                        label: "Replace".into(),
-                        danger: true,
-                    },
-                ],
-                default: 0,
-                cancel: 0,
-            },
-            window,
-            cx,
-        );
-        let tab = tab.downgrade();
-        cx.spawn_in(window, async move |this, cx| {
-            if reply.recv().await != Ok(1) {
-                return;
-            }
-            let _ = this.update_in(cx, |shell, window, cx| {
-                if let Some(tab) = tab.upgrade() {
-                    shell.write_tab(&tab, &rel, window, cx);
-                }
-            });
-        })
-        .detach();
+        self.write_tab(tab, &query_rel(conn, name, ext), window, cx);
     }
 
-    // Writes `tab`'s text to `rel` through core and ties the tab to it; a refusal or I/O
-    // error shows "Cannot save" and leaves the tab as it was.
+    // Writes `tab`'s text to `rel` through core, ties the tab to it and says where it went; a
+    // refusal or I/O error shows "Cannot save" and leaves the tab as it was.
     fn write_tab(
         &mut self,
         tab: &Entity<QueryTab>,
@@ -2162,6 +2117,9 @@ impl Shell {
                     self.number_untitled(&other, cx);
                 }
                 tab.update(cx, |t, cx| t.set_file(path.to_path_buf(), sql, cx));
+                let text = format!("Saved {}", path.display());
+                let kind = ui::NoticeKind::Success;
+                ui::notice(window, cx, ui::Notice { text, kind });
             }
             Err(e) => show_error("Cannot save", e.to_string(), window, cx),
         }

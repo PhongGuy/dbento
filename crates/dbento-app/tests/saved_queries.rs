@@ -62,14 +62,47 @@ fn ctrl_s_names_an_unsaved_tab_then_rewrites_its_file(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_name_that_leaves_queries_is_refused(cx: &mut TestAppContext) {
+fn a_name_that_leaves_queries_is_refused_in_the_dialog(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
     name(cx, &o, "../../escape");
-    wait_real(cx, "the error", |cx| present(cx, o.win, "save-error-ok"));
+    let says = "queries/lite/../../escape.sql is not a file under the workspace's queries/ folder";
+    assert!(present(cx, o.win, "save-name"), "the dialog stays open");
+    assert_eq!(
+        label_of(cx, o.win, "save-name-error").as_deref(),
+        Some(says)
+    );
+    assert!(
+        !present(cx, o.win, "save-error-ok"),
+        "no separate error dialog"
+    );
+    assert!(
+        !present(cx, o.win, "save-name-confirm"),
+        "nothing to overwrite"
+    );
+    // A long reason wraps inside the dialog instead of running past its edge.
+    cx.update_window(o.win, |_, w, cx| {
+        w.render_frame(cx);
+        let field = w.find("save-name").bounds();
+        let error = w.find("save-name-error").bounds();
+        assert!(error.right() <= field.right(), "{error:?} vs {field:?}");
+    })
+    .unwrap();
+    // OK again checks the same typed name: the dialog kept it.
+    click(cx, &o, "save-ok");
+    assert_eq!(
+        label_of(cx, o.win, "save-name-error").as_deref(),
+        Some(says)
+    );
     let dir = o.fx.dir.path();
     assert!(!dir.join("escape.sql").exists() && !dir.join("queries/escape.sql").exists());
-    click(cx, &o, "save-error-ok");
+    name(cx, &o, "/abs");
+    let abs = label_of(cx, o.win, "save-name-error").unwrap_or_default();
+    assert!(
+        abs.ends_with("is not a file under the workspace's queries/ folder"),
+        "{abs}"
+    );
+    click(cx, &o, "save-cancel");
     assert_eq!(
         label_of(cx, o.win, ("tab", 0usize)).as_deref(),
         Some("Query 1")
@@ -78,35 +111,69 @@ fn a_name_that_leaves_queries_is_refused(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn saving_over_an_existing_name_asks_first(cx: &mut TestAppContext) {
+fn an_existing_name_offers_overwrite_in_the_dialog(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     let file = o.fx.dir.path().join("queries/lite/top.sql");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "SELECT 0").unwrap();
     press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
     name(cx, &o, "top");
-    wait_real(cx, "the question", |cx| {
-        present(cx, o.win, "overwrite-keep")
-    });
-    click(cx, &o, "overwrite-keep");
-    assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 0");
+    assert!(present(cx, o.win, "save-name"), "the dialog stays open");
     assert_eq!(
-        label_of(cx, o.win, ("tab", 0usize)).as_deref(),
-        Some("Query 1")
+        label_of(cx, o.win, "save-name-error").as_deref(),
+        Some("queries/lite/top.sql already exists.")
     );
-    assert!(active(cx, &o).4, "a kept file leaves the tab edited");
-    press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
+    assert!(present(cx, o.win, "save-name-confirm"));
+    assert!(!present(cx, o.win, "overwrite-keep"), "no second dialog");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 0");
+    // Editing the name drops the line and its Overwrite; the typed name is still there.
+    cx.update_window(o.win, |_, w, cx| {
+        w.press("end", cx);
+        w.input("2", cx);
+    })
+    .unwrap();
+    assert!(!present(cx, o.win, "save-name-error"));
+    assert!(!present(cx, o.win, "save-name-confirm"));
     name(cx, &o, "top.sql");
-    wait_real(cx, "the question", |cx| {
-        present(cx, o.win, "overwrite-replace")
-    });
-    click(cx, &o, "overwrite-replace");
+    click(cx, &o, "save-name-confirm");
+    assert!(!present(cx, o.win, "save-name"));
     assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 1");
     assert_eq!(
         label_of(cx, o.win, ("tab", 0usize)).as_deref(),
         Some("top.sql")
     );
     assert!(!active(cx, &o).4, "a saved tab is not edited");
+}
+
+#[gpui_kit::test]
+fn a_new_name_after_an_edit_saves_under_it(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let file = o.fx.dir.path().join("queries/lite/top.sql");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "SELECT 0").unwrap();
+    press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
+    name(cx, &o, "top");
+    cx.update_window(o.win, |_, w, cx| {
+        w.press("end", cx);
+        w.input("2", cx);
+    })
+    .unwrap();
+    click(cx, &o, "save-ok");
+    let saved = o.fx.dir.path().join("queries/lite/top2.sql");
+    wait_real(cx, "the file", |_| saved.exists());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 0");
+}
+
+#[gpui_kit::test]
+fn a_save_says_where_it_went(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
+    name(cx, &o, "top");
+    wait_real(cx, "the notice", |cx| present(cx, o.win, "notice"));
+    assert_eq!(
+        label_of(cx, o.win, "notice").as_deref(),
+        Some("Saved queries/lite/top.sql")
+    );
 }
 
 #[gpui_kit::test]
@@ -133,10 +200,11 @@ fn an_unlisted_file_behind_a_folder_link_is_not_overwritten_silently(cx: &mut Te
     std::os::unix::fs::symlink(dir.join("queries/real"), dir.join("queries/lite")).unwrap();
     press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
     name(cx, &o, "top");
-    wait_real(cx, "the question", |cx| {
-        present(cx, o.win, "overwrite-keep")
-    });
-    click(cx, &o, "overwrite-keep");
+    assert_eq!(
+        label_of(cx, o.win, "save-name-error").as_deref(),
+        Some("queries/lite/top.sql already exists.")
+    );
+    click(cx, &o, "save-cancel");
     assert_eq!(
         fs::read_to_string(dir.join("queries/real/top.sql")).unwrap(),
         "SELECT 0"
@@ -277,10 +345,7 @@ fn replacing_a_file_open_in_another_tab_unbinds_that_tab(cx: &mut TestAppContext
     click(cx, &o, "tab-new"); // tab 2
     press_in_editor(cx, &o, "SELECT 2", "ctrl-s");
     name(cx, &o, "a");
-    wait_real(cx, "the question", |cx| {
-        present(cx, o.win, "overwrite-replace")
-    });
-    click(cx, &o, "overwrite-replace");
+    click(cx, &o, "save-name-confirm");
     assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 2");
     let tabs: Vec<_> = o.shell.read_with(cx, |s, cx| {
         s.tabs()
