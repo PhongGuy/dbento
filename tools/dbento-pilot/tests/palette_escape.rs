@@ -23,12 +23,7 @@ async fn one_escape_closes_the_palette_a_shortcut_opened() {
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     pilot.ok("launch", launch_args("headless", ws.path())).await;
-    pilot
-        .ok(
-            "click",
-            json!({ "target": { "id": ["connection-lite"] }, "count": 2 }),
-        )
-        .await;
+    common::open_connection(&pilot, "connection-lite").await;
     until(&pilot, "the editor", |t| find_node(t, "editor").is_some()).await;
     pilot
         .ok("click", json!({ "target": { "id": ["editor"] } }))

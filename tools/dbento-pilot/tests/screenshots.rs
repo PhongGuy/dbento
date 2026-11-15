@@ -94,7 +94,7 @@ async fn the_readme_screenshots() {
     // Hero: the shop's tables in the explorer and a saved query's result in the grid.
     click(&pilot, "connection-toggle-shop", 1).await;
     row(&pilot, "shop.main.orders").await;
-    click(&pilot, "connection-shop", 2).await;
+    common::open_connection(&pilot, "connection-shop").await;
     until(&pilot, "the editor", |t| find_node(t, "editor").is_some()).await;
     click(&pilot, "editor", 1).await;
     key(&pilot, "ctrl-o").await;

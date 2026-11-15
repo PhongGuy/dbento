@@ -59,7 +59,7 @@ async fn tab_keys_switch_jump_and_move_and_a_drag_reorders() {
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     pilot.ok("launch", launch_args("headless", ws.path())).await;
-    click(&pilot, "connection-lite", json!({ "count": 2 })).await;
+    common::open_connection(&pilot, "connection-lite").await;
     until(&pilot, "the first tab", |t| find_node(t, "tab-0").is_some()).await;
     click(&pilot, "tab-new", json!({})).await;
     click(&pilot, "tab-new", json!({})).await;

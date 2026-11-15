@@ -93,7 +93,7 @@ async fn launch(ws: &Path, password: &str) -> Pilot {
     pilot
 }
 async fn run(pilot: &Pilot, conn: &str, sql: &str) {
-    click(pilot, &format!("connection-{conn}"), json!({ "count": 2 })).await;
+    common::open_connection(pilot, &format!("connection-{conn}")).await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;

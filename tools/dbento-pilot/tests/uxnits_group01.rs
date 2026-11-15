@@ -152,7 +152,7 @@ async fn toolbar_slot_header_room_and_filter_clear() {
         let mut args = launch_args("headless", ws.path());
         args["env"] = json!({ dbento_pilot::THEME_VAR: theme });
         pilot.ok("launch", args).await;
-        click(&pilot, "connection-lite", 2).await;
+        common::open_connection(&pilot, "connection-lite").await;
         pilot
             .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
             .await;

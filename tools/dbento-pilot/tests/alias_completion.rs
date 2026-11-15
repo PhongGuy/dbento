@@ -68,7 +68,7 @@ async fn an_alias_completes_its_tables_columns() {
         row_index(t, "shop.main.orders/indexes").is_some()
     })
     .await;
-    click(&pilot, "connection-shop", 2).await;
+    common::open_connection(&pilot, "connection-shop").await;
     until(&pilot, "the editor", |t| find_node(t, "editor").is_some()).await;
     click(&pilot, "editor", 1).await;
 

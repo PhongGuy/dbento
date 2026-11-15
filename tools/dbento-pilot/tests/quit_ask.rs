@@ -53,7 +53,7 @@ async fn closing_while_a_statement_runs_asks_naming_the_tab() {
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     pilot.ok("launch", launch_args("headless", ws.path())).await;
-    click(&pilot, "connection-lite", json!({ "count": 2 })).await;
+    common::open_connection(&pilot, "connection-lite").await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;

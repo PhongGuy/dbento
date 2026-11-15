@@ -48,7 +48,7 @@ async fn launch(ws: &Path) -> Pilot {
 }
 /// Opens `duck`'s query tab, types `sql` and runs it.
 async fn query(pilot: &Pilot, sql: &str) {
-    click(pilot, "connection-duck", json!({ "count": 2 })).await;
+    common::open_connection(pilot, "connection-duck").await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;
