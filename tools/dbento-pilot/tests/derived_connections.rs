@@ -103,7 +103,8 @@ async fn a_parent_lists_its_databases_and_a_child_runs_in_its_own() {
     click(&pilot, &format!("tree-toggle-{ix}"), json!({})).await;
     seek(&pilot, &format!("{child}.public")).await;
     let (_, ix) = seek(&pilot, &child).await;
-    click(&pilot, &format!("tree-row-{ix}"), json!({ "count": 2 })).await;
+    click(&pilot, &format!("tree-row-{ix}"), json!({})).await;
+    pilot.ok("key", json!({ "keys": "enter" })).await;
     pilot
         .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
         .await;
