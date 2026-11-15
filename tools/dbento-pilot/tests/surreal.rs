@@ -89,6 +89,8 @@ async fn fill(pilot: &Pilot, id: &str, text: &str) {
 async fn launch(ws: &Path, password: &str) -> Pilot {
     let pilot = Pilot::start().await;
     let mut args = launch_args("headless", ws);
+    // Tall enough that the dialog's TLS choice is in view without scrolling the form.
+    args["height"] = json!(1100);
     args["env"] = json!({ SR_SECRET_VAR: password });
     pilot.ok("launch", args).await;
     pilot

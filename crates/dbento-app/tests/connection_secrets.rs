@@ -94,6 +94,12 @@ fn the_keychain_note_names_the_environment_fallback(cx: &mut TestAppContext) {
     present(cx, win, "connection-list");
     click_id(cx, win, "connection-new");
     wait_real(cx, "the dialog", |cx| present(cx, win, "conn-name"));
+    // Before a name is typed the note shows where the name goes, not a half-built variable.
+    let unnamed = support::label_of(cx, win, "conn-keychain-note").unwrap();
+    assert!(
+        unnamed.contains("Set DBENTO_SECRET_<NAME> to keep it."),
+        "{unnamed}"
+    );
     let f = shell.read_with(cx, |s, _| s.connection_form().cloned().unwrap());
     let name = f.read_with(cx, |f, _| f.input(Field::Name).clone());
     cx.update_window(win, |_, w, cx| {

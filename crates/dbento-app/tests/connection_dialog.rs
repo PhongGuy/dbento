@@ -135,6 +135,8 @@ fn a_changed_file_offers_reload(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_folder_field_suggests_existing_folders_and_takes_new_ones(cx: &mut TestAppContext) {
     let o = opened(cx, "", "folder = \"team/core\"", 0);
+    // Tall enough that the list under Folder, at the foot of the form, needs no scrolling.
+    cx.simulate_window_resize(o.win, gpui_kit::size(px(1440.), px(1200.)));
     support::gear(cx, o.win, "nopg");
     let folder = form(cx, &o).read_with(cx, |f, _| f.input(Field::Folder).clone());
     cx.update_window(o.win, |_, w, cx| {
