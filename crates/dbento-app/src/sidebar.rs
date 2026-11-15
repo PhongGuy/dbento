@@ -46,8 +46,8 @@ use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
     RevealStep, RowKind, catalog_entries, column_detail, count_text, db_index, group_title,
-    index_select_sql, insert_sql, lone_schema, node_connection, object_group_title,
-    offers_definition, qualified_name, select_text,
+    index_select_sql, insert_sql, node_connection, object_group_title, offers_definition,
+    qualified_name, select_text,
 };
 use crate::ui::{self, Icons, Notice, NoticeKind};
 use crate::{settings, theme, tokio_bridge};
@@ -919,7 +919,7 @@ impl Sidebar {
             if let CatalogQuery::Count { rel } = &r.query {
                 let notice = match &r.result {
                     Ok(CatalogData::Count(n)) => Notice {
-                        text: count_text(rel, *n),
+                        text: count_text(&self.tree.shown_name(conn, rel), *n),
                         kind: NoticeKind::Info,
                     },
                     Ok(_) => Notice {
@@ -971,22 +971,23 @@ impl Sidebar {
             self.copy_insert_when_loaded(cx);
         }
         if schemas_landed {
-            self.open_lone_schema(conn, cx);
+            self.open_auto_schema(conn, cx);
         }
         self.advance_reveal(cx);
         self.load_objects(cx);
         cx.notify();
     }
 
-    // A connection showing a single schema opens it once, so its tables show straight away;
-    // a failed load is not an open, so Retry still gets one.
-    fn open_lone_schema(&mut self, conn: &str, cx: &mut Context<Self>) {
+    // A connection showing a single schema, or a MySQL one naming its database, opens that
+    // schema once so its tables show straight away; a failed load is not an open, so Retry
+    // still gets one.
+    fn open_auto_schema(&mut self, conn: &str, cx: &mut Context<Self>) {
         if self.auto_opened.contains(conn)
             || !self.tree.is_expanded(&NodeKey::Connection(conn.to_owned()))
         {
             return;
         }
-        let Some(schema) = self.tree.schemas(conn).and_then(lone_schema) else {
+        let Some(schema) = self.tree.auto_open_schema(conn) else {
             return;
         };
         let key = NodeKey::Schema {
@@ -1011,7 +1012,7 @@ impl Sidebar {
         let sql = insert_sql(*engine, rel, &names);
         cx.write_to_clipboard(ClipboardItem::new_string(sql));
         // A delayed copy can land long after the click, so every copy says what it wrote.
-        let text = format!("INSERT for {}.{} copied", rel.schema(), rel.name());
+        let text = format!("INSERT for {} copied", self.tree.shown_name(conn, rel));
         self.pending_insert = None;
         cx.emit(SidebarEvent::Notice(Notice {
             text,
@@ -1141,10 +1142,15 @@ impl Sidebar {
         .detach();
     }
 
-    // Enter opens a selected relation as its double click does and asks for a selected
-    // object's definition (a DynamoDB index runs instead); on Load more or a failed row it does
-    // what a click on the row or its Retry does. Any other selection lets the key go on.
+    // Enter opens a selected connection's tab and a selected relation as its double click
+    // does, and asks for a selected object's definition (a DynamoDB index runs instead); on Load
+    // more or a failed row it does what a click on the row or its Retry does. Any other
+    // selection lets the key go on.
     fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        if let (Some(Selection::Connection(_)), Some(ix)) = (&self.selection, self.selected()) {
+            self.open(ix, cx);
+            return;
+        }
         if let Some(Selection::Status { key, aria }) = self.selection.clone() {
             self.activate_status(&key, &aria, cx);
             return;
@@ -1667,14 +1673,14 @@ impl Sidebar {
                     .test_support()
                     .bg(bg)
                     .border_color(if selected { accent } else { bg })
-                    // Every click selects; only the second click of a double click opens, so
-                    // a triple click opens once.
+                    // Every click selects; the second click of a double click toggles, as the
+                    // chevron does, so a triple click toggles once. Enter and + open a tab.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         window.focus(&this.focus, cx);
                         this.quiet_tip_on_click(&click_key, false, cx);
                         this.select(ix, cx);
                         if e.click_count() == 2 {
-                            this.open(ix, cx);
+                            this.toggle_node(click_key.clone(), cx);
                         }
                     }))
                     .on_hover(cx.listener(move |this, over: &bool, _, cx| {
@@ -1918,8 +1924,21 @@ impl Sidebar {
             base
         };
         match &row.kind {
-            // A Redis DB trails its key count, dimmed with the name when it holds none.
+            // A Redis DB trails its key count, dimmed with the name when it holds none; a
+            // MySQL connection's configured database trails a dim "default".
             RowKind::Schema => match &row.key {
+                NodeKey::Schema { conn, schema }
+                    if self.tree.default_schema(conn) == Some(schema.as_str()) =>
+                {
+                    base.child(name(row.label.clone()))
+                        .child(div().flex_1())
+                        .child(
+                            mono_dim("default".to_owned())
+                                .id(("tree-detail", visible))
+                                .aria_label("default")
+                                .test_support(),
+                        )
+                }
                 NodeKey::Schema { conn, schema } => match self.tree.key_count(conn, schema) {
                     Some(keys) => base
                         .when(keys == 0, |row| row.text_color(dim))
@@ -1956,8 +1975,8 @@ impl Sidebar {
             RowKind::LoadMore => base.text_color(accent).child(name(row.label.clone())),
             RowKind::Relation(_) => {
                 let tip: Option<SharedString> = match &row.key {
-                    NodeKey::Relation { rel, .. } if self.tip_allowed(&row.key, false) => {
-                        Some(relation_tooltip(rel).into())
+                    NodeKey::Relation { conn, rel } if self.tip_allowed(&row.key, false) => {
+                        Some(relation_tooltip(&self.tree.shown_name(conn, rel)).into())
                     }
                     NodeKey::Connection(_)
                     | NodeKey::Schema { .. }
@@ -2219,22 +2238,18 @@ pub fn engine_icon(engine: Engine) -> IconName {
 }
 
 /// A connection row's tooltip: the engine, where it points and how to open it,
-/// "postgres · host:5432/db · Double-click to open a query tab".
+/// "postgres · host:5432/db · Enter to open a query tab".
 pub fn connection_tooltip(c: &ConnectionConfig) -> String {
     format!(
-        "{} \u{b7} {} \u{b7} Double-click to open a query tab",
+        "{} \u{b7} {} \u{b7} Enter to open a query tab",
         c.engine_label(),
         c.display_target()
     )
 }
 
-/// A relation row's tooltip: its qualified name and how to open it.
-pub fn relation_tooltip(rel: &RelationRef) -> String {
-    format!(
-        "{}.{} \u{b7} Double-click or Enter to open",
-        rel.schema(),
-        rel.name()
-    )
+/// A relation row's tooltip: its name as the explorer shows it and how to open it.
+pub fn relation_tooltip(name: &str) -> String {
+    format!("{name} \u{b7} Double-click or Enter to open")
 }
 
 /// The driver name a connection's tooltip leads with.

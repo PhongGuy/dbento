@@ -80,3 +80,66 @@ fn a_deleted_then_readded_connection_opens_its_lone_schema_again(cx: &mut TestAp
     click_id(cx, o.win, part_id("connection-toggle", "lite"));
     wait_real(cx, "main's table again", |cx| tree(cx, o.win) == OPEN);
 }
+
+// The row and detail labels from the top of the tree down.
+fn rows_with_detail(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+) -> Vec<(String, Option<String>)> {
+    (0usize..)
+        .map_while(|i| {
+            Some((
+                label_of(cx, win, ("tree-row", i))?,
+                label_of(cx, win, ("tree-detail", i)),
+            ))
+        })
+        .collect()
+}
+
+#[gpui_kit::test]
+fn a_mysql_connection_opens_and_marks_its_configured_database(cx: &mut TestAppContext) {
+    crate::support::init(cx);
+    crate::support::init_tokio(cx);
+    let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
+    let _enter = rt.enter();
+    let db = rt.block_on(dbento_testkit::mysql_db());
+    rt.block_on(db.scalar("CREATE TABLE t (id INT)"));
+    let (dir, spec) = crate::support::my_spec(&db, "");
+    let files = tempfile::tempdir().unwrap();
+    let services = dbento_app::app::Services {
+        paths: dbento_app::app::AppPaths::in_dir(files.path()),
+        store: std::sync::Arc::clone(&spec.store),
+        env: std::sync::Arc::clone(&spec.env),
+        secrets_in_memory: false,
+    };
+    let (win, _shell) = cx
+        .update(|cx| dbento_app::app::start(services, Some(dir.path().into()), cx))
+        .unwrap();
+    click_id(cx, win, part_id("connection-toggle", "my"));
+    let schema = format!("my.{}", db.database());
+    let table = format!("{schema}.t");
+    wait_real(cx, "the configured database's table", |cx| {
+        tree(cx, win).contains(&table)
+    });
+    let rows = rows_with_detail(cx, win);
+    let marked: Vec<_> = rows
+        .iter()
+        .filter(|(_, d)| d.as_deref() == Some("default"))
+        .map(|(aria, _)| aria.as_str())
+        .collect();
+    assert_eq!(
+        marked,
+        [schema.as_str()],
+        "only the configured database is marked"
+    );
+    let open: Vec<_> = rows
+        .iter()
+        .filter(|(aria, _)| aria.ends_with("/tables"))
+        .map(|(aria, _)| aria.clone())
+        .collect();
+    assert_eq!(
+        open,
+        [format!("{schema}/tables")],
+        "the others stay collapsed"
+    );
+}

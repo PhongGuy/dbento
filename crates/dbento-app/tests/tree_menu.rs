@@ -45,7 +45,7 @@ fn expanded(cx: &mut TestAppContext, setup: &str, want: &[&str]) -> Opened {
 #[test]
 fn a_relation_row_says_how_to_open_it() {
     assert_eq!(
-        relation_tooltip(&RelationRef::new("main", "Album")),
+        relation_tooltip("main.Album"),
         "main.Album \u{b7} Double-click or Enter to open"
     );
 }
@@ -412,8 +412,8 @@ fn insert_and_count_text_read_naturally() {
         ),
         "INSERT INTO shop.\"Order\" (id, \"Total\")\nVALUES (NULL, NULL)"
     );
-    assert_eq!(count_text(&rel, 1), "main.Album: 1 row");
-    assert_eq!(count_text(&rel, 12345), "main.Album: 12,345 rows");
+    assert_eq!(count_text("main.Album", 1), "main.Album: 1 row");
+    assert_eq!(count_text("Album", 12345), "Album: 12,345 rows");
 }
 
 #[gpui_kit::test]
@@ -421,7 +421,7 @@ fn count_rows_shows_a_notice(cx: &mut TestAppContext) {
     let o = expanded(cx, T, &MAIN_OPEN);
     menu(cx, &o, 2, "tree-menu-count");
     wait_real(cx, "the count", |cx| {
-        label_of(cx, o.win, "notice").as_deref() == Some("main.Album: 3 rows")
+        label_of(cx, o.win, "notice").as_deref() == Some("Album: 3 rows")
     });
     assert_eq!(tree(cx, o.win), MAIN_OPEN, "the count changes no level");
 }
@@ -436,7 +436,7 @@ fn generate_insert_loads_the_columns_first(cx: &mut TestAppContext) {
     });
     assert_eq!(tree(cx, o.win), MAIN_OPEN, "Album stays collapsed");
     wait_real(cx, "the INSERT notice", |cx| {
-        label_of(cx, o.win, "notice").as_deref() == Some("INSERT for main.Album copied")
+        label_of(cx, o.win, "notice").as_deref() == Some("INSERT for Album copied")
     });
 }
 
@@ -465,7 +465,7 @@ fn generate_insert_with_the_columns_loaded_copies_with_a_notice(cx: &mut TestApp
     );
     assert_eq!(
         label_of(cx, o.win, "notice").as_deref(),
-        Some("INSERT for main.Album copied")
+        Some("INSERT for Album copied")
     );
 }
 

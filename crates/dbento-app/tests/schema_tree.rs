@@ -1454,3 +1454,76 @@ fn mongodb_opens_a_collection_with_find_and_names_another_database() {
         "db.getSiblingDB(\"logs\").getCollection(\"a\\\"b\").find()"
     );
 }
+
+#[test]
+fn a_lone_schema_names_relations_bare_and_several_qualify_them() {
+    let mut t = loaded();
+    let album = RelationRef::new("main", "Album");
+    assert_eq!(t.shown_name("lite", &album), "Album");
+    let r = t
+        .refresh_connection("lite")
+        .into_iter()
+        .find(|r| r.query == CatalogQuery::Schemas)
+        .unwrap();
+    answer(&mut t, r, Ok(schemas(&["main", "aux"])));
+    assert_eq!(t.shown_name("lite", &album), "main.Album");
+    assert_eq!(
+        t.shown_name("other", &album),
+        "main.Album",
+        "unloaded qualifies"
+    );
+}
+
+const MY: &str = "engine = \"mysql\"\nhost = \"127.0.0.1\"\nport = 9\nuser = \"x\"\n";
+
+// A tree over a workspace with MySQL connection `my` (its table gets `extra`) and Postgres `pg`.
+fn my_tree(extra: &str) -> (tempfile::TempDir, CatalogTree) {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!(
+        "dbento = 1\n[connections.my]\n{MY}{extra}\n[connections.pg]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = 9\ndatabase = \"shop\"\nuser = \"x\"\n"
+    );
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let mut t = CatalogTree::new();
+    t.set_workspace(std::sync::Arc::new(
+        dbento_core::Workspace::open(dir.path()).unwrap(),
+    ));
+    (dir, t)
+}
+fn listed(t: &mut CatalogTree, conn: &str, names: &[&str]) {
+    let r = t.toggle(&NodeKey::Connection(conn.into())).unwrap();
+    answer(t, r, Ok(schemas(names)));
+}
+
+#[test]
+fn a_mysql_configured_database_is_the_default_schema() {
+    let (_dir, mut t) = my_tree("database = \"shop\"");
+    assert_eq!(t.default_schema("my"), None, "nothing listed yet");
+    listed(&mut t, "my", &["audit", "shop", "sys"]);
+    assert_eq!(t.default_schema("my"), Some("shop"));
+    assert_eq!(t.auto_open_schema("my"), Some("shop"));
+}
+
+#[test]
+fn no_default_schema_without_a_listed_mysql_database() {
+    let (_dir, mut t) = my_tree("");
+    listed(&mut t, "my", &["audit", "shop"]);
+    assert_eq!(t.default_schema("my"), None, "no database configured");
+    assert_eq!(t.auto_open_schema("my"), None);
+    let (_dir, mut t) = my_tree("database = \"gone\"");
+    listed(&mut t, "my", &["audit", "shop"]);
+    assert_eq!(
+        t.default_schema("my"),
+        None,
+        "the database is not on the server"
+    );
+    // A Postgres database holds its schemas, so its name is never one of them.
+    listed(&mut t, "pg", &["public", "shop"]);
+    assert_eq!(t.default_schema("pg"), None);
+    assert_eq!(t.auto_open_schema("pg"), None);
+}
+
+#[test]
+fn a_lone_schema_is_auto_opened() {
+    let t = loaded();
+    assert_eq!(t.auto_open_schema("lite"), Some("main"));
+}

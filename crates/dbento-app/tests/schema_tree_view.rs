@@ -285,14 +285,33 @@ fn a_single_click_on_a_connection_selects_it_without_opening_a_tab(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn double_clicking_a_connection_opens_its_tab(cx: &mut TestAppContext) {
+fn double_clicking_a_connection_toggles_it_without_opening_a_tab(cx: &mut TestAppContext) {
     let (_fx, _files, win, shell) = started(cx, T);
     cx.update_window(win, |_, w, cx| w.double_click(connection_id("lite"), cx))
         .unwrap();
+    wait_tree(cx, win, &MAIN_OPEN);
+    assert!(shell.read_with(cx, |s, _| s.tab().is_none()));
+    cx.update_window(win, |_, w, cx| w.double_click(connection_id("lite"), cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        tree(cx, win).is_empty(),
+        "a second double click collapses it"
+    );
+    assert!(shell.read_with(cx, |s, _| s.tab().is_none()));
+}
+
+#[gpui_kit::test]
+fn enter_on_a_selected_connection_opens_its_tab(cx: &mut TestAppContext) {
+    let (_fx, _files, win, shell) = started(cx, T);
+    click(cx, win, connection_id("lite"));
+    cx.update_window(win, |_, w, cx| w.press("enter", cx))
+        .unwrap();
     cx.run_until_parked();
     assert_eq!(shell.read_with(cx, |s, _| s.tabs().len()), 1);
-    // A second double click activates that tab instead of opening another.
-    cx.update_window(win, |_, w, cx| w.double_click(connection_id("lite"), cx))
+    // A second Enter activates that tab instead of opening another.
+    click(cx, win, connection_id("lite"));
+    cx.update_window(win, |_, w, cx| w.press("enter", cx))
         .unwrap();
     cx.run_until_parked();
     assert_eq!(shell.read_with(cx, |s, _| s.tabs().len()), 1);
@@ -435,12 +454,13 @@ fn a_triple_click_opens_a_relation_once(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_triple_click_opens_a_connection_once(cx: &mut TestAppContext) {
+fn a_triple_click_expands_a_connection_once(cx: &mut TestAppContext) {
     use dbento_app::sidebar::SidebarEvent;
     let (_fx, _files, win, shell) = started(cx, T);
     let opens = count_events(cx, &shell, |e| matches!(e, SidebarEvent::Open(_)));
     triple_click(cx, win, connection_id("lite"));
-    assert_eq!(opens.get(), 1);
+    wait_tree(cx, win, &MAIN_OPEN);
+    assert_eq!(opens.get(), 0);
 }
 
 #[gpui_kit::test]

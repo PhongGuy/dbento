@@ -129,7 +129,7 @@ fn a_connection_tooltip_names_the_engine_and_target() {
     assert_eq!(
         connection_tooltip(lite),
         format!(
-            "sqlite \u{b7} {} \u{b7} Double-click to open a query tab",
+            "sqlite \u{b7} {} \u{b7} Enter to open a query tab",
             lite.display_target()
         )
     );

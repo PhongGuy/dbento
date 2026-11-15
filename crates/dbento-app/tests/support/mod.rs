@@ -202,13 +202,16 @@ pub struct Opened {
     pub win: AnyWindowHandle,
     pub shell: gpui_kit::Entity<dbento_app::shell::Shell>,
 }
-/// Double-clicks connection `name`'s explorer row, which opens or activates its tab.
+/// Selects connection `name`'s explorer row and presses Enter, which opens or activates its tab.
 pub fn open_connection_row(cx: &mut TestAppContext, win: AnyWindowHandle, name: &str) {
-    cx.update_window(win, |_, w, cx| w.double_click(connection_id(name), cx))
+    cx.update_window(win, |_, w, cx| w.click(connection_id(name), cx))
+        .unwrap();
+    cx.run_until_parked();
+    cx.update_window(win, |_, w, cx| w.press("enter", cx))
         .unwrap();
     cx.run_until_parked();
 }
-/// The app on a fixture workspace with connection `ix` double-clicked open.
+/// The app on a fixture workspace with connection `ix` opened from its explorer row.
 pub fn opened(cx: &mut TestAppContext, setup: &str, extra: &str, ix: usize) -> Opened {
     init(cx);
     init_tokio(cx);
