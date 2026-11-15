@@ -93,8 +93,8 @@ async fn a_short_window_scrolls_the_body_and_keeps_the_footer() {
 }
 
 /// A window tall enough for the form shows it whole, with the footer right under the body
-/// rather than stretched apart from it. With the Databases field, the new Postgres form needs a
-/// little over 900 px.
+/// and the Test line rather than stretched apart from them. Under its fixed top, the new
+/// Postgres form needs a little over 1000 px.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tall_window_shows_the_whole_form() {
     let ws = sqlite_workspace();
@@ -111,9 +111,10 @@ async fn a_tall_window_shows_the_whole_form() {
     .await;
     pilot.ok("wait", json!({ "ms": 300 })).await;
     shot(&pilot, "dialog-tall.png").await;
-    let (body, folder, save) = (
+    let (body, folder, line, save) = (
         bounds(&tree, "conn-body"),
         bounds(&tree, "conn-folder"),
+        bounds(&tree, "conn-test-line"),
         bounds(&tree, "conn-save"),
     );
     assert!(
@@ -121,8 +122,8 @@ async fn a_tall_window_shows_the_whole_form() {
         "Folder {folder:?} is cut off by the body {body:?}"
     );
     assert!(
-        save.y - (body.y + body.h) <= 24.0,
-        "the footer sits apart from the body: Save {save:?}, body {body:?}"
+        line.y - (body.y + body.h) <= 1.0 && save.y - (line.y + line.h) <= 24.0,
+        "the footer sits apart from the body: Save {save:?}, Test line {line:?}, body {body:?}"
     );
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 }

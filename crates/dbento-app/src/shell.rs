@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
-    EditPlan, Engine, FolderPath, GrantState, ObjectRef, RelationKind, RelationRef, SavedQuery,
-    Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort, Workspace, WorkspaceItem,
-    WriteError, connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret,
-    secret_env_var, tls_key_is_encrypted,
+    EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, RelationKind, RelationRef,
+    SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort, Workspace,
+    WorkspaceItem, WriteError, connect, move_secret, plan_edit, resolve_key_passphrase,
+    resolve_secret, secret_env_var, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -48,7 +48,7 @@ use crate::approvals_panel::{ApprovalsPanel, Decided, Outcome};
 use crate::browse::BrowseEvent;
 use crate::catalog::CatalogClosing;
 use crate::confirm::{self, Ask, Choice, TextAsk, ask, ask_text};
-use crate::connection_dialog::{ConnectionForm, ConnectionFormEvent, Field, TestState};
+use crate::connection_dialog::{ConnectionForm, ConnectionFormEvent, ErrorAt, Field, TestState};
 use crate::definition_panel::{DefinitionPanel, DefinitionPanelEvent};
 use crate::drafts::{DraftSlot, Drafts};
 use crate::history::HistoryLog;
@@ -108,6 +108,20 @@ fn save_state(file: &ChangeQueue<SavedState>) {
     if let Err(e) = file.write() {
         eprintln!("dbento: cannot save the app state: {e}");
     }
+}
+
+// The space the connection dialog keeps under itself: the kit's window margin and the frame.
+const FORM_FOOT_GAP: f32 = 32.;
+
+// A name no connection in `ws` has, for testing a connection not yet named.
+fn unused_name(ws: &Workspace) -> String {
+    let mut name = "unnamed".to_owned();
+    let mut n = 1;
+    while ws.connection_spec(&name).is_some() {
+        n += 1;
+        name = format!("unnamed-{n}");
+    }
+    name
 }
 
 // Plans `edit` on `ws` and writes it for the connection dialog, which shows a refusal
@@ -3235,8 +3249,13 @@ impl Shell {
             window.open_dialog(cx, move |dialog, window, cx| {
                 let shell = shell.clone();
                 let muted = cx.theme().muted_foreground;
+                // The form never grows past the window's foot, so the kit keeps the top edge
+                // where it is instead of sliding the dialog up as fields come and go.
+                let viewport = window.viewport_size().height;
+                let top = (viewport / 10.).max(px(64.));
+                let tallest = (viewport - top - px(FORM_FOOT_GAP)).max(px(0.));
                 confirm::frame(dialog, px(560.), None, cx)
-                    .margin_top((window.viewport_size().height / 10.).max(px(64.)))
+                    .margin_top(top)
                     .overlay_closable(false)
                     .on_close(move |_, window, cx| {
                         let _ = shell.update(cx, |s, cx| s.drop_connection_form(window, cx));
@@ -3250,11 +3269,15 @@ impl Shell {
                                 v_flex()
                                     .flex_1()
                                     .min_h_0()
-                                    .child(confirm::title_row(
-                                        Some((Icons::Database, muted)),
-                                        title,
-                                        cx,
-                                    ))
+                                    .max_h(tallest)
+                                    .child(
+                                        confirm::title_row(
+                                            Some((Icons::Database, muted)),
+                                            title,
+                                            cx,
+                                        )
+                                        .flex_none(),
+                                    )
                                     .child(form.clone()),
                             )
                         }
@@ -3391,6 +3414,14 @@ impl Shell {
         let typed_passphrase = f.key_passphrase(cx);
         let previous = f.previous().map(str::to_owned);
         let planned = f.test_edit(cx).and_then(|(name, mut spec)| {
+            // A Test needs no name: an unnamed edit keeps its old name, so stored secrets
+            // still answer, and an unnamed new connection borrows one no connection has.
+            let stand_in = name.is_empty() && previous.is_none();
+            let name = match (name.is_empty(), &previous) {
+                (false, _) => name,
+                (true, Some(old)) => old.clone(),
+                (true, None) => unused_name(&ws),
+            };
             // Postgres needs a database to connect to, but the database is what a Test lists:
             // with Database left empty, the test opens the server's own `postgres` instead, so
             // Host, User and Password are enough to pick from the list. Save still needs one.
@@ -3404,9 +3435,17 @@ impl Shell {
                 name: name.clone(),
                 spec,
             };
+            // A refusal names the connection; the stand-in name means nothing to the user.
             plan_edit(&ws, &edit)
+                .map_err(|e| {
+                    let says = e.to_string();
+                    let prefix = format!("connection `{name}`: ");
+                    match says.strip_prefix(&prefix) {
+                        Some(rest) if stand_in => rest.to_owned(),
+                        _ => says,
+                    }
+                })
                 .map(|plan| (name, plan))
-                .map_err(|e| e.to_string())
         });
         let (name, plan) = match planned {
             Ok(planned) => planned,
@@ -3572,23 +3611,39 @@ impl Shell {
             return;
         }
         let previous = form.read(cx).previous().map(str::to_owned);
-        let written = form.read(cx).edit(cx).map_err(|says| (says, false));
+        let written = form
+            .read(cx)
+            .checked_edit(cx)
+            .map_err(|r| (r.at, r.says, false));
         let written = written.and_then(|(name, spec)| {
             // Checked before planning, so a refused rename never touches disk.
             if let Some(old) = previous.as_deref().filter(|old| *old != name)
                 && self.connection_in_use(old, cx)
             {
-                return Err((IN_USE.to_owned(), false));
+                return Err((None, IN_USE.to_owned(), false));
             }
             let edit = Edit::PutConnection {
                 previous: previous.clone(),
                 name: name.clone(),
                 spec,
             };
-            plan_and_write(&ws, &edit).map(|plan| (name, plan))
+            // A taken or malformed name is about the Name field; the rest is about the file.
+            let plan = plan_edit(&ws, &edit).map_err(|e| {
+                let at = matches!(
+                    e,
+                    EditError::NameTaken { .. } | EditError::InvalidName { .. }
+                )
+                .then_some(ErrorAt::Field(Field::Name));
+                (at, e.to_string(), false)
+            })?;
+            plan.apply()
+                .map_err(|e| (None, e.to_string(), matches!(e, WriteError::Changed)))?;
+            Ok((name, plan))
         });
         match written {
-            Err((says, stale)) => form.update(cx, |f, cx| f.set_error(Some(says), stale, cx)),
+            Err((at, says, stale)) => {
+                form.update(cx, |f, cx| f.set_error_at(at, Some(says), stale, cx));
+            }
             Ok((name, plan)) => {
                 // Read before the form closes, which clears the password field.
                 let password = Self::password_to_store(&form, &plan, &name, cx);

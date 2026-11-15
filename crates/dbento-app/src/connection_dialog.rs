@@ -177,6 +177,20 @@ pub enum ConnectionFormEvent {
     Edited,
 }
 
+/// Where a refusal shows when it is about one control: under that field, or under the
+/// Databases choice. A refusal about none shows over the footer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ErrorAt {
+    Field(Field),
+    Databases,
+}
+
+/// A refusal of the typed values, and the control it is about.
+pub(crate) struct Refusal {
+    pub(crate) at: Option<ErrorAt>,
+    pub(crate) says: String,
+}
+
 /// Where Test connection stands, shown in `conn-test-result`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestState {
@@ -225,6 +239,7 @@ pub struct ConnectionForm {
     chosen: Vec<String>,
     color: Option<Color>,
     error: Option<String>,
+    error_at: Option<ErrorAt>,
     stale: bool,
     folders: Vec<FolderPath>,
     suggestions: Vec<FolderPath>,
@@ -387,6 +402,7 @@ impl ConnectionForm {
             color: loaded.color,
             loaded,
             error: None,
+            error_at: None,
             stale: false,
             folders,
             suggestions: Vec::new(),
@@ -775,6 +791,7 @@ impl ConnectionForm {
         self.test = TestState::Idle;
         if !self.stale {
             self.error = None;
+            self.error_at = None;
         }
         cx.emit(ConnectionFormEvent::Edited);
         cx.notify();
@@ -799,21 +816,33 @@ impl ConnectionForm {
     /// The name and the loaded spec with only the controls the user changed applied, checked
     /// as Save writes it.
     pub fn edit(&self, cx: &App) -> Result<(String, ConnectionSpec), String> {
+        self.checked_edit(cx).map_err(|r| r.says)
+    }
+
+    /// As [`Self::edit`], with the control a refusal is about.
+    pub(crate) fn checked_edit(&self, cx: &App) -> Result<(String, ConnectionSpec), Refusal> {
         self.spec(cx, true)
     }
 
     /// As [`Self::edit`] for Test, which connects the connection itself: which databases become
     /// children doesn't change that, and a Test is how the Choose list fills, so the Databases
-    /// checks wait for Save and the spec carries no `databases`.
+    /// checks wait for Save and the spec carries no `databases`. A Test needs no name, so the
+    /// name may be empty.
     pub fn test_edit(&self, cx: &App) -> Result<(String, ConnectionSpec), String> {
-        self.spec(cx, false)
+        self.spec(cx, false).map_err(|r| r.says)
     }
 
-    fn spec(&self, cx: &App, saving: bool) -> Result<(String, ConnectionSpec), String> {
+    fn spec(&self, cx: &App, saving: bool) -> Result<(String, ConnectionSpec), Refusal> {
         let text = |field: Field| self.input(field).read(cx).value().trim().to_owned();
+        let at = |field: Field| {
+            move |says: String| Refusal {
+                at: Some(ErrorAt::Field(field)),
+                says,
+            }
+        };
         let name = text(Field::Name);
-        if name.is_empty() {
-            return Err("Enter a name".into());
+        if saving && name.is_empty() {
+            return Err(at(Field::Name)("Enter a name".into()));
         }
         // Compare each control with what the loaded spec showed, so an untouched control never
         // writes a key: a default stays absent and a value keeps its spelling in the file.
@@ -832,7 +861,10 @@ impl ConnectionForm {
             match f.kind {
                 FieldKind::Port { .. } => {
                     if let Some(v) = changed(Field::Port, &shown.port) {
-                        spec.port = v.map(|p| parse_port(&p)).transpose()?;
+                        spec.port = v
+                            .map(|p| parse_port(&p))
+                            .transpose()
+                            .map_err(at(Field::Port))?;
                     }
                 }
                 // A DynamoDB secret only pairs with an access key; without one the environment
@@ -847,7 +879,9 @@ impl ConnectionForm {
                             SecretChoice::Keychain => SecretSource::Keychain,
                             SecretChoice::None => SecretSource::None,
                             SecretChoice::Env if env.is_empty() => {
-                                return Err("Enter an environment variable name".into());
+                                return Err(at(Field::EnvVar)(
+                                    "Enter an environment variable name".into(),
+                                ));
                             }
                             SecretChoice::Env => SecretSource::Env(env),
                         });
@@ -877,7 +911,10 @@ impl ConnectionForm {
                 }
                 FieldKind::Databases if !saving => spec.databases = None,
                 FieldKind::Databases => {
-                    let now = self.databases_value()?;
+                    let now = self.databases_value().map_err(|says| Refusal {
+                        at: Some(ErrorAt::Databases),
+                        says,
+                    })?;
                     if now != spec.databases {
                         spec.databases = now;
                     }
@@ -885,9 +922,9 @@ impl ConnectionForm {
                         && self.engine == Engine::Postgres
                         && text(Field::Database).is_empty()
                     {
-                        return Err(format!(
+                        return Err(at(Field::Database)(format!(
                             "Enter a database to list the others from, such as {POSTGRES_DATABASE}"
-                        ));
+                        )));
                     }
                 }
                 // Only `consistent_read` is a flag today; ticked writes true, unticked drops the key.
@@ -902,7 +939,10 @@ impl ConnectionForm {
                     };
                     if field == Field::AuthLevel {
                         if let Some(v) = changed(field, &shown.auth_level) {
-                            spec.auth_level = v.map(|t| parse_auth_level(&t)).transpose()?;
+                            spec.auth_level = v
+                                .map(|t| parse_auth_level(&t))
+                                .transpose()
+                                .map_err(at(Field::AuthLevel))?;
                         }
                         continue;
                     }
@@ -948,7 +988,7 @@ impl ConnectionForm {
             spec.folder = v
                 .map(|f| f.parse::<FolderPath>())
                 .transpose()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| at(Field::Folder)(e.to_string()))?;
         }
         Ok((name, spec))
     }
@@ -985,8 +1025,20 @@ impl ConnectionForm {
         })
     }
 
-    /// Shows `error` under the fields; `stale` adds the Reload button for a file changed since load.
+    /// Shows `error` over the footer; `stale` adds the Reload button for a file changed since load.
     pub fn set_error(&mut self, error: Option<String>, stale: bool, cx: &mut Context<Self>) {
+        self.set_error_at(None, error, stale, cx);
+    }
+
+    /// As [`Self::set_error`], with the error under the control `at` names and marking it.
+    pub(crate) fn set_error_at(
+        &mut self,
+        at: Option<ErrorAt>,
+        error: Option<String>,
+        stale: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.error_at = error.is_some().then_some(at).flatten();
         self.error = error;
         self.stale = stale;
         cx.notify();
@@ -995,6 +1047,14 @@ impl ConnectionForm {
     /// The error line's text, if any.
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// The field the error line sits under and marks, if it is about one.
+    pub fn error_field(&self) -> Option<Field> {
+        match self.error_at? {
+            ErrorAt::Field(field) => Some(field),
+            ErrorAt::Databases => None,
+        }
     }
 
     /// Switching engine empties the fields only the other engine has, so the result validates;
@@ -1112,6 +1172,7 @@ impl ConnectionForm {
         cx: &App,
     ) -> AnyElement {
         let input = Self::styled(Input::new(self.input(field)), field != Field::Name, cx);
+        let input = self.marked(input, field, cx);
         let input = if matches!(field, Field::Password | Field::KeyPassphrase) {
             input.mask_toggle()
         } else {
@@ -1145,7 +1206,11 @@ impl ConnectionForm {
                     .test_support()
                     .flex_1()
                     .min_w_0()
-                    .child(Self::styled(Input::new(self.input(field)), true, cx)),
+                    .child(self.marked(
+                        Self::styled(Input::new(self.input(field)), true, cx),
+                        field,
+                        cx,
+                    )),
             )
             .child(pick);
         Self::row(label, file, cx)
@@ -1160,8 +1225,13 @@ impl ConnectionForm {
         field: Field,
         cx: &App,
     ) -> AnyElement {
-        let host = Self::styled(Input::new(self.input(field)), true, cx);
+        let host = self.marked(
+            Self::styled(Input::new(self.input(field)), true, cx),
+            field,
+            cx,
+        );
         let port = Self::styled(Input::new(&self.port), true, cx).w(px(PORT_WIDTH));
+        let port = self.marked(port, Field::Port, cx);
         let line = h_flex()
             .gap_3()
             .child(div().id(id).test_support().flex_1().min_w_0().child(host))
@@ -1194,6 +1264,44 @@ impl ConnectionForm {
             .text_color(theme::dim(cx))
             .child(says)
             .into_any_element()
+    }
+
+    // The field an error is about takes the danger border the kit gives an invalid control.
+    fn marked(&self, input: Input, field: Field, cx: &App) -> Input {
+        if self.error_at == Some(ErrorAt::Field(field)) {
+            input.border_color(cx.theme().danger)
+        } else {
+            input
+        }
+    }
+
+    // The error line, when the error is about `at`: under that control and aligned with it,
+    // or below the form for an error about none, where a stale file also offers Reload.
+    fn error_line(&self, at: Option<ErrorAt>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let says = self.error.clone().filter(|_| self.error_at == at)?;
+        let line = div()
+            .id("conn-error")
+            .aria_label(SharedString::from(says.clone()))
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .text_sm()
+            .text_color(cx.theme().danger)
+            .child(says);
+        let row = h_flex()
+            .gap_2()
+            .when(at.is_some(), |row| row.pl(px(LABEL_WIDTH + 12.)))
+            .when(at.is_none(), |row| row.items_start())
+            .child(line)
+            .when(at.is_none() && self.stale, |row| {
+                row.child(
+                    ui::secondary(Button::new("conn-reload"))
+                        .small()
+                        .label("Reload")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ConnectionFormEvent::Reload))),
+                )
+            });
+        Some(row.into_any_element())
     }
 
     // True while a DynamoDB form has no access key ID, so the secret rows give way to a hint.
@@ -1234,6 +1342,7 @@ impl ConnectionForm {
         rows.push(Self::row("Secret", h_flex().child(secret), cx));
         if self.secret == SecretChoice::Env {
             rows.push(self.text_row("Variable", "conn-env", Field::EnvVar, cx));
+            rows.extend(self.error_line(Some(ErrorAt::Field(Field::EnvVar)), cx));
         }
         if self.secrets_in_memory && self.secret == SecretChoice::Keychain {
             rows.push(self.keychain_note(cx));
@@ -1434,7 +1543,10 @@ impl ConnectionForm {
                 (FieldKind::Secret, _) => rows.extend(self.secret_rows(f.label, window, cx)),
                 (FieldKind::Tls, _) => rows.extend(self.tls_rows(f.label, window, cx)),
                 (FieldKind::Flag, _) => rows.push(self.flag_row(f, cx)),
-                (FieldKind::Databases, _) => rows.extend(self.databases_rows(f.label, window, cx)),
+                (FieldKind::Databases, _) => {
+                    rows.extend(self.databases_rows(f.label, window, cx));
+                    rows.extend(self.error_line(Some(ErrorAt::Databases), cx));
+                }
                 (FieldKind::Text, Some((field, id))) if next_is_port => {
                     rows.push(self.host_port_row(f.label, id, field, cx));
                     shown.push(&fields[ix + 1]);
@@ -1475,6 +1587,9 @@ impl ConnectionForm {
                     }
                 }
                 _ => {}
+            }
+            for (field, _) in shown.iter().filter_map(|f| field_of(f.key)) {
+                rows.extend(self.error_line(Some(ErrorAt::Field(field)), cx));
             }
             for f in shown {
                 if let Some(says) = f.help {
@@ -1550,7 +1665,13 @@ impl ConnectionForm {
     // Without a keychain the password lasts only this run; the note names the variable that
     // would keep it, as the typed name currently spells it.
     fn keychain_note(&self, cx: &App) -> AnyElement {
+        // Until a name is typed, the variable shows where the name goes.
         let name = self.name.read(cx).value().trim().to_owned();
+        let name = if name.is_empty() {
+            "<name>".into()
+        } else {
+            name
+        };
         let says = format!(
             "No keychain: the password is kept until Dbento quits. Set {} to keep it.",
             secret_env_var(&name)
@@ -1659,6 +1780,9 @@ impl ConnectionForm {
 /// The Port box's width.
 const PORT_WIDTH: f32 = 96.;
 
+/// The Test outcome's slot: two lines of small text.
+const TEST_LINE_HEIGHT: f32 = 40.;
+
 /// The label column's width, so every control starts on one line.
 const LABEL_WIDTH: f32 = 96.;
 
@@ -1690,13 +1814,10 @@ impl Render for ConnectionForm {
             cx,
         );
         // Each choice row sits in a flex row; the engine picker wraps within the field column.
-        let mut sections: Vec<(&'static str, Vec<AnyElement>)> = vec![(
-            "Connection",
-            vec![
-                self.text_row("Name", "conn-name", Field::Name, cx),
-                Self::row("Engine", h_flex().child(engine), cx),
-            ],
-        )];
+        let mut first = vec![self.text_row("Name", "conn-name", Field::Name, cx)];
+        first.extend(self.error_line(Some(ErrorAt::Field(Field::Name)), cx));
+        first.push(Self::row("Engine", h_flex().child(engine), cx));
+        let mut sections: Vec<(&'static str, Vec<AnyElement>)> = vec![("Connection", first)];
         // Rows join the section of the same title, so Name and Engine lead Connection and the
         // common rows end Options, which SQLite's descriptor lacks.
         let mut section = |title: &'static str, rows: Vec<AnyElement>| match sections
@@ -1725,9 +1846,11 @@ impl Render for ConnectionForm {
             options.push(Self::help_line("conn-read-only-help".into(), says, cx));
         }
         options.push(self.text_row("Timeout", "conn-timeout", Field::Timeout, cx));
+        options.extend(self.error_line(Some(ErrorAt::Field(Field::Timeout)), cx));
         let swatches = self.swatches(cx).into_any_element();
         options.push(Self::row("Colour", swatches, cx));
         options.push(self.text_row("Folder", "conn-folder", Field::Folder, cx));
+        options.extend(self.error_line(Some(ErrorAt::Field(Field::Folder)), cx));
         if !self.suggestions.is_empty() {
             let items = self.suggestions.iter().map(|p| p.to_string()).collect();
             let picked: fn(&mut Self, &mut Context<Self>) = |this, _| this.suggestions.clear();
@@ -1738,31 +1861,7 @@ impl Render for ConnectionForm {
         section("Options", options);
 
         let danger = cx.theme().danger;
-        let error = self.error.clone().map(|says| {
-            h_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .id("conn-error")
-                        .aria_label(SharedString::from(says.clone()))
-                        .test_support()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
-                        .text_color(danger)
-                        .child(says),
-                )
-                .when(self.stale, |row| {
-                    row.child(
-                        ui::secondary(Button::new("conn-reload"))
-                            .small()
-                            .label("Reload")
-                            .on_click(
-                                cx.listener(|_, _, _, cx| cx.emit(ConnectionFormEvent::Reload)),
-                            ),
-                    )
-                })
-        });
+        let error = self.error_line(None, cx);
         let result = match &self.test {
             TestState::Idle => None,
             TestState::Testing => Some(("Testing\u{2026}".to_owned(), theme::dim(cx))),
@@ -1778,6 +1877,18 @@ impl Render for ConnectionForm {
                 .text_color(color)
                 .child(says)
         });
+        // The outcome, or an error about no one field, keeps a fixed slot over the footer: it
+        // stays in view however the body scrolls, and its coming and going never moves the
+        // buttons. Text longer than the slot wraps and scrolls inside it.
+        let result = div()
+            .id("conn-test-line")
+            .test_support()
+            .flex_none()
+            .h(px(TEST_LINE_HEIGHT))
+            .px_4()
+            .overflow_y_scroll()
+            .children(error)
+            .children(result);
         let delete = self.previous.is_some().then(|| {
             Button::new("conn-delete")
                 .h(px(32.))
@@ -1795,8 +1906,10 @@ impl Render for ConnectionForm {
             .label("Save")
             .on_click(cx.listener(|_, _, _, cx| cx.emit(ConnectionFormEvent::Save)));
         let save_keys = keys_for(&SaveConnection, cx).map(|k| chip_keys(&k));
+        // Delete stands alone at the far left, away from the buttons a user means to press.
         let footer = confirm::footer(cx)
             .children(delete)
+            .child(div().flex_1())
             .child(
                 ui::secondary(Button::new("conn-test"))
                     .h(px(32.))
@@ -1804,7 +1917,6 @@ impl Render for ConnectionForm {
                     .disabled(self.test == TestState::Testing)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(ConnectionFormEvent::Test))),
             )
-            .child(div().flex_1())
             .child(with_keys(cancel, Some("Esc"), ChoiceStyle::Neutral, cx))
             .child(with_keys(
                 save,
@@ -1850,11 +1962,9 @@ impl Render for ConnectionForm {
                     .px_4()
                     .pt_3()
                     .pb_4()
-                    .children(sections)
-                    .children(error)
-                    // Driver errors run long, so the test outcome wraps on its own row.
-                    .children(result),
+                    .children(sections),
             )
+            .child(result)
             .child(footer)
     }
 }
