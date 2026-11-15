@@ -2,14 +2,18 @@
 //! the read-only badge and the confirmation for unguarded writes.
 
 use std::borrow::Cow;
+use std::cell::Cell;
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use dbento_core::{
     ConnectionConfig, Engine, ExplainMode, QueryLanguage, ReadOnlyEnforcement, RelationRef,
     Unguarded, Workspace, explain_request, read_only_residual,
 };
+use gpui_kit::base::ElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Editor, EditorState, Enter, Escape, IndentInline, InputEvent, MoveDown, MoveUp,
@@ -52,8 +56,36 @@ use crate::{staged, theme, ui};
 // around them, so a height saved on a taller screen never squeezes the results shut.
 const RESULTS_ROOM: Pixels = px(312.);
 const EDITOR_MIN: Pixels = px(100.);
+// The narrowest a toolbar chip truncates to, which still shows the start of its text.
+const CHIP_MIN: Pixels = px(64.);
 /// The height of a tab's toolbar above its query split.
 pub(crate) const TOOLBAR_HEIGHT: Pixels = px(40.);
+
+/// How far the toolbar has collapsed to fit: the run summary goes first, then the Run key
+/// hint, then the Run, All and read-only labels; at the last level the chips truncate.
+pub const TOOLBAR_LEVELS: usize = 4;
+
+/// The toolbar's collapse level after a frame at `level` whose row measured `row` wide in a
+/// toolbar `width` wide. `needed[l]` is the width level `l` overflowed at, so a level comes
+/// back only once the toolbar is at least that wide.
+pub fn toolbar_level(
+    level: usize,
+    needed: &mut [Option<Pixels>; TOOLBAR_LEVELS],
+    row: Pixels,
+    width: Pixels,
+) -> usize {
+    if level < TOOLBAR_LEVELS && row > width + px(0.5) {
+        needed[level] = Some(row);
+        return level + 1;
+    }
+    let mut level = level;
+    while let Some(Some(need)) = level.checked_sub(1).map(|l| needed[l])
+        && need <= width
+    {
+        level -= 1;
+    }
+    level
+}
 
 /// The `row-limit` button's text for `cap`.
 pub fn row_limit_label(cap: Option<u64>) -> String {
@@ -481,6 +513,11 @@ pub struct QueryTab {
     label: Option<String>,
     // A Redis value tab's title, `<key> · db N`; set, the tab shows the value, not the editor.
     key_title: Option<String>,
+    // The toolbar's collapse level, the widths each lower level needed, and the contents
+    // they were measured with: new contents measure again from the top.
+    toolbar_level: usize,
+    toolbar_needed: [Option<Pixels>; TOOLBAR_LEVELS],
+    toolbar_contents: u64,
     // The tab a reference was followed from while this tab is its preview.
     preview_of: Option<EntityId>,
     // The reference hops this tab walked, for Back and Forward.
@@ -628,6 +665,9 @@ impl QueryTab {
             origin: None,
             label: None,
             key_title: None,
+            toolbar_level: 0,
+            toolbar_needed: [None; TOOLBAR_LEVELS],
+            toolbar_contents: 0,
             preview_of: None,
             replace_undo: None,
             nav: NavHistory::default(),
@@ -1367,13 +1407,21 @@ impl QueryTab {
         Some(
             div()
                 .flex()
-                .flex_none()
+                .flex_shrink(1.)
+                .min_w_0()
                 .items_center()
                 .gap_2()
                 .child(
-                    ui::chip("conn-chip", text, cx)
+                    ui::chip_base(cx)
+                        .id("conn-chip")
+                        .aria_label(text)
+                        .test_support()
+                        .flex_shrink(1.)
+                        .min_w(CHIP_MIN)
+                        .overflow_hidden()
                         .border_color(warning)
-                        .text_color(warning),
+                        .text_color(warning)
+                        .child(div().min_w_0().truncate().child(text)),
                 )
                 .children(reconnect),
         )
@@ -1392,14 +1440,19 @@ impl QueryTab {
                 .rounded_full()
                 .bg(tag_color(c))
         });
+        // Only a toolbar collapsed to its last level squeezes the chip; then its name truncates.
+        let label = div().min_w_0().truncate().child(text.clone());
         let m = self.model.read(cx);
         if m.closed() || m.browses() {
             return ui::chip_base(cx)
                 .id("query-connection")
                 .aria_label(text.clone())
                 .test_support()
+                .flex_shrink(1.)
+                .min_w(CHIP_MIN)
+                .overflow_hidden()
                 .children(dot)
-                .child(text)
+                .child(label)
                 .into_any_element();
         }
         let (workspace, sidebar) = (Arc::clone(&self.workspace), self.sidebar.clone());
@@ -1407,7 +1460,8 @@ impl QueryTab {
         let tab = cx.entity().downgrade();
         let theme = cx.theme();
         let (radius, border, popover) = (theme.radius, theme.border, theme.popover);
-        Button::new("query-connection")
+        // The menu wraps the button in a box of its own, so the shrinking box is this one.
+        let button = Button::new("query-connection")
             .ghost()
             .xsmall()
             .h(px(22.))
@@ -1418,12 +1472,17 @@ impl QueryTab {
             .bg(popover)
             .accessibility_label(text.clone())
             .children(dot)
-            .child(text)
+            .child(label)
             .dropdown_caret(true)
             .dropdown_menu(move |menu, _, cx| {
                 let rows = pickable_connections(&workspace, sidebar.as_ref(), cx);
                 connection_menu(menu, &tab, &rows, &current)
-            })
+            });
+        div()
+            .flex_shrink(1.)
+            .min_w(CHIP_MIN)
+            .overflow_hidden()
+            .child(button)
             .into_any_element()
     }
 }
@@ -1511,6 +1570,30 @@ impl Render for QueryTab {
         let badge_text: SharedString =
             read_only_badge_text(&self.session_conn, m.read_only_level()).into();
         let production = self.conn.is_production();
+        let limit = row_limit_label(m.max_rows());
+        let contents = {
+            let mut h = DefaultHasher::new();
+            let changed = match self.state {
+                ConnState::Current => 0u8,
+                ConnState::Changed { still_read_write } => 1 + u8::from(still_read_write),
+                ConnState::Gone => 3,
+            };
+            let conn = connection_chip_text(&self.conn);
+            (
+                conn, &summary, changed, read_only, production, explain, format, key_mode,
+            )
+                .hash(&mut h);
+            (&badge_text, &limit).hash(&mut h);
+            h.finish()
+        };
+        if contents != self.toolbar_contents {
+            self.toolbar_contents = contents;
+            self.toolbar_level = 0;
+            self.toolbar_needed = [None; TOOLBAR_LEVELS];
+        }
+        let level = self.toolbar_level;
+        let summary = summary.filter(|_| level < 1);
+        let labelled = level < 3;
         // Production is a loud chip in the toolbar; its id keeps the old band's name.
         let prod_chip = production.then(|| {
             ui::production_chip(cx)
@@ -1529,7 +1612,7 @@ impl Render for QueryTab {
                 .test_support()
                 .text_color(dim)
                 .child(ui::icon(ui::Icons::Lock, px(12.), dim))
-                .child("read-only")
+                .when(labelled, |d| d.child("read-only"))
                 .tooltip(move |window, cx| theme::tooltip(tooltip.clone(), window, cx))
         });
         let run_summary = summary.map(|text| {
@@ -1546,27 +1629,38 @@ impl Render for QueryTab {
                 .child(text)
         });
         // The Run key hint, spelled from the effective keys; an unbound Run has no chip.
-        let run_keys = keys_for(&RunStatement, cx).map(|k| {
+        let run_keys = keys_for(&RunStatement, cx).filter(|_| level < 2).map(|k| {
             let keys = chip_keys(&k);
             ui::key_chip_colored(keys.clone(), primary_fg, primary_fg.opacity(0.4), cx)
                 .id("run-keys")
                 .aria_label(keys)
                 .test_support()
         });
+        // The row keeps its natural width until the last level, so an overflow shows how much
+        // room this level needs; at the last level it fits the toolbar and the chips truncate.
+        let fits = Rc::new(Cell::new(None));
+        let measured = Rc::clone(&fits);
+        let row = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .h_full()
+            .px_2()
+            .map(|d| {
+                if level < TOOLBAR_LEVELS {
+                    d.flex_grow(1.).flex_shrink_0()
+                } else {
+                    d.flex_1().min_w_0()
+                }
+            })
+            .on_prepaint(move |bounds, _, _| measured.set(Some(bounds.size.width)));
+        let tab = cx.entity().downgrade();
         // The toolbar sits flat on the panel; its label still names the connection's colour.
         let mut toolbar = div().id("query-toolbar").test_support();
         if let Some(c) = self.conn.effective_color() {
             toolbar = toolbar.aria_label(color_name(c));
         }
-        let toolbar = toolbar
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_1()
-            .h(TOOLBAR_HEIGHT)
-            .px_2()
-            .border_b_1()
-            .border_color(border)
+        let row = row
             // The connection and its safety badges lead, so the tab says where it runs first.
             .child(connection)
             .children(badge)
@@ -1591,7 +1685,8 @@ impl Render for QueryTab {
                                 .rounded_tr(px(0.))
                                 .rounded_br(px(0.))
                                 .icon(ui::Icons::Play)
-                                .label("Run")
+                                .when(labelled, |b| b.label("Run"))
+                                .accessibility_label("Run")
                                 .children(run_keys)
                                 .disabled(closed)
                                 .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
@@ -1615,7 +1710,7 @@ impl Render for QueryTab {
                                 .rounded_tl(px(0.))
                                 .rounded_bl(px(0.))
                                 .icon(ui::Icons::FastForward)
-                                .label("All")
+                                .when(labelled, |b| b.label("All"))
                                 .accessibility_label("Run all")
                                 .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
                                 .disabled(closed)
@@ -1711,8 +1806,7 @@ impl Render for QueryTab {
                 ui::accessibility_id(Button::new("row-limit"), "row-limit")
                     .ghost()
                     .small()
-                    .label(row_limit_label(self.model.read(cx).max_rows()))
-                    .child(ui::icon(ui::Icons::ChevronDown, px(12.), dim))
+                    .label(limit)
                     .font_family(mono)
                     .disabled(closed)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1725,6 +1819,25 @@ impl Render for QueryTab {
             .child(div().flex_1())
             .children(chip)
             .children(run_summary);
+        let toolbar = toolbar
+            .flex()
+            .flex_none()
+            .h(TOOLBAR_HEIGHT)
+            .overflow_hidden()
+            .border_b_1()
+            .border_color(border)
+            .child(row)
+            // The row prepaints first, so its width is known when the toolbar's is.
+            .on_prepaint(move |bounds, _, cx| {
+                let Some(row) = fits.get() else { return };
+                let _ = tab.update(cx, |t, cx| {
+                    let next = toolbar_level(level, &mut t.toolbar_needed, row, bounds.size.width);
+                    if next != t.toolbar_level {
+                        t.toolbar_level = next;
+                        cx.notify();
+                    }
+                });
+            });
         let editor_max = (window.viewport_size().height - RESULTS_ROOM).max(EDITOR_MIN);
         let start_height = self.start_height.map(|h| h.min(editor_max));
         // The Editor fills its wrapper, so a click at the wrapper's centre lands in the text.
@@ -1792,8 +1905,7 @@ impl Render for QueryTab {
             .flex()
             .flex_col()
             .min_h_0()
-            // A production tab carries a 2 px danger rule along its top edge.
-            .when(production, |d| d.border_t_2().border_color(danger))
+            .relative()
             .child(toolbar)
             .when_some(key, |d, (header, error, more)| {
                 d.child(key_pane(header, error, more, self.results.clone(), cx))
@@ -1810,6 +1922,21 @@ impl Render for QueryTab {
                             )
                             .child(resizable_panel().child(self.results.clone())),
                     ),
+                )
+            })
+            // A production tab's 2 px danger rule lies over the toolbar's top edge, drawn last
+            // so it covers it, rather than pushing the toolbar down.
+            .when(production, |d| {
+                d.child(
+                    div()
+                        .id("production-rule")
+                        .test_support()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .bg(danger),
                 )
             })
     }

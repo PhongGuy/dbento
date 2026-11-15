@@ -127,6 +127,7 @@ mod lone_schema;
 mod look;
 mod menu_rows;
 mod mongo_documents;
+mod narrow;
 mod nav_history;
 mod new_tab_pick;
 mod new_tab_rule;
