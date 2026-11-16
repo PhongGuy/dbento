@@ -1,6 +1,7 @@
 //! uxnits group 03 under gpui-pilot: the editor menu greys Cut and Copy without a selection,
 //! no row tooltip draws over the explorer menu, the approval path tooltip sits beside its
-//! line clear of the SQL, and the commit preview sets its SQL 9 px inside the box.
+//! line clear of the SQL and the headline, and the commit preview sets its SQL 9 px inside
+//! the box.
 //! Set DBENTO_SHOTS_DIR to keep the shots.
 mod common;
 
@@ -11,6 +12,7 @@ use common::{
     Pilot, Rect, bounds, find_node, launch_args, sqlite_workspace, sqlite_workspace_named,
 };
 use dbento_app::app::AppPaths;
+use dbento_app::approvals::FOLDER_TIP_DROP;
 use dbento_core::{ApprovalRequest, ApprovalStore, Writes};
 use serde_json::{Value, json};
 
@@ -194,10 +196,9 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
         click(&pilot, "apply-rollback").await;
         assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
 
-        // The approval dialog's path tooltip opens beside the folder name, clear of the SQL.
-        // The tooltip opens right of the folder name, so a fixed name keeps its place repeatable; a
-        // scratch name narrower than the headline would put the tooltip's shadow on its line.
-        let (_root, ws) = sqlite_workspace_named("dbento-workspace");
+        // The approval dialog's path tooltip opens beside the folder name, clear of the SQL. A
+        // short name puts it under the headline's text, the case where its shadow could reach up.
+        let (_root, ws) = sqlite_workspace_named("app");
         let state = tempfile::tempdir().unwrap();
         let store = ApprovalStore::open(&AppPaths::in_dir(state.path()).approvals).unwrap();
         let sql = "UPDATE t SET name = 'z' WHERE id = 1";
@@ -218,11 +219,16 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
         hover(&pilot, "approval-workspace", 1500).await;
         let tipped = dir.join(format!("approval-path-tooltip-{theme}.png"));
         shot(&pilot, &tipped).await;
-        let (headline, line, sql_box) = (
+        let (headline, label, sql_box) = (
             bounds(&tree, "approval-connection"),
             bounds(&tree, "approval-workspace"),
             bounds(&tree, "approval-sql"),
         );
+        // The label's hover area reaches below its text; the line is the text alone.
+        let line = Rect {
+            h: label.h - f64::from(FOLDER_TIP_DROP),
+            ..label
+        };
         // The lines sit a gap_2 apart and the SQL box adds its mt_1: half a gap more.
         let gap = line.y - headline.y - headline.h;
         assert_eq!(
@@ -245,12 +251,34 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
             h: sql_box.h - 8.0,
             ..sql_box
         };
-        for (what, r) in [("SQL", sql_text), ("headline", headline)] {
-            assert!(
-                !changed(&plain, &tipped, r),
-                "the tooltip covers the {what}"
-            );
-        }
+        assert!(
+            !changed(&plain, &tipped, sql_text),
+            "the tooltip covers the SQL"
+        );
+        // No pixel of the headline's rows darkens across the dialog's width, shadow included,
+        // past the one level the shadow's farthest blur rounds to.
+        let headline_rows = Rect {
+            x: sql_box.x,
+            w: sql_box.w,
+            ..headline
+        };
+        let (a, b) = (pixel_reader(&plain), pixel_reader(&tipped));
+        let (x0, x1) = (
+            headline_rows.x as usize,
+            (headline_rows.x + headline_rows.w) as usize,
+        );
+        let (y0, y1) = (
+            headline_rows.y as usize,
+            (headline_rows.y + headline_rows.h) as usize,
+        );
+        let tinted = |p: [i32; 3], q: [i32; 3]| (0..3).any(|i| (p[i] - q[i]).abs() > 1);
+        let touched = (y0..y1)
+            .rev()
+            .find(|&y| (x0..x1).any(|x| tinted(a(x, y), b(x, y))));
+        assert_eq!(
+            touched, None,
+            "the tooltip or its shadow reaches the headline's rows"
+        );
         assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     }
 }
