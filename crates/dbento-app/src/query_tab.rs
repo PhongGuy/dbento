@@ -10,8 +10,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dbento_core::{
-    ConnectionConfig, Engine, ExplainMode, QueryLanguage, ReadOnlyEnforcement, RelationRef,
-    Unguarded, Workspace, explain_request, read_only_residual,
+    ConnectionConfig, Engine, ExplainError, ExplainMode, QueryLanguage, ReadOnlyEnforcement,
+    RelationRef, Unguarded, Workspace, explain_request, read_only_residual,
 };
 use gpui_kit::base::ElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -104,7 +104,7 @@ pub fn next_row_limit(cap: Option<u64>) -> Option<u64> {
 }
 
 /// The read-only badge's tooltip on a Postgres connection.
-pub const READ_ONLY_PG_TOOLTIP: &str = "Read-only: each statement runs in its own read-only transaction, so a SET lasts one statement. Put settings in the connection's `settings` in dbento.toml.";
+pub const READ_ONLY_PG_TOOLTIP: &str = "Read-only: each statement runs in its own read-only transaction, so a SET lasts one statement. To keep a setting, add it to the connection's settings table in dbento.toml.";
 /// The read-only badge's tooltip on a SQLite connection.
 pub const READ_ONLY_SQLITE_TOOLTIP: &str =
     "Read-only: SQLite refuses every write on this connection.";
@@ -249,6 +249,40 @@ pub fn confirm_title(kind: Unguarded, connection: &str) -> String {
     format!("{} on '{connection}'", kind.label())
 }
 
+/// The Redis flush `sql` runs, "FLUSHALL" or else "FLUSHDB", read from its first word.
+fn flush_command(sql: &str) -> &'static str {
+    let first = sql.split_whitespace().next().unwrap_or_default();
+    match first
+        .trim_matches(['"', '\''])
+        .eq_ignore_ascii_case("FLUSHALL")
+    {
+        true => "FLUSHALL",
+        false => "FLUSHDB",
+    }
+}
+
+/// What the explain shortcut says when `err` refuses the statement on `engine`, which prose
+/// calls `title`: a sentence listing only the statements that engine has.
+pub fn explain_warning(err: &ExplainError, engine: Engine, title: &str) -> String {
+    match err {
+        ExplainError::UnsupportedEngine => format!("EXPLAIN is not available for {title} yet."),
+        ExplainError::NotOneStatement => "Select one statement to explain.".to_owned(),
+        ExplainError::AlreadyExplain => {
+            "This is already an EXPLAIN. Run it to see its plan.".to_owned()
+        }
+        ExplainError::NotExplainable => {
+            let statements = match engine {
+                Engine::Sqlite => "SELECT, WITH, VALUES, INSERT, UPDATE, DELETE or REPLACE",
+                Engine::Postgres | _ => {
+                    "SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or MERGE"
+                }
+            };
+            format!("Only {statements} can be explained on {title}, and not after a block comment.")
+        }
+        other => format!("{other}."),
+    }
+}
+
 /// The confirmation's one-line explanation of what the statement would do.
 pub fn confirm_explanation(kind: Option<Unguarded>) -> &'static str {
     match kind {
@@ -271,22 +305,32 @@ pub fn confirm_explanation(kind: Option<Unguarded>) -> &'static str {
 
 /// The question asked before a guarded statement runs: Cancel (Enter and Escape) or a
 /// destructive "Run anyway", with the statement boxed under the explanation and highlighted
-/// as `language`.
-pub fn unguarded_ask(
-    kind: Option<Unguarded>,
-    connection: &str,
-    sql: &str,
-    language: &'static str,
-) -> Ask {
-    let title = match kind {
-        Some(kind) => confirm_title(kind, connection),
-        None => format!("Run this statement on '{connection}'?"),
+/// in `engine`'s prompt language. A flush names the one command it runs, and SurrealDB's
+/// explanations speak of records.
+pub fn unguarded_ask(kind: Option<Unguarded>, engine: Engine, connection: &str, sql: &str) -> Ask {
+    let flush = (kind == Some(Unguarded::FlushKeys)).then(|| flush_command(sql));
+    let title = match (kind, flush) {
+        (_, Some(command)) => format!("{command} on '{connection}'"),
+        (Some(kind), None) => confirm_title(kind, connection),
+        (None, None) => format!("Run this statement on '{connection}'?"),
+    };
+    let detail = match (kind, flush, engine) {
+        (_, Some("FLUSHALL"), _) => "It deletes every key in every database on the server.",
+        (_, Some(_), _) => "It deletes every key in this database.",
+        // SurrealDB stores records, not rows.
+        (Some(Unguarded::UpdateWithoutWhere), _, Engine::Surrealdb) => {
+            "It has no WHERE clause, so it changes every record."
+        }
+        (Some(Unguarded::DeleteWithoutWhere), _, Engine::Surrealdb) => {
+            "It has no WHERE clause, so it deletes every record."
+        }
+        _ => confirm_explanation(kind),
     };
     Ask {
         title: title.into(),
-        detail: Some(confirm_explanation(kind).into()),
+        detail: Some(detail.into()),
         sql: Some(sql.to_owned().into()),
-        language,
+        language: prompt_language(engine),
         choices: vec![
             Choice {
                 id: "confirm-skip",
@@ -310,9 +354,15 @@ pub fn analyze_ask(kinds: &[Unguarded], connection: &str, sql: &str) -> Ask {
     let mut detail = "ANALYZE executes the statement to time it. Its changes are rolled back, \
         but sequence values it takes and effects outside the transaction are kept."
         .to_owned();
-    if !kinds.is_empty() {
-        let labels: Vec<_> = kinds.iter().map(|k| k.label()).collect();
-        detail.push_str(&format!(" It is also: {}.", labels.join(", ")));
+    // Each unguarded kind adds the sentence its own confirmation would show, once.
+    let mut said = Vec::new();
+    for &kind in kinds {
+        let sentence = confirm_explanation(Some(kind));
+        if !said.contains(&sentence) {
+            said.push(sentence);
+            detail.push(' ');
+            detail.push_str(sentence);
+        }
     }
     Ask {
         title: format!("EXPLAIN ANALYZE runs this statement on '{connection}'").into(),
@@ -1062,7 +1112,9 @@ impl QueryTab {
                     .update(cx, |m, cx| m.request_explain(request, range.start, cx));
             }
             Err(err) => {
-                let (text, kind) = (err.to_string(), ui::NoticeKind::Warning);
+                let title = crate::sidebar::engine_title(&self.session_conn);
+                let text = explain_warning(&err, engine, title);
+                let kind = ui::NoticeKind::Warning;
                 ui::notice(window, cx, ui::Notice { text, kind });
             }
         }
@@ -1224,8 +1276,8 @@ impl QueryTab {
         let spec = if analyze {
             analyze_ask(&kinds, connection, &sql)
         } else {
-            let language = prompt_language(self.session_conn.engine());
-            unguarded_ask(kinds.first().copied(), connection, &sql, language)
+            let engine = self.session_conn.engine();
+            unguarded_ask(kinds.first().copied(), engine, connection, &sql)
         };
         let reply = ask(spec, window, cx);
         cx.spawn_in(window, async move |this, cx| {

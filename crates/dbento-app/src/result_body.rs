@@ -1,5 +1,7 @@
 //! What the result body shows for the run's subject statement, and the failed body's parts.
 
+use std::time::Duration;
+
 use dbento_core::{Engine, ExecuteError, leading_keyword};
 
 use crate::keymap::plus_keys;
@@ -50,19 +52,28 @@ pub fn result_body(results: &[StatementResult], selected: Option<usize>) -> Resu
 /// "N row(s) updated|inserted|deleted" by `leading_keyword`; another statement:
 /// "N row(s) affected" when N > 0, else "Statement completed".
 pub fn dml_text(sql: &str, rows_affected: Option<u64>) -> String {
+    match (dml_verb(sql), rows_affected) {
+        (Some(_), Some(n)) => changed_rows(sql, n),
+        (None, Some(n)) if n > 0 => changed_rows(sql, n),
+        _ => "Statement completed".to_owned(),
+    }
+}
+
+/// "N row(s) updated|inserted|deleted" by `leading_keyword`, else "N row(s) affected"; the
+/// tab, its tooltip and the footer all word a count this way so they agree.
+pub fn changed_rows(sql: &str, n: u64) -> String {
+    format!("{} {}", format_rows(n), dml_verb(sql).unwrap_or("affected"))
+}
+
+fn dml_verb(sql: &str) -> Option<&'static str> {
     let keyword = leading_keyword(sql);
-    let verb = [
+    [
         ("UPDATE", "updated"),
         ("INSERT", "inserted"),
         ("DELETE", "deleted"),
     ]
     .into_iter()
-    .find_map(|(k, verb)| k.eq_ignore_ascii_case(keyword).then_some(verb));
-    match (verb, rows_affected) {
-        (Some(verb), Some(n)) => format!("{} {verb}", format_rows(n)),
-        (None, Some(n)) if n > 0 => format!("{} affected", format_rows(n)),
-        _ => "Statement completed".to_owned(),
-    }
+    .find_map(|(k, verb)| k.eq_ignore_ascii_case(keyword).then_some(verb))
 }
 
 /// No results and not `busy` (`running() || browses()`, so a loading table tab stays quiet):
@@ -111,6 +122,12 @@ pub struct ErrorView {
 
 /// The error of a failed statement; None for any other end.
 pub fn error_view(r: &StatementResult) -> Option<ErrorView> {
+    error_view_timed(r, None)
+}
+
+/// [`error_view`], whose timeout message names `timeout`, the connection's
+/// `statement_timeout`, when one is set.
+pub fn error_view_timed(r: &StatementResult, timeout: Option<Duration>) -> Option<ErrorView> {
     let Some(StatementEnd::Failed(e)) = r.store.end() else {
         return None;
     };
@@ -143,7 +160,24 @@ pub fn error_view(r: &StatementResult) -> Option<ErrorView> {
         v.hint = hint.clone();
         v.position = *position;
     }
+    // Keep any engine-specific tail after the core's own wording of a timeout.
+    if let (ExecuteError::Timeout, Some(limit)) = (e, timeout) {
+        let base = ExecuteError::Timeout.to_string();
+        let tail = v.message.strip_prefix(base.as_str()).unwrap_or_default();
+        v.message = format!(
+            "The statement timed out after {}, the connection's statement_timeout{tail}.",
+            limit_text(limit)
+        );
+    }
     Some(v)
+}
+
+/// A configured limit as written: "500 ms", "30 s", or "1500 ms" when not whole seconds.
+fn limit_text(d: Duration) -> String {
+    match d.subsec_nanos() == 0 {
+        true => format!("{} s", d.as_secs()),
+        false => format!("{} ms", d.as_millis()),
+    }
 }
 
 /// The code as the body labels it for `engine`: `SQLSTATE c` on Postgres, `error c` with

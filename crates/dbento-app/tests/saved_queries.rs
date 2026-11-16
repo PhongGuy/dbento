@@ -66,7 +66,7 @@ fn a_name_that_leaves_queries_is_refused_in_the_dialog(cx: &mut TestAppContext) 
     let o = opened(cx, "", "", 0);
     press_in_editor(cx, &o, "SELECT 1", "ctrl-s");
     name(cx, &o, "../../escape");
-    let says = "queries/lite/../../escape.sql is not a file under the workspace's queries/ folder";
+    let says = "queries/lite/../../escape.sql is not a file under the workspace's queries/ folder.";
     assert!(present(cx, o.win, "save-name"), "the dialog stays open");
     assert_eq!(
         label_of(cx, o.win, "save-name-error").as_deref(),
@@ -99,7 +99,7 @@ fn a_name_that_leaves_queries_is_refused_in_the_dialog(cx: &mut TestAppContext) 
     name(cx, &o, "/abs");
     let abs = label_of(cx, o.win, "save-name-error").unwrap_or_default();
     assert!(
-        abs.ends_with("is not a file under the workspace's queries/ folder"),
+        abs.ends_with("is not a file under the workspace's queries/ folder."),
         "{abs}"
     );
     click(cx, &o, "save-cancel");
@@ -371,4 +371,19 @@ fn a_saved_name_takes_the_connections_extension() {
     );
     assert_eq!(name_problem("", "sql").as_deref(), Some("Enter a name."));
     assert_eq!(name_problem("orders", "js"), None);
+}
+
+#[test]
+fn a_message_reads_as_a_sentence_unless_it_starts_with_a_path() {
+    use dbento_app::labels::sentence;
+    assert_eq!(
+        sentence("no dbento.toml in /tmp/x"),
+        "No dbento.toml in /tmp/x."
+    );
+    assert_eq!(
+        sentence("queries/a.sql is not UTF-8 text"),
+        "queries/a.sql is not UTF-8 text."
+    );
+    assert_eq!(sentence("Already done."), "Already done.");
+    assert_eq!(sentence(""), "");
 }

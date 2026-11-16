@@ -6,7 +6,7 @@ use dbento_app::confirm::{
     text_frame,
 };
 use dbento_app::query_tab::{confirm_explanation, unguarded_ask};
-use dbento_core::Unguarded;
+use dbento_core::{Engine, Unguarded};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext, px};
 
@@ -120,9 +120,9 @@ fn the_explanation_names_what_happens_to_every_row() {
 fn the_unguarded_ask_reads_cancel_and_run_anyway_and_carries_the_sql() {
     let a = unguarded_ask(
         Some(Unguarded::DeleteWithoutWhere),
+        Engine::Postgres,
         "prod",
         "DELETE FROM t",
-        "sql",
     );
     let buttons: Vec<_> = a
         .choices
@@ -200,9 +200,9 @@ fn the_dialog_is_480_px_under_the_toolbar_with_a_48_px_footer(cx: &mut TestAppCo
 fn a_mongodb_prompt_previews_in_javascript() {
     let a = unguarded_ask(
         Some(Unguarded::DeleteAllDocuments),
+        Engine::Mongodb,
         "shop",
         "db.orders.deleteMany({})",
-        "javascript",
     );
     assert_eq!(a.language, "javascript");
     assert_eq!(

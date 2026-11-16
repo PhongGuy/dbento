@@ -1,8 +1,8 @@
 //! Opening a plan: keys, toolbar, palette entries and the ANALYZE question's wording.
 use crate::support::{Opened, label_of, open_connection_row, opened, present, started, wait_real};
 use dbento_app::palette::PaletteCommand;
-use dbento_app::query_tab::analyze_ask;
-use dbento_core::Unguarded;
+use dbento_app::query_tab::{analyze_ask, explain_warning};
+use dbento_core::{Engine, ExplainError, ExplainMode, Unguarded, explain_request};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 
@@ -40,7 +40,10 @@ fn the_analyze_ask_says_it_runs_and_rolls_back() {
     let d = a.detail.clone().unwrap();
     assert!(d.starts_with("ANALYZE executes the statement to time it. Its changes are rolled back, but sequence values it takes and effects outside the transaction are kept."), "{d}");
     assert!(
-        d.ends_with("It is also: DELETE without WHERE, DROP."),
+        d.ends_with(
+            "It has no WHERE clause, so it deletes every row. \
+             It removes the object and everything in it."
+        ),
         "{d}"
     );
     assert_eq!(a.sql.as_deref(), Some("DELETE FROM t"));
@@ -61,7 +64,42 @@ fn the_analyze_ask_says_it_runs_and_rolls_back() {
         !analyze_ask(&[], "dev", "INSERT INTO t VALUES (1)")
             .detail
             .unwrap()
-            .contains("It is also")
+            .contains("WHERE")
+    );
+}
+
+#[test]
+fn explain_warnings_are_sentences_that_list_only_the_engines_statements() {
+    let warn = |engine, sql| {
+        let err = explain_request(engine, sql, ExplainMode::Plan).unwrap_err();
+        let title = if engine == Engine::Postgres {
+            "PostgreSQL"
+        } else {
+            "SQLite"
+        };
+        explain_warning(&err, engine, title)
+    };
+    assert_eq!(
+        warn(Engine::Postgres, "VACUUM"),
+        "Only SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or MERGE can be explained \
+         on PostgreSQL, and not after a block comment."
+    );
+    assert_eq!(
+        warn(Engine::Sqlite, "VACUUM"),
+        "Only SELECT, WITH, VALUES, INSERT, UPDATE, DELETE or REPLACE can be explained on \
+         SQLite, and not after a block comment."
+    );
+    assert_eq!(
+        warn(Engine::Postgres, "EXPLAIN SELECT 1"),
+        "This is already an EXPLAIN. Run it to see its plan."
+    );
+    assert_eq!(
+        warn(Engine::Postgres, "SELECT 1; SELECT 2"),
+        "Select one statement to explain."
+    );
+    assert_eq!(
+        explain_warning(&ExplainError::UnsupportedEngine, Engine::Mysql, "MySQL"),
+        "EXPLAIN is not available for MySQL yet."
     );
 }
 
@@ -153,8 +191,7 @@ fn mysql_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
     cx.update_window(s.win, |_, w, cx| w.press("ctrl-e", cx))
         .unwrap();
     wait_real(cx, "the unsupported notice", |cx| {
-        label_of(cx, s.win, "notice").as_deref()
-            == Some("EXPLAIN is not available on this engine yet")
+        label_of(cx, s.win, "notice").as_deref() == Some("EXPLAIN is not available for MySQL yet.")
     });
 
     cx.update_window(s.win, |_, w, cx| w.right_click("editor", cx))

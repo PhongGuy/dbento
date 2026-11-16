@@ -2019,7 +2019,7 @@ impl Shell {
                 title: "The file changed on disk".into(),
                 detail: Some(
                     format!(
-                        "{} was changed outside this tab since it was opened.",
+                        "{} was changed outside this tab since the tab last loaded or saved it.",
                         rel.display()
                     )
                     .into(),
@@ -2657,7 +2657,7 @@ impl Shell {
             }
             Err(e) => {
                 self.clear_workspace();
-                self.error = Some(e.to_string());
+                self.error = Some(crate::labels::sentence(&e.to_string()));
                 self.forget_if_saved(&dir, cx);
             }
         }
@@ -3114,15 +3114,18 @@ impl Shell {
                     name: name.to_owned(),
                     spec: spec.clone(),
                 };
-                plan_edit(&ws, &edit).err().map(|e| e.to_string().into())
+                plan_edit(&ws, &edit)
+                    .err()
+                    .map(|e| edit_error_text(&e).into())
             }
         };
         let env = secret_env_var(old);
-        let hint = if (self.services.env)(&env).is_some() {
-            format!("New name. Its password variable {env} becomes DBENTO_SECRET_<NEW NAME>.")
-        } else {
-            "New name".to_owned()
-        };
+        let mut hint = NAME_RULE_HINT.to_owned();
+        if (self.services.env)(&env).is_some() {
+            hint.push_str(&format!(
+                " Its password variable {env} becomes DBENTO_SECRET_<NEW NAME>."
+            ));
+        }
         let spec = TextAsk {
             title: format!("Rename connection {old}").into(),
             hint: hint.into(),
@@ -3708,7 +3711,7 @@ impl Shell {
                     EditError::NameTaken { .. } | EditError::InvalidName { .. }
                 )
                 .then_some(ErrorAt::Field(Field::Name));
-                (at, e.to_string(), false)
+                (at, edit_error_text(&e), false)
             })?;
             plan.apply()
                 .map_err(|e| (None, e.to_string(), matches!(e, WriteError::Changed)))?;
@@ -5648,6 +5651,18 @@ enum Written {
 
 // The refusal to rename or delete a connection an open tab runs on.
 const IN_USE: &str = "Close its tabs first";
+
+// The rename dialog's hint: the name rule, and why it is stricter than a folder's.
+const NAME_RULE_HINT: &str = "New name, in letters, digits, - and _ only. It also names the \
+    connection's password variable, so it is stricter than a folder name.";
+
+// An edit's refusal as the dialogs show it, the name rule in plain words.
+fn edit_error_text(e: &EditError) -> String {
+    if let EditError::InvalidName { .. } = e {
+        return "Use letters, digits, - and _ only.".to_owned();
+    }
+    e.to_string()
+}
 
 // A planned edit always holds its connection; this only guards the lookup.
 fn missing(name: &str) -> String {

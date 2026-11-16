@@ -165,7 +165,7 @@ fn a_write_only_run_footer_describes_the_last_statement(cx: &mut TestAppContext)
     assert!(!present(cx, o.win, "footer-rows"));
     assert_eq!(
         label_of(cx, o.win, "footer-note").as_deref(),
-        Some("2 rows affected")
+        Some("2 rows inserted")
     );
 }
 #[gpui_kit::test]
@@ -179,7 +179,7 @@ fn selecting_a_write_statement_shows_an_empty_grid_and_its_footer(cx: &mut TestA
     assert!(!present(cx, o.win, "footer-rows"));
     assert_eq!(
         label_of(cx, o.win, "footer-note").as_deref(),
-        Some("1 row affected")
+        Some("1 row inserted")
     );
     click_id(cx, o.win, ("statement-result", 1usize));
     assert_eq!(

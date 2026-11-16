@@ -60,7 +60,10 @@ fn a_folder_without_dbento_toml_shows_the_error(cx: &mut TestAppContext) {
         })
         .unwrap();
     let error = support::label_of(cx, win, "welcome-error").expect("an error is shown");
-    assert!(error.contains("no dbento.toml"), "{error}");
+    assert_eq!(
+        error,
+        format!("No dbento.toml in {}.", empty.path().display())
+    );
     assert!(shell.read_with(cx, |s, _| s.workspace().is_none()));
     assert!(!AppPaths::in_dir(files.path()).state.exists());
 }

@@ -58,11 +58,13 @@ fn a_bad_connection_name_stays_in_the_dialog(cx: &mut TestAppContext) {
             .unwrap()
             .contains("already exists")
     );
+    // The rule reads in plain words, and the hint says why it is stricter than a folder's.
+    let hint = label_of(cx, s.win, "save-hint").unwrap();
+    assert!(hint.contains("stricter than a folder name"), "{hint}");
     name(cx, &s, "a b");
-    assert!(
-        label_of(cx, s.win, "save-name-error")
-            .unwrap()
-            .contains("[A-Za-z0-9_-]")
+    assert_eq!(
+        label_of(cx, s.win, "save-name-error").as_deref(),
+        Some("Use letters, digits, - and _ only.")
     );
     assert_eq!(s.toml(), TREE);
 }

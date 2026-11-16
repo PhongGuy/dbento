@@ -89,11 +89,11 @@ fn a_script_lists_each_statement_and_opens_on_its_failure(cx: &mut TestAppContex
     let win = pane(cx, "CREATE TABLE u(x);", sql);
     assert_eq!(
         support::label_of(cx, win, ("statement-result", 0usize)).as_deref(),
-        Some("1 row affected")
+        Some("1 row inserted")
     );
     assert_eq!(
         support::label_of(cx, win, ("statement-result", 1usize)).as_deref(),
-        Some("2 rows affected")
+        Some("2 rows inserted")
     );
     assert_eq!(
         support::label_of(cx, win, ("statement-result", 2usize)).as_deref(),

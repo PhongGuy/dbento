@@ -3,7 +3,9 @@ use crate::support;
 use std::sync::Arc;
 
 use crate::support::{Opened, fixture, label_of, opened, present, spec, wait_real};
-use dbento_app::result_body::{ErrorView, code_label, error_copy_text, error_view, jump_target};
+use dbento_app::result_body::{
+    ErrorView, code_label, error_copy_text, error_view, error_view_timed, jump_target,
+};
 use dbento_app::results::ResultStore;
 use dbento_app::runner::StatementEnd;
 use dbento_app::tab_model::{StatementResult, TabModel, statement_source};
@@ -244,6 +246,38 @@ fn an_empty_database_code_shows_no_code() {
     assert_eq!((v.message.as_str(), v.code.as_deref()), ("x", None));
     assert_eq!(code_label(Some(Engine::Duckdb), &v), None);
     assert_eq!(error_copy_text(&v), "x\n\nSELECT 1");
+}
+
+#[test]
+fn a_timeout_names_the_configured_statement_timeout() {
+    let timed_out = |engine| {
+        let mut store = ResultStore::new(Arc::from(Vec::new()));
+        store.finish(StatementEnd::Failed(ExecuteError::Timeout));
+        StatementResult {
+            stmt: 0,
+            sql: "SELECT pg_sleep(9)".into(),
+            engine: Some(engine),
+            epoch: 0,
+            store,
+            elapsed: None,
+            source: None,
+            plan: None,
+        }
+    };
+    let message = |engine, limit| error_view_timed(&timed_out(engine), limit).unwrap().message;
+    assert_eq!(
+        message(Engine::Postgres, Some(std::time::Duration::from_secs(5))),
+        "The statement timed out after 5 s, the connection's statement_timeout."
+    );
+    assert_eq!(
+        message(
+            Engine::Mongodb,
+            Some(std::time::Duration::from_millis(1500))
+        ),
+        "The statement timed out after 1500 ms, the connection's statement_timeout; \
+         a write may have kept part of its changes."
+    );
+    assert_eq!(message(Engine::Postgres, None), "the statement timed out");
 }
 
 #[test]
