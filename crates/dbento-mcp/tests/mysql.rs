@@ -205,7 +205,9 @@ async fn the_tool_descriptions_name_mysql() {
     };
     let listed = description("list_connections");
     assert!(
-        listed.contains("sqlite, postgres, mysql, mssql, duckdb, mongodb, surrealdb or redis"),
+        listed.contains(
+            "sqlite, postgres, mysql, mssql, duckdb, mongodb, surrealdb, redis or dynamodb"
+        ),
         "{listed}"
     );
     let schemas = description("list_schemas");

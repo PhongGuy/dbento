@@ -367,7 +367,7 @@ impl DbentoServer {
 impl DbentoServer {
     #[tool(
         description = "List the workspace's connections: name, engine (sqlite, postgres, \
-                       mysql, mssql, duckdb, mongodb, surrealdb or redis; mysql also covers \
+                       mysql, mssql, duckdb, mongodb, surrealdb, redis or dynamodb; mysql also covers \
                        MariaDB, redis also Valkey), its query `language`, whether it is \
                        read-only, how far its read-only \
                        session goes (`read_only_enforcement`, `session`), whether it is tagged \
