@@ -1,4 +1,4 @@
-# Dbento
+# <img src="assets/icon/dbento-32.svg" alt="" width="40" height="40" align="top"> Dbento
 
 **A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client read-only access to your databases by default. It speaks SQL to Postgres, SQLite, MySQL, SQL Server and DuckDB, and each NoSQL store's own language to MongoDB, SurrealDB, Redis and DynamoDB. The name is db + bento: data in neat compartments.
 
