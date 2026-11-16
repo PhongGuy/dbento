@@ -156,3 +156,35 @@ fn the_production_rule_overlays_the_toolbar_instead_of_pushing_it_down(cx: &mut 
     let bar = bounds(cx, plain.win, "query-toolbar").unwrap();
     assert_eq!((rule.top(), rule.size.height), (bar.top(), px(2.)));
 }
+
+// A client-decorated window pads each untiled side with the border's shadow; layout gets the rest.
+#[test]
+fn the_usable_size_leaves_out_the_shadow_on_each_untiled_side() {
+    use dbento_app::shell::usable_size;
+    use gpui_kit::{Decorations, Tiling};
+    let viewport = size(px(1000.), px(700.));
+    let floating = Decorations::Client {
+        tiling: Tiling::default(),
+    };
+    assert_eq!(
+        usable_size(viewport, floating, Some(px(20.))),
+        size(px(960.), px(660.))
+    );
+    let left_half = Decorations::Client {
+        tiling: Tiling {
+            top: true,
+            left: true,
+            right: false,
+            bottom: true,
+        },
+    };
+    assert_eq!(
+        usable_size(viewport, left_half, Some(px(20.))),
+        size(px(980.), px(700.))
+    );
+    assert_eq!(
+        usable_size(viewport, Decorations::Server, Some(px(20.))),
+        viewport
+    );
+    assert_eq!(usable_size(viewport, floating, None), viewport);
+}

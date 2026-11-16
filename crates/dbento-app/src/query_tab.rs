@@ -1890,7 +1890,7 @@ impl Render for QueryTab {
                     }
                 });
             });
-        let editor_max = (window.viewport_size().height - RESULTS_ROOM).max(EDITOR_MIN);
+        let editor_max = (crate::shell::content_size(window).height - RESULTS_ROOM).max(EDITOR_MIN);
         let start_height = self.start_height.map(|h| h.min(editor_max));
         // The Editor fills its wrapper, so a click at the wrapper's centre lands in the text.
         // It draws no box of its own: the panel and the toolbar's hairline already frame it.

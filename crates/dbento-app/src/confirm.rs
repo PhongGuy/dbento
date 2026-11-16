@@ -176,7 +176,7 @@ pub fn with_keys(button: Button, keys: Option<&str>, style: ChoiceStyle, cx: &Ap
 
 /// Where a dialog's surface starts: the kit's tenth of the height, never above DIALOG_TOP.
 pub fn dialog_top(window: &Window) -> Pixels {
-    (window.viewport_size().height / 10.).max(DIALOG_TOP)
+    (crate::shell::content_size(window).height / 10.).max(DIALOG_TOP)
 }
 
 /// A read-only SQL editor holding `sql`: highlighted, no line numbers, folding or soft wrap.

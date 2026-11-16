@@ -836,7 +836,7 @@ impl Render for Palette {
             .bordered(false)
             .filterable(false)
             .placeholder("Search tables, queries and commands; > commands, # queries, ? shortcuts")
-            .max_h(window.viewport_size().height * 0.6);
+            .max_h(crate::shell::content_size(window).height * 0.6);
         // An empty `#` list says how to make a query; other modes keep the kit's empty slot.
         if parse_query(&query).0 == Mode::Queries && self.init.queries.is_empty() {
             let dim = theme::dim(cx);
