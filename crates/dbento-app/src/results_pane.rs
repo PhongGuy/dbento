@@ -48,8 +48,8 @@ use crate::plan_view::PlanView;
 use crate::record::{record_at, record_position};
 use crate::record_form::RecordForm;
 use crate::result_body::{
-    ErrorView, ResultBody, body_subject, code_label, dml_text, empty_text, error_copy_text,
-    error_view, jump_target, result_body,
+    ErrorView, ResultBody, body_subject, changed_rows, code_label, dml_text, empty_text,
+    error_copy_text, error_view_timed, jump_target, result_body,
 };
 use crate::results::ResultStore;
 use crate::runner::{PARK_AT_CAP, StatementEnd, StopReason};
@@ -232,12 +232,10 @@ pub fn result_mark(r: &StatementResult, asking: Option<usize>, more: bool) -> Re
     }
 }
 
-/// The footer note for a completed statement: "N affected", "any changes were rolled back",
-/// or both joined by ", "; None when neither applies.
-pub fn outcome_note(o: &Outcome) -> Option<String> {
-    let affected = o
-        .rows_affected
-        .map(|n| format!("{} affected", format_rows(n)));
+/// The footer note for a completed `sql`: its count as [`changed_rows`] words it, "any changes
+/// were rolled back", or both joined by ", "; None when neither applies.
+pub fn outcome_note(sql: &str, o: &Outcome) -> Option<String> {
+    let affected = o.rows_affected.map(|n| changed_rows(sql, n));
     let rolled_back = o
         .rolled_back
         .then(|| "any changes were rolled back".to_owned());
@@ -250,7 +248,7 @@ pub fn outcome_note(o: &Outcome) -> Option<String> {
 /// One line describing how a statement ended, or "running" while it has not.
 pub fn summary(r: &StatementResult) -> String {
     let outcome = |o: &Outcome| match o.rows_affected {
-        Some(n) => format!("{} affected", format_rows(n)),
+        Some(n) => changed_rows(&r.sql, n),
         None => format_rows(o.rows),
     };
     match r.store.end() {
@@ -2760,9 +2758,15 @@ impl Render for ResultsPane {
         let header_shown = body_subject(results, self.selected)
             .is_some_and(|ix| !results[ix].store.columns().is_empty());
         let clearable = !results.is_empty() && filter.is_some_and(|f| !f.is_empty());
+        // A timeout names the connection's configured limit, read as it stands now.
+        let spec = m.spec();
+        let timeout = spec
+            .workspace
+            .connection(&spec.connection)
+            .and_then(|c| c.statement_timeout());
         let error = body_subject(results, self.selected)
             .filter(|_| failed)
-            .and_then(|ix| Some((error_view(&results[ix])?, results[ix].engine)));
+            .and_then(|ix| Some((error_view_timed(&results[ix], timeout)?, results[ix].engine)));
         let footer = body_subject(results, self.selected).map(|ix| {
             let r = &results[ix];
             let cap = m.cap_view(r.stmt);
@@ -2783,7 +2787,7 @@ impl Render for ResultsPane {
                 Some(StatementEnd::Truncated(o)) => {
                     Some((format!("truncated at {}", format_rows(o.rows)), warning))
                 }
-                Some(StatementEnd::Complete(o)) => outcome_note(o).map(|n| (n, dim)),
+                Some(StatementEnd::Complete(o)) => outcome_note(&r.sql, o).map(|n| (n, dim)),
                 Some(StatementEnd::Failed(e)) => Some((e.to_string(), danger)),
                 Some(StatementEnd::Stopped {
                     reason: StopReason::User,

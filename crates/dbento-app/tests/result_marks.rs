@@ -39,7 +39,7 @@ fn a_write_names_what_it_changed_on_its_tab_and_footer(cx: &mut TestAppContext) 
     );
     assert_eq!(
         label_of(cx, o.win, "footer-note").as_deref(),
-        Some("2 rows affected")
+        Some("2 rows deleted")
     );
 }
 

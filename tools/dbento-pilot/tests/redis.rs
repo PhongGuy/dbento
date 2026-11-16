@@ -390,7 +390,7 @@ async fn badges_name_the_acl_level_and_a_flush_asks() {
         find_node(t, "confirm-detail").is_some()
     })
     .await;
-    let says = "It deletes every key in the database, or with FLUSHALL in every database.";
+    let says = "It deletes every key in this database.";
     assert_eq!(name(&tree, "confirm-detail"), Some(says));
     click(&pilot, "confirm-skip", json!({})).await;
     until(&pilot, "the prompt to close", |t| {

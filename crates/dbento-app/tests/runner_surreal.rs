@@ -129,7 +129,7 @@ async fn a_fenced_result_notes_that_its_changes_were_rolled_back() {
     assert_eq!(rows, 1);
     assert!(o.rolled_back);
     assert_eq!(
-        outcome_note(&o).as_deref(),
+        outcome_note("RETURN fn::w()", &o).as_deref(),
         Some("any changes were rolled back")
     );
     assert_eq!(db.count("fnt").await, 0, "the fence undid the write");
@@ -137,7 +137,7 @@ async fn a_fenced_result_notes_that_its_changes_were_rolled_back() {
     let (_b, writer) = sr_spec(&db, ("ro", "root"), "");
     let (o, _) = outcome_of(writer, "CREATE w:1 SET x = 1").await;
     assert!(!o.rolled_back);
-    assert_eq!(outcome_note(&o), None);
+    assert_eq!(outcome_note("CREATE w:1 SET x = 1", &o), None);
     assert_eq!(db.count("w").await, 1);
 }
 

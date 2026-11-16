@@ -8,6 +8,7 @@ use dbento_core::Workspace;
 use gpui_kit::{App, SharedString, Window};
 
 use crate::confirm::{TextAsk, TextConfirm, ask_text_confirming};
+use crate::labels::sentence;
 
 /// Why `name` cannot name a saved query with extension `ext`, as the dialog says it; None
 /// when it can.
@@ -74,7 +75,10 @@ pub fn ask_name(
         let exists = Rc::clone(&exists);
         move |name: &str| match name_problem(name, ext) {
             Some(says) => Some(SharedString::from(says)),
-            None => exists(name).0.err().map(|e| e.to_string().into()),
+            None => exists(name)
+                .0
+                .err()
+                .map(|e| sentence(&e.to_string()).into()),
         }
     };
     let confirm = move |name: &str| match exists(name) {

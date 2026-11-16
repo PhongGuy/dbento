@@ -9,7 +9,7 @@ use dbento_app::query_tab::{
     READ_ONLY_REDIS_UNCONNECTED_TOOLTIP, READ_ONLY_SQLITE_TOOLTIP,
     READ_ONLY_SURREAL_BEST_EFFORT_TOOLTIP, READ_ONLY_SURREAL_UNCONNECTED_TOOLTIP,
     READ_ONLY_SURREAL_VIEWER_TOOLTIP, confirm_explanation, confirm_title, editor_language,
-    prompt_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of,
+    prompt_language, read_only_badge_text, read_only_tooltip, read_only_tooltip_of, unguarded_ask,
 };
 use dbento_app::result_body::{ErrorView, code_label};
 use dbento_core::{Engine, Unguarded};
@@ -79,6 +79,10 @@ fn the_badge_tooltip_follows_the_engine() {
     assert_eq!(read_only_tooltip(Engine::Postgres), READ_ONLY_PG_TOOLTIP);
     assert_eq!(read_only_tooltip(Engine::Sqlite), READ_ONLY_SQLITE_TOOLTIP);
     assert!(READ_ONLY_PG_TOOLTIP.contains("SET lasts one statement"));
+    assert!(
+        !READ_ONLY_PG_TOOLTIP.contains('`'),
+        "{READ_ONLY_PG_TOOLTIP}"
+    );
     assert_eq!(read_only_tooltip(Engine::Mysql), READ_ONLY_MYSQL_TOOLTIP);
     assert!(READ_ONLY_MYSQL_TOOLTIP.contains("only SELECT"));
 }
@@ -517,14 +521,42 @@ fn a_redis_badge_names_the_level_its_acl_gives_and_the_residual() {
 }
 
 #[test]
-fn a_flush_explains_that_every_key_goes() {
+fn a_flush_names_the_one_command_it_runs() {
+    let flush = |sql| {
+        let a = unguarded_ask(Some(Unguarded::FlushKeys), Engine::Redis, "cache", sql);
+        (a.title.to_string(), a.detail.unwrap().to_string())
+    };
     assert_eq!(
-        confirm_explanation(Some(Unguarded::FlushKeys)),
-        "It deletes every key in the database, or with FLUSHALL in every database."
+        flush("FLUSHDB"),
+        (
+            "FLUSHDB on 'cache'".to_owned(),
+            "It deletes every key in this database.".to_owned()
+        )
     );
     assert_eq!(
-        confirm_title(Unguarded::FlushKeys, "cache"),
-        "FLUSHDB or FLUSHALL on 'cache'"
+        flush("flushall async"),
+        (
+            "FLUSHALL on 'cache'".to_owned(),
+            "It deletes every key in every database on the server.".to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_surrealdb_prompt_speaks_of_records() {
+    let detail = |kind| {
+        unguarded_ask(Some(kind), Engine::Surrealdb, "s", "DELETE person")
+            .detail
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        detail(Unguarded::DeleteWithoutWhere),
+        "It has no WHERE clause, so it deletes every record."
+    );
+    assert_eq!(
+        detail(Unguarded::UpdateWithoutWhere),
+        "It has no WHERE clause, so it changes every record."
     );
 }
 

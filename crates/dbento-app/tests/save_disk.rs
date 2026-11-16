@@ -1,6 +1,8 @@
 //! Saving a query tab whose file changed on disk since it was opened asks Reload, Overwrite
 //! or Cancel instead of writing over the change.
-use crate::support::{Opened, click_id, opened, palette_pick, palette_rows, present, wait_real};
+use crate::support::{
+    Opened, click_id, label_of, opened, palette_pick, palette_rows, present, wait_real,
+};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 use std::fs;
@@ -74,6 +76,13 @@ fn changed_on_disk(cx: &mut TestAppContext) -> (Opened, PathBuf) {
 #[gpui_kit::test]
 fn cancel_leaves_the_changed_file_and_the_edited_text(cx: &mut TestAppContext) {
     let (o, file) = changed_on_disk(cx);
+    // Worded for a tab that has saved since it opened, not only one fresh from disk.
+    assert_eq!(
+        label_of(cx, o.win, "confirm-detail").as_deref(),
+        Some(
+            "queries/lite/a.sql was changed outside this tab since the tab last loaded or saved it."
+        )
+    );
     click_id(cx, o.win, "save-conflict-cancel");
     assert!(!present(cx, o.win, "save-conflict-cancel"));
     assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 9");

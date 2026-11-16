@@ -158,7 +158,8 @@ const DATABASES_CHOICES: [DatabasesChoice; 3] = [
 pub const POSTGRES_DATABASE: &str = "postgres";
 
 // The tooltip on a database that cannot be a child connection's name.
-const BAD_DATABASE_NAME: &str = "Only names matching [A-Za-z0-9_-]+ can be opened as a connection.";
+const BAD_DATABASE_NAME: &str =
+    "Only a database named in letters, digits, - and _ can be opened as a connection.";
 
 /// What the form asks of its owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

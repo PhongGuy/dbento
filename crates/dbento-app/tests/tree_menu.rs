@@ -177,9 +177,27 @@ fn each_row_kind_has_its_own_items(cx: &mut TestAppContext) {
                 "Refresh",
             ]
         );
+        let new_query =
+            |kind, engine| catalog_entries(&RowKind::Relation(kind), engine, cx)[1].label;
         assert_eq!(
-            catalog_entries(&RowKind::Relation(RelationKind::View), Engine::Postgres, cx)[1].label,
+            new_query(RelationKind::View, Engine::Postgres),
             "New query on view"
+        );
+        assert_eq!(
+            new_query(RelationKind::MaterializedView, Engine::Postgres),
+            "New query on materialized view"
+        );
+        assert_eq!(
+            new_query(RelationKind::ForeignTable, Engine::Postgres),
+            "New query on foreign table"
+        );
+        assert_eq!(
+            new_query(RelationKind::Other, Engine::Postgres),
+            "New query on relation"
+        );
+        assert_eq!(
+            new_query(RelationKind::Table, Engine::Mongodb),
+            "New query on collection"
         );
         assert_eq!(table[0].keys, Some(EXPLORER_OPEN_KEYS.into()));
         assert!(table[1..].iter().all(|e| e.keys.is_none() && e.enabled));

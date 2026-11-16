@@ -2239,10 +2239,13 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
                 keys: keys_for(&OpenSelected, cx),
                 ..entry("tree-menu-open", "Open data")
             },
-            new_query(if *kind == RelationKind::Table {
-                "New query on table"
-            } else {
-                "New query on view"
+            new_query(match kind {
+                RelationKind::Table if mongo => "New query on collection",
+                RelationKind::Table => "New query on table",
+                RelationKind::View => "New query on view",
+                RelationKind::MaterializedView => "New query on materialized view",
+                RelationKind::ForeignTable => "New query on foreign table",
+                RelationKind::Other | _ => "New query on relation",
             }),
             copy_name,
         ]
