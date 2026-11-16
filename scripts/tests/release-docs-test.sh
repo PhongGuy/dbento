@@ -40,6 +40,12 @@ test_readme_screenshots_exist() {
   grep -qF 'assets/screenshots/hero.png' "$README" || fail "README has no hero screenshot"
 }
 
+# The title carries the app icon from its SVG source, so the README never shows a stale export.
+test_readme_title_shows_the_icon() {
+  head -n 1 "$README" | grep -qF '<img src="assets/icon/dbento.svg"' || fail "README title does not show assets/icon/dbento.svg"
+  [[ -f $ROOT/assets/icon/dbento.svg ]] || fail "assets/icon/dbento.svg does not exist"
+}
+
 test_readme_covers_first_launch_on_each_platform() {
   need "$README" 'sha256sum -c --ignore-missing SHA256SUMS'
   need "$README" '/Applications'
