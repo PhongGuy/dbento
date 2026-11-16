@@ -1,6 +1,6 @@
 use dbento_app::bench_driver::{
     BenchConfig, BenchMode, BenchReport, CancelDriver, CancelStep, Driver, Step, WARM_FRAMES,
-    Warmup, end_label,
+    Warmup, bench_connection, end_label,
 };
 use dbento_app::runner::{StatementEnd, StopReason};
 use std::time::{Duration, Instant};
@@ -252,4 +252,26 @@ fn a_log_line_names_the_level_and_target() {
         log_line(log::Level::Error, "gpui::platform", "broken pipe"),
         "dbento-app bench: ERROR gpui::platform: broken pipe"
     );
+}
+
+#[test]
+fn a_bench_names_a_declared_or_child_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let pg =
+        "engine = \"postgres\"\nhost = \"127.0.0.1\"\nport = 9\ndatabase = \"x\"\nuser = \"x\"\n";
+    let toml = format!(
+        "dbento = 1\n[connections.pg]\n{pg}databases = [\"app\"]\n[connections.srv]\n{pg}databases = \"all\"\n"
+    );
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    assert_eq!(bench_connection(&ws, "pg").as_deref(), Ok("pg"));
+    assert_eq!(bench_connection(&ws, "pg/app").as_deref(), Ok("pg/app"));
+    assert_eq!(
+        bench_connection(&ws, "srv/stress").as_deref(),
+        Ok("srv/stress")
+    );
+    let missing = bench_connection(&ws, "lite").unwrap_err();
+    assert!(missing.contains("target variable"), "{missing}");
+    let unlisted = bench_connection(&ws, "pg/other").unwrap_err();
+    assert!(unlisted.contains("databases"), "{unlisted}");
 }

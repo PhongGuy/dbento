@@ -15,7 +15,7 @@ use gpui_kit::{App, AppContext as _, Bounds, Entity, Window, WindowBounds, px, s
 use crate::app::{AppPaths, Services, window_options};
 use crate::bench_driver::{
     BenchConfig, BenchExit, BenchMode, BenchReport, CancelDriver, CancelStep, Driver, STDERR_LOG,
-    Step, WARM_FRAMES, Warmup, end_label,
+    Step, WARM_FRAMES, Warmup, bench_connection, end_label,
 };
 use crate::query_tab::QueryTab;
 use crate::results_pane::shown;
@@ -142,19 +142,12 @@ fn open(
     }));
     handle
         .update(cx, |_, window, cx| {
-            let ix = shell.read(cx).workspace().and_then(|ws| {
-                let name = &bench.borrow().config.connection;
-                ws.connections().iter().position(|c| c.name() == name)
-            });
-            match ix {
-                Some(ix) => shell.update(cx, |s, cx| s.open_connection(ix, window, cx)),
-                None => {
-                    return Err(format!(
-                        "no connection {:?}: is its target variable set?",
-                        bench.borrow().config.connection
-                    ));
-                }
-            }
+            let name = bench.borrow().config.connection.clone();
+            let conn = match shell.read(cx).workspace() {
+                Some(ws) => bench_connection(ws, &name)?,
+                None => return Err(format!("no workspace to open {name:?} in")),
+            };
+            shell.update(cx, |s, cx| s.open_connection_named(&conn, window, cx));
             let tab = tab(&shell, cx);
             let sql = bench.borrow().config.sql.clone();
             tab.update(cx, |t, cx| t.set_sql(&sql, window, cx));

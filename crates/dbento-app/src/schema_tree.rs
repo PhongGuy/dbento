@@ -2312,7 +2312,9 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             copy_name,
         ],
         RowKind::KeyFolder { .. } => vec![copy_name],
-        RowKind::LoadMore | RowKind::Database { .. } => Vec::new(),
+        // A child connection's session items come from the connection menu, ahead of these.
+        RowKind::Database { .. } => vec![copy_name],
+        RowKind::LoadMore => Vec::new(),
     }
 }
 
