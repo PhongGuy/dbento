@@ -174,7 +174,7 @@ fn an_empty_access_key_id_writes_no_secret_and_the_workspace_takes_it(cx: &mut T
     set(cx, win, &f, Field::Region, "eu-west-1");
     set(cx, win, &f, Field::AccessKeyId, "AKIDEXAMPLE");
     set(cx, win, &f, Field::Password, "typed-then-hidden");
-    radio(cx, win, "conn-secret", 2);
+    radio(cx, win, "conn-secret", 1);
     set(cx, win, &f, Field::AccessKeyId, "");
     let (name, spec) = edit(cx, &f).unwrap();
     assert_eq!(
@@ -209,6 +209,65 @@ fn clearing_a_loaded_access_key_id_drops_its_secret(cx: &mut TestAppContext) {
     let mut want = dy();
     want.access_key_id = None;
     assert_eq!(edit(cx, &f), Ok(("orders".into(), want)));
+}
+
+fn secret_option(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+    ix: usize,
+) -> Option<(Option<String>, Option<bool>)> {
+    cx.update_window(win, |_, w, cx| {
+        w.render_frame(cx);
+        w.within("conn-secret")
+            .try_find(ix)
+            .map(|o| (o.label().map(str::to_owned), o.selected()))
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn an_access_key_id_offers_only_the_keychain_and_an_environment_variable(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    radio(cx, win, "conn-engine", 8);
+    set(cx, win, &f, Field::AccessKeyId, "AKIDEXAMPLE");
+    assert_eq!(
+        secret_option(cx, win, 0).and_then(|o| o.0).as_deref(),
+        Some("Keychain")
+    );
+    assert_eq!(
+        secret_option(cx, win, 1).and_then(|o| o.0).as_deref(),
+        Some("Environment variable")
+    );
+    assert_eq!(secret_option(cx, win, 2), None);
+}
+
+#[gpui_kit::test]
+fn a_none_secret_carried_into_dynamodb_falls_back_to_the_keychain(cx: &mut TestAppContext) {
+    let (win, f) = open(cx, None);
+    radio(cx, win, "conn-engine", 0);
+    radio(cx, win, "conn-secret", 2);
+    radio(cx, win, "conn-engine", 8);
+    set(cx, win, &f, Field::Name, "orders");
+    set(cx, win, &f, Field::Region, "eu-west-1");
+    set(cx, win, &f, Field::AccessKeyId, "AKIDEXAMPLE");
+    assert_eq!(secret_option(cx, win, 0).and_then(|o| o.1), Some(true));
+    let (name, spec) = edit(cx, &f).unwrap();
+    assert_ne!(spec.secret, Some(SecretSource::None));
+    // What Save writes is a combination the workspace accepts.
+    let dir = tempfile::tempdir().unwrap();
+    Workspace::init(dir.path()).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let plan = plan_edit(
+        &ws,
+        &Edit::PutConnection {
+            previous: None,
+            name: name.clone(),
+            spec,
+        },
+    )
+    .unwrap();
+    let conn = plan.workspace().connection(&name).unwrap();
+    assert_eq!(conn.secret_source(), &SecretSource::Keychain);
 }
 
 #[test]
