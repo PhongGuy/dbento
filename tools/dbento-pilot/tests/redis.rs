@@ -51,7 +51,8 @@ fn first_row(tree: &Value) -> Option<usize> {
 /// row is sought downward first, then upward once a scroll stops moving the list.
 async fn seek(pilot: &Pilot, aria: &str) -> (Value, usize) {
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut sweep = 2;
+    let mut sweep: i32 = 2;
+    let mut per_notch = 0.0_f64;
     let mut last = None;
     loop {
         let tree = pilot.ok("tree", json!({})).await;
@@ -64,8 +65,20 @@ async fn seek(pilot: &Pilot, aria: &str) -> (Value, usize) {
         let notches = match row_named(&tree, aria) {
             None => {
                 let first = first_row(&tree);
-                if last.is_some() && first == last {
-                    sweep = -sweep;
+                // Each step moves at most 80% of the rows on screen, so no row slips past
+                // between two reads. The widest move per notch seen is kept, since a step
+                // cut short at either end of the list understates it.
+                if let (Some(was), Some(now)) = (last, first) {
+                    let moved = now.abs_diff(was);
+                    if moved == 0 {
+                        sweep = -sweep;
+                    } else {
+                        per_notch = per_notch.max(moved as f64 / f64::from(sweep.unsigned_abs()));
+                    }
+                }
+                if per_notch > 0.0 {
+                    let budget = rows(&tree).count() as f64 * 0.8;
+                    sweep = sweep.signum() * ((budget / per_notch) as i32).max(1);
                 }
                 last = first;
                 sweep
