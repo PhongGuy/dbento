@@ -65,16 +65,16 @@ pub(crate) const TOOLBAR_HEIGHT: Pixels = px(40.);
 /// hint, then the Run, All and read-only labels; at the last level the chips truncate.
 pub const TOOLBAR_LEVELS: usize = 4;
 
-/// The toolbar's collapse level after a frame at `level` whose row measured `row` wide in a
-/// toolbar `width` wide. `needed[l]` is the width level `l` overflowed at, so a level comes
-/// back only once the toolbar is at least that wide.
-pub fn toolbar_level(
+/// A staged collapse's level after a frame at `level` whose row measured `row` wide in a
+/// container `width` wide, out of `N` levels. `needed[l]` is the width level `l` overflowed
+/// at, so a level comes back only once the container is at least that wide.
+pub fn toolbar_level<const N: usize>(
     level: usize,
-    needed: &mut [Option<Pixels>; TOOLBAR_LEVELS],
+    needed: &mut [Option<Pixels>; N],
     row: Pixels,
     width: Pixels,
 ) -> usize {
-    if level < TOOLBAR_LEVELS && row > width + px(0.5) {
+    if level < N && row > width + px(0.5) {
         needed[level] = Some(row);
         return level + 1;
     }

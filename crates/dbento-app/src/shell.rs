@@ -2,6 +2,7 @@
 //! workspace's layout, with the status bar at the foot.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -18,6 +19,7 @@ use dbento_core::{
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
+use gpui_kit::base::ElementExt as _;
 use gpui_kit::base::{ObservedElement, ResizeHandleRenderer, ResizeHandleState};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -67,7 +69,7 @@ use crate::palette::{self, Mode, PaletteCommand, PaletteEvent, PaletteInit, Tabl
 use crate::persist::ChangeQueue;
 use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
-use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT};
+use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
@@ -380,6 +382,10 @@ pub struct Shell {
     tab_menu_target: Option<usize>,
     // The tab menu is open; tab tooltips are off while it is.
     tab_menu_open: bool,
+    // The start column's collapse, as the query toolbar's: level 1 drops the key chips and
+    // truncates the labels; `start_needed` is the width the full rows needed.
+    start_level: usize,
+    start_needed: [Option<Pixels>; 1],
     // The tab strip's sideways scroll, so the active tab can be brought into view.
     tab_scroll: ScrollHandle,
     // The root's focus, so window-wide actions reach the shell from any view.
@@ -540,6 +546,8 @@ impl Shell {
             activated_serial: 0,
             tab_menu_target: None,
             tab_menu_open: false,
+            start_level: 0,
+            start_needed: [None],
             tab_scroll: ScrollHandle::new(),
             focus,
             _os_appearance: os_appearance,
@@ -4504,10 +4512,40 @@ impl Shell {
         ];
         let theme = cx.theme();
         let (muted, hover, radius) = (theme.muted_foreground, theme.list_hover, theme.radius);
+        // Until collapsed, each row's content keeps its natural width so the widest one can be
+        // measured against the column; collapsed, it drops the chip and truncates its label.
+        let collapsed = self.start_level > 0;
+        let widest = Rc::new(Cell::new(px(0.)));
         let rows = actions
             .into_iter()
             .enumerate()
             .map(|(ix, (label, glyph, keys, act))| {
+                let widest = Rc::clone(&widest);
+                let name = div().id(("start-label", ix)).test_support().child(label);
+                let content = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .h_full()
+                    .px(px(8.))
+                    .child(ui::icon(glyph, px(14.), muted))
+                    .map(|d| {
+                        if collapsed {
+                            d.flex_1()
+                                .min_w_0()
+                                .child(name.flex_1().min_w_0().truncate())
+                        } else {
+                            d.flex_grow(1.)
+                                .flex_shrink_0()
+                                .child(name.flex_grow(1.))
+                                .children(keys.map(|k| {
+                                    ui::key_chip(chip_keys(&k), cx)
+                                        .id(("start-keys", ix))
+                                        .test_support()
+                                }))
+                        }
+                    })
+                    .on_prepaint(move |b, _, _| widest.set(widest.get().max(b.size.width)));
                 div()
                     .id(("start-action", ix))
                     .role(Role::Button)
@@ -4515,24 +4553,32 @@ impl Shell {
                     .aria_label(label)
                     .test_support()
                     .flex()
-                    .items_center()
-                    .gap(px(8.))
                     .w_full()
                     .h(px(32.))
-                    .px(px(8.))
+                    .overflow_hidden()
                     .rounded(radius)
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover))
-                    .child(ui::icon(glyph, px(14.), muted))
-                    .child(div().flex_1().child(label))
-                    .children(keys.map(|k| ui::key_chip(chip_keys(&k), cx)))
+                    .child(content)
                     .on_click(cx.listener(move |this, _, window, cx| act(this, window, cx)))
             });
+        let (level, shell) = (self.start_level, cx.entity().downgrade());
         column("No tab open", "start-title", cx)
             .id("start-card")
             .test_support()
             .child(ui::section_label("Start", cx).mt(px(4.)))
             .children(rows)
+            // The rows prepaint first, so the widest is known when the column's width is.
+            .on_prepaint(move |bounds, _, cx| {
+                let _ = shell.update(cx, |s, cx| {
+                    let next =
+                        toolbar_level(level, &mut s.start_needed, widest.get(), bounds.size.width);
+                    if next != s.start_level {
+                        s.start_level = next;
+                        cx.notify();
+                    }
+                });
+            })
     }
 
     // The welcome column: the open button, the recent workspaces and an error slot.
@@ -4673,15 +4719,17 @@ pub fn tab_line_strength(active: bool, production: bool) -> f32 {
     if active || production { 1. } else { 0.5 }
 }
 
-// The 360 px column shared by the start and welcome views: no box, so the tab area's fill
-// shows through, led by its SemiBold heading. Callers add the body.
+// The column shared by the start and welcome views, 360 px or its pane's width if narrower:
+// no box, so the tab area's fill shows through, led by its SemiBold heading. Callers add the body.
 fn column(title: &'static str, title_id: &'static str, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
         .flex_none()
         .gap(px(8.))
-        .w(px(360.))
+        .w_full()
+        .max_w(px(360.))
+        .min_w_0()
         .text_color(cx.theme().foreground)
         .child(
             div()

@@ -2,7 +2,9 @@ use crate::support;
 use crate::support::{opened, present, reload, rewrite};
 use dbento_app::query_tab::{TOOLBAR_LEVELS, toolbar_level};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, AppContext as _, Bounds, Pixels, TestAppContext, px, size};
+use gpui_kit::{
+    AnyWindowHandle, AppContext as _, Bounds, ElementId, Pixels, TestAppContext, px, size,
+};
 
 const T: &str = "CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);";
 // The query toolbar's items, left to right.
@@ -32,9 +34,10 @@ fn resize(cx: &mut TestAppContext, win: AnyWindowHandle, w: f32, h: f32) {
 fn bounds(
     cx: &mut TestAppContext,
     win: AnyWindowHandle,
-    id: &'static str,
+    id: impl Into<ElementId>,
 ) -> Option<Bounds<Pixels>> {
-    cx.update_window(win, |_, w, cx| {
+    let id = id.into();
+    cx.update_window(win, move |_, w, cx| {
         w.render_frame(cx);
         w.try_find(id).map(|e| e.bounds())
     })
@@ -82,7 +85,7 @@ fn the_query_toolbar_keeps_its_items_apart_in_a_narrow_window(cx: &mut TestAppCo
         assert!(bar.right() <= tabs.right() + px(0.5), "{bar:?} in {tabs:?}");
         let shown: Vec<_> = TOOLBAR
             .iter()
-            .filter_map(|id| bounds(cx, o.win, id).map(|b| (*id, b)))
+            .filter_map(|id| bounds(cx, o.win, *id).map(|b| (*id, b)))
             .filter(|(_, b)| b.size.width > px(0.5))
             .collect();
         for pair in shown.windows(2) {
@@ -187,4 +190,50 @@ fn the_usable_size_leaves_out_the_shadow_on_each_untiled_side() {
         viewport
     );
     assert_eq!(usable_size(viewport, floating, None), viewport);
+}
+
+// Whether `inner` lies within `outer`'s left and right edges, allowing for rounding.
+fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
+    inner.left() >= outer.left() - px(0.5) && inner.right() <= outer.right() + px(0.5)
+}
+
+#[gpui_kit::test]
+fn the_start_panel_fits_the_tab_area_and_drops_its_chips_only_when_they_do_not_fit(
+    cx: &mut TestAppContext,
+) {
+    let o = opened(cx, "", "", 0);
+    cx.update_window(o.win, |_, w, cx| w.press("ctrl-w", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(present(cx, o.win, "start-card"));
+    let (min_w, min_h) = dbento_app::app::MIN_WINDOW;
+    for (w, h) in [(1600., 900.), (640., 480.), (min_w, min_h)] {
+        resize(cx, o.win, w, h);
+        let (card, tabs) = (
+            bounds(cx, o.win, "start-card").unwrap(),
+            bounds(cx, o.win, "tab-area").unwrap(),
+        );
+        assert!(within(card, tabs), "at {w}x{h} {card:?} in {tabs:?}");
+        let title = bounds(cx, o.win, "start-title").unwrap();
+        assert!(within(title, card), "at {w}x{h} the title {title:?}");
+        for ix in 0..4usize {
+            let row = bounds(cx, o.win, ("start-action", ix)).unwrap();
+            assert!(within(row, card), "at {w}x{h} row {ix} {row:?}");
+            let label = bounds(cx, o.win, ("start-label", ix)).unwrap();
+            assert!(within(label, row), "at {w}x{h} label {ix} {label:?}");
+            match bounds(cx, o.win, ("start-keys", ix)) {
+                Some(keys) => {
+                    assert!(within(keys, row), "at {w}x{h} keys {ix} {keys:?}");
+                    assert!(keys.left() >= label.right(), "at {w}x{h} keys {ix} overlap");
+                }
+                // A wide pane keeps every chip; only a narrow one drops them.
+                None => assert!(w < 1600., "at {w}x{h} keys {ix} dropped"),
+            }
+        }
+    }
+    // The smallest window has no room for the longest row with its chip.
+    assert!(bounds(cx, o.win, ("start-keys", 2usize)).is_none());
+    // Widening the window brings the chips back.
+    resize(cx, o.win, 1600., 900.);
+    assert!(bounds(cx, o.win, ("start-keys", 2usize)).is_some());
 }
