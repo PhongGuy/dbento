@@ -72,15 +72,36 @@ test_sections_come_in_the_shared_order() {
   if grep -q '^# ' <<<"$out"; then fail "the notes carry a title heading"; fi
 }
 
-# Before you install tells users how to check a download against the build attestation.
-test_before_you_install_shows_the_attestation_check() {
-  local d=$WORK/attest out section
+# Downloads links every file to this release and tells users how to check one against the
+# build attestation, in the layout the sibling apps' releases share.
+test_downloads_link_every_file_and_show_the_attestation_check() {
+  local d=$WORK/attest out section row
+  new_repo "$d" 'feat: first'
+  tag "$d" v0.1.0
+  out=$(notes "$d" v0.1.0 "$GENERATED") || { fail "script failed"; return 0; }
+  section=$(awk '/^## Downloads$/ { on = 1; next } /^## / { on = 0 } on' <<<"$out")
+  grep -qF '`gh attestation verify <file> --repo PhongGuy/dbento`' <<<"$section" \
+    || fail "Downloads lacks the gh attestation verify line"
+  while IFS= read -r row; do
+    grep -qE '\[[^]]+\]\(https://github\.com/PhongGuy/dbento/releases/download/v0\.1\.0/[^)]+\)' <<<"$row" \
+      || fail "an unlinked download row: $row"
+  done < <(grep -E '^\| (Linux|macOS|Windows)' <<<"$section")
+  [[ $(grep -cE '^\| (Linux|macOS|Windows)' <<<"$section") == 10 ]] || fail "want ten download rows"
+}
+
+# Before you install gives one bolded bullet per platform and nothing else.
+test_before_you_install_has_one_bullet_per_platform() {
+  local d=$WORK/platforms out section
   new_repo "$d" 'feat: first'
   tag "$d" v0.1.0
   out=$(notes "$d" v0.1.0 "$GENERATED") || { fail "script failed"; return 0; }
   section=$(awk '/^## Before you install$/ { on = 1; next } /^## / { on = 0 } on' <<<"$out")
-  grep -qF '`gh attestation verify <file> --repo PhongGuy/dbento`' <<<"$section" \
-    || fail "Before you install lacks the gh attestation verify line"
+  if grep -vE '^(- \*\*[^*]+:\*\* .+)?$' <<<"$section" | grep -q .; then
+    fail "Before you install has a line that is not a bolded platform bullet"
+  fi
+  for p in 'macOS' 'Windows' 'Linux AppImage' 'Linux .deb'; do
+    grep -qF -- "- **$p:**" <<<"$section" || fail "Before you install has no $p bullet"
+  done
 }
 
 test_whats_changed_is_the_generated_content() {
