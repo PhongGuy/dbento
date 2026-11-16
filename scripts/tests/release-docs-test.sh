@@ -40,10 +40,10 @@ test_readme_screenshots_exist() {
   grep -qF 'assets/screenshots/hero.png' "$README" || fail "README has no hero screenshot"
 }
 
-# The title carries the app icon from its SVG source, so the README never shows a stale export.
+# The title carries the small-size SVG icon, as the sibling apps' READMEs do.
 test_readme_title_shows_the_icon() {
-  head -n 1 "$README" | grep -qF '<img src="assets/icon/dbento.svg"' || fail "README title does not show assets/icon/dbento.svg"
-  [[ -f $ROOT/assets/icon/dbento.svg ]] || fail "assets/icon/dbento.svg does not exist"
+  head -n 1 "$README" | grep -qF '<img src="assets/icon/dbento-32.svg"' || fail "README title does not show assets/icon/dbento-32.svg"
+  [[ -f $ROOT/assets/icon/dbento-32.svg ]] || fail "assets/icon/dbento-32.svg does not exist"
 }
 
 test_readme_covers_first_launch_on_each_platform() {
