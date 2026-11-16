@@ -873,10 +873,11 @@ impl ConnectionForm {
                 FieldKind::Secret if self.secret_waits(cx) => spec.secret = None,
                 FieldKind::Secret => {
                     let env = text(Field::EnvVar);
-                    if self.secret != shown.secret
-                        || (self.secret == SecretChoice::Env && env != shown.env_var.trim())
+                    let secret = self.secret_choice();
+                    if secret != shown.secret
+                        || (secret == SecretChoice::Env && env != shown.env_var.trim())
                     {
-                        spec.secret = Some(match self.secret {
+                        spec.secret = Some(match secret {
                             SecretChoice::Keychain => SecretSource::Keychain,
                             SecretChoice::None => SecretSource::None,
                             SecretChoice::Env if env.is_empty() => {
@@ -1310,6 +1311,16 @@ impl ConnectionForm {
         self.engine == Engine::Dynamodb && self.access_key_id.read(cx).value().trim().is_empty()
     }
 
+    // The source in effect: an access key ID needs its secret somewhere, so a None carried into
+    // a DynamoDB form reads as the keychain, the dialog's default.
+    fn secret_choice(&self) -> SecretChoice {
+        if self.engine == Engine::Dynamodb && self.secret == SecretChoice::None {
+            SecretChoice::Keychain
+        } else {
+            self.secret
+        }
+    }
+
     // The Password row and the rows that say where the secret comes from.
     fn secret_rows(
         &self,
@@ -1325,10 +1336,16 @@ impl ConnectionForm {
             )];
         }
         let mut rows = vec![self.text_row(label, "conn-password", Field::Password, cx)];
+        let choice = self.secret_choice();
+        let options: &[&str] = if self.engine == Engine::Dynamodb {
+            &["Keychain", "Environment variable"]
+        } else {
+            &["Keychain", "Environment variable", "None"]
+        };
         let secret = ui::segmented(
             "conn-secret",
-            &["Keychain", "Environment variable", "None"],
-            self.secret as usize,
+            options,
+            choice as usize,
             cx.listener(|this, ix: &usize, _, cx| {
                 this.secret = [
                     SecretChoice::Keychain,
@@ -1341,14 +1358,14 @@ impl ConnectionForm {
             cx,
         );
         rows.push(Self::row("Secret", h_flex().child(secret), cx));
-        if self.secret == SecretChoice::Env {
+        if choice == SecretChoice::Env {
             rows.push(self.text_row("Variable", "conn-env", Field::EnvVar, cx));
             rows.extend(self.error_line(Some(ErrorAt::Field(Field::EnvVar)), cx));
         }
-        if self.secrets_in_memory && self.secret == SecretChoice::Keychain {
+        if self.secrets_in_memory && choice == SecretChoice::Keychain {
             rows.push(self.keychain_note(cx));
         }
-        if self.secret == SecretChoice::Keychain {
+        if choice == SecretChoice::Keychain {
             rows.extend(self.env_note(cx));
         }
         rows
