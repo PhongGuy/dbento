@@ -29,8 +29,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Action as _, AnyView, App, AppContext as _, BackgroundExecutor, ClickEvent, Context,
-    DismissEvent, Div, ElementId, Entity, EntityId, FocusHandle, Focusable as _, FontWeight,
-    InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton, ParentElement,
+    Decorations, DismissEvent, Div, ElementId, Entity, EntityId, FocusHandle, Focusable as _,
+    FontWeight, InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton, ParentElement,
     PathPromptOptions, Pixels, Render, Role, ScrollHandle, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     div, img, px, transparent_black,
@@ -87,8 +87,9 @@ const TEST_DATABASE_POSTGRES: &str = crate::connection_dialog::POSTGRES_DATABASE
 /// How long a passed Test waits for the server's database list before offering none.
 const TEST_DATABASES_CAP: Duration = Duration::from_secs(5);
 
-// The narrowest the tab area gets before the side panels give way, and their own minimum.
-const MIN_TAB_AREA: Pixels = px(160.);
+// The narrowest the tab area gets before the side panels give way, wide enough for the
+// query toolbar's connection, production chip and Run; and the side panels' own minimum.
+const MIN_TAB_AREA: Pixels = px(240.);
 const PANEL_MIN: Pixels = px(100.);
 // The right dock's opening width; a definition gets more, since statements run long.
 const DOCK_WIDTH: Pixels = px(320.);
@@ -4705,6 +4706,19 @@ pub fn new_tab_connection<T>(tab: Option<T>, selected: Option<T>, moved: bool) -
     }
 }
 
+// The window's content width. A client-decorated window's viewport also holds the shadow the
+// kit pads each untiled side with, which no panel can use.
+fn content_width(window: &Window) -> Pixels {
+    let width = window.viewport_size().width;
+    let (Decorations::Client { tiling }, Some(inset)) =
+        (window.window_decorations(), window.client_inset())
+    else {
+        return width;
+    };
+    let shadowed = [tiling.left, tiling.right].iter().filter(|t| !**t).count();
+    width - inset * shadowed as f32
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The side panels share what the tab area leaves at its minimum, so a narrow window
@@ -4716,7 +4730,7 @@ impl Render for Shell {
         let inspector = self.inspector_open && !expanded;
         let docked = self.history_open || inspector || self.approvals_open || self.definition_open;
         let sides = if docked { 2. } else { 1. };
-        let split_width = window.viewport_size().width - RAIL_WIDTH - GUTTER;
+        let split_width = content_width(window) - RAIL_WIDTH - GUTTER;
         let side_max = ((split_width - MIN_TAB_AREA) / sides).max(PANEL_MIN);
         // The gutters are padding inside the resizable panels, every gap on the tab area's
         // side, so the sidebar box is its panel's saved width and each resize handle stays on
@@ -4754,11 +4768,12 @@ impl Render for Shell {
                 .size(dock_width + GUTTER)
                 .size_range(PANEL_MIN..side_max)
                 .flex_shrink_0()
+                .fixed()
                 .child(gutter(px(0.), GUTTER).child(panel))
         });
         let content = match &self.sidebar {
-            // The side panels never shrink, so a panel added or removed resizes only the tab
-            // area; a drag still moves them, since it sets their size.
+            // The side panels are fixed, so a panel added or removed, or the window resized,
+            // resizes only the tab area; a drag still moves them, since it sets their size.
             Some(sidebar) => h_resizable("shell-split")
                 .with_handle_appearance(gap_handle())
                 .with_state(&self.split)
@@ -4767,6 +4782,7 @@ impl Render for Shell {
                         .size(px(self.sidebar_width.unwrap_or(260.)))
                         .size_range(PANEL_MIN..side_max)
                         .flex_shrink_0()
+                        .fixed()
                         .child(
                             gutter(px(0.), px(0.)).child(
                                 panel_box(cx)
