@@ -31,17 +31,17 @@ DuckDB, MongoDB, SurrealDB, Redis and DynamoDB are default Cargo features (`duck
 
 ### A result grid that keeps up
 
-Results stream in as the database sends them, into a virtualized grid that fetches the next batch as you scroll. A row limit (1k, 10k, 100k or 1M rows, or none, with only a memory budget) stops collecting and marks the result truncated. Dbento never rewrites your SQL to add a `LIMIT`, and a type it does not know is shown, never turned into NULL. Copy cells as TSV, CSV, JSON, Markdown or `INSERT` statements, export loaded rows to CSV or JSON, and step through one row in the record view.
+Results stream in as the database sends them, into a virtualized grid that fetches the next batch as you scroll. A row limit (1k, 10k, 100k or 1M rows, or none, with only a memory budget) stops collecting and marks the result truncated. Dbento never rewrites your SQL to add a `LIMIT`, and a type it does not know is shown, never turned into NULL. Copy cells as TSV, CSV, JSON, Markdown or `INSERT` statements, export loaded rows to CSV, TSV or JSON, and step through one row in the record view.
 
 ### An editor that knows your schema
 
-SQL highlighting, formatting, and completion of schemas, tables, columns and keywords from the connection's live catalog. Queries open in tabs, saved queries are plain `.sql` files, every run lands in a searchable history, and the command palette (Ctrl+P, Cmd+P on macOS) finds tables, saved queries and commands. A running query can be cancelled.
+SQL highlighting, formatting, and completion of schemas, tables, columns and keywords from the connection's live catalog. Queries open in tabs, saved queries are plain `.sql` files, every run lands in a searchable history, and the command palette (Ctrl+P, Cmd+P on macOS) finds tables, saved queries and commands. Ctrl+/ (Cmd+/) toggles line comments, a tab with unsaved changes is marked and asks before it closes, and a running query can be cancelled.
 
 ![Completion in a WHERE clause offering the columns of orders, the customers table and SQL keywords](assets/screenshots/completion.png)
 
 ### An explorer down to the indexes
 
-The schema tree shows tables, views, materialized views and foreign tables, and under each one its columns, keys, indexes, checks and triggers, plus types and routines on Postgres. Open any object to read its definition, copy it, or open it in a query tab.
+The schema tree shows tables, views, materialized views and foreign tables, and under each one its columns, keys, indexes, checks and triggers, plus types and routines on Postgres and SQL Server and routines on MySQL. Open an object to read its definition, where the engine gives one, copy it, or open it in a query tab.
 
 ![The orders table expanded in the explorer, with its index's CREATE INDEX statement in the definition dock](assets/screenshots/explorer.png)
 
@@ -83,13 +83,14 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 - On SurrealDB each statement runs in a transaction that is cancelled, and a VIEWER login is enforced by the server. At either level, stored logic reached from a `SELECT` can still advance sequences, call `http::*` functions or write files, and a root OWNER or anonymous login can run `ALTER SYSTEM`.
 - On Redis and Valkey, Dbento checks the user's ACL against the server's command table when it connects. A user whose ACL refuses every write is enforced by the server; otherwise Dbento refuses writes and commands it cannot classify. The check runs once, so a later `ACL SETUSER` can widen the user.
 - DynamoDB has no read-only session. A read-only connection sends only `ListTables`, `DescribeTable`, `Scan` and PartiQL `SELECT`, but only IAM stops someone with the same keys from writing, so give a production connection keys that can only read.
-- A connection tagged red is marked as production in the tab line and the status bar.
-- `UPDATE` or `DELETE` without `WHERE`, `DROP`, `TRUNCATE`, `updateMany` or `deleteMany` with an empty filter, and `FLUSHDB` or `FLUSHALL` ask before they run.
-- Write detection follows each engine: `pg_query` for Postgres and DuckDB, so a write hidden in a CTE is still caught; SQLite's own read-only check; sqlparser for MySQL and SQL Server; an allowlist of read methods for MongoDB; and the server's command table for Redis. Outside a read-only session, a statement the parser cannot handle is never blocked for that reason alone.
+- A connection tagged red, or in a red folder, is marked as production in its query tab's toolbar and the status bar.
+- `UPDATE` or `DELETE` without `WHERE`, `DROP` (and MongoDB's `drop` or SurrealDB's `REMOVE`), `TRUNCATE`, `updateMany` or `deleteMany` with an empty filter, and `FLUSHDB` or `FLUSHALL` ask before they run. DynamoDB statements never ask.
+- Write detection follows each engine: `pg_query` for Postgres and DuckDB, so a write hidden in a CTE is still caught; SQLite's own read-only check; sqlparser for MySQL and SQL Server; an allowlist of read methods for MongoDB; the server's command table for Redis; a keyword scan for SurrealDB; and the first keyword of a PartiQL statement for DynamoDB. Outside a read-only session, a statement the parser cannot handle is never blocked for that reason alone.
 
 ### Also
 
 - Light and dark themes, or follow the system.
+- Shortcuts can be rebound in a `keymap.json`, which Settings (Ctrl+,) opens and reloads.
 - `dbento import datagrip`, `dbento import dbeaver` and `dbento import beekeeper` bring over connections and saved queries from DataGrip, DBeaver and Beekeeper Studio, and saved passwords go to the keychain.
 - Try it without a database server: `make demo` (see [Try the demo](#try-the-demo)).
 
@@ -165,7 +166,7 @@ auth_level = "database"
 - **SurrealDB** takes `host`, `port` (8000), `namespace`, `database`, and with a `user` an `auth_level` of `root`, `namespace` or `database`. Without a user the session is anonymous.
 - **SQL Server** can take a `read_only_user`, a user that can only read, for its read-only work (see [Safety the database enforces](#safety-the-database-enforces)).
 
-A Postgres or SQL Server connection can also reach the other databases on its server. Set `databases` to a list of names, such as `databases = ["billing", "audit"]`, or to `"all"`, and each database becomes a child connection named `<parent>/<database>`, for example `app-dev/billing`. A child uses its parent's credentials and safety settings, and works anywhere a connection name does: `dbento query`, `dbento run`, `dbento connections`, and the MCP server, where `list_databases` lists a parent's databases.
+A Postgres or SQL Server connection can also reach the other databases on its server. Set `databases` to a list of names, such as `databases = ["billing", "audit"]`, or to `"all"`, and each database becomes a child connection named `<parent>/<database>`, for example `app-dev/billing`. A child uses its parent's credentials and safety settings, and works anywhere a connection name does: the app's explorer, `dbento query`, `dbento run`, `dbento connections`, and the MCP server, where `list_databases` lists a parent's databases. In the app, the connection dialog's Databases field sets the same list.
 
 ### Secrets stay out of files
 
@@ -181,9 +182,9 @@ No password is ever written to `dbento.toml`. A server connection's secret is st
 | macOS Intel | [Dbento_x86_64.dmg](https://github.com/PhongGuy/dbento/releases/latest/download/Dbento_x86_64.dmg) | [tar.gz](https://github.com/PhongGuy/dbento/releases/latest/download/dbento-x86_64-apple-darwin.tar.gz) |
 | Windows x64 | [Installer (.exe)](https://github.com/PhongGuy/dbento/releases/latest/download/dbento-app_x64-setup.exe) | [zip](https://github.com/PhongGuy/dbento/releases/latest/download/dbento-x86_64-pc-windows-msvc.zip) |
 
-No release has been published yet, so these links start working with the first one. Until then, [build from source](#build-from-source). The macOS and Windows packages have not yet been tested on those systems.
+The links point to the latest release; to build it yourself, see [Build from source](#build-from-source). The macOS and Windows packages have not yet been tested on those systems.
 
-Releases will be listed on the [releases page](https://github.com/PhongGuy/dbento/releases), with checksums. See [Install notes](#install-notes) for the first launch on macOS and Windows.
+Releases are listed on the [releases page](https://github.com/PhongGuy/dbento/releases), with checksums. See [Install notes](#install-notes) for the first launch on macOS and Windows.
 
 ### Install notes
 
@@ -212,6 +213,8 @@ xattr -dr com.apple.quarantine /Applications/Dbento.app
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS
 ```
+
+Every file, `SHA256SUMS` included, also carries a build attestation, which `gh attestation verify <file> --repo PhongGuy/dbento` checks.
 
 ## Build from source
 
@@ -281,6 +284,8 @@ Open the app on a workspace by passing its folder:
 dbento-app ~/my-databases
 ```
 
+The workspace name in the title bar opens a menu of recent workspaces, Open workspace and Close workspace (Ctrl+K Ctrl+O and Ctrl+K F), so you can switch without restarting the app.
+
 ### Connect an AI client
 
 Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take a JSON entry like this one:
@@ -304,7 +309,7 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 
 | Target | What it does |
 | --- | --- |
-| `make check` | The merge gate: `cargo fmt --check`, clippy with warnings as errors, and the full test suite. |
+| `make check` | The merge gate: a RustSec advisory scan with `cargo deny`, `cargo fmt --check`, clippy with warnings as errors, and the full test suite. |
 | `make pilot-check` | Builds and runs the gpui-pilot tests in `tools/dbento-pilot`, which drive the real app, except the two wheel-scroll timing recordings. |
 | `make pilot-timing` | The wheel-scroll timing recordings alone. They wait for a quiet machine and refuse to measure a loaded one; a pass stamps the committed tree it ran on. |
 | `make timing-guard` | Fails when the grid, its scrolling or rendering, the wheel test or the gpui pins changed since `BASE` (default `origin/master`) and the current tree has no `pilot-timing` stamp. |
@@ -319,7 +324,7 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 `make pilot-check` and `make screenshots` need the `gpui-pilot` server on your `PATH`, or `GPUI_PILOT_BIN` naming it. Install it with:
 
 ```sh
-cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.3.2 gpui-pilot
+cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.4.1 gpui-pilot
 ```
 
 A change to the results grid, its scrolling or rendering merges only once `make timing-guard` passes: run `make pilot-timing` on a quiet machine on the commit you merge. The paths it watches are listed in `scripts/timing-guard.sh`.
