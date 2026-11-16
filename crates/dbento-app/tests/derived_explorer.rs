@@ -1,6 +1,6 @@
-//! The explorer's databases level: listing, invalid rows, child sessions and reloads.
+//! The explorer's databases level: listing, invalid rows, child sessions, menus and reloads.
 use crate::derived_tabs::{tab_conns, with_shell};
-use crate::support::{Started, label_of, present, reload, started, wait_real};
+use crate::support::{Started, label_of, present, reload, right_click, started, wait_real};
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::explorer::part_id;
 use dbento_app::schema_tree::NodeKey;
@@ -265,4 +265,77 @@ fn an_expanded_connection_that_becomes_a_parent_lists_its_databases(cx: &mut Tes
     std::fs::write(s.dir.path().join("dbento.toml"), &plain).unwrap();
     reload(cx, s.win);
     wait_srv(cx, s.win, &["srv:error"]);
+}
+
+/// The declared-connection items that edit dbento.toml, which a child is not written in.
+const DECLARED_ONLY: [&str; 4] = ["menu-edit", "menu-duplicate", "menu-rename", "menu-delete"];
+
+#[gpui_kit::test]
+fn a_child_row_menu_offers_the_session_items_and_copy_name(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    click(cx, s.win, part_id("connection-toggle", "listed"));
+    wait_real(cx, "the list", |cx| {
+        tree(cx, s.win) == ["listed/app", "listed/booking"]
+    });
+    right_click(cx, &s, ("tree-row", 1usize));
+    for id in [
+        "menu-new-query",
+        "menu-refresh-schema",
+        "menu-disconnect",
+        "tree-menu-copy-name",
+    ] {
+        assert!(present(cx, s.win, id), "{id}");
+    }
+    for id in DECLARED_ONLY {
+        assert!(!present(cx, s.win, id), "{id}");
+    }
+    click(cx, s.win, "tree-menu-copy-name");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some("booking")
+    );
+    right_click(cx, &s, ("tree-row", 1usize));
+    click(cx, s.win, "menu-new-query");
+    assert_eq!(tab_conns(cx, &s), ["listed/booking"]);
+}
+
+#[gpui_kit::test]
+fn a_child_row_menu_refreshes_and_disconnects_the_child(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    listed_srv(cx, &s, &["app"]);
+    click(cx, s.win, ("tree-toggle", 0usize));
+    wait_srv(cx, s.win, &["srv/app", "srv/app:error"]);
+    let sidebar = s.sidebar(cx);
+    let schemas = CatalogQuery::Schemas;
+    answer(
+        cx,
+        &s,
+        "srv/app",
+        schemas,
+        CatalogData::Schemas(vec![SchemaInfo::new("public")]),
+    );
+    let cached = |cx: &mut TestAppContext| {
+        sidebar.read_with(cx, |sb, _| sb.tree().schemas("srv/app").is_some())
+    };
+    assert!(cached(cx));
+    right_click(cx, &s, ("tree-row", 0usize));
+    click(cx, s.win, "menu-refresh-schema");
+    assert!(!cached(cx), "refresh drops the child's cached schemas");
+    let open = |cx: &mut TestAppContext| sidebar.read_with(cx, |sb, _| sb.catalog_sessions());
+    assert_eq!(open(cx), 2, "srv and srv/app");
+    right_click(cx, &s, ("tree-row", 0usize));
+    click(cx, s.win, "menu-disconnect");
+    wait_real(cx, "the child's session closed", |cx| open(cx) == 1);
+}
+
+#[gpui_kit::test]
+fn an_invalid_database_row_only_copies_its_name(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    listed_srv(cx, &s, &["my.db"]);
+    wait_srv(cx, s.win, &["srv/my.db:invalid"]);
+    right_click(cx, &s, ("tree-row", 0usize));
+    assert!(present(cx, s.win, "tree-menu-copy-name"));
+    for id in ["menu-new-query", "menu-refresh-schema", "menu-disconnect"] {
+        assert!(!present(cx, s.win, id), "{id}");
+    }
 }

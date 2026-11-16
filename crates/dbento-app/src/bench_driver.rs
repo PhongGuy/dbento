@@ -286,3 +286,14 @@ pub fn end_label(end: &StatementEnd) -> String {
         }
     }
 }
+
+/// The connection a bench config names, declared or `parent/database`, or why it cannot run.
+pub fn bench_connection(ws: &dbento_core::Workspace, name: &str) -> Result<String, String> {
+    match ws.resolve(name) {
+        Ok(conn) => Ok(conn.name().to_owned()),
+        Err(dbento_core::ResolveError::NotFound { .. }) => Err(format!(
+            "no connection {name:?}: is its target variable set?"
+        )),
+        Err(e) => Err(e.to_string()),
+    }
+}

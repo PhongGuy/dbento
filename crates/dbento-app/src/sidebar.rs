@@ -2467,15 +2467,30 @@ fn explorer_menu(menu: PopupMenu, weak: &WeakEntity<Sidebar>, cx: &mut App) -> P
             let _ = weak.update(cx, |_, cx| cx.emit(event.clone()));
         }
     };
-    if let Some(ExplorerTarget::Catalog(t)) = target {
-        let Some(conn) = ws.connection(&t.connection) else {
-            return menu;
-        };
-        return catalog_menu(menu, *t, &conn, weak, cx);
-    }
     // Every row leads with its glyph; only New connection and Reload carry a key chip.
     let label =
         |id: &'static str, text: &'static str| ui::menu_item(id, menu_icon(id), text, None, cx);
+    if let Some(ExplorerTarget::Catalog(t)) = target {
+        // A database row is a child connection: it leads with the connection menu's session
+        // items. One whose name cannot be a connection quotes as its parent, to copy its name.
+        let database = matches!(t.kind, RowKind::Database { .. });
+        let parent = || {
+            t.connection
+                .split_once('/')
+                .and_then(|(p, _)| ws.connection(p))
+        };
+        let Some(conn) = (ws.connection(&t.connection)).or_else(|| parent().filter(|_| database))
+        else {
+            return menu;
+        };
+        let child = t.kind == (RowKind::Database { invalid: None });
+        let menu = if child {
+            session_items(menu, &t.connection, weak, label).separator()
+        } else {
+            menu
+        };
+        return catalog_menu(menu, *t, &conn, weak, cx);
+    }
     let new_connection = ui::menu_item(
         "menu-new-connection",
         menu_icon("menu-new-connection"),
@@ -2492,23 +2507,7 @@ fn explorer_menu(menu: PopupMenu, weak: &WeakEntity<Sidebar>, cx: &mut App) -> P
         };
         let item = WorkspaceItem::Connection(name.clone());
         let parent = conn.folder().cloned();
-        let new_query = SidebarEvent::NewQuery {
-            connection: name.clone(),
-            sql: String::new(),
-        };
-        let refresh = name.clone();
-        return menu
-            .item(label("menu-new-query", "New query").on_click(emit(new_query)))
-            .item(
-                label("menu-refresh-schema", "Refresh schema")
-                    .on_click(on_sidebar(weak, move |s, cx| {
-                        s.refresh_connection(&refresh, cx)
-                    })),
-            )
-            .item(
-                label("menu-disconnect", "Disconnect")
-                    .on_click(emit(SidebarEvent::Disconnect(name.clone()))),
-            )
+        return session_items(menu, &name, weak, label)
             .separator()
             .item(
                 label("menu-edit", "Edit connection")
@@ -2566,6 +2565,38 @@ fn explorer_menu(menu: PopupMenu, weak: &WeakEntity<Sidebar>, cx: &mut App) -> P
                 .on_click(emit(SidebarEvent::Reload)),
             ),
     }
+}
+
+// The session items a connection's menu leads with, a declared or a child connection's:
+// New query, Refresh schema and Disconnect on `name`.
+fn session_items(
+    menu: PopupMenu,
+    name: &str,
+    weak: &WeakEntity<Sidebar>,
+    label: impl Fn(&'static str, &'static str) -> PopupMenuItem,
+) -> PopupMenu {
+    let emit = |event: SidebarEvent| {
+        let weak = weak.clone();
+        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |_, cx| cx.emit(event.clone()));
+        }
+    };
+    let new_query = SidebarEvent::NewQuery {
+        connection: name.to_owned(),
+        sql: String::new(),
+    };
+    let refresh = name.to_owned();
+    menu.item(label("menu-new-query", "New query").on_click(emit(new_query)))
+        .item(
+            label("menu-refresh-schema", "Refresh schema")
+                .on_click(on_sidebar(weak, move |s, cx| {
+                    s.refresh_connection(&refresh, cx)
+                })),
+        )
+        .item(
+            label("menu-disconnect", "Disconnect")
+                .on_click(emit(SidebarEvent::Disconnect(name.to_owned()))),
+        )
 }
 
 /// What a right-click landed on: a workspace row, or a catalog row with what its menu needs.
