@@ -147,11 +147,11 @@ jobs:
         run: |
           ls /usr/share/vulkan/icd.d/
           test -n "$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | head -n 1)"
-      # v0.4.1, the server the local gate runs, pinned to its commit; rust-cache keeps ~/.cargo/bin.
+      # gpui-pilot v0.6.0 (gpui-kit 0.10.0), pinned to the tag's commit; rust-cache keeps ~/.cargo/bin.
       - name: Install gpui-pilot
         run: >-
           cargo install --locked gpui-pilot
           --git https://github.com/PhongGuy/gpui-pilot
-          --rev 3e99ae462edbc4910261879dc28e6af7eaf87515
+          --rev 4d49fa71cf89a5bc61db27721aa45f60f7b86f59
       - name: Pilot scenarios
         run: make LOCKED=--locked PILOT_SKIP="$PILOT_SKIP" pilot-check
