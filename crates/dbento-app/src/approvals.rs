@@ -25,6 +25,11 @@ use crate::{theme, ui};
 /// How often the app looks for new approval requests.
 pub const APPROVAL_POLL: Duration = Duration::from_secs(1);
 
+/// How far the folder label's hover area reaches below its text. The path tooltip centres on
+/// that area, so it sits half this lower: its shadow clears the headline, yet stays short of
+/// the SQL box, which then draws over the shadow's lower tail.
+pub const FOLDER_TIP_DROP: f32 = 6.;
+
 /// One request as the dialog shows it, with its connection's tag read from its own workspace.
 #[derive(Debug, Clone)]
 pub struct Shown {
@@ -464,7 +469,8 @@ pub fn ask_approval(
                                 )
                                 .children(class.clone().map(|c| text("approval-class", c)))
                                 // A plain-looking kit button, for the one tooltip that can sit
-                                // beside its line: below it the path would cover the SQL.
+                                // beside its line: below it the path would cover the SQL. Its
+                                // hover area reaches down into the gap so the tooltip sits lower.
                                 .child(
                                     h_flex().child(
                                         Button::new("approval-workspace")
@@ -481,6 +487,8 @@ pub fn ask_approval(
                                             .tab_stop(false)
                                             .h_auto()
                                             .p_0()
+                                            .pb(px(FOLDER_TIP_DROP))
+                                            .mb(px(-FOLDER_TIP_DROP))
                                             .text_sm()
                                             .line_height(line_height)
                                             .tooltip(path.clone())
