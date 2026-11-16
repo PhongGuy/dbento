@@ -31,7 +31,7 @@ use gpui_kit::{
     Action as _, AnyView, App, AppContext as _, BackgroundExecutor, ClickEvent, Context,
     Decorations, DismissEvent, Div, ElementId, Entity, EntityId, FocusHandle, Focusable as _,
     FontWeight, InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton, ParentElement,
-    PathPromptOptions, Pixels, Render, Role, ScrollHandle, SharedString, Stateful,
+    PathPromptOptions, Pixels, Render, Role, ScrollHandle, SharedString, Size, Stateful,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     div, img, px, transparent_black,
 };
@@ -1773,7 +1773,7 @@ impl Shell {
     ) -> Option<Entity<QueryTab>> {
         let tab = self.open_unnumbered(connection, window, cx)?;
         // The new table tab gives a fifth of the query split to the editor.
-        let split = (window.viewport_size().height - query_chrome()).max(px(0.));
+        let split = (content_size(window).height - query_chrome()).max(px(0.));
         tab.update(cx, |t, _| t.set_editor_height(split * 0.2));
         self.load_relation(self.tabs.len() - 1, rel, table, filter, window, cx);
         Some(tab)
@@ -3328,7 +3328,7 @@ impl Shell {
                 let muted = cx.theme().muted_foreground;
                 // The form never grows past the window's foot, so the kit keeps the top edge
                 // where it is instead of sliding the dialog up as fields come and go.
-                let viewport = window.viewport_size().height;
+                let viewport = content_size(window).height;
                 let top = (viewport / 10.).max(px(64.));
                 let tallest = (viewport - top - px(FORM_FOOT_GAP)).max(px(0.));
                 confirm::frame(dialog, px(560.), None, cx)
@@ -3392,7 +3392,7 @@ impl Shell {
                 let shell = shell.clone();
                 let muted = cx.theme().muted_foreground;
                 confirm::frame(dialog, px(560.), None, cx)
-                    .margin_top((window.viewport_size().height / 10.).max(px(64.)))
+                    .margin_top((content_size(window).height / 10.).max(px(64.)))
                     .on_close(move |_, _, cx| {
                         let _ = shell.update(cx, |s, _| s.settings_view = None);
                     })
@@ -4709,17 +4709,30 @@ pub fn new_tab_connection<T>(tab: Option<T>, selected: Option<T>, moved: bool) -
     }
 }
 
-// The window's content width. A client-decorated window's viewport also holds the shadow the
-// kit pads each untiled side with, which no panel can use.
-fn content_width(window: &Window) -> Pixels {
-    let width = window.viewport_size().width;
-    let (Decorations::Client { tiling }, Some(inset)) =
-        (window.window_decorations(), window.client_inset())
-    else {
-        return width;
+/// The part of a `viewport` that layout can use: with client `decorations`, the kit pads each
+/// untiled side with an `inset` of shadow that nothing can draw into.
+pub fn usable_size(
+    viewport: Size<Pixels>,
+    decorations: Decorations,
+    inset: Option<Pixels>,
+) -> Size<Pixels> {
+    let (Decorations::Client { tiling }, Some(inset)) = (decorations, inset) else {
+        return viewport;
     };
-    let shadowed = [tiling.left, tiling.right].iter().filter(|t| !**t).count();
-    width - inset * shadowed as f32
+    let shadowed = |a: bool, b: bool| inset * [a, b].iter().filter(|t| !**t).count() as f32;
+    Size {
+        width: viewport.width - shadowed(tiling.left, tiling.right),
+        height: viewport.height - shadowed(tiling.top, tiling.bottom),
+    }
+}
+
+/// The window's content size: its viewport less the client-decoration shadow.
+pub(crate) fn content_size(window: &Window) -> Size<Pixels> {
+    usable_size(
+        window.viewport_size(),
+        window.window_decorations(),
+        window.client_inset(),
+    )
 }
 
 impl Render for Shell {
@@ -4733,7 +4746,7 @@ impl Render for Shell {
         let inspector = self.inspector_open && !expanded;
         let docked = self.history_open || inspector || self.approvals_open || self.definition_open;
         let sides = if docked { 2. } else { 1. };
-        let split_width = content_width(window) - RAIL_WIDTH - GUTTER;
+        let split_width = content_size(window).width - RAIL_WIDTH - GUTTER;
         let side_max = ((split_width - MIN_TAB_AREA) / sides).max(PANEL_MIN);
         // The gutters are padding inside the resizable panels, every gap on the tab area's
         // side, so the sidebar box is its panel's saved width and each resize handle stays on
@@ -4909,7 +4922,7 @@ impl Shell {
             .on_close_window(move |_, window, cx| kit_close(window, cx));
         // The workspace pill follows the icon and stops short of the centred search pill; the
         // bar spreads its children, so the two share one.
-        let room = ((window.viewport_size().width - SEARCH_PILL_WIDTH) / 2.)
+        let room = ((content_size(window).width - SEARCH_PILL_WIDTH) / 2.)
             .max(TITLE_BAR_HEIGHT * 3.)
             - px(56.);
         let bar = bar.child(
