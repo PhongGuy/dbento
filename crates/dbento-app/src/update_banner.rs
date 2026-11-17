@@ -16,7 +16,7 @@ use crate::ui;
 use crate::updates::{self, InstallPhase};
 
 /// The banner while the global updater has an offer; None without one. Its actions sit
-/// beside the text, clear of the toasts that stack in the window's top right corner.
+/// beside the text; in a narrow window a toast in the top right corner may cover the last.
 pub fn banner(shell: &Entity<Shell>, _window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     let updates = updates::global(cx)?;
     let u = updates.read(cx);

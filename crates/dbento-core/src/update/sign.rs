@@ -30,10 +30,23 @@ pub fn verify_manifest(
         match key.verify(manifest, &signature, false) {
             Ok(()) => return Ok(()),
             Err(Error::UnexpectedKeyId) => continue,
-            Err(e) => return Err(CheckError::ManifestSignature(e.to_string())),
+            Err(e) => return Err(CheckError::ManifestSignature(mid_sentence(&e.to_string()))),
         }
     }
     Err(CheckError::UnknownKey)
+}
+
+/// minisign's message, which opens with a capital, to follow our own text after a colon; an
+/// opening acronym such as "I/O" keeps its case.
+fn mid_sentence(message: &str) -> String {
+    let mut chars = message.chars();
+    match (chars.next(), chars.next()) {
+        (Some(first), Some(second)) if second.is_lowercase() => first
+            .to_lowercase()
+            .chain(message.chars().skip(1))
+            .collect(),
+        _ => message.to_owned(),
+    }
 }
 
 /// The minisign box inside one base64 line, or `None` when it is not base64 of UTF-8 text.

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::shell::Shell;
-use crate::{persist, settings_store};
+use crate::{persist, settings_store, ui};
 
 /// When updates were last checked and which release the user chose to skip.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -358,6 +358,18 @@ pub fn report_text(report: &Report) -> String {
         Report::Available(version) => format!("Dbento {version} is available."),
         Report::Failed(message) => format!("Update check failed: {message}"),
         Report::Disabled => "Update checks are not configured for this build.".to_string(),
+    }
+}
+
+/// The toast for a manual check's report: a failure warns, anything else informs.
+pub fn report_notice(report: &Report) -> ui::Notice {
+    let kind = match report {
+        Report::Failed(_) => ui::NoticeKind::Warning,
+        Report::UpToDate | Report::Available(_) | Report::Disabled => ui::NoticeKind::Info,
+    };
+    ui::Notice {
+        text: report_text(report),
+        kind,
     }
 }
 

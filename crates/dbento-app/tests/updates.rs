@@ -296,3 +296,15 @@ fn a_manual_check_during_an_automatic_one_reports_its_result(cx: &mut TestAppCon
     cx.run_until_parked();
     assert_eq!(*seen.borrow(), [Report::Available("99.0.0".into())]);
 }
+
+#[test]
+fn a_failed_check_toasts_as_a_warning_and_the_rest_as_information() {
+    use dbento_app::ui::NoticeKind;
+    let kind = |r: Report| updates::report_notice(&r).kind;
+    assert_eq!(kind(Report::Failed("offline".into())), NoticeKind::Warning);
+    assert_eq!(kind(Report::UpToDate), NoticeKind::Info);
+    assert_eq!(kind(Report::Available("99.0.0".into())), NoticeKind::Info);
+    assert_eq!(kind(Report::Disabled), NoticeKind::Info);
+    let text = updates::report_notice(&Report::UpToDate).text;
+    assert_eq!(text, updates::report_text(&Report::UpToDate));
+}

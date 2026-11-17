@@ -676,7 +676,6 @@ impl SettingsView {
     fn update_rows(&self, enabled: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let store = self.store.clone();
         let toggle = Checkbox::new("settings-check-updates")
-            .small()
             .label("Check for updates")
             .checked(enabled)
             .on_click(move |checked: &bool, _, cx| {
@@ -684,7 +683,8 @@ impl SettingsView {
                 store.update(cx, |s, cx| s.change(cx, |v| v.check_for_updates = on));
             });
         let check_now = ui::secondary(Button::new("settings-check-now"))
-            .small()
+            .h(px(32.))
+            .flex_none()
             .label("Check now")
             .on_click(|_, _, cx| updates::check_now(cx));
         let report = updates::global(cx)
@@ -692,6 +692,8 @@ impl SettingsView {
             .map(|says| {
                 div()
                     .id("settings-update-status")
+                    .flex_1()
+                    .min_w_0()
                     .role(Role::Label)
                     .aria_label(says.clone())
                     .test_support()
@@ -699,6 +701,7 @@ impl SettingsView {
                     .text_color(theme::dim(cx))
                     .child(says)
             });
+        // A long failure wraps beside the button instead of running past the dialog.
         let manual = h_flex().gap_3().child(check_now).children(report);
         vec![
             Self::row("Automatic", toggle, cx),

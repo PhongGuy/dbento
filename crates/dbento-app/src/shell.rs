@@ -473,14 +473,9 @@ impl Shell {
                 vec![
                     cx.observe(&u, |_, _, cx| cx.notify()),
                     cx.subscribe_in(&u, window, |_, _, event, window, cx| match event {
-                        UpdatesEvent::Reported(report) => ui::notice(
-                            window,
-                            cx,
-                            ui::Notice {
-                                text: updates::report_text(report),
-                                kind: ui::NoticeKind::Info,
-                            },
-                        ),
+                        UpdatesEvent::Reported(report) => {
+                            ui::notice(window, cx, updates::report_notice(report))
+                        }
                     }),
                 ]
             })

@@ -9,8 +9,10 @@ use dbento_app::updates::{
     self, CheckResult, Checker, Offer, Prepared, Progress, Stager, UpdateHooks, Updates,
 };
 use dbento_core::update::{Relaunch, release_notes_url};
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Entity, Task, TestAppContext, WindowOptions,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, Pixels, Task, TestAppContext,
+    WindowBounds, WindowOptions, point, px, size,
 };
 use std::rc::Rc;
 
@@ -214,4 +216,57 @@ fn a_close_the_user_keeps_open_leaves_the_release_armed(cx: &mut TestAppContext)
     assert!(updates.read_with(cx, |u, _| u.armed()), "Keep disarmed it");
     m.update(cx, |m, _| m.cancel());
     o.idle(cx);
+}
+
+const LONG_FAILURE: &str = "could not reach the update server: error connecting to \
+    updates.example.com on every address it resolved to, after trying each of them twice";
+
+fn bounds_of(cx: &mut TestAppContext, win: AnyWindowHandle, id: &'static str) -> Bounds<Pixels> {
+    cx.run_until_parked();
+    cx.update_window(win, |_, w, cx| {
+        w.render_frame(cx);
+        w.find(id).bounds()
+    })
+    .unwrap()
+}
+
+// A long failure wraps inside the 640 px dialog, and Check now matches the section's
+// default-size buttons, such as Open keymap file.
+#[gpui_kit::test]
+fn a_long_failure_wraps_in_settings_beside_a_default_size_button(cx: &mut TestAppContext) {
+    support::init(cx);
+    let files = tempfile::tempdir().unwrap();
+    cx.update(|cx| settings_store::install(None, Appearance::System, cx));
+    let failing: Checker = Rc::new(|_| Task::ready(Err(LONG_FAILURE.to_string())));
+    let path = files.path().join("update-state.json");
+    cx.update(|cx| updates::install(Some(path), UpdateHooks::checking(failing), cx));
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+            point(px(0.), px(0.)),
+            size(px(640.), px(1000.)),
+        ))),
+        ..Default::default()
+    };
+    let (win, _) = cx
+        .update(|cx| {
+            gpui_kit::open_window(options, cx, |w, cx| cx.new(|cx| SettingsView::new(w, cx)))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    click_id(cx, win, "settings-check-now");
+    let status = bounds_of(cx, win, "settings-update-status");
+    assert!(
+        status.right() <= px(640.),
+        "the failure ran past the dialog: {status:?}"
+    );
+    let check = bounds_of(cx, win, "settings-check-now");
+    assert!(
+        status.size.height > check.size.height,
+        "the failure did not wrap: {status:?}"
+    );
+    let keymap = bounds_of(cx, win, "settings-keymap-open");
+    assert_eq!(
+        check.size.height, keymap.size.height,
+        "Check now is not the section's size"
+    );
 }
