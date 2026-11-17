@@ -221,6 +221,7 @@ mod tree_affordances;
 mod tree_menu;
 mod ui;
 mod update_arm;
+mod update_banner;
 mod update_quit;
 mod updates;
 mod user_keymap;

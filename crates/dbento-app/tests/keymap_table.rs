@@ -204,9 +204,10 @@ fn chips_spell_the_vertical_arrows_and_home_and_end() {
     assert_eq!(keymap::chip_keys("end"), "End");
 }
 
-const IDS: [&str; 55] = [
+const IDS: [&str; 56] = [
     "view.cycle_appearance",
     "app.open_settings",
+    "app.check_for_updates",
     "grid.copy_cells",
     "query.run_statement",
     "query.run_all",

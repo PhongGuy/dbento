@@ -119,6 +119,8 @@ gpui_kit::actions!(
         MoveTabRight,
         /// Opens the Settings dialog.
         OpenSettings,
+        /// Checks for a newer release now and reports the result.
+        CheckForUpdates,
         /// Asks for a folder and switches to the workspace in it.
         OpenWorkspace,
         /// Closes the workspace and shows the welcome view.
@@ -206,6 +208,8 @@ pub const MOVE_TAB_LEFT_KEYS: &str = "secondary-shift-pageup";
 pub const MOVE_TAB_RIGHT_KEYS: &str = "secondary-shift-pagedown";
 /// The keys for `OpenSettings`.
 pub const SETTINGS_KEYS: &str = "secondary-,";
+/// The keys for `CheckForUpdates`.
+pub const CHECK_UPDATES_KEYS: &str = "secondary-k u";
 /// The keys for `OpenWorkspace`: VS Code's Open Folder chord.
 pub const OPEN_WORKSPACE_KEYS: &str = "secondary-k secondary-o";
 /// The keys for `CloseWorkspace`: VS Code's Close Folder chord.
@@ -261,6 +265,13 @@ pub fn bindings() -> Vec<Binding> {
             || Box::new(OpenSettings),
             None,
             Some("Open settings"),
+        ),
+        row(
+            "app.check_for_updates",
+            CHECK_UPDATES_KEYS,
+            || Box::new(CheckForUpdates),
+            None,
+            Some("Check for updates"),
         ),
         // Copies the grid's selection; scoped to the table so editors keep their own copy.
         row(

@@ -175,11 +175,14 @@ fn row_at(cx: &mut TestAppContext, o: &Opened, at: Point<Pixels>) -> Option<Stri
 }
 const MANY: &str = "CREATE TABLE orders(id INTEGER PRIMARY KEY); CREATE TABLE orders2(id INTEGER); \
                     CREATE TABLE orders3(id INTEGER); CREATE TABLE orders4(id INTEGER);";
+// Three tables, so the loaded rows put a row, not a group header, under the resting pointer.
+const THREE: &str = "CREATE TABLE orders(id INTEGER PRIMARY KEY); CREATE TABLE orders2(id INTEGER); \
+                     CREATE TABLE orders3(id INTEGER);";
 
 // Rows that load under a resting pointer must not steal the highlight; moving it still does.
 #[gpui_kit::test]
 fn loaded_rows_under_a_resting_pointer_keep_the_highlight(cx: &mut TestAppContext) {
-    let o = launched(cx, MANY, "");
+    let o = launched(cx, THREE, "");
     open(cx, &o);
     wait_real(cx, "the idle rows", |cx| {
         has(cx, &o, "Search tables in nopg")
@@ -206,7 +209,7 @@ fn loaded_rows_under_a_resting_pointer_keep_the_highlight(cx: &mut TestAppContex
         sidebar.update(cx, |s, cx| {
             s.ensure_loaded("lite", &[CatalogQuery::Schemas, main.clone()], cx)
         });
-        has(cx, &o, "orders4 \u{b7} lite")
+        has(cx, &o, "orders3 \u{b7} lite")
     });
     let under = row_at(cx, &o, at).expect("a row under the pointer");
     assert_ne!(

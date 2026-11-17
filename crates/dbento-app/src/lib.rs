@@ -70,6 +70,7 @@ pub mod tab_model;
 pub mod theme;
 pub mod tokio_bridge;
 pub mod ui;
+pub mod update_banner;
 pub mod updates;
 pub mod user_keymap;
 pub mod window_controls;

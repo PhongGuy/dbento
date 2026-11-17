@@ -57,11 +57,11 @@ use crate::history::HistoryLog;
 use crate::history_panel::{HistoryPanel, HistoryPanelEvent};
 use crate::inspector::{Inspector, InspectorEvent};
 use crate::keymap::{
-    CloseTab, CloseWorkspace, GoToLastTab, GoToTab1, GoToTab2, GoToTab3, GoToTab4, GoToTab5,
-    GoToTab6, GoToTab7, GoToTab8, MoveTabLeft, MoveTabRight, NavBack, NavForward, NewConnection,
-    NewTab, OpenCommands, OpenPalette, OpenQuery, OpenSettings, OpenWorkspace, RecentTabBack,
-    RecentTabForward, ReloadWorkspace, SaveQuery, ToggleHistory, ToggleRowInspector, chip_keys,
-    keys_for,
+    CheckForUpdates, CloseTab, CloseWorkspace, GoToLastTab, GoToTab1, GoToTab2, GoToTab3, GoToTab4,
+    GoToTab5, GoToTab6, GoToTab7, GoToTab8, MoveTabLeft, MoveTabRight, NavBack, NavForward,
+    NewConnection, NewTab, OpenCommands, OpenPalette, OpenQuery, OpenSettings, OpenWorkspace,
+    RecentTabBack, RecentTabForward, ReloadWorkspace, SaveQuery, ToggleHistory, ToggleRowInspector,
+    chip_keys, keys_for,
 };
 use crate::link::LinkState;
 use crate::nav::{Hop, NavHistory};
@@ -83,6 +83,8 @@ use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
+use crate::update_banner;
+use crate::updates::{self, UpdatesEvent};
 
 /// The database a Postgres Test opens when the form names none: every server has it.
 const TEST_DATABASE_POSTGRES: &str = crate::connection_dialog::POSTGRES_DATABASE;
@@ -394,6 +396,8 @@ pub struct Shell {
     // The settings store; `appearance` mirrors its choice and its save failures become toasts.
     settings: Entity<SettingsStore>,
     _settings_events: [Subscription; 2],
+    // The update banner's redraws and the manual check's toast; empty without an updater.
+    _update_events: Vec<Subscription>,
     _sidebar_events: Option<Subscription>,
     // The foot reads the sidebar's link, so its changes redraw the shell.
     _sidebar_notify: Option<Subscription>,
@@ -464,6 +468,23 @@ impl Shell {
                 ),
             }),
         ];
+        let update_events = updates::global(cx)
+            .map(|u| {
+                vec![
+                    cx.observe(&u, |_, _, cx| cx.notify()),
+                    cx.subscribe_in(&u, window, |_, _, event, window, cx| match event {
+                        UpdatesEvent::Reported(report) => ui::notice(
+                            window,
+                            cx,
+                            ui::Notice {
+                                text: updates::report_text(report),
+                                kind: ui::NoticeKind::Info,
+                            },
+                        ),
+                    }),
+                ]
+            })
+            .unwrap_or_default();
         let os_appearance = cx.observe_window_appearance(window, |this, window, cx| {
             theme::apply(this.appearance, window.appearance(), window, cx);
         });
@@ -553,6 +574,7 @@ impl Shell {
             _os_appearance: os_appearance,
             settings,
             _settings_events: settings_events,
+            _update_events: update_events,
             _sidebar_events: None,
             _sidebar_notify: None,
             _history_events: None,
@@ -1888,6 +1910,7 @@ impl Shell {
             C::ToggleRowInspector => self.toggle_inspector(cx),
             C::CycleAppearance => self.cycle_appearance(cx),
             C::OpenSettings => self.open_settings(window, cx),
+            C::CheckForUpdates => updates::check_now(cx),
             // Like the `query-save` button: focus the editor so the action reaches the tab's
             // own handlers, whatever the dialog refocused on close.
             C::RunStatement
@@ -4873,6 +4896,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
             )
+            .on_action(cx.listener(|_, _: &CheckForUpdates, _, cx| updates::check_now(cx)))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
             .on_action(
                 cx.listener(|this, _: &NewConnection, window, cx| this.new_connection(window, cx)),
@@ -4939,6 +4963,7 @@ impl Render for Shell {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.title_bar(window, cx))
+            .children(update_banner::banner(&cx.entity(), window, cx))
             .child(
                 div().flex_1().min_h_0().flex().children(rail).child(
                     div()

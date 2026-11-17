@@ -95,7 +95,10 @@ fn a_query_ranks_each_group_and_drops_empty_ones() {
     assert_eq!(s[0].entries, [Entry::Table(t("lite", "orders"))]);
     assert_eq!(
         s[1].entries,
-        [Entry::Command(PaletteCommand::KeyboardShortcuts)]
+        [
+            Entry::Command(PaletteCommand::CheckForUpdates),
+            Entry::Command(PaletteCommand::KeyboardShortcuts)
+        ]
     );
     assert_eq!(s[2].entries, [Entry::SearchIn("nopg".into())]);
 }
