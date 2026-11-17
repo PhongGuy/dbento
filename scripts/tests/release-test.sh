@@ -98,11 +98,91 @@ test_a_failed_pkgid_stops_the_guard() {
 test_unknown_subcommands_print_usage() {
   local status=0
   bash "$RELEASE_SH" manifest dist 1 x v1 out >/dev/null 2>&1 || status=$?
-  [[ $status == 2 ]] || fail "manifest exited $status, want 2"
+  [[ $status == 2 ]] || fail "manifest with five arguments exited $status, want 2"
   status=0
   bash "$RELEASE_SH" >/dev/null 2>&1 || status=$?
   [[ $status == 2 ]] || fail "no subcommand exited $status, want 2"
-  if grep -nE 'latest\.json|update_m|APINATA|apinata|cli_raw' "$RELEASE_SH"; then fail "updater or Apinata leftovers in release.sh"; fi
+  if grep -nE 'APINATA|apinata|cli_raw|xtask update-manifest' "$RELEASE_SH"; then fail "Apinata leftovers in release.sh"; fi
+}
+
+# A fixture release: the AppImages and the NSIS installer under dist, every update-only file under update.
+manifest_fixture() {
+  local d=$1 v=$2 f
+  mkdir -p "$d/dist" "$d/update"
+  for f in "dbento-app_${v}_x86_64.AppImage" "dbento-app_${v}_aarch64.AppImage" "dbento-app_${v}_x64-setup.exe"; do
+    printf '%s' "$f" >"$d/dist/$f"
+  done
+  for f in "Dbento_${v}_aarch64.app.tar.gz" "Dbento_${v}_x86_64.app.tar.gz" "dbento-${v}-x86_64-unknown-linux-gnu" \
+    "dbento-${v}-aarch64-unknown-linux-gnu" "dbento-${v}-aarch64-apple-darwin" "dbento-${v}-x86_64-apple-darwin" \
+    "dbento-${v}-x86_64-pc-windows-msvc.exe"; do
+    printf '%s' "$f" >"$d/update/$f"
+  done
+}
+
+test_manifest_lists_every_update_target() {
+  local d=$WORK/manifest base=https://github.com/PhongGuy/dbento/releases/download/v1.2.3 m row id format file
+  manifest_fixture "$d" 1.2.3
+  bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 "$base" || { fail "manifest failed"; return 0; }
+  m=$d/update/latest.json
+  [[ $(jq -r .version "$m") == 1.2.3 ]] || fail "manifest version: $(jq -r .version "$m")"
+  [[ $(jq -r .pub_date "$m") =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "pub_date: $(jq -r .pub_date "$m")"
+  local want="app-linux-aarch64 app-linux-x86_64 app-macos-aarch64 app-macos-x86_64 app-windows-x86_64 cli-linux-aarch64 cli-linux-x86_64 cli-macos-aarch64 cli-macos-x86_64 cli-windows-x86_64 "
+  [[ $(jq -r '.targets | keys[]' "$m" | tr '\n' ' ') == "$want" ]] || fail "targets: $(jq -r '.targets | keys[]' "$m" | tr '\n' ' ')"
+  for row in 'app-linux-x86_64 appimage dist/dbento-app_1.2.3_x86_64.AppImage' \
+    'app-linux-aarch64 appimage dist/dbento-app_1.2.3_aarch64.AppImage' \
+    'app-macos-aarch64 app update/Dbento_1.2.3_aarch64.app.tar.gz' \
+    'app-macos-x86_64 app update/Dbento_1.2.3_x86_64.app.tar.gz' \
+    'app-windows-x86_64 nsis dist/dbento-app_1.2.3_x64-setup.exe' \
+    'cli-linux-x86_64 binary update/dbento-1.2.3-x86_64-unknown-linux-gnu' \
+    'cli-linux-aarch64 binary update/dbento-1.2.3-aarch64-unknown-linux-gnu' \
+    'cli-macos-aarch64 binary update/dbento-1.2.3-aarch64-apple-darwin' \
+    'cli-macos-x86_64 binary update/dbento-1.2.3-x86_64-apple-darwin' \
+    'cli-windows-x86_64 binary update/dbento-1.2.3-x86_64-pc-windows-msvc.exe'; do
+    read -r id format file <<<"$row"
+    [[ $(jq -r --arg id "$id" '.targets[$id].format' "$m") == "$format" ]] || fail "$id format"
+    [[ $(jq -r --arg id "$id" '.targets[$id].url' "$m") == "$base/${file#*/}" ]] || fail "$id url: $(jq -r --arg id "$id" '.targets[$id].url' "$m")"
+    [[ $(jq -r --arg id "$id" '.targets[$id].size' "$m") == "$(wc -c <"$d/$file" | tr -d ' ')" ]] || fail "$id size"
+    [[ $(jq -r --arg id "$id" '.targets[$id].sha256' "$m") == "$(sha256sum "$d/$file" | cut -d' ' -f1)" ]] || fail "$id sha256"
+  done
+  [[ ! -e $d/dist/latest.json ]] || fail "the manifest landed in dist"
+}
+
+test_manifest_refuses_a_pre_release_or_a_missing_file() {
+  local d=$WORK/manifest-bad base=https://example.com/v1.2.3-rc.1
+  manifest_fixture "$d" 1.2.3-rc.1
+  if bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3-rc.1 "$base" 2>/dev/null; then fail "a pre-release got a manifest"; fi
+  [[ ! -e $d/update/latest.json ]] || fail "a pre-release left a manifest"
+
+  d=$WORK/manifest-missing
+  manifest_fixture "$d" 1.2.3
+  rm "$d/update/dbento-1.2.3-aarch64-apple-darwin"
+  local msg
+  if msg=$(bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3 2>&1); then fail "a missing file got a manifest"; fi
+  [[ $msg == *dbento-1.2.3-aarch64-apple-darwin* ]] || fail "missing-file message: $msg"
+  [[ ! -e $d/update/latest.json ]] || fail "a missing file left a manifest"
+}
+
+test_manifest_entry_refuses_a_malformed_target_id() {
+  printf 'x' >"$WORK/entry"
+  local id
+  for id in app-linux-x86 cli-freebsd-x86_64 tool-linux-x86_64 app-linux-x86_64-extra; do
+    if manifest_entry "$id" "$WORK/entry" binary https://example.com/entry 2>/dev/null; then fail "$id accepted"; fi
+  done
+  [[ $(manifest_entry cli-linux-x86_64 "$WORK/entry" binary https://example.com/entry | jq -r '."cli-linux-x86_64".size') == 1 ]] \
+    || fail "a well-formed entry was refused"
+}
+
+test_manifest_leaves_nothing_when_the_final_write_fails() {
+  local d=$WORK/manifest-jq fake=$WORK/jq-bin real
+  real=$(command -v jq)
+  manifest_fixture "$d" 1.2.3
+  mkdir -p "$fake"
+  printf '#!/usr/bin/env bash\nif [[ $1 == -s ]]; then echo partial; exit 1; fi\nexec %q "$@"\n' "$real" >"$fake/jq"
+  chmod +x "$fake/jq"
+  if PATH=$fake:$PATH bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3 2>/dev/null; then
+    fail "a failed jq still wrote a manifest"
+  fi
+  [[ ! -e $d/update/latest.json && ! -e $d/update/latest.json.tmp ]] || fail "manifest leftovers: $(ls "$d/update" | grep latest)"
 }
 
 test_sums_writes_checksums_for_a_directory() {

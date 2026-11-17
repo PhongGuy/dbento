@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release helpers for the release workflow: the tag guard, the build matrix, the secret-free
-# build and package, the macOS dmg, stable-named copies and SHA256SUMS.
+# build and package, the macOS dmg, stable-named copies, SHA256SUMS and the update manifest.
 # Must stay bash 3.2 safe, since macOS runners run /bin/bash 3.2.
 # Sourcing this file only defines functions; running it dispatches a subcommand.
 source "$(dirname "${BASH_SOURCE[0]}")/package-linux.sh"
@@ -228,6 +228,136 @@ stable_copies() {
   fi
 }
 
+# The update targets: id, where the file ships from, its name with @V@ for the version, and its format.
+update_targets() {
+  cat <<'EOF'
+app-linux-x86_64 dist dbento-app_@V@_x86_64.AppImage appimage
+app-linux-aarch64 dist dbento-app_@V@_aarch64.AppImage appimage
+app-macos-aarch64 update Dbento_@V@_aarch64.app.tar.gz app
+app-macos-x86_64 update Dbento_@V@_x86_64.app.tar.gz app
+app-windows-x86_64 dist dbento-app_@V@_x64-setup.exe nsis
+cli-linux-x86_64 update dbento-@V@-x86_64-unknown-linux-gnu binary
+cli-linux-aarch64 update dbento-@V@-aarch64-unknown-linux-gnu binary
+cli-macos-aarch64 update dbento-@V@-aarch64-apple-darwin binary
+cli-macos-x86_64 update dbento-@V@-x86_64-apple-darwin binary
+cli-windows-x86_64 update dbento-@V@-x86_64-pc-windows-msvc.exe binary
+EOF
+}
+
+# One manifest entry as compact JSON, {ID: {url, format, size, sha256}}; refuses a malformed id or a missing file.
+manifest_entry() {
+  local id=$1 file=$2 format=$3 url=$4 re='^(app|cli)-(linux|macos|windows)-(x86_64|aarch64)$' size sha
+  if [[ ! $id =~ $re ]]; then echo "release: malformed update target id '$id'" >&2; return 1; fi
+  if [[ ! -f $file ]]; then echo "release: update target $id needs $file, which is missing" >&2; return 1; fi
+  size=$(wc -c <"$file" | tr -d ' ') || return 1
+  sha=$(sha256sum "$file" | cut -d' ' -f1) || return 1
+  jq -cn --arg id "$id" --arg url "$url" --arg format "$format" --arg sha "$sha" --argjson size "$size" \
+    '{($id): {url: $url, format: $format, size: $size, sha256: $sha}}'
+}
+
+# Write UPDATE/latest.json for stable VERSION, artifact URLs under BASE_URL; nothing is written on failure.
+write_manifest() {
+  local dist=$1 update=$2 version=$3 base=$4 re='^[0-9]+\.[0-9]+\.[0-9]+$' id where pattern format name dir entries=
+  if [[ ! $version =~ $re ]]; then echo "release: the update manifest needs a stable version, got '$version'" >&2; return 1; fi
+  while read -r id where pattern format; do
+    name=${pattern//@V@/$version}
+    if [[ $where == dist ]]; then dir=$dist; else dir=$update; fi
+    entries="$entries$(manifest_entry "$id" "$dir/$name" "$format" "$base/$name")"$'\n' || return 1
+  done < <(update_targets)
+  printf '%s' "$entries" | jq -s --arg v "$version" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{version: $v, pub_date: $d, targets: add}' >"$update/latest.json.tmp" || { rm -f -- "$update/latest.json.tmp"; return 1; }
+  mv -- "$update/latest.json.tmp" "$update/latest.json"
+}
+
+usage() {
+  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR | manifest DIST UPDATE VERSION BASE_URL" >&2
+  exit 2
+}
+
+main() {
+  local os
+  os=$(package_os) || return 1
+  package_dirs "$os"
+  prepare_out_dir "$ROOT" "$OUT" || return 1
+  OUT=$(realpath -m -- "$OUT")
+  cd "$ROOT"
+  # libduckdb does not build for msvc.
+  local features=()
+  if [[ $os == windows ]]; then features=(--no-default-features --features dbento-core/keychain); fi
+  cargo build --release --locked -p dbento-cli -p dbento-app ${features[@]+"${features[@]}"}
+  cargo fetch --locked
+  cargo xtask notices --out "$OUT/THIRD-PARTY-NOTICES.html"
+  echo "release: $os build in $OUT"
+}
+
+# Package what build_main left into the CLI archive and the app installer. macOS is ad-hoc
+# signed; Windows ships unsigned, since there is no CA-issued certificate.
+package_main() {
+  local os
+  os=$(package_os) || return 1
+  package_dirs "$os"
+  local out version target bin_dir
+  out=$(realpath -m -- "$OUT")
+  if [[ ! -f $out/THIRD-PARTY-NOTICES.html ]]; then
+    echo "release: no build in $out; run release.sh build first" >&2
+    return 1
+  fi
+  unset DBENTO_MACOS_SIGNING_IDENTITY DBENTO_WINDOWS_SIGN_COMMAND
+  cd "$ROOT"
+  version=$(workspace_version)
+  target=$(rustc -vV | sed -n 's/^host: //p')
+  bin_dir=${CARGO_TARGET_DIR:-$ROOT/target}/release
+  local files=("$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/README.md" "$out/THIRD-PARTY-NOTICES.html")
+  if [[ $os == macos ]]; then
+    package_app "$out" app
+    TAR=gtar macos_dmg "$out" "$version" "${target%%-*}"
+    adhoc_sign "$bin_dir/dbento"
+    TAR=gtar cli_archive "$bin_dir/dbento" "$version" "$target" "$out" "${files[@]}"
+  else
+    package_app "$out" nsis
+    cli_zip "$bin_dir/dbento.exe" "$version" "$target" "$out" "${files[@]}"
+  fi
+  rm -rf -- "$out/.cargo-packager"
+  echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
+}
+
+# The stable name of release file NAME at VERSION, for /releases/latest/download links: the
+# version dropped. Prints nothing for a file that is not an artifact.
+stable_name() {
+  local name=$1 version=$2 out
+  case $name in
+    *.tar.gz | *.deb | *.AppImage | *.dmg | *.exe | *.zip) ;;
+    *) return 0 ;;
+  esac
+  case $name in
+    *"_${version}_"*) out=${name/"_${version}_"/_} ;;
+    *"-${version}-"*) out=${name/"-${version}-"/-} ;;
+    *) return 0 ;;
+  esac
+  echo "$out"
+}
+
+# Copy every versioned artifact under DIR to its stable name at DIR's top level, beside the
+# versioned file. Fails when two files would share one stable name, or when none is copied.
+stable_copies() {
+  local dir=$1 version=$2 f stable seen=" " copied=0
+  while IFS= read -r f; do
+    stable=$(stable_name "$(basename "$f")" "$version")
+    [[ -n $stable ]] || continue
+    if [[ $seen == *" $stable "* ]]; then
+      echo "release: two release files map to the stable name $stable" >&2
+      return 1
+    fi
+    seen="$seen$stable "
+    cp -- "$f" "$dir/$stable" || return 1
+    copied=$((copied + 1))
+  done < <(find "$dir" -type f | LC_ALL=C sort)
+  if ((copied == 0)); then
+    echo "release: no versioned release files under $dir" >&2
+    return 1
+  fi
+}
+
 usage() {
   echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR" >&2
   exit 2
@@ -261,6 +391,10 @@ main() {
     sums)
       (($# == 2)) || usage
       write_sums "$2"
+      ;;
+    manifest)
+      (($# == 5)) || usage
+      write_manifest "$2" "$3" "$4" "$5"
       ;;
     *) usage ;;
   esac
