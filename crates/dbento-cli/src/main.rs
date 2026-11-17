@@ -10,6 +10,7 @@ mod json;
 mod mcp;
 mod run;
 mod secret;
+mod self_update;
 mod table;
 
 use std::io::IsTerminal;
@@ -82,6 +83,8 @@ enum Command {
     },
     /// Serve the workspace's databases to an AI client over stdio (MCP); writes need approval in the app.
     Mcp(mcp::McpArgs),
+    /// Check for a newer dbento and install it when this copy is a standalone download.
+    SelfUpdate(self_update::SelfUpdateArgs),
 }
 
 #[derive(Subcommand)]
@@ -263,6 +266,7 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
             source: ImportSource::Beekeeper(args),
         } => return import::beekeeper(cli.workspace.as_deref(), &args),
         Command::Mcp(args) => return mcp::serve(cli.workspace.as_deref(), &args).await,
+        Command::SelfUpdate(args) => return Ok(self_update::run(&args).await),
         Command::Secret { action } => {
             let ws = open_workspace(cli.workspace.as_deref())?;
             match action {

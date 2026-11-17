@@ -48,6 +48,9 @@ rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 rusqlite.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "process"] }
+wiremock.workspace = true
+minisign.workspace = true
+base64.workspace = true
 # Not forwarded from [features]: `cargo install` drops dev-dependencies, so a feature naming one fails.
 dbento-testkit = { path = "../dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb"] }
 

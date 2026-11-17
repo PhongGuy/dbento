@@ -92,6 +92,7 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 - Light and dark themes, or follow the system.
 - Shortcuts can be rebound in a `keymap.json`, which Settings (Ctrl+,) opens and reloads.
 - `dbento import datagrip`, `dbento import dbeaver` and `dbento import beekeeper` bring over connections and saved queries from DataGrip, DBeaver and Beekeeper Studio, and saved passwords go to the keychain.
+- `dbento self-update` checks for a newer release and replaces a standalone `dbento` download in place; `--check` only reports.
 - Try it without a database server: `make demo` (see [Try the demo](#try-the-demo)).
 
 ## How it works
