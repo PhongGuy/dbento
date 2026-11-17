@@ -156,6 +156,7 @@ mod surreal_use;
 mod update_check;
 mod update_config;
 mod update_download;
+mod update_install_kind;
 mod update_manifest;
 mod update_signature;
 mod update_support;

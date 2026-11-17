@@ -3,6 +3,7 @@
 
 mod error;
 mod fetch;
+mod install;
 mod manifest;
 mod sign;
 
@@ -13,6 +14,7 @@ use url::{Host, Url};
 
 pub use error::{CheckError, DownloadError};
 pub use fetch::{check, download};
+pub use install::{InstallKind, RELEASE_BUILD, Reason, install_kind};
 pub use manifest::evaluate;
 pub use sign::verify_manifest;
 
