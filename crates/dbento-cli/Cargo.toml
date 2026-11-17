@@ -30,7 +30,7 @@ redis = ["dbento-core/redis", "dbento-mcp/redis"]
 dynamodb = ["dbento-core/dynamodb", "dbento-mcp/dynamodb"]
 
 [dependencies]
-dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain", "update"] }
 dbento-mcp = { path = "../dbento-mcp", default-features = false }
 anyhow.workspace = true
 clap.workspace = true

@@ -153,6 +153,7 @@ mod surreal_login;
 mod surreal_read_only;
 mod surreal_results;
 mod surreal_use;
+mod update_config;
 mod workspace;
 mod workspace_extra;
 mod workspace_files;
