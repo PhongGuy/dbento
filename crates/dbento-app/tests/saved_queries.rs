@@ -191,6 +191,7 @@ fn the_save_button_saves_like_ctrl_s(cx: &mut TestAppContext) {
     assert!(!active(cx, &o).4, "a saved tab is not edited");
 }
 
+#[cfg(unix)]
 #[gpui_kit::test]
 fn an_unlisted_file_behind_a_folder_link_is_not_overwritten_silently(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);

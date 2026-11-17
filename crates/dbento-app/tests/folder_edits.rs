@@ -3,7 +3,7 @@ use crate::support::{Started, TREE, click_id, label_of, present, started, wait_r
 use dbento_app::app::{AppPaths, SavedState, WorkspaceSession, start};
 use dbento_app::explorer::{connection_id, folder_id, part_id};
 use dbento_app::persist::{load_json, save_json};
-use dbento_core::{Edit, FolderPath, WorkspaceItem};
+use dbento_core::{Edit, FolderPath};
 use gpui_kit::{AppContext as _, TestAppContext};
 
 fn path(p: &str) -> FolderPath {
@@ -148,6 +148,7 @@ fn a_refused_edit_says_why_and_writes_nothing(cx: &mut TestAppContext) {
     assert_eq!(s.toml(), TREE);
 }
 
+#[cfg(unix)]
 #[gpui_kit::test]
 fn an_edit_that_changes_nothing_writes_nothing(cx: &mut TestAppContext) {
     let s = started(cx, TREE);
@@ -157,7 +158,7 @@ fn an_edit_that_changes_nothing_writes_nothing(cx: &mut TestAppContext) {
     let file = s.dir.path().join("dbento.toml");
     std::fs::remove_file(&file).unwrap();
     std::os::unix::fs::symlink(&real, &file).unwrap();
-    let top = || WorkspaceItem::Connection("top".into());
+    let top = || dbento_core::WorkspaceItem::Connection("top".into());
     apply(
         cx,
         &s,

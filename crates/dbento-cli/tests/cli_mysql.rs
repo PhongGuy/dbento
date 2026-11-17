@@ -46,6 +46,7 @@ fn running(db: &MyDb, sql: &str) -> String {
 }
 
 /// Polls `sql` on `db` until it answers `want`, for up to 5 s.
+#[cfg(unix)]
 async fn until(db: &MyDb, sql: &str, want: &str) -> bool {
     until_within(db, sql, want, 50).await
 }
