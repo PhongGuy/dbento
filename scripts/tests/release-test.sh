@@ -98,11 +98,102 @@ test_a_failed_pkgid_stops_the_guard() {
 test_unknown_subcommands_print_usage() {
   local status=0
   bash "$RELEASE_SH" manifest dist 1 x v1 out >/dev/null 2>&1 || status=$?
-  [[ $status == 2 ]] || fail "manifest exited $status, want 2"
+  [[ $status == 2 ]] || fail "manifest with five arguments exited $status, want 2"
   status=0
   bash "$RELEASE_SH" >/dev/null 2>&1 || status=$?
   [[ $status == 2 ]] || fail "no subcommand exited $status, want 2"
-  if grep -nE 'latest\.json|update_m|APINATA|apinata|cli_raw' "$RELEASE_SH"; then fail "updater or Apinata leftovers in release.sh"; fi
+  if grep -nE 'APINATA|apinata|cli_raw|xtask update-manifest' "$RELEASE_SH"; then fail "Apinata leftovers in release.sh"; fi
+  [[ $(bash "$RELEASE_SH" 2>&1) == *"manifest DIST UPDATE VERSION BASE_URL"* ]] || fail "usage does not name the manifest subcommand"
+  local f
+  for f in $(grep -oE '^[a-z_]+\(\)' "$RELEASE_SH" | sort | uniq -d); do fail "release.sh defines $f more than once"; done
+}
+
+test_manifest_drops_a_trailing_slash_from_the_base_url() {
+  local d=$WORK/manifest-slash
+  manifest_fixture "$d" 1.2.3
+  bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3/ || { fail "manifest failed"; return 0; }
+  [[ $(jq -r '.targets["cli-linux-x86_64"].url' "$d/update/latest.json") == https://example.com/v1.2.3/dbento-1.2.3-x86_64-unknown-linux-gnu ]] \
+    || fail "trailing-slash url: $(jq -r '.targets["cli-linux-x86_64"].url' "$d/update/latest.json")"
+}
+
+# A fixture release: the AppImages and the NSIS installer under dist, every update-only file under update.
+manifest_fixture() {
+  local d=$1 v=$2 f
+  mkdir -p "$d/dist" "$d/update"
+  for f in "dbento-app_${v}_x86_64.AppImage" "dbento-app_${v}_aarch64.AppImage" "dbento-app_${v}_x64-setup.exe"; do
+    printf '%s' "$f" >"$d/dist/$f"
+  done
+  for f in "Dbento_${v}_aarch64.app.tar.gz" "Dbento_${v}_x86_64.app.tar.gz" "dbento-${v}-x86_64-unknown-linux-gnu" \
+    "dbento-${v}-aarch64-unknown-linux-gnu" "dbento-${v}-aarch64-apple-darwin" "dbento-${v}-x86_64-apple-darwin" \
+    "dbento-${v}-x86_64-pc-windows-msvc.exe"; do
+    printf '%s' "$f" >"$d/update/$f"
+  done
+}
+
+test_manifest_lists_every_update_target() {
+  local d=$WORK/manifest base=https://github.com/PhongGuy/dbento/releases/download/v1.2.3 m row id format file
+  manifest_fixture "$d" 1.2.3
+  bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 "$base" || { fail "manifest failed"; return 0; }
+  m=$d/update/latest.json
+  [[ $(jq -r .version "$m") == 1.2.3 ]] || fail "manifest version: $(jq -r .version "$m")"
+  [[ $(jq -r .pub_date "$m") =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "pub_date: $(jq -r .pub_date "$m")"
+  local want="app-linux-aarch64 app-linux-x86_64 app-macos-aarch64 app-macos-x86_64 app-windows-x86_64 cli-linux-aarch64 cli-linux-x86_64 cli-macos-aarch64 cli-macos-x86_64 cli-windows-x86_64 "
+  [[ $(jq -r '.targets | keys[]' "$m" | tr '\n' ' ') == "$want" ]] || fail "targets: $(jq -r '.targets | keys[]' "$m" | tr '\n' ' ')"
+  for row in 'app-linux-x86_64 appimage dist/dbento-app_1.2.3_x86_64.AppImage' \
+    'app-linux-aarch64 appimage dist/dbento-app_1.2.3_aarch64.AppImage' \
+    'app-macos-aarch64 app update/Dbento_1.2.3_aarch64.app.tar.gz' \
+    'app-macos-x86_64 app update/Dbento_1.2.3_x86_64.app.tar.gz' \
+    'app-windows-x86_64 nsis dist/dbento-app_1.2.3_x64-setup.exe' \
+    'cli-linux-x86_64 binary update/dbento-1.2.3-x86_64-unknown-linux-gnu' \
+    'cli-linux-aarch64 binary update/dbento-1.2.3-aarch64-unknown-linux-gnu' \
+    'cli-macos-aarch64 binary update/dbento-1.2.3-aarch64-apple-darwin' \
+    'cli-macos-x86_64 binary update/dbento-1.2.3-x86_64-apple-darwin' \
+    'cli-windows-x86_64 binary update/dbento-1.2.3-x86_64-pc-windows-msvc.exe'; do
+    read -r id format file <<<"$row"
+    [[ $(jq -r --arg id "$id" '.targets[$id].format' "$m") == "$format" ]] || fail "$id format"
+    [[ $(jq -r --arg id "$id" '.targets[$id].url' "$m") == "$base/${file#*/}" ]] || fail "$id url: $(jq -r --arg id "$id" '.targets[$id].url' "$m")"
+    [[ $(jq -r --arg id "$id" '.targets[$id].size' "$m") == "$(wc -c <"$d/$file" | tr -d ' ')" ]] || fail "$id size"
+    [[ $(jq -r --arg id "$id" '.targets[$id].sha256' "$m") == "$(sha256sum "$d/$file" | cut -d' ' -f1)" ]] || fail "$id sha256"
+  done
+  [[ ! -e $d/dist/latest.json ]] || fail "the manifest landed in dist"
+}
+
+test_manifest_refuses_a_pre_release_or_a_missing_file() {
+  local d=$WORK/manifest-bad base=https://example.com/v1.2.3-rc.1
+  manifest_fixture "$d" 1.2.3-rc.1
+  if bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3-rc.1 "$base" 2>/dev/null; then fail "a pre-release got a manifest"; fi
+  [[ ! -e $d/update/latest.json ]] || fail "a pre-release left a manifest"
+
+  d=$WORK/manifest-missing
+  manifest_fixture "$d" 1.2.3
+  rm "$d/update/dbento-1.2.3-aarch64-apple-darwin"
+  local msg
+  if msg=$(bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3 2>&1); then fail "a missing file got a manifest"; fi
+  [[ $msg == *dbento-1.2.3-aarch64-apple-darwin* ]] || fail "missing-file message: $msg"
+  [[ ! -e $d/update/latest.json ]] || fail "a missing file left a manifest"
+}
+
+test_manifest_entry_refuses_a_malformed_target_id() {
+  printf 'x' >"$WORK/entry"
+  local id
+  for id in app-linux-x86 cli-freebsd-x86_64 tool-linux-x86_64 app-linux-x86_64-extra; do
+    if manifest_entry "$id" "$WORK/entry" binary https://example.com/entry 2>/dev/null; then fail "$id accepted"; fi
+  done
+  [[ $(manifest_entry cli-linux-x86_64 "$WORK/entry" binary https://example.com/entry | jq -r '."cli-linux-x86_64".size') == 1 ]] \
+    || fail "a well-formed entry was refused"
+}
+
+test_manifest_leaves_nothing_when_the_final_write_fails() {
+  local d=$WORK/manifest-jq fake=$WORK/jq-bin real
+  real=$(command -v jq)
+  manifest_fixture "$d" 1.2.3
+  mkdir -p "$fake"
+  printf '#!/usr/bin/env bash\nif [[ $1 == -s ]]; then echo partial; exit 1; fi\nexec %q "$@"\n' "$real" >"$fake/jq"
+  chmod +x "$fake/jq"
+  if PATH=$fake:$PATH bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3 2>/dev/null; then
+    fail "a failed jq still wrote a manifest"
+  fi
+  [[ ! -e $d/update/latest.json && ! -e $d/update/latest.json.tmp ]] || fail "manifest leftovers: $(ls "$d/update" | grep latest)"
 }
 
 test_sums_writes_checksums_for_a_directory() {
@@ -177,27 +268,34 @@ test_stable_copies_refuse_a_clash_or_an_empty_directory() {
 }
 
 test_macos_dmg_ad_hoc_signs_then_wraps_the_app() {
-  local out=$WORK/mac
+  local out=$WORK/mac update=$WORK/mac-update
   mkdir -p "$out/Dbento.app/Contents"
+  printf 'plist' >"$out/Dbento.app/Contents/Info.plist"
   printf '#!/usr/bin/env bash\necho "codesign $*" >>"%s/mac.log"\n' "$WORK" >"$WORK/codesign"
   printf '#!/usr/bin/env bash\necho "hdiutil $*" >>"%s/mac.log"\ntouch "${@: -1}"\n' "$WORK" >"$WORK/hdiutil"
   chmod +x "$WORK/codesign" "$WORK/hdiutil"
-  CODESIGN=$WORK/codesign HDIUTIL=$WORK/hdiutil macos_dmg "$out" 1.2.3 aarch64 || fail "macos_dmg failed"
+  CODESIGN=$WORK/codesign HDIUTIL=$WORK/hdiutil macos_dmg "$out" 1.2.3 aarch64 "$update" || fail "macos_dmg failed"
   local want="codesign --force --deep --sign - $out/Dbento.app
 codesign --verify --deep --strict $out/Dbento.app
 hdiutil create -volname Dbento -srcfolder $out/Dbento.app -ov -format UDZO $out/Dbento_1.2.3_aarch64.dmg"
   [[ $(cat "$WORK/mac.log") == "$want" ]] || fail "macOS commands: $(cat "$WORK/mac.log")"
   [[ $(ls "$out") == Dbento_1.2.3_aarch64.dmg ]] || fail "want only the dmg, got: $(ls "$out")"
+  # The update payload is the signed bundle as the single top-level entry, outside dist.
+  local t=$update/Dbento_1.2.3_aarch64.app.tar.gz
+  [[ -f $t ]] || { fail "no .app.tar.gz in $update: $(ls "$update" 2>&1)"; return 0; }
+  [[ $(tar -tzf "$t" | cut -d/ -f1 | LC_ALL=C sort -u) == Dbento.app ]] || fail "tarball top level: $(tar -tzf "$t" | tr '\n' ' ')"
+  tar -tzf "$t" | grep -qx 'Dbento.app/Contents/Info.plist' || fail "tarball lacks the bundle contents"
 }
 
 test_macos_dmg_stops_when_the_signature_does_not_verify() {
-  local out=$WORK/mac-bad
+  local out=$WORK/mac-bad update=$WORK/mac-bad-update
   mkdir -p "$out/Dbento.app/Contents"
   printf '#!/usr/bin/env bash\n[[ $1 == --verify ]] && exit 1\nexit 0\n' >"$WORK/codesign-bad"
   printf '#!/usr/bin/env bash\necho ran >"%s/hdiutil-bad.log"\n' "$WORK" >"$WORK/hdiutil-bad"
   chmod +x "$WORK/codesign-bad" "$WORK/hdiutil-bad"
-  if CODESIGN=$WORK/codesign-bad HDIUTIL=$WORK/hdiutil-bad macos_dmg "$out" 1.2.3 aarch64; then fail "an unverified app was wrapped"; fi
+  if CODESIGN=$WORK/codesign-bad HDIUTIL=$WORK/hdiutil-bad macos_dmg "$out" 1.2.3 aarch64 "$update"; then fail "an unverified app was wrapped"; fi
   [[ ! -e $WORK/hdiutil-bad.log && -d $out/Dbento.app ]] || fail "hdiutil ran or the app was removed"
+  [[ ! -e $update/Dbento_1.2.3_aarch64.app.tar.gz ]] || fail "an unverified app became an update payload"
 }
 
 test_cli_zip_holds_the_exe_and_files() {
@@ -319,11 +417,51 @@ test_package_needs_the_build_output_and_never_builds() {
   # With the notices and binary in place, package packages, signs and archives, but never builds.
   mkdir -p "$out/Dbento.app" "$WORK/pkg-target/release"
   touch "$out/THIRD-PARTY-NOTICES.html" "$WORK/pkg-target/release/dbento"
-  PATH=$fake:$PATH OUT_DIR=$out CARGO_TARGET_DIR=$WORK/pkg-target bash "$RELEASE_SH" package >/dev/null 2>&1 \
+  PATH=$fake:$PATH OUT_DIR=$out CARGO_TARGET_DIR=$WORK/pkg-target UPDATE_DIR=$WORK/pkg-update bash "$RELEASE_SH" package >/dev/null 2>&1 \
     || fail "package failed after a build: $(tr '\n' '|' <"$WORK/pkg.log")"
   rm -rf -- "$out"
+  grep -qF -- "-czf $WORK/pkg-update/Dbento_1.2.3_" "$WORK/pkg.log" || fail "package wrote no .app.tar.gz into UPDATE_DIR: $(tr '\n' '|' <"$WORK/pkg.log")"
   grep -q '^cargo xtask packager-config ' "$WORK/pkg.log" || fail "package did not package: $(tr '\n' '|' <"$WORK/pkg.log")"
   if grep -qE '^cargo (build|fetch)|^cargo xtask notices' "$WORK/pkg.log"; then fail "package built: $(tr '\n' '|' <"$WORK/pkg.log")"; fi
+}
+
+test_update_cli_takes_no_arguments() {
+  local status=0
+  bash "$RELEASE_SH" update-cli extra >/dev/null 2>&1 || status=$?
+  [[ $status == 2 ]] || fail "update-cli with an argument exited $status, want 2"
+}
+
+test_update_cli_copies_the_release_binary_under_its_target_name() {
+  local fake=$WORK/ucli-bin host
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  fake_macos_host "$fake" "$WORK/ucli.log"
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$fake/uname"
+  mkdir -p "$WORK/ucli-target/release"
+  printf 'elf' >"$WORK/ucli-target/release/dbento"
+  chmod 0755 "$WORK/ucli-target/release/dbento"
+  PATH=$fake:$PATH CARGO_TARGET_DIR=$WORK/ucli-target UPDATE_DIR=$WORK/ucli-out bash "$RELEASE_SH" update-cli \
+    || fail "update-cli failed"
+  [[ $(ls "$WORK/ucli-out") == "dbento-1.2.3-$host" ]] || fail "update-cli wrote: $(ls "$WORK/ucli-out")"
+  [[ -x $WORK/ucli-out/dbento-1.2.3-$host && $(cat "$WORK/ucli-out/dbento-1.2.3-$host") == elf ]] \
+    || fail "the raw CLI is not the executable release binary"
+
+  # Windows keeps the .exe on both sides.
+  printf '#!/usr/bin/env bash\necho MINGW64_NT-10.0\n' >"$fake/uname"
+  printf 'MZ' >"$WORK/ucli-target/release/dbento.exe"
+  PATH=$fake:$PATH CARGO_TARGET_DIR=$WORK/ucli-target UPDATE_DIR=$WORK/ucli-win bash "$RELEASE_SH" update-cli \
+    || fail "update-cli failed on Windows"
+  [[ $(cat "$WORK/ucli-win/dbento-1.2.3-$host.exe" 2>/dev/null) == MZ ]] || fail "Windows raw CLI: $(ls "$WORK/ucli-win" 2>&1)"
+}
+
+test_update_cli_needs_the_release_binary() {
+  local fake=$WORK/ucli-missing msg
+  fake_macos_host "$fake" "$WORK/ucli-missing.log"
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$fake/uname"
+  if msg=$(PATH=$fake:$PATH CARGO_TARGET_DIR=$WORK/none-target UPDATE_DIR=$WORK/ucli-none bash "$RELEASE_SH" update-cli 2>&1); then
+    fail "update-cli passed without a binary"
+  fi
+  [[ $msg == *"no release CLI"* ]] || fail "missing-binary message: $msg"
+  [[ ! -e $WORK/ucli-none ]] || fail "update-cli created its directory without a binary"
 }
 
 # Windows ships unsigned under its plain names; no file is renamed for a missing certificate.

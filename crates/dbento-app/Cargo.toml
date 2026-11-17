@@ -30,7 +30,7 @@ dynamodb = ["dbento-core/dynamodb"]
 bench = ["dep:dbento-bench"]
 
 [dependencies]
-dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain", "update"] }
 # Only the bench mode uses it, for its targets workspace and memory reading.
 dbento-bench = { path = "../dbento-bench", optional = true }
 gpui-kit.workspace = true

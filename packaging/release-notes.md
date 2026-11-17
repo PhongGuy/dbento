@@ -30,4 +30,6 @@ Each file also has a copy with no version in its name, for links that always poi
 
 ## Updates
 
-Dbento does not update itself yet. Get new versions from the [Releases page](https://github.com/PhongGuy/dbento/releases).
+Dbento checks GitHub once a day for a newer release and tells you when one is out. Nothing downloads or installs until you choose to update, and every update is verified against a signature before it is applied. To turn the check off, clear **Check for updates** in Settings. You can always get new versions from the [Releases page](https://github.com/PhongGuy/dbento/releases).
+
+On macOS, the first launch after an update asks for keychain access once for each saved connection password, because the updated app is a new build. Choose "Always Allow" to keep it from asking again.

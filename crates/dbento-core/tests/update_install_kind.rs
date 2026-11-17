@@ -1,0 +1,380 @@
+//! Which installs the updater may replace: a pure table.
+#![cfg(feature = "update")]
+
+use dbento_core::update::{
+    InstallKind as K, Os, Product, RELEASE_BUILD, Reason as R, install_kind,
+};
+use std::path::{Path, PathBuf};
+
+/// Product, OS, release build, executable, `$APPIMAGE`, sibling app, expected kind.
+type Row = (
+    Product,
+    Os,
+    bool,
+    &'static str,
+    Option<&'static str>,
+    bool,
+    K,
+);
+
+#[test]
+fn the_classification_table() {
+    use Os::{Linux, Macos, Windows};
+    use Product::{App, Cli};
+    let p = PathBuf::from;
+    let mac_app = "/Applications/Dbento.app/Contents/MacOS/dbento-app";
+    let rows: Vec<Row> = vec![
+        // Rule 0: an unmarked build never self-replaces, on any OS and in any layout.
+        (
+            Cli,
+            Linux,
+            false,
+            "/home/u/.local/bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::SourceBuild),
+        ),
+        (
+            Cli,
+            Linux,
+            false,
+            "/usr/bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::SourceBuild),
+        ),
+        (
+            App,
+            Macos,
+            false,
+            mac_app,
+            None,
+            false,
+            K::NotOwned(R::SourceBuild),
+        ),
+        (
+            Cli,
+            Windows,
+            false,
+            r"C:\tools\dbento.exe",
+            None,
+            false,
+            K::NotOwned(R::SourceBuild),
+        ),
+        (
+            App,
+            Linux,
+            false,
+            "/tmp/.mount_Db/usr/bin/dbento-app",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::NotOwned(R::SourceBuild),
+        ),
+        // Rule 1: the .deb.
+        (
+            Cli,
+            Linux,
+            true,
+            "/usr/bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::SystemPackage),
+        ),
+        (
+            App,
+            Linux,
+            true,
+            "/usr/bin/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::SystemPackage),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "//usr/bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::SystemPackage),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "/usr/local/bin/dbento",
+            None,
+            false,
+            K::Standalone(p("/usr/local/bin/dbento")),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "/home/u/.local/bin/dbento",
+            None,
+            false,
+            K::Standalone(p("/home/u/.local/bin/dbento")),
+        ),
+        // Rule 2: the CLI that ships with the app.
+        (
+            Cli,
+            Linux,
+            true,
+            "/tmp/.mount_Db/usr/bin/dbento",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::NotOwned(R::ShippedWithApp),
+        ),
+        (
+            Cli,
+            Macos,
+            true,
+            "/Applications/Dbento.app/Contents/MacOS/dbento",
+            None,
+            false,
+            K::NotOwned(R::ShippedWithApp),
+        ),
+        (
+            Cli,
+            Macos,
+            true,
+            "/Applications/Dbento.app/Contents/Resources/dbento",
+            None,
+            false,
+            K::NotOwned(R::ShippedWithApp),
+        ),
+        (
+            Cli,
+            Macos,
+            true,
+            "/Applications/Dbento.APP/Contents/MacOS/bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::ShippedWithApp),
+        ),
+        (
+            Cli,
+            Windows,
+            true,
+            r"C:\Users\u\AppData\Local\Dbento\dbento.exe",
+            None,
+            true,
+            K::NotOwned(R::ShippedWithApp),
+        ),
+        (
+            Cli,
+            Windows,
+            true,
+            r"C:\tools\dbento.exe",
+            None,
+            false,
+            K::Standalone(p(r"C:\tools\dbento.exe")),
+        ),
+        (
+            Cli,
+            Macos,
+            true,
+            "/Volumes/Tools/dbento",
+            None,
+            false,
+            K::Standalone(p("/Volumes/Tools/dbento")),
+        ),
+        // Rule 3: a mounted dmg or a translocated app.
+        (
+            App,
+            Macos,
+            true,
+            "/Volumes/Dbento/Dbento.app/Contents/MacOS/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::ReadOnlyVolume),
+        ),
+        (
+            App,
+            Macos,
+            true,
+            "/private/var/folders/x/T/AppTranslocation/AB12/d/Dbento.app/Contents/MacOS/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::Translocated),
+        ),
+        // Rule 4: the layouts the app updater owns.
+        (
+            App,
+            Linux,
+            true,
+            "/tmp/.mount_Db/usr/bin/dbento-app",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::AppImage(p("/home/u/Dbento.AppImage")),
+        ),
+        (
+            App,
+            Macos,
+            true,
+            mac_app,
+            None,
+            false,
+            K::MacApp(p("/Applications/Dbento.app")),
+        ),
+        (
+            App,
+            Windows,
+            true,
+            r"C:\Users\u\AppData\Local\Dbento\dbento-app.exe",
+            None,
+            false,
+            K::WindowsNsis,
+        ),
+        // Rule 5: every other app layout.
+        (
+            App,
+            Linux,
+            true,
+            "/home/u/dbento-1.0/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            App,
+            Macos,
+            true,
+            "/Users/u/bin/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            App,
+            Macos,
+            true,
+            "/Applications/Dbento.app/Contents/Resources/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        // A path the caller failed to canonicalize could disguise a package-managed binary.
+        (
+            Cli,
+            Linux,
+            true,
+            "/usr/local/../bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "/usr/./bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "usr/bin/dbento",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            Cli,
+            Windows,
+            true,
+            r"C:\tools\..\dbento.exe",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            Cli,
+            Windows,
+            true,
+            r"tools\dbento.exe",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        // Each layout rule holds only on its own OS.
+        (
+            Cli,
+            Macos,
+            true,
+            "/usr/bin/dbento",
+            None,
+            false,
+            K::Standalone(p("/usr/bin/dbento")),
+        ),
+        (
+            App,
+            Linux,
+            true,
+            "/Volumes/x/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            App,
+            Linux,
+            true,
+            "/tmp/AppTranslocation/x/dbento-app",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::AppImage(p("/home/u/Dbento.AppImage")),
+        ),
+        (
+            Cli,
+            Macos,
+            true,
+            "/Users/u/bin/dbento",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::Standalone(p("/Users/u/bin/dbento")),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "/home/u/bin/dbento",
+            None,
+            true,
+            K::NotOwned(R::ShippedWithApp),
+        ),
+    ];
+    for (product, os, release, exe, appimage, sibling, want) in rows {
+        let got = install_kind(
+            product,
+            os,
+            release,
+            Path::new(exe),
+            appimage.map(Path::new),
+            sibling,
+        );
+        assert_eq!(got, want, "{product:?} {os:?} release={release} {exe}");
+    }
+}
+
+#[test]
+fn the_release_marker_comes_only_from_the_build_environment() {
+    assert_eq!(RELEASE_BUILD, option_env!("DBENTO_RELEASE_BUILD").is_some());
+}
+
+#[test]
+fn each_reason_says_why() {
+    assert_eq!(
+        R::ShippedWithApp.to_string(),
+        "it ships with the Dbento app, so update the app instead"
+    );
+    assert!(
+        R::SourceBuild.to_string().contains("built from source"),
+        "{}",
+        R::SourceBuild
+    );
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release helpers for the release workflow: the tag guard, the build matrix, the secret-free
-# build and package, the macOS dmg, stable-named copies and SHA256SUMS.
+# build and package, the macOS dmg, stable-named copies, SHA256SUMS and the update manifest.
 # Must stay bash 3.2 safe, since macOS runners run /bin/bash 3.2.
 # Sourcing this file only defines functions; running it dispatches a subcommand.
 source "$(dirname "${BASH_SOURCE[0]}")/package-linux.sh"
@@ -81,12 +81,14 @@ adhoc_sign() {
   "${CODESIGN:-codesign}" --verify --deep --strict "$1"
 }
 
-# Ad-hoc sign OUT/Dbento.app, wrap it as OUT/Dbento_VERSION_ARCH.dmg, and
-# drop the .app so only the release artifact is left.
+# Ad-hoc sign OUT/Dbento.app, tar the signed bundle into UPDATE as the updater's payload, wrap
+# it as OUT/Dbento_VERSION_ARCH.dmg, and drop the .app so only the release artifact is left.
 macos_dmg() {
-  local out=$1 version=$2 arch=$3
+  local out=$1 version=$2 arch=$3 update=$4
   local app=$out/Dbento.app
   adhoc_sign "$app" || return 1
+  mkdir -p "$update" || return 1
+  "${TAR:-tar}" -C "$out" -czf "$update/Dbento_${version}_${arch}.app.tar.gz" Dbento.app || return 1
   "${HDIUTIL:-hdiutil}" create -volname Dbento -srcfolder "$app" -ov -format UDZO \
     "$out/Dbento_${version}_${arch}.dmg" || return 1
   rm -rf "$app"
@@ -141,6 +143,7 @@ package_dirs() {
   realpath -m / >/dev/null 2>&1 || realpath() { portable_realpath "$@"; }
   ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   OUT=${OUT_DIR:-$ROOT/target/dist/$1}
+  UPDATE=${UPDATE_DIR:-$ROOT/target/update/$1}
 }
 
 # Build the release binaries and the notices on macOS or Windows into OUT_DIR.
@@ -168,6 +171,7 @@ package_main() {
   package_dirs "$os"
   local out version target bin_dir
   out=$(realpath -m -- "$OUT")
+  UPDATE=$(realpath -m -- "$UPDATE")
   if [[ ! -f $out/THIRD-PARTY-NOTICES.html ]]; then
     echo "release: no build in $out; run release.sh build first" >&2
     return 1
@@ -180,7 +184,7 @@ package_main() {
   local files=("$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/README.md" "$out/THIRD-PARTY-NOTICES.html")
   if [[ $os == macos ]]; then
     package_app "$out" app
-    TAR=gtar macos_dmg "$out" "$version" "${target%%-*}"
+    TAR=gtar macos_dmg "$out" "$version" "${target%%-*}" "$UPDATE"
     adhoc_sign "$bin_dir/dbento"
     TAR=gtar cli_archive "$bin_dir/dbento" "$version" "$target" "$out" "${files[@]}"
   else
@@ -189,6 +193,34 @@ package_main() {
   fi
   rm -rf -- "$out/.cargo-packager"
   echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
+}
+
+# The update directory name for this host: linux, macos or windows.
+update_os() {
+  case $(uname -s) in
+    Linux) echo linux ;;
+    Darwin) echo macos ;;
+    MINGW* | MSYS* | CYGWIN*) echo windows ;;
+    *) echo "release: no update files for $(uname -s)" >&2; return 1 ;;
+  esac
+}
+
+# Copy the release CLI into UPDATE_DIR as dbento-VERSION-HOST[.exe], the raw binary the updater
+# swaps in. The binary is checked first, so a missing build leaves no directory behind.
+update_cli() {
+  local os exe= bin version host
+  os=$(update_os) || return 1
+  package_dirs "$os"
+  if [[ $os == windows ]]; then exe=.exe; fi
+  bin=${CARGO_TARGET_DIR:-$ROOT/target}/release/dbento$exe
+  if [[ ! -f $bin ]]; then
+    echo "release: no release CLI at $bin; run release.sh build first" >&2
+    return 1
+  fi
+  version=$(workspace_version) || return 1
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  mkdir -p "$UPDATE" || return 1
+  install -m 0755 "$bin" "$UPDATE/dbento-$version-$host$exe"
 }
 
 # The stable name of release file NAME at VERSION, for /releases/latest/download links: the
@@ -228,8 +260,49 @@ stable_copies() {
   fi
 }
 
+# The update targets: id, where the file ships from, its name with @V@ for the version, and its format.
+update_targets() {
+  cat <<'EOF'
+app-linux-x86_64 dist dbento-app_@V@_x86_64.AppImage appimage
+app-linux-aarch64 dist dbento-app_@V@_aarch64.AppImage appimage
+app-macos-aarch64 update Dbento_@V@_aarch64.app.tar.gz app
+app-macos-x86_64 update Dbento_@V@_x86_64.app.tar.gz app
+app-windows-x86_64 dist dbento-app_@V@_x64-setup.exe nsis
+cli-linux-x86_64 update dbento-@V@-x86_64-unknown-linux-gnu binary
+cli-linux-aarch64 update dbento-@V@-aarch64-unknown-linux-gnu binary
+cli-macos-aarch64 update dbento-@V@-aarch64-apple-darwin binary
+cli-macos-x86_64 update dbento-@V@-x86_64-apple-darwin binary
+cli-windows-x86_64 update dbento-@V@-x86_64-pc-windows-msvc.exe binary
+EOF
+}
+
+# One manifest entry as compact JSON, {ID: {url, format, size, sha256}}; refuses a malformed id or a missing file.
+manifest_entry() {
+  local id=$1 file=$2 format=$3 url=$4 re='^(app|cli)-(linux|macos|windows)-(x86_64|aarch64)$' size sha
+  if [[ ! $id =~ $re ]]; then echo "release: malformed update target id '$id'" >&2; return 1; fi
+  if [[ ! -f $file ]]; then echo "release: update target $id needs $file, which is missing" >&2; return 1; fi
+  size=$(wc -c <"$file" | tr -d ' ') || return 1
+  sha=$(sha256sum "$file" | cut -d' ' -f1) || return 1
+  jq -cn --arg id "$id" --arg url "$url" --arg format "$format" --arg sha "$sha" --argjson size "$size" \
+    '{($id): {url: $url, format: $format, size: $size, sha256: $sha}}'
+}
+
+# Write UPDATE/latest.json for stable VERSION, artifact URLs under BASE_URL; nothing is written on failure.
+write_manifest() {
+  local dist=$1 update=$2 version=$3 base=${4%/} re='^[0-9]+\.[0-9]+\.[0-9]+$' id where pattern format name dir entries=
+  if [[ ! $version =~ $re ]]; then echo "release: the update manifest needs a stable version, got '$version'" >&2; return 1; fi
+  while read -r id where pattern format; do
+    name=${pattern//@V@/$version}
+    if [[ $where == dist ]]; then dir=$dist; else dir=$update; fi
+    entries="$entries$(manifest_entry "$id" "$dir/$name" "$format" "$base/$name")"$'\n' || return 1
+  done < <(update_targets)
+  printf '%s' "$entries" | jq -s --arg v "$version" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{version: $v, pub_date: $d, targets: add}' >"$update/latest.json.tmp" || { rm -f -- "$update/latest.json.tmp"; return 1; }
+  mv -- "$update/latest.json.tmp" "$update/latest.json"
+}
+
 usage() {
-  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR" >&2
+  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | update-cli | stable DIR VERSION | sums DIR | manifest DIST UPDATE VERSION BASE_URL" >&2
   exit 2
 }
 
@@ -254,6 +327,10 @@ main() {
       (($# == 1)) || usage
       package_main
       ;;
+    update-cli)
+      (($# == 1)) || usage
+      update_cli
+      ;;
     stable)
       (($# == 3)) || usage
       stable_copies "$2" "$3"
@@ -261,6 +338,10 @@ main() {
     sums)
       (($# == 2)) || usage
       write_sums "$2"
+      ;;
+    manifest)
+      (($# == 5)) || usage
+      write_manifest "$2" "$3" "$4" "$5"
       ;;
     *) usage ;;
   esac

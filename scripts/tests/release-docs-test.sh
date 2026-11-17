@@ -73,6 +73,8 @@ test_releasing_doc_covers_the_attestation() {
   [[ -f $DOC ]] || return 0
   need "$DOC" 'gh attestation verify <file> --repo PhongGuy/dbento'
   need "$DOC" 'The `attest` job is the only job bound to the `release` environment'
+  need "$DOC" 'gh attestation verify latest.json --repo PhongGuy/dbento'
+  need "$DOC" 'minisign -V -p dbento-update.pub -m latest.json -x latest.json.minisig'
 }
 
 test_releasing_doc_says_outward_steps_are_the_maintainers() {
@@ -101,12 +103,49 @@ test_docs_name_no_certificate_or_unsigned_marker() {
   done
 }
 
-test_docs_carry_no_updater_or_apinata_text() {
+# Neither doc names Apinata; the README names no update-only file, which users never download by hand,
+# while the releasing guide documents them.
+test_docs_name_no_apinata_and_only_the_guide_names_update_files() {
   local f
   for f in "$README" "$DOC"; do
     [[ -f $f ]] || continue
-    if grep -niE 'apinata|latest\.json|APINATA_|\.app\.tar\.gz' "$f"; then fail "$(basename "$f") carries updater or Apinata text"; fi
+    if grep -niE 'apinata|APINATA_' "$f"; then fail "$(basename "$f") carries Apinata text"; fi
   done
+  if grep -nE 'latest\.json|\.app\.tar\.gz' "$README"; then fail "README names an update-only file"; fi
+  need "$DOC" 'latest.json'
+  need "$DOC" '.app.tar.gz'
+}
+
+test_releasing_doc_covers_update_signing() {
+  [[ -f $DOC ]] || return 0
+  need "$DOC" 'The `attest` job compiles nothing; it runs only the distro `minisign`'
+  need "$DOC" 'CARGO_PACKAGER_SIGN_PRIVATE_KEY'
+  need "$DOC" 'set only on the signing step'
+  need "$DOC" 'update/latest.json.sig'
+  need "$DOC" "A published release's assets are never replaced; a bad release is fixed by a new version."
+  if grep -nF 'No release job holds a signing secret' "$DOC"; then fail "RELEASING.md still says no job holds a signing secret"; fi
+}
+
+test_releasing_doc_covers_the_keys() {
+  [[ -f $DOC ]] || return 0
+  grep -qx '## Keys' "$DOC" || fail "RELEASING.md has no Keys section"
+  grep -qx '### Rotation and compromise' "$DOC" || fail "RELEASING.md has no rotation section"
+  local s
+  for s in '40786E97EA264BC5' 'assets/update/keys.txt' 'cargo packager signer generate --path dbento-update.key' \
+    'gh secret set CARGO_PACKAGER_SIGN_PRIVATE_KEY --env release < dbento-update.key' \
+    'gh secret set CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD --env release' 'Never set them as repository secrets'; do
+    need "$DOC" "$s"
+  done
+}
+
+test_release_notes_explain_updates() {
+  local notes=$ROOT/packaging/release-notes.md section
+  section=$(awk '/^## Updates$/ { on = 1; next } /^## / { on = 0 } on' "$notes")
+  [[ -n $section ]] || { fail "release-notes.md has no Updates section"; return 0; }
+  grep -qF 'checks GitHub once a day' <<<"$section" || fail "Updates does not say how often Dbento checks"
+  grep -qF 'Check for updates' <<<"$section" || fail "Updates does not say how to turn the check off"
+  grep -qiF 'keychain' <<<"$section" || fail "Updates does not warn about the macOS keychain prompt"
+  if grep -qF 'does not update itself' <<<"$section"; then fail "Updates still says Dbento does not update itself"; fi
 }
 
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do "$t"; done

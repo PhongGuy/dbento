@@ -53,6 +53,9 @@ mod keychain;
 #[cfg(feature = "keychain")]
 pub use keychain::KeychainStore;
 
+#[cfg(feature = "update")]
+pub mod update;
+
 mod introspect;
 pub use introspect::{
     ColumnMeta, IntrospectError, RELATION_CAP, Relation, RelationKind, RelationList, RelationRef,

@@ -24,6 +24,11 @@ job_body() {
        in_jobs && on' "$1"
 }
 
+# Print the lines of the step named NAME in job JOB of FILE, up to the next step.
+step_body() {
+  job_body "$1" "$2" | awk -v name="      - name: $3" '$0 == name { on = 1; print; next } on && /^      - / { exit } on'
+}
+
 # Every uses: must name a 40-hex commit, never a tag or a branch.
 pinned_uses_only() {
   local file=$1 bad
@@ -214,10 +219,26 @@ test_zizmor_audits_the_workflows() {
   [[ $(job_timeouts "$ZIZMOR") == "zizmor=10 " ]] || fail "zizmor timeouts: $(job_timeouts "$ZIZMOR")"
 }
 
-# No release job holds a secret: there is no certificate, and provenance comes from attestation.
-test_release_holds_no_signing_secret() {
+# The two update-signing secrets appear once each, on the attest job's sign step env, piped from
+# builtins; there is still no code-signing certificate.
+test_release_holds_secrets_only_on_the_sign_step() {
   [[ -f $RELEASE ]] || return 0
-  if grep -nE 'secrets\.|WINDOWS_CERTIFICATE|signtool' "$RELEASE"; then fail "release.yml still handles a signing secret"; fi
+  if grep -nE 'WINDOWS_CERTIFICATE|signtool' "$RELEASE"; then fail "release.yml still handles a code-signing secret"; fi
+  local got step
+  got=$(grep -oE 'secrets\.[A-Z_]+' "$RELEASE" | LC_ALL=C sort | tr '\n' ' ') || true
+  [[ $got == "secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD " ]] \
+    || fail "secrets in release.yml: $got"
+  step=$(step_body "$RELEASE" attest 'Sign the update manifest')
+  [[ -n $step ]] || { fail "the attest job has no sign step"; return 0; }
+  grep -qxF '          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}' <<<"$step" \
+    || fail "the key is not on the sign step's env"
+  grep -qxF '          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}' <<<"$step" \
+    || fail "the password is not on the sign step's env"
+  grep -qF "printf '%s\n' \"\$CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD\" |" <<<"$step" || fail "the password is not piped from printf"
+  grep -qF -- "-s <(printf '%s' \"\$CARGO_PACKAGER_SIGN_PRIVATE_KEY\" | base64 -d)" <<<"$step" \
+    || fail "the key is not read through a process substitution"
+  grep -qF 'base64 -w0 update/latest.json.minisig > update/latest.json.sig' <<<"$step" || fail "no one-line .sig"
+  grep -qF 'rm update/latest.json.minisig' <<<"$step" || fail "the raw .minisig is left for upload"
 }
 
 # The attest job compiles nothing and attests exactly the files the draft uploads, SHA256SUMS
@@ -230,7 +251,9 @@ test_release_attests_every_drafted_file() {
   checksums=$(job_body "$RELEASE" checksums)
   [[ -n $attest ]] || { fail "release.yml has no attest job"; return 0; }
   grep -qxF '      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2' <<<"$attest" || fail "attest action pin"
-  grep -qxF '          subject-path: dist/*' <<<"$attest" || fail "attest does not cover every file in dist"
+  grep -qxF '          subject-path: |' <<<"$attest" || fail "attest subject-path is not a list"
+  { grep -qxF '            dist/*' <<<"$attest" && grep -qxF '            update/*' <<<"$attest"; } \
+    || fail "attest does not cover dist/* and update/*"
   [[ $(grep -cE '^    environment:' "$RELEASE") == 1 ]] || fail "environment: outside one job: $(grep -n 'environment:' "$RELEASE")"
   grep -qxF '    environment: release' <<<"$attest" || fail "the attest job is not bound to environment: release"
   grep -qxF "    if: github.ref_type == 'tag'" <<<"$attest" || fail "the attest job does not run only on a tag"
@@ -238,11 +261,25 @@ test_release_attests_every_drafted_file() {
   perms=$(awk '/^    permissions:$/ { on = 1; next } on && /^      [a-z-]+: [a-z]+( #.*)?$/ { sub(/ #.*/, ""); print $0; next } { on = 0 }' <<<"$attest" | LC_ALL=C sort | tr -s ' ' | tr '\n' '|')
   [[ $perms == " artifact-metadata: write| attestations: write| contents: read| id-token: write|" ]] || fail "attest permissions: $perms"
   [[ $(grep -c 'id-token: write' "$RELEASE") == 1 ]] || fail "id-token: write outside the attest job"
-  if grep -nE '^        run:|cargo|make ' <<<"$attest"; then fail "the attest job runs commands"; fi
+  # It compiles nothing: its only commands are the minisign install and the sign step.
+  [[ $(grep -cE '^        run:' <<<"$attest") == 2 ]] || fail "attest runs more than the minisign install and the sign step"
+  if grep -nE 'cargo|make |scripts/|actions/checkout' <<<"$attest"; then fail "the attest job builds or runs repository code"; fi
+  grep -qxF '          sudo apt-get install -y -qq --no-install-recommends minisign=0.11-1' <<<"$attest" \
+    || fail "minisign is not the pinned distro package"
+  [[ $(grep -cxF "        if: hashFiles('update/latest.json') != ''" <<<"$attest") == 2 ]] \
+    || fail "the minisign steps do not wait for a manifest"
+  local install sign att
+  install=$(grep -nxF '      - name: Install minisign' <<<"$attest" | cut -d: -f1) || true
+  sign=$(grep -nxF '      - name: Sign the update manifest' <<<"$attest" | cut -d: -f1) || true
+  att=$(grep -n 'uses: actions/attest@' <<<"$attest" | cut -d: -f1) || true
+  [[ -n $install && -n $sign && -n $att && $install -lt $sign && $sign -lt $att ]] \
+    || fail "attest order: install '$install', sign '$sign', attest '$att'"
+  if grep -qxF '          path: dist' <<<"$attest$draft"; then fail "attest or draft still unpacks into dist only"; fi
+  grep -qF 'name: signed-${{ needs.guard.outputs.version }}' <<<"$attest" || fail "attest does not upload the signed set"
   # One artifact carries the files from the sums to the attestation to the draft.
   grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$checksums" || fail "checksums does not upload the release files"
   grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$attest" || fail "attest does not download the release files"
-  grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$draft" || fail "draft does not download the release files"
+  grep -qF 'name: signed-${{ needs.guard.outputs.version }}' <<<"$draft" || fail "draft does not download the signed set"
   grep -qxF '    needs: [guard, checksums]' <<<"$attest" || fail "attest does not follow checksums"
   grep -qxF '    needs: [guard, checksums, attest]' <<<"$draft" || fail "draft does not wait for attest"
   grep -qxF "    if: github.ref_type == 'tag' && !inputs.dry_run" <<<"$draft" || fail "draft does not run only on a tag release"
@@ -262,7 +299,7 @@ test_release_drafts_only_on_a_tag() {
   [[ -f $RELEASE ]] || return 0
   [[ $(grep -cE '^[[:space:]]+run: .*gh release' "$RELEASE") == 1 ]] || fail "want exactly one run: line calling gh release: $(grep -n 'gh release' "$RELEASE")"
   [[ $(grep -cE '^[[:space:]]+gh release' "$RELEASE") == 0 ]] || fail "a gh release call inside a run block: $(grep -n 'gh release' "$RELEASE")"
-  grep -qF 'gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/*' "$RELEASE" \
+  grep -qE 'gh release create "\$GITHUB_REF_NAME" --repo "\$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento \$VERSION" --notes-file "\$RUNNER_TEMP/notes.md" dist/\* update/\*$' "$RELEASE" \
     || fail "draft command"
   # gh puts a notes file before generated notes, so the two never mix.
   if grep -qF -- '--generate-notes' "$RELEASE"; then fail "release.yml still asks gh to generate notes"; fi
@@ -300,9 +337,49 @@ test_release_notes_checkout_has_full_history() {
   grep -q 'fetch-depth: 0' <<<"$(job_body "$RELEASE" draft)" || fail "the draft job checks out without fetch-depth: 0"
 }
 
-test_release_has_no_updater_pieces() {
+# The updater lives only where the design puts it: no Apinata leftovers, no cargo packager signer,
+# no repository variables, and latest.json written in checksums and signed in attest only.
+test_release_updater_pieces_sit_in_checksums_and_attest() {
   [[ -f $RELEASE ]] || return 0
-  if grep -niE 'apinata|UPDATE_|latest\.json|signer|manifest|choco' "$RELEASE"; then fail "updater or Apinata leftovers in release.yml"; fi
+  if grep -niE 'apinata|choco|signer|vars\.' "$RELEASE"; then fail "Apinata, signer or variable leftovers in release.yml"; fi
+  local j
+  for j in guard build draft; do
+    if grep -n 'latest\.json' <<<"$(job_body "$RELEASE" "$j")"; then fail "$j touches latest.json"; fi
+  done
+  local step
+  step=$(step_body "$RELEASE" checksums 'Write the update manifest')
+  grep -qxF "        if: github.ref_type == 'tag' && !inputs.dry_run" <<<"$step" || fail "the manifest is written outside tag releases"
+  grep -qxF '        run: scripts/release.sh manifest dist update "$VERSION" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"' <<<"$step" \
+    || fail "manifest command: $step"
+  local sums manifest
+  sums=$(grep -nF 'run: scripts/release.sh sums dist' "$RELEASE" | cut -d: -f1) || true
+  manifest=$(grep -nF 'run: scripts/release.sh manifest dist update' "$RELEASE" | cut -d: -f1) || true
+  [[ -n $sums && -n $manifest && $sums -lt $manifest ]] || fail "the manifest (line $manifest) does not follow the sums (line $sums)"
+}
+
+# Only the release build job marks its binaries, and every runner hands on its update payloads.
+# The raw CLI is staged after packaging, because the macOS package step ad-hoc signs it in place.
+test_release_build_marks_and_stages_update_files() {
+  [[ -f $RELEASE ]] || return 0
+  local build checksums
+  build=$(job_body "$RELEASE" build)
+  checksums=$(job_body "$RELEASE" checksums)
+  grep -qxF '      DBENTO_RELEASE_BUILD: "1"' <<<"$build" || fail "the build job does not set DBENTO_RELEASE_BUILD"
+  [[ $(grep -c 'DBENTO_RELEASE_BUILD' "$RELEASE") == 1 ]] || fail "DBENTO_RELEASE_BUILD outside the build job env"
+  grep -qxF '        run: bash scripts/release.sh update-cli' <<<"$build" || fail "the build job stages no raw CLI"
+  local linux package stage
+  linux=$(grep -nxF '        run: make package' <<<"$build" | cut -d: -f1) || true
+  package=$(grep -nxF '        run: bash scripts/release.sh package' <<<"$build" | cut -d: -f1) || true
+  stage=$(grep -nxF '        run: bash scripts/release.sh update-cli' <<<"$build" | cut -d: -f1) || true
+  [[ -n $linux && -n $package && -n $stage && $linux -lt $stage && $package -lt $stage ]] \
+    || fail "update-cli (line $stage) does not follow both package steps (lines $linux, $package)"
+  grep -qF 'name: update-${{ matrix.target }}' <<<"$build" || fail "the build job uploads no update files"
+  grep -qF "path: target/update/\${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}/" <<<"$build" \
+    || fail "update upload path"
+  { grep -qxF '          pattern: update-*' <<<"$checksums" && grep -qxF '          path: update' <<<"$checksums"; } \
+    || fail "checksums does not gather the update files into update/"
+  { grep -qxF '            dist/' <<<"$checksums" && grep -qxF '            update/' <<<"$checksums"; } \
+    || fail "the release artifact does not carry dist/ and update/"
 }
 
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do "$t"; done
