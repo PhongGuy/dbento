@@ -9,6 +9,7 @@ use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::persist::save_json;
 use dbento_app::settings::Settings;
 use dbento_app::theme::Appearance;
+use dbento_app::updates::{self, UpdateHooks};
 use dbento_core::MemoryStore;
 use dbento_core::paths::STATE_DIR_VAR;
 use gpui_kit::{App, AssetSource};
@@ -45,7 +46,15 @@ impl PilotApp for Dbento {
             secrets_in_memory: false,
         };
         seed_appearance(&dir, std::env::var(THEME_VAR).ok().as_deref())?;
-        start(services, workspace_arg(&launch.args)?, cx)?;
+        let workspace = workspace_arg(&launch.args)?;
+        // The updater keeps its state beside the app's; with no feed in the launch env a
+        // debug build stays Disabled, so a scenario reaches the network only when it asks.
+        updates::install(
+            Some(AppPaths::in_dir(&dir).update_state),
+            UpdateHooks::real(),
+            cx,
+        );
+        start(services, workspace, cx)?;
         Ok(())
     }
 }

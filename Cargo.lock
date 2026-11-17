@@ -2496,12 +2496,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64 0.23.1",
  "clap",
  "dbento-core",
  "dbento-mcp",
  "dbento-testkit",
  "humantime",
  "insta",
+ "minisign",
  "rmcp",
  "rpassword",
  "rusqlite",
@@ -2510,6 +2512,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "unicode-width",
+ "wiremock",
 ]
 
 [[package]]
@@ -2529,6 +2532,7 @@ dependencies = [
  "dbento-testkit",
  "dirs 7.0.0",
  "duckdb",
+ "flate2",
  "futures-util",
  "half",
  "hex",
@@ -2548,12 +2552,14 @@ dependencies = [
  "rusqlite",
  "rustls",
  "rustls-platform-verifier",
+ "self-replace",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "sqlite3-parser",
  "sqlparser",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tiberius",
@@ -9320,6 +9326,17 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "self-replace"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "609c5606d9d357b26e4ee1a7a01beac396628d0fa01ebbade2a09cefb88e65af"
+dependencies = [
+ "fastrand",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

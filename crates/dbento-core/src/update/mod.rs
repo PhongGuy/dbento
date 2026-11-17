@@ -1,18 +1,23 @@
 //! The self-updater: the public release feed, a build's update configuration and the URL
 //! rules every update request follows. Compiled only with the `update` feature.
 
+mod apply;
+mod bundle;
 mod error;
 mod fetch;
 mod install;
 mod manifest;
 mod sign;
 
+use std::borrow::Cow;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use url::{Host, Url};
 
-pub use error::{CheckError, DownloadError};
+pub use apply::{install, staging_dir, sweep_staged};
+pub use error::{CheckError, DownloadError, InstallError};
 pub use fetch::{check, download};
 pub use install::{InstallKind, RELEASE_BUILD, Reason, install_kind};
 pub use manifest::evaluate;
@@ -212,6 +217,23 @@ impl Staged {
     }
 }
 
+/// How the updated program starts once this process is done.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Relaunch {
+    /// Start this AppImage or `.app` bundle after this process exits.
+    Restart(PathBuf),
+    /// Start this installer now, then exit; it restarts the app itself.
+    Installer {
+        /// The installer executable.
+        program: PathBuf,
+        /// Its command-line arguments.
+        args: Vec<OsString>,
+    },
+    /// Nothing to start (a replaced CLI binary).
+    Nothing,
+}
+
 /// The release notes page for `version`.
 pub fn release_notes_url(version: &str) -> String {
     format!("https://github.com/PhongGuy/dbento/releases/tag/v{version}")
@@ -287,8 +309,9 @@ pub fn build_config_with(
 }
 
 /// The configuration this build was released with: the public feed, unless
-/// `DBENTO_UPDATE_MANIFEST_URL` overrides it, and the keys from `assets/update/keys.txt`.
-/// A debug build without the override is [`CheckError::Disabled`].
+/// `DBENTO_UPDATE_MANIFEST_URL` overrides it, and the keys from `assets/update/keys.txt`
+/// (in a debug build, `DBENTO_TEST_UPDATE_KEYS` when set). A debug build without the override
+/// is [`CheckError::Disabled`].
 pub fn build_config(product: Product) -> Result<UpdateConfig, CheckError> {
     let manifest_url = feed(
         std::env::var("DBENTO_UPDATE_MANIFEST_URL").ok(),
@@ -298,9 +321,22 @@ pub fn build_config(product: Product) -> Result<UpdateConfig, CheckError> {
         product,
         manifest_url.as_deref(),
         Some(DOWNLOAD_PAGE),
-        include_str!("../../../../assets/update/keys.txt"),
+        &keys_text(
+            std::env::var("DBENTO_TEST_UPDATE_KEYS").ok(),
+            cfg!(debug_assertions),
+        ),
         env!("CARGO_PKG_VERSION"),
     )
+}
+
+// The keys `build_config` trusts. A debug build takes a non-empty `DBENTO_TEST_UPDATE_KEYS`
+// so tests can sign with throwaway keys; a release build always trusts the compiled keys.
+fn keys_text(override_keys: Option<String>, debug: bool) -> Cow<'static, str> {
+    const COMPILED: &str = include_str!("../../../../assets/update/keys.txt");
+    match override_keys.filter(|k| debug && !k.is_empty()) {
+        Some(keys) => Cow::Owned(keys),
+        None => Cow::Borrowed(COMPILED),
+    }
 }
 
 // A non-empty override always wins. Without one, only release builds use the compiled feed,
@@ -329,7 +365,7 @@ pub(crate) fn allowed(url: &Url) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MANIFEST_URL, feed};
+    use super::{MANIFEST_URL, feed, keys_text};
 
     #[test]
     fn debug_builds_need_the_override_and_release_builds_default_to_the_feed() {
@@ -343,5 +379,14 @@ mod tests {
             Some(MANIFEST_URL)
         );
         assert_eq!(feed(Some(local.into()), false).as_deref(), Some(local));
+    }
+
+    #[test]
+    fn only_debug_builds_take_test_keys_from_the_environment() {
+        let compiled = include_str!("../../../../assets/update/keys.txt");
+        assert_eq!(keys_text(Some("TESTKEY".into()), true), "TESTKEY");
+        assert_eq!(keys_text(Some(String::new()), true), compiled);
+        assert_eq!(keys_text(None, true), compiled);
+        assert_eq!(keys_text(Some("TESTKEY".into()), false), compiled);
     }
 }

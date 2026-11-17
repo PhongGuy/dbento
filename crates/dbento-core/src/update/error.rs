@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use super::Reason;
+
 /// Why an update check failed.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -66,6 +68,26 @@ pub enum DownloadError {
     #[error("could not write {}: {message}", path.display())]
     Io {
         /// The file being written or moved.
+        path: PathBuf,
+        /// The system's description of the failure.
+        message: String,
+    },
+}
+
+/// Why installing a staged update failed. The install target is unchanged on every error.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InstallError {
+    /// The install belongs to something the updater leaves alone.
+    #[error("this install is not updated in place: {0}")]
+    NotOwned(Reason),
+    /// The install's directory does not accept the new files.
+    #[error("cannot write the update into {}", .0.display())]
+    NotWritable(PathBuf),
+    /// Reading the staged update or replacing the install failed.
+    #[error("could not install {}: {message}", path.display())]
+    Io {
+        /// The file or directory the failure concerns.
         path: PathBuf,
         /// The system's description of the failure.
         message: String,

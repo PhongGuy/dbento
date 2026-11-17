@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use super::{Os, Product};
+use super::{Format, Os, Product};
 
 /// Whether this build came from the release workflow, which alone sets `DBENTO_RELEASE_BUILD`
 /// at compile time. Callers pass it to [`install_kind`].
@@ -23,6 +23,19 @@ pub enum InstallKind {
     WindowsNsis,
     /// An install the updater must leave alone.
     NotOwned(Reason),
+}
+
+impl InstallKind {
+    /// Whether a release packaged as `format` can replace this install.
+    pub fn accepts(&self, format: Format) -> bool {
+        matches!(
+            (self, format),
+            (InstallKind::Standalone(_), Format::Binary)
+                | (InstallKind::AppImage(_), Format::AppImage)
+                | (InstallKind::MacApp(_), Format::App)
+                | (InstallKind::WindowsNsis, Format::Nsis)
+        )
+    }
 }
 
 /// Why the updater leaves an install alone.

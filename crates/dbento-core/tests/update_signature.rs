@@ -104,3 +104,18 @@ fn an_undecodable_key_is_skipped() {
         Err(CheckError::UnknownKey)
     );
 }
+
+#[test]
+fn a_failing_signature_reads_as_one_sentence() {
+    let k = TestKey::generate();
+    let m = b"{\"version\":\"1.0.0\"}";
+    let got = verify_manifest(
+        b"{\"version\":\"9.0.0\"}",
+        k.sign(m).as_bytes(),
+        &[k.key_line()],
+    );
+    assert_eq!(
+        got.map_err(|e| e.to_string()),
+        Err("the update manifest signature is invalid: the signature verification failed".into())
+    );
+}

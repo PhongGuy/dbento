@@ -76,11 +76,19 @@ fn main() {
                     env: Arc::new(|v| std::env::var(v).ok()),
                     secrets_in_memory,
                 };
-                cx.update(|cx| match start(services, dir, cx) {
-                    Ok(_) => cx.activate(true),
-                    Err(e) => {
-                        eprintln!("dbento: {e}");
-                        cx.quit();
+                cx.update(|cx| {
+                    // The schedule's first tick waits for `start` to install the settings store.
+                    dbento_app::updates::install(
+                        Some(services.paths.update_state.clone()),
+                        dbento_app::updates::UpdateHooks::real(),
+                        cx,
+                    );
+                    match start(services, dir, cx) {
+                        Ok(_) => cx.activate(true),
+                        Err(e) => {
+                            eprintln!("dbento: {e}");
+                            cx.quit();
+                        }
                     }
                 });
             })

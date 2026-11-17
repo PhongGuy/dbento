@@ -33,6 +33,7 @@ mod cli_query;
 mod cli_redis;
 mod cli_run_secret;
 mod cli_safety;
+mod cli_self_update;
 mod cli_surreal;
 mod cli_torture;
 mod cli_workspace;

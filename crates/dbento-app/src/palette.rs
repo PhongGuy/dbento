@@ -238,13 +238,15 @@ pub enum PaletteCommand {
     CycleAppearance,
     /// Opens the Settings dialog.
     OpenSettings,
+    /// Checks for a newer release now.
+    CheckForUpdates,
     /// Switches the palette to the shortcut list.
     KeyboardShortcuts,
 }
 
 impl PaletteCommand {
     /// Every command, in the order the Commands group lists them.
-    pub const ALL: [PaletteCommand; 19] = [
+    pub const ALL: [PaletteCommand; 20] = [
         Self::NewTab,
         Self::CloseTab,
         Self::SaveQuery,
@@ -263,6 +265,7 @@ impl PaletteCommand {
         Self::ToggleRowInspector,
         Self::CycleAppearance,
         Self::OpenSettings,
+        Self::CheckForUpdates,
         Self::KeyboardShortcuts,
     ];
 
@@ -287,6 +290,7 @@ impl PaletteCommand {
             Self::ToggleRowInspector => "Toggle row inspector",
             Self::CycleAppearance => "Toggle appearance",
             Self::OpenSettings => "Open settings",
+            Self::CheckForUpdates => "Check for updates",
             Self::KeyboardShortcuts => "Keyboard shortcuts",
         }
     }
@@ -312,6 +316,7 @@ impl PaletteCommand {
             Self::ToggleRowInspector => Box::new(keymap::ToggleRowInspector),
             Self::CycleAppearance => Box::new(CycleAppearance),
             Self::OpenSettings => Box::new(keymap::OpenSettings),
+            Self::CheckForUpdates => Box::new(keymap::CheckForUpdates),
             Self::KeyboardShortcuts => return None,
         })
     }

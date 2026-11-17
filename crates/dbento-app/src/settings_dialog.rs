@@ -1,5 +1,6 @@
 //! The Settings dialog's view: theme and density segments, a family picker and size field for
-//! each of the UI, editor and grid fonts, and the keymap file with its problems and commands.
+//! each of the UI, editor and grid fonts, the update check, and the keymap file with its
+//! problems and commands.
 //! Every settings change goes straight to the settings store.
 
 use std::ops::RangeInclusive;
@@ -7,6 +8,7 @@ use std::ops::RangeInclusive;
 use gpui_kit::base::actions::{Cancel, Confirm};
 use gpui_kit::base::{Decrement, Increment, StepAction, step_value};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
@@ -24,6 +26,7 @@ use crate::settings::{Density, EDITOR_SIZES, FontChoice, GRID_SIZES, Settings, U
 use crate::settings_store::{self, SettingsStore};
 use crate::theme::{self, Appearance};
 use crate::ui::{self, Icons, Notice, NoticeKind};
+use crate::updates;
 
 /// Which of the three fonts a control edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +187,10 @@ impl SettingsView {
             this.echo(window, cx);
             cx.notify();
         }));
+        // A manual check's report shows under Check now, so the view follows the updater.
+        if let Some(updates) = updates::global(cx) {
+            subscriptions.push(cx.observe(&updates, |_, _, cx| cx.notify()));
+        }
         SettingsView {
             store,
             focus: cx.focus_handle(),
@@ -665,6 +672,43 @@ impl SettingsView {
         rows
     }
 
+    // The automatic check's switch, a manual check, and the last manual check's report.
+    fn update_rows(&self, enabled: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let store = self.store.clone();
+        let toggle = Checkbox::new("settings-check-updates")
+            .label("Check for updates")
+            .checked(enabled)
+            .on_click(move |checked: &bool, _, cx| {
+                let on = *checked;
+                store.update(cx, |s, cx| s.change(cx, |v| v.check_for_updates = on));
+            });
+        let check_now = ui::secondary(Button::new("settings-check-now"))
+            .h(px(32.))
+            .flex_none()
+            .label("Check now")
+            .on_click(|_, _, cx| updates::check_now(cx));
+        let report = updates::global(cx)
+            .and_then(|u| u.read(cx).last_report().map(updates::report_text))
+            .map(|says| {
+                div()
+                    .id("settings-update-status")
+                    .flex_1()
+                    .min_w_0()
+                    .role(Role::Label)
+                    .aria_label(says.clone())
+                    .test_support()
+                    .text_sm()
+                    .text_color(theme::dim(cx))
+                    .child(says)
+            });
+        // A long failure wraps beside the button instead of running past the dialog.
+        let manual = h_flex().gap_3().child(check_now).children(report);
+        vec![
+            Self::row("Automatic", toggle, cx),
+            Self::row("", manual, cx),
+        ]
+    }
+
     // Opening never blocks the dialog: a failure (no folder, a write error) is a toast naming
     // the file.
     fn open_keymap(window: &mut Window, cx: &mut App) {
@@ -738,9 +782,11 @@ impl Render for SettingsView {
         });
         let border = cx.theme().border;
         let keyboard = self.keyboard_rows(cx);
+        let updates = self.update_rows(current.check_for_updates, cx);
         let sections = [
             ("Appearance", look),
             ("Fonts", fonts),
+            ("Updates", updates),
             ("Keyboard", keyboard),
         ]
         .into_iter()
