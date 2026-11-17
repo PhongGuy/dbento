@@ -301,6 +301,52 @@ fn the_classification_table() {
             false,
             K::NotOwned(R::Unrecognised),
         ),
+        // Each layout rule holds only on its own OS.
+        (
+            Cli,
+            Macos,
+            true,
+            "/usr/bin/dbento",
+            None,
+            false,
+            K::Standalone(p("/usr/bin/dbento")),
+        ),
+        (
+            App,
+            Linux,
+            true,
+            "/Volumes/x/dbento-app",
+            None,
+            false,
+            K::NotOwned(R::Unrecognised),
+        ),
+        (
+            App,
+            Linux,
+            true,
+            "/tmp/AppTranslocation/x/dbento-app",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::AppImage(p("/home/u/Dbento.AppImage")),
+        ),
+        (
+            Cli,
+            Macos,
+            true,
+            "/Users/u/bin/dbento",
+            Some("/home/u/Dbento.AppImage"),
+            false,
+            K::Standalone(p("/Users/u/bin/dbento")),
+        ),
+        (
+            Cli,
+            Linux,
+            true,
+            "/home/u/bin/dbento",
+            None,
+            true,
+            K::NotOwned(R::ShippedWithApp),
+        ),
     ];
     for (product, os, release, exe, appimage, sibling, want) in rows {
         let got = install_kind(
