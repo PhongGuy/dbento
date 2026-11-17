@@ -51,6 +51,8 @@ url = "2.5.8"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
 minisign-verify = "=0.3.0"
 semver = "1.0.28"
+tar = { version = "=0.4.46", default-features = false }
+flate2 = "1.1.11"
 wiremock = "0.6.5"
 minisign = "=0.10.0"
 sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }

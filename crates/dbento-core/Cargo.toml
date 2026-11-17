@@ -58,6 +58,8 @@ keyring-core = { workspace = true, optional = true }
 ureq = { workspace = true, optional = true }
 minisign-verify = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -96,7 +98,7 @@ keychain = [
     "dep:windows-native-keyring-store",
 ]
 # The self-updater: a signed manifest check and a verified download over ureq.
-update = ["dep:ureq", "dep:minisign-verify", "dep:semver"]
+update = ["dep:ureq", "dep:minisign-verify", "dep:semver", "dep:tar", "dep:flate2"]
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -105,6 +107,8 @@ aws-smithy-types.workspace = true
 dbento-testkit = { path = "../dbento-testkit" }
 wiremock.workspace = true
 minisign.workspace = true
+tar.workspace = true
+flate2.workspace = true
 
 [[test]]
 name = "integration"

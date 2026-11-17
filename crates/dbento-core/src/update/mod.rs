@@ -1,6 +1,7 @@
 //! The self-updater: the public release feed, a build's update configuration and the URL
 //! rules every update request follows. Compiled only with the `update` feature.
 
+mod bundle;
 mod error;
 mod fetch;
 mod install;
@@ -12,7 +13,7 @@ use std::time::Duration;
 
 use url::{Host, Url};
 
-pub use error::{CheckError, DownloadError};
+pub use error::{CheckError, DownloadError, InstallError};
 pub use fetch::{check, download};
 pub use install::{InstallKind, RELEASE_BUILD, Reason, install_kind};
 pub use manifest::evaluate;
