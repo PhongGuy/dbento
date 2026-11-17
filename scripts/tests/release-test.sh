@@ -268,27 +268,34 @@ test_stable_copies_refuse_a_clash_or_an_empty_directory() {
 }
 
 test_macos_dmg_ad_hoc_signs_then_wraps_the_app() {
-  local out=$WORK/mac
+  local out=$WORK/mac update=$WORK/mac-update
   mkdir -p "$out/Dbento.app/Contents"
+  printf 'plist' >"$out/Dbento.app/Contents/Info.plist"
   printf '#!/usr/bin/env bash\necho "codesign $*" >>"%s/mac.log"\n' "$WORK" >"$WORK/codesign"
   printf '#!/usr/bin/env bash\necho "hdiutil $*" >>"%s/mac.log"\ntouch "${@: -1}"\n' "$WORK" >"$WORK/hdiutil"
   chmod +x "$WORK/codesign" "$WORK/hdiutil"
-  CODESIGN=$WORK/codesign HDIUTIL=$WORK/hdiutil macos_dmg "$out" 1.2.3 aarch64 || fail "macos_dmg failed"
+  CODESIGN=$WORK/codesign HDIUTIL=$WORK/hdiutil macos_dmg "$out" 1.2.3 aarch64 "$update" || fail "macos_dmg failed"
   local want="codesign --force --deep --sign - $out/Dbento.app
 codesign --verify --deep --strict $out/Dbento.app
 hdiutil create -volname Dbento -srcfolder $out/Dbento.app -ov -format UDZO $out/Dbento_1.2.3_aarch64.dmg"
   [[ $(cat "$WORK/mac.log") == "$want" ]] || fail "macOS commands: $(cat "$WORK/mac.log")"
   [[ $(ls "$out") == Dbento_1.2.3_aarch64.dmg ]] || fail "want only the dmg, got: $(ls "$out")"
+  # The update payload is the signed bundle as the single top-level entry, outside dist.
+  local t=$update/Dbento_1.2.3_aarch64.app.tar.gz
+  [[ -f $t ]] || { fail "no .app.tar.gz in $update: $(ls "$update" 2>&1)"; return 0; }
+  [[ $(tar -tzf "$t" | cut -d/ -f1 | LC_ALL=C sort -u) == Dbento.app ]] || fail "tarball top level: $(tar -tzf "$t" | tr '\n' ' ')"
+  tar -tzf "$t" | grep -qx 'Dbento.app/Contents/Info.plist' || fail "tarball lacks the bundle contents"
 }
 
 test_macos_dmg_stops_when_the_signature_does_not_verify() {
-  local out=$WORK/mac-bad
+  local out=$WORK/mac-bad update=$WORK/mac-bad-update
   mkdir -p "$out/Dbento.app/Contents"
   printf '#!/usr/bin/env bash\n[[ $1 == --verify ]] && exit 1\nexit 0\n' >"$WORK/codesign-bad"
   printf '#!/usr/bin/env bash\necho ran >"%s/hdiutil-bad.log"\n' "$WORK" >"$WORK/hdiutil-bad"
   chmod +x "$WORK/codesign-bad" "$WORK/hdiutil-bad"
-  if CODESIGN=$WORK/codesign-bad HDIUTIL=$WORK/hdiutil-bad macos_dmg "$out" 1.2.3 aarch64; then fail "an unverified app was wrapped"; fi
+  if CODESIGN=$WORK/codesign-bad HDIUTIL=$WORK/hdiutil-bad macos_dmg "$out" 1.2.3 aarch64 "$update"; then fail "an unverified app was wrapped"; fi
   [[ ! -e $WORK/hdiutil-bad.log && -d $out/Dbento.app ]] || fail "hdiutil ran or the app was removed"
+  [[ ! -e $update/Dbento_1.2.3_aarch64.app.tar.gz ]] || fail "an unverified app became an update payload"
 }
 
 test_cli_zip_holds_the_exe_and_files() {
@@ -410,11 +417,51 @@ test_package_needs_the_build_output_and_never_builds() {
   # With the notices and binary in place, package packages, signs and archives, but never builds.
   mkdir -p "$out/Dbento.app" "$WORK/pkg-target/release"
   touch "$out/THIRD-PARTY-NOTICES.html" "$WORK/pkg-target/release/dbento"
-  PATH=$fake:$PATH OUT_DIR=$out CARGO_TARGET_DIR=$WORK/pkg-target bash "$RELEASE_SH" package >/dev/null 2>&1 \
+  PATH=$fake:$PATH OUT_DIR=$out CARGO_TARGET_DIR=$WORK/pkg-target UPDATE_DIR=$WORK/pkg-update bash "$RELEASE_SH" package >/dev/null 2>&1 \
     || fail "package failed after a build: $(tr '\n' '|' <"$WORK/pkg.log")"
   rm -rf -- "$out"
+  grep -qF -- "-czf $WORK/pkg-update/Dbento_1.2.3_" "$WORK/pkg.log" || fail "package wrote no .app.tar.gz into UPDATE_DIR: $(tr '\n' '|' <"$WORK/pkg.log")"
   grep -q '^cargo xtask packager-config ' "$WORK/pkg.log" || fail "package did not package: $(tr '\n' '|' <"$WORK/pkg.log")"
   if grep -qE '^cargo (build|fetch)|^cargo xtask notices' "$WORK/pkg.log"; then fail "package built: $(tr '\n' '|' <"$WORK/pkg.log")"; fi
+}
+
+test_update_cli_takes_no_arguments() {
+  local status=0
+  bash "$RELEASE_SH" update-cli extra >/dev/null 2>&1 || status=$?
+  [[ $status == 2 ]] || fail "update-cli with an argument exited $status, want 2"
+}
+
+test_update_cli_copies_the_release_binary_under_its_target_name() {
+  local fake=$WORK/ucli-bin host
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  fake_macos_host "$fake" "$WORK/ucli.log"
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$fake/uname"
+  mkdir -p "$WORK/ucli-target/release"
+  printf 'elf' >"$WORK/ucli-target/release/dbento"
+  chmod 0755 "$WORK/ucli-target/release/dbento"
+  PATH=$fake:$PATH CARGO_TARGET_DIR=$WORK/ucli-target UPDATE_DIR=$WORK/ucli-out bash "$RELEASE_SH" update-cli \
+    || fail "update-cli failed"
+  [[ $(ls "$WORK/ucli-out") == "dbento-1.2.3-$host" ]] || fail "update-cli wrote: $(ls "$WORK/ucli-out")"
+  [[ -x $WORK/ucli-out/dbento-1.2.3-$host && $(cat "$WORK/ucli-out/dbento-1.2.3-$host") == elf ]] \
+    || fail "the raw CLI is not the executable release binary"
+
+  # Windows keeps the .exe on both sides.
+  printf '#!/usr/bin/env bash\necho MINGW64_NT-10.0\n' >"$fake/uname"
+  printf 'MZ' >"$WORK/ucli-target/release/dbento.exe"
+  PATH=$fake:$PATH CARGO_TARGET_DIR=$WORK/ucli-target UPDATE_DIR=$WORK/ucli-win bash "$RELEASE_SH" update-cli \
+    || fail "update-cli failed on Windows"
+  [[ $(cat "$WORK/ucli-win/dbento-1.2.3-$host.exe" 2>/dev/null) == MZ ]] || fail "Windows raw CLI: $(ls "$WORK/ucli-win" 2>&1)"
+}
+
+test_update_cli_needs_the_release_binary() {
+  local fake=$WORK/ucli-missing msg
+  fake_macos_host "$fake" "$WORK/ucli-missing.log"
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$fake/uname"
+  if msg=$(PATH=$fake:$PATH CARGO_TARGET_DIR=$WORK/none-target UPDATE_DIR=$WORK/ucli-none bash "$RELEASE_SH" update-cli 2>&1); then
+    fail "update-cli passed without a binary"
+  fi
+  [[ $msg == *"no release CLI"* ]] || fail "missing-binary message: $msg"
+  [[ ! -e $WORK/ucli-none ]] || fail "update-cli created its directory without a binary"
 }
 
 # Windows ships unsigned under its plain names; no file is renamed for a missing certificate.

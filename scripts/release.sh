@@ -81,12 +81,14 @@ adhoc_sign() {
   "${CODESIGN:-codesign}" --verify --deep --strict "$1"
 }
 
-# Ad-hoc sign OUT/Dbento.app, wrap it as OUT/Dbento_VERSION_ARCH.dmg, and
-# drop the .app so only the release artifact is left.
+# Ad-hoc sign OUT/Dbento.app, tar the signed bundle into UPDATE as the updater's payload, wrap
+# it as OUT/Dbento_VERSION_ARCH.dmg, and drop the .app so only the release artifact is left.
 macos_dmg() {
-  local out=$1 version=$2 arch=$3
+  local out=$1 version=$2 arch=$3 update=$4
   local app=$out/Dbento.app
   adhoc_sign "$app" || return 1
+  mkdir -p "$update" || return 1
+  "${TAR:-tar}" -C "$out" -czf "$update/Dbento_${version}_${arch}.app.tar.gz" Dbento.app || return 1
   "${HDIUTIL:-hdiutil}" create -volname Dbento -srcfolder "$app" -ov -format UDZO \
     "$out/Dbento_${version}_${arch}.dmg" || return 1
   rm -rf "$app"
@@ -141,6 +143,7 @@ package_dirs() {
   realpath -m / >/dev/null 2>&1 || realpath() { portable_realpath "$@"; }
   ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   OUT=${OUT_DIR:-$ROOT/target/dist/$1}
+  UPDATE=${UPDATE_DIR:-$ROOT/target/update/$1}
 }
 
 # Build the release binaries and the notices on macOS or Windows into OUT_DIR.
@@ -168,6 +171,7 @@ package_main() {
   package_dirs "$os"
   local out version target bin_dir
   out=$(realpath -m -- "$OUT")
+  UPDATE=$(realpath -m -- "$UPDATE")
   if [[ ! -f $out/THIRD-PARTY-NOTICES.html ]]; then
     echo "release: no build in $out; run release.sh build first" >&2
     return 1
@@ -180,7 +184,7 @@ package_main() {
   local files=("$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/README.md" "$out/THIRD-PARTY-NOTICES.html")
   if [[ $os == macos ]]; then
     package_app "$out" app
-    TAR=gtar macos_dmg "$out" "$version" "${target%%-*}"
+    TAR=gtar macos_dmg "$out" "$version" "${target%%-*}" "$UPDATE"
     adhoc_sign "$bin_dir/dbento"
     TAR=gtar cli_archive "$bin_dir/dbento" "$version" "$target" "$out" "${files[@]}"
   else
@@ -189,6 +193,34 @@ package_main() {
   fi
   rm -rf -- "$out/.cargo-packager"
   echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
+}
+
+# The update directory name for this host: linux, macos or windows.
+update_os() {
+  case $(uname -s) in
+    Linux) echo linux ;;
+    Darwin) echo macos ;;
+    MINGW* | MSYS* | CYGWIN*) echo windows ;;
+    *) echo "release: no update files for $(uname -s)" >&2; return 1 ;;
+  esac
+}
+
+# Copy the release CLI into UPDATE_DIR as dbento-VERSION-HOST[.exe], the raw binary the updater
+# swaps in. The binary is checked first, so a missing build leaves no directory behind.
+update_cli() {
+  local os exe= bin version host
+  os=$(update_os) || return 1
+  package_dirs "$os"
+  if [[ $os == windows ]]; then exe=.exe; fi
+  bin=${CARGO_TARGET_DIR:-$ROOT/target}/release/dbento$exe
+  if [[ ! -f $bin ]]; then
+    echo "release: no release CLI at $bin; run release.sh build first" >&2
+    return 1
+  fi
+  version=$(workspace_version) || return 1
+  host=$(rustc -vV | sed -n 's/^host: //p')
+  mkdir -p "$UPDATE" || return 1
+  install -m 0755 "$bin" "$UPDATE/dbento-$version-$host$exe"
 }
 
 # The stable name of release file NAME at VERSION, for /releases/latest/download links: the
@@ -270,7 +302,7 @@ write_manifest() {
 }
 
 usage() {
-  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR | manifest DIST UPDATE VERSION BASE_URL" >&2
+  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | update-cli | stable DIR VERSION | sums DIR | manifest DIST UPDATE VERSION BASE_URL" >&2
   exit 2
 }
 
@@ -294,6 +326,10 @@ main() {
     package)
       (($# == 1)) || usage
       package_main
+      ;;
+    update-cli)
+      (($# == 1)) || usage
+      update_cli
       ;;
     stable)
       (($# == 3)) || usage
