@@ -116,9 +116,16 @@ fn swap(staged: &Path, target: &Path) -> Result<(), InstallError> {
     let old = PathBuf::from(old);
     let _ = std::fs::remove_file(&old);
     std::fs::rename(target, &old).map_err(|e| failed(target, target, e))?;
-    std::fs::rename(staged, target).map_err(|e| {
-        let _ = std::fs::rename(&old, target);
-        failed(target, target, e)
+    // A failed restore leaves the previous version only at `.old`, so the error names it.
+    std::fs::rename(staged, target).map_err(|e| match std::fs::rename(&old, target) {
+        Ok(()) => failed(target, target, e),
+        Err(restore) => InstallError::Io {
+            message: format!(
+                "{e}; the previous version could not be put back ({restore}) and is at {}",
+                old.display()
+            ),
+            path: old.clone(),
+        },
     })?;
     let _ = std::fs::remove_file(&old);
     Ok(())

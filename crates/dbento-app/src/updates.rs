@@ -384,6 +384,7 @@ pub struct Updates {
     offer: Option<Offer>,
     report: Option<Report>,
     in_flight: Option<Task<()>>,
+    manual_pending: bool,
     stager: Option<Stager>,
     launcher: Rc<dyn Launcher>,
     phase: InstallPhase,
@@ -409,6 +410,7 @@ impl Updates {
             offer: None,
             report: None,
             in_flight: None,
+            manual_pending: false,
             stager: hooks.stager,
             launcher: hooks.launcher,
             phase: InstallPhase::Idle,
@@ -455,9 +457,10 @@ impl Updates {
         self.start(true, unix_secs(SystemTime::now()), cx);
     }
 
-    /// Hides the offer for this run.
+    /// Hides the offer for this run and cancels its download; a prepared release is kept.
     pub fn later(&mut self, cx: &mut Context<Self>) {
         self.offer = None;
+        self.cancel_download();
         cx.notify();
     }
 
@@ -468,13 +471,7 @@ impl Updates {
             self.state.skipped_version = Some(offer.version);
             self.save();
         }
-        self.armed = false;
-        if let Some(skipped) = self.prepared.take() {
-            skipped.discard();
-        }
-        if !matches!(self.phase, InstallPhase::Downloading { .. }) {
-            self.phase = InstallPhase::Idle;
-        }
+        self.drop_release();
         cx.notify();
     }
 
@@ -614,31 +611,56 @@ impl Updates {
         ok
     }
 
-    // A different version disarms and discards the prepared release, so a release is
-    // installed only after a fresh press for the version the banner shows.
+    // No offer, or a different version, disarms and discards the prepared release, so a
+    // release is installed only while the banner shows its version.
     fn set_offer(&mut self, offer: Option<Offer>) {
-        if let Some(new) = &offer
-            && self
-                .prepared
-                .as_ref()
-                .is_some_and(|p| !p.holds(&new.version))
-        {
-            self.armed = false;
-            if let Some(stale) = self.prepared.take() {
-                stale.discard();
+        match &offer {
+            None => self.drop_release(),
+            Some(new) => {
+                if self
+                    .prepared
+                    .as_ref()
+                    .is_some_and(|p| !p.holds(&new.version))
+                {
+                    self.armed = false;
+                    if let Some(stale) = self.prepared.take() {
+                        stale.discard();
+                    }
+                    self.phase = InstallPhase::Idle;
+                }
             }
-            self.phase = InstallPhase::Idle;
         }
         self.offer = offer;
     }
 
+    // Dropping the tasks cancels the download, so it can neither report back nor arm.
+    fn cancel_download(&mut self) {
+        self.preparing = None;
+        self.progress = None;
+        if matches!(self.phase, InstallPhase::Downloading { .. }) {
+            self.phase = InstallPhase::Idle;
+        }
+    }
+
+    // The release the user turned down: no download, nothing prepared, nothing armed.
+    fn drop_release(&mut self) {
+        self.cancel_download();
+        self.armed = false;
+        if let Some(dropped) = self.prepared.take() {
+            dropped.discard();
+        }
+        self.phase = InstallPhase::Idle;
+    }
+
     // The time is recorded before the check runs, so a failing server is tried once a day.
-    // A check already in flight makes this a no-op.
+    // A check already in flight is not repeated; a manual one asked for meanwhile makes it
+    // finish as manual, so the user still gets a report.
     fn start(&mut self, manual: bool, now: u64, cx: &mut Context<Self>) {
         let Some(checker) = self.checker.as_ref().map(Rc::clone) else {
             return;
         };
         if self.in_flight.is_some() {
+            self.manual_pending |= manual;
             return;
         }
         self.state.last_check = Some(now);
@@ -657,6 +679,7 @@ impl Updates {
         cx: &mut Context<Self>,
     ) {
         self.in_flight = None;
+        let manual = manual || std::mem::take(&mut self.manual_pending);
         match (result, manual) {
             (Ok(CheckResult::UpToDate), true) => {
                 self.set_offer(None);

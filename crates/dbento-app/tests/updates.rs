@@ -268,3 +268,31 @@ fn install_waits_for_the_settings_and_follows_them(cx: &mut TestAppContext) {
     let global = cx.update(|cx| updates::global(cx).map(|g| g.entity_id()));
     assert_eq!(global, Some(u.entity_id()));
 }
+
+#[gpui_kit::test]
+fn a_manual_check_during_an_automatic_one_reports_its_result(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let (go, gate) = tokio::sync::oneshot::channel::<()>();
+    let gate = RefCell::new(Some(gate));
+    let c: Checker = Rc::new(move |cx| {
+        let wait = gate.borrow_mut().take();
+        cx.background_spawn(async move {
+            if let Some(rx) = wait {
+                let _ = rx.await;
+            }
+            Ok(CheckResult::Available(offer("99.0.0")))
+        })
+    });
+    let u = model(cx, dir.path(), UpdateHooks::checking(c));
+    let seen = reports(cx, &u);
+    due(cx, &u, true, T0);
+    u.update(cx, |u, cx| u.check_now(cx));
+    cx.run_until_parked();
+    assert!(
+        seen.borrow().is_empty(),
+        "reported before the check finished"
+    );
+    go.send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(*seen.borrow(), [Report::Available("99.0.0".into())]);
+}

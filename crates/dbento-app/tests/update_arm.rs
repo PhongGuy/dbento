@@ -197,3 +197,54 @@ fn skipping_the_offer_disarms_and_drops_the_prepared_release(cx: &mut TestAppCon
     r.updates.update(cx, |u, cx| u.arm(cx));
     assert!(!armed(cx, &r), "the skipped release could be armed again");
 }
+
+#[gpui_kit::test]
+fn an_up_to_date_check_disarms_and_drops_the_prepared_release(cx: &mut TestAppContext) {
+    let r = rig(cx, Relaunch::Restart(IMAGE.into()), None, false);
+    prepare(cx, &r);
+    r.updates.update(cx, |u, cx| u.arm(cx));
+    *r.answer.borrow_mut() = CheckResult::UpToDate;
+    r.updates.update(cx, |u, cx| u.check_now(cx));
+    cx.run_until_parked();
+    assert!(!armed(cx, &r), "a release with no banner stayed armed");
+    assert_eq!(phase(cx, &r), InstallPhase::Idle);
+}
+
+// Later or Skip during a download cancels it, so a re-offer of the same version never
+// arms (and closes the window) on behalf of a download the user turned down.
+fn turning_down_cancels_the_download(
+    cx: &mut TestAppContext,
+    turn_down: fn(&mut Updates, &mut gpui_kit::Context<Updates>),
+) {
+    let (go, gate) = oneshot::channel();
+    let r = rig(cx, Relaunch::Restart(IMAGE.into()), Some(gate), false);
+    let done = prepare(cx, &r);
+    r.updates.update(cx, turn_down);
+    assert_eq!(
+        phase(cx, &r),
+        InstallPhase::Idle,
+        "the download kept running"
+    );
+    r.updates.update(cx, |u, cx| u.check_now(cx));
+    cx.run_until_parked();
+    let _ = go.send(());
+    cx.run_until_parked();
+    assert_eq!(done.get(), None, "the turned-down download reported back");
+    assert_eq!(
+        phase(cx, &r),
+        InstallPhase::Idle,
+        "the turned-down download finished"
+    );
+    r.updates.update(cx, |u, cx| u.arm(cx));
+    assert!(!armed(cx, &r), "the turned-down download was kept");
+}
+
+#[gpui_kit::test]
+fn later_cancels_a_running_download(cx: &mut TestAppContext) {
+    turning_down_cancels_the_download(cx, Updates::later);
+}
+
+#[gpui_kit::test]
+fn skip_cancels_a_running_download(cx: &mut TestAppContext) {
+    turning_down_cancels_the_download(cx, Updates::skip);
+}
