@@ -153,6 +153,7 @@ mod surreal_login;
 mod surreal_read_only;
 mod surreal_results;
 mod surreal_use;
+mod update_check;
 mod update_config;
 mod update_manifest;
 mod update_signature;

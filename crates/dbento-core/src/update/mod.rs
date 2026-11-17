@@ -2,6 +2,7 @@
 //! rules every update request follows. Compiled only with the `update` feature.
 
 mod error;
+mod fetch;
 mod manifest;
 mod sign;
 
@@ -10,6 +11,7 @@ use std::time::Duration;
 use url::{Host, Url};
 
 pub use error::CheckError;
+pub use fetch::check;
 pub use manifest::evaluate;
 pub use sign::verify_manifest;
 

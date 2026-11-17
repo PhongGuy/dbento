@@ -30,3 +30,79 @@ impl TestKey {
         STANDARD.encode(sig.unwrap().to_string())
     }
 }
+
+use dbento_core::update::{Product, UpdateConfig, build_config_with, target_id};
+use sha2::Digest as _;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+pub const PAGE: &str = "https://example.com/download";
+
+/// A CLI config whose manifest lives at `<base>/latest.json`, trusting `key`.
+pub fn config(base: &str, key: &TestKey, current: &str) -> UpdateConfig {
+    config_at(&format!("{base}/latest.json"), key, current)
+}
+
+/// A CLI config for the manifest at `url`, trusting `key`.
+pub fn config_at(url: &str, key: &TestKey, current: &str) -> UpdateConfig {
+    build_config_with(
+        Product::Cli,
+        Some(url),
+        Some(PAGE),
+        &key.key_line(),
+        current,
+    )
+    .unwrap()
+}
+
+pub fn sha256_hex(data: &[u8]) -> String {
+    sha2::Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A manifest offering `version` of this host's CLI at `url` in `format`, listing `body`'s size and hash.
+pub fn manifest_as(version: &str, format: &str, url: &str, body: &[u8]) -> String {
+    format!(
+        r#"{{"version":"{version}","targets":{{"{}":{{"url":"{url}","format":"{format}","size":{},"sha256":"{}"}}}}}}"#,
+        target_id(Product::Cli).unwrap(),
+        body.len(),
+        sha256_hex(body)
+    )
+}
+
+pub fn manifest(version: &str, url: &str, body: &[u8]) -> String {
+    manifest_as(version, "binary", url, body)
+}
+
+pub async fn mount(server: &MockServer, at: &str, response: ResponseTemplate) {
+    Mock::given(method("GET"))
+        .and(path(at))
+        .respond_with(response)
+        .mount(server)
+        .await;
+}
+
+/// Serves `manifest` and its signature by `key` at `/latest.json` and `/latest.json.sig`.
+pub async fn publish(server: &MockServer, key: &TestKey, manifest: &str) {
+    mount(
+        server,
+        "/latest.json",
+        ResponseTemplate::new(200).set_body_string(manifest),
+    )
+    .await;
+    let sig = key.sign(manifest.as_bytes());
+    mount(
+        server,
+        "/latest.json.sig",
+        ResponseTemplate::new(200).set_body_string(sig),
+    )
+    .await;
+}
+
+/// A loopback port nothing listens on.
+pub fn dead_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
+}
