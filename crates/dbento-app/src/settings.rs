@@ -35,6 +35,8 @@ pub struct Settings {
     pub grid_font: FontChoice,
     /// How tightly rows are packed.
     pub density: Density,
+    /// Whether the app checks for a newer release once a day.
+    pub check_for_updates: bool,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -47,6 +49,7 @@ impl Default for Settings {
             editor_font: FontChoice::new(MONO_FAMILY, 12),
             grid_font: FontChoice::new(MONO_FAMILY, 12),
             density: Density::Default,
+            check_for_updates: true,
             extra: serde_json::Map::new(),
         }
     }
@@ -129,6 +132,7 @@ struct RawSettings {
     editor_font: Option<RawFont>,
     grid_font: Option<RawFont>,
     density: Option<Density>,
+    check_for_updates: Option<bool>,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -169,6 +173,7 @@ impl From<RawSettings> for Settings {
             editor_font: font(raw.editor_font, d.editor_font),
             grid_font: font(raw.grid_font, d.grid_font),
             density: raw.density.unwrap_or(d.density),
+            check_for_updates: raw.check_for_updates.unwrap_or(d.check_for_updates),
             extra: raw.extra,
         }
     }

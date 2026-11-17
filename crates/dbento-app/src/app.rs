@@ -38,6 +38,8 @@ pub struct AppPaths {
     pub settings: PathBuf,
     /// The user's key binding overrides, as JSON.
     pub keymap: PathBuf,
+    /// When updates were last checked and which release was skipped, as JSON.
+    pub update_state: PathBuf,
 }
 
 impl AppPaths {
@@ -61,6 +63,7 @@ impl AppPaths {
 impl From<StatePaths> for AppPaths {
     fn from(p: StatePaths) -> AppPaths {
         AppPaths {
+            update_state: p.state.with_file_name("update-state.json"),
             state: p.state,
             history: p.history,
             drafts: p.drafts,

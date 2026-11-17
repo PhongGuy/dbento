@@ -220,6 +220,7 @@ mod title_controls;
 mod tree_affordances;
 mod tree_menu;
 mod ui;
+mod updates;
 mod user_keymap;
 mod version;
 mod widths;

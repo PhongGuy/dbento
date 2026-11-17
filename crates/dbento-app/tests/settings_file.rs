@@ -31,7 +31,8 @@ fn the_defaults_are_the_bundled_fonts_and_system() {
             "ui_font": { "family": "Inter", "size": 13 },
             "editor_font": { "family": "JetBrains Mono", "size": 12 },
             "grid_font": { "family": "JetBrains Mono", "size": 12 },
-            "density": "default"
+            "density": "default",
+            "check_for_updates": true
         })
     );
 }
