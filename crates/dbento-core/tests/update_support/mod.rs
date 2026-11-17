@@ -106,3 +106,58 @@ pub fn dead_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
 }
+
+use dbento_core::update::{Available, Timeouts, check};
+use std::path::Path;
+use std::time::Duration;
+
+/// Mounts `response` at `/artifact`.
+pub async fn serve_artifact(server: &MockServer, response: ResponseTemplate) {
+    mount(server, "/artifact", response).await;
+}
+
+/// Publishes 99.0.0 with its binary entry at `<server>/artifact` listing `listed`; returns the offer.
+pub async fn offer(server: &MockServer, key: &TestKey, listed: &[u8]) -> Available {
+    offer_within(server, key, listed, Duration::from_secs(15 * 60)).await
+}
+
+/// As `offer`, with the artifact's total time limit.
+pub async fn offer_within(
+    server: &MockServer,
+    key: &TestKey,
+    listed: &[u8],
+    total: Duration,
+) -> Available {
+    let url = format!("{}/artifact", server.uri());
+    publish(server, key, &manifest("99.0.0", &url, listed)).await;
+    let mut t = Timeouts::default();
+    t.artifact = total;
+    let cfg = config(&server.uri(), key, "1.0.0").with_timeouts(t);
+    check(&cfg).await.unwrap().expect("offered")
+}
+
+/// Serves `body` at `/artifact` and returns the 99.0.0 offer listing it in `format`.
+pub async fn offer_as(server: &MockServer, format: &str, body: &[u8]) -> Available {
+    let key = TestKey::generate();
+    serve_artifact(
+        server,
+        ResponseTemplate::new(200).set_body_bytes(body.to_vec()),
+    )
+    .await;
+    let url = format!("{}/artifact", server.uri());
+    publish(server, &key, &manifest_as("99.0.0", format, &url, body)).await;
+    check(&config(&server.uri(), &key, "1.0.0"))
+        .await
+        .unwrap()
+        .expect("offered")
+}
+
+/// The sorted file names in `dir`.
+pub fn leftovers(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}

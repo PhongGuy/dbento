@@ -6,12 +6,13 @@ mod fetch;
 mod manifest;
 mod sign;
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use url::{Host, Url};
 
-pub use error::CheckError;
-pub use fetch::check;
+pub use error::{CheckError, DownloadError};
+pub use fetch::{check, download};
 pub use manifest::evaluate;
 pub use sign::verify_manifest;
 
@@ -186,6 +187,26 @@ impl Available {
     /// The artifact's size in bytes.
     pub fn size(&self) -> u64 {
         self.size
+    }
+}
+
+/// A downloaded artifact whose size and SHA-256 matched the manifest, waiting to be installed.
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct Staged {
+    path: PathBuf,
+    version: String,
+}
+
+impl Staged {
+    /// The staged file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The release version it holds.
+    pub fn version(&self) -> &str {
+        &self.version
     }
 }
 

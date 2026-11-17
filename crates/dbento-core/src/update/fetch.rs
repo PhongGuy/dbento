@@ -1,18 +1,26 @@
-//! The update client and the manifest check. The client sends only a fixed header set, never
-//! decodes bodies, and caps every body on the wire. It is blocking, so callers run it on
-//! tokio's blocking pool.
+//! The update client, the manifest check and the artifact download. The client sends only a
+//! fixed header set, never decodes bodies, and caps every body on the wire. It is blocking, so
+//! callers run it on tokio's blocking pool.
 
+use std::fs::{File, OpenOptions};
+use std::io::{ErrorKind, Read as _, Write as _};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use sha2::{Digest as _, Sha256};
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::{Agent, Body, http::Response};
 use url::Url;
 
-use super::{Available, CheckError, Timeouts, UpdateConfig, allowed, evaluate, verify_manifest};
+use super::{
+    Available, CheckError, DownloadError, Format, Staged, Timeouts, UpdateConfig, allowed,
+    evaluate, verify_manifest,
+};
 
 const MANIFEST_CAP: u64 = 64 * 1024;
 const SIGNATURE_CAP: u64 = 4 * 1024;
 const MAX_REDIRECTS: u32 = 5;
+const CHUNK: usize = 64 * 1024;
 
 /// Fetches the manifest (at most 64 KiB) and the manifest URL plus `.sig` (at most 4 KiB),
 /// verifies the signature, then evaluates. `Ok(None)` when no newer stable release exists.
@@ -52,6 +60,141 @@ fn check_blocking(cfg: &UpdateConfig) -> Result<Option<Available>, CheckError> {
     // The bytes verified are the bytes parsed; nothing is read from an unverified manifest.
     verify_manifest(&manifest, &signature, &cfg.keys)?;
     evaluate(&manifest, cfg)
+}
+
+/// Streams the artifact to `<name>.part` in `staging_dir`, then renames it to `<name>`:
+/// `dbento-update-<version>` plus the suffix its installer needs. The `.part` is created
+/// exclusively (mode 0600 on Unix) before any request, or the result is
+/// [`DownloadError::NotWritable`]. A body longer or shorter than listed is
+/// [`DownloadError::SizeMismatch`], a wrong digest [`DownloadError::HashMismatch`], a 404
+/// [`DownloadError::ArtifactMissing`] and any other non-success [`DownloadError::Http`]. Every
+/// failure removes the `.part`. `progress(received, size)` runs after each chunk is written.
+pub async fn download(
+    a: &Available,
+    staging_dir: &Path,
+    progress: impl FnMut(u64, u64) + Send + 'static,
+) -> Result<Staged, DownloadError> {
+    let a = a.clone();
+    let dir = staging_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || download_blocking(&a, &dir, progress))
+        .await
+        .map_err(|e| DownloadError::Offline(e.to_string()))?
+}
+
+fn download_blocking(
+    a: &Available,
+    dir: &Path,
+    progress: impl FnMut(u64, u64),
+) -> Result<Staged, DownloadError> {
+    let name = staged_name(a);
+    let path = dir.join(&name);
+    let part = dir.join(format!("{name}.part"));
+    // A `.part` left by an earlier crash is never resumed: its bytes were never verified.
+    let _ = std::fs::remove_file(&part);
+    // Create exclusively, so a link planted after the remove is refused rather than followed.
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = options
+        .open(&part)
+        .map_err(|_| DownloadError::NotWritable(dir.to_path_buf()))?;
+    let renamed = stream(a, file, &part, progress)
+        .and_then(|()| std::fs::rename(&part, &path).map_err(|e| io(&path, &e)));
+    if let Err(e) = renamed {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    Ok(Staged {
+        path,
+        version: a.version.clone(),
+    })
+}
+
+/// The staged file name; installers recognise an AppImage, app bundle or `.exe` by its suffix.
+fn staged_name(a: &Available) -> String {
+    let suffix = match a.format {
+        Format::AppImage => ".AppImage",
+        Format::App => ".app.tar.gz",
+        Format::Nsis => ".exe",
+        Format::Binary if cfg!(windows) => ".exe",
+        Format::Binary => "",
+    };
+    format!("dbento-update-{}{suffix}", a.version)
+}
+
+/// Writes the body into `file`, never past `a.size` bytes, then checks its length and digest.
+fn stream(
+    a: &Available,
+    mut file: File,
+    part: &Path,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<(), DownloadError> {
+    let https_only = !local_override(&a.url);
+    let response = agent(&a.timeouts, a.timeouts.artifact, https_only)
+        .get(&a.url)
+        .call()
+        .map_err(download_transport)?;
+    let status = response.status();
+    if status.as_u16() == 404 {
+        return Err(DownloadError::ArtifactMissing);
+    }
+    if !status.is_success() {
+        return Err(DownloadError::Http(status.as_u16()));
+    }
+    // ureq's reader has no limit of its own, so this loop is the size cap.
+    let mut reader = response.into_body().into_reader();
+    let mut buf = vec![0u8; CHUNK];
+    let mut hasher = Sha256::new();
+    let mut received = 0u64;
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            // A body read error wraps the ureq error, so a timeout stays a timeout.
+            Err(e) => return Err(download_transport(ureq::Error::from(e))),
+        };
+        let got = received + n as u64;
+        if got > a.size {
+            return Err(DownloadError::SizeMismatch {
+                expected: a.size,
+                got,
+            });
+        }
+        let chunk = buf.get(..n).unwrap_or_default();
+        file.write_all(chunk).map_err(|e| io(part, &e))?;
+        hasher.update(chunk);
+        received = got;
+        progress(received, a.size);
+    }
+    if received != a.size {
+        return Err(DownloadError::SizeMismatch {
+            expected: a.size,
+            got: received,
+        });
+    }
+    file.sync_all().map_err(|e| io(part, &e))?;
+    if hex::encode(hasher.finalize()) != a.sha256 {
+        return Err(DownloadError::HashMismatch);
+    }
+    Ok(())
+}
+
+fn io(path: &Path, e: &std::io::Error) -> DownloadError {
+    DownloadError::Io {
+        path: PathBuf::from(path),
+        message: e.to_string(),
+    }
+}
+
+/// The download's twin of [`transport`]: a time limit is `Timeout`, anything else `Offline`.
+fn download_transport(e: ureq::Error) -> DownloadError {
+    if matches!(e, ureq::Error::Timeout(_)) {
+        DownloadError::Timeout
+    } else {
+        DownloadError::Offline(e.to_string())
+    }
 }
 
 /// An `http` URL that still passes the URL rule: a loopback override for local testing.
