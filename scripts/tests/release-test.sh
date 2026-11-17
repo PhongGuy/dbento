@@ -103,6 +103,17 @@ test_unknown_subcommands_print_usage() {
   bash "$RELEASE_SH" >/dev/null 2>&1 || status=$?
   [[ $status == 2 ]] || fail "no subcommand exited $status, want 2"
   if grep -nE 'APINATA|apinata|cli_raw|xtask update-manifest' "$RELEASE_SH"; then fail "Apinata leftovers in release.sh"; fi
+  [[ $(bash "$RELEASE_SH" 2>&1) == *"manifest DIST UPDATE VERSION BASE_URL"* ]] || fail "usage does not name the manifest subcommand"
+  local f
+  for f in $(grep -oE '^[a-z_]+\(\)' "$RELEASE_SH" | sort | uniq -d); do fail "release.sh defines $f more than once"; done
+}
+
+test_manifest_drops_a_trailing_slash_from_the_base_url() {
+  local d=$WORK/manifest-slash
+  manifest_fixture "$d" 1.2.3
+  bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3/ || { fail "manifest failed"; return 0; }
+  [[ $(jq -r '.targets["cli-linux-x86_64"].url' "$d/update/latest.json") == https://example.com/v1.2.3/dbento-1.2.3-x86_64-unknown-linux-gnu ]] \
+    || fail "trailing-slash url: $(jq -r '.targets["cli-linux-x86_64"].url' "$d/update/latest.json")"
 }
 
 # A fixture release: the AppImages and the NSIS installer under dist, every update-only file under update.

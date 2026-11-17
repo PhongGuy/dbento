@@ -257,7 +257,7 @@ manifest_entry() {
 
 # Write UPDATE/latest.json for stable VERSION, artifact URLs under BASE_URL; nothing is written on failure.
 write_manifest() {
-  local dist=$1 update=$2 version=$3 base=$4 re='^[0-9]+\.[0-9]+\.[0-9]+$' id where pattern format name dir entries=
+  local dist=$1 update=$2 version=$3 base=${4%/} re='^[0-9]+\.[0-9]+\.[0-9]+$' id where pattern format name dir entries=
   if [[ ! $version =~ $re ]]; then echo "release: the update manifest needs a stable version, got '$version'" >&2; return 1; fi
   while read -r id where pattern format; do
     name=${pattern//@V@/$version}
@@ -271,95 +271,6 @@ write_manifest() {
 
 usage() {
   echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR | manifest DIST UPDATE VERSION BASE_URL" >&2
-  exit 2
-}
-
-main() {
-  local os
-  os=$(package_os) || return 1
-  package_dirs "$os"
-  prepare_out_dir "$ROOT" "$OUT" || return 1
-  OUT=$(realpath -m -- "$OUT")
-  cd "$ROOT"
-  # libduckdb does not build for msvc.
-  local features=()
-  if [[ $os == windows ]]; then features=(--no-default-features --features dbento-core/keychain); fi
-  cargo build --release --locked -p dbento-cli -p dbento-app ${features[@]+"${features[@]}"}
-  cargo fetch --locked
-  cargo xtask notices --out "$OUT/THIRD-PARTY-NOTICES.html"
-  echo "release: $os build in $OUT"
-}
-
-# Package what build_main left into the CLI archive and the app installer. macOS is ad-hoc
-# signed; Windows ships unsigned, since there is no CA-issued certificate.
-package_main() {
-  local os
-  os=$(package_os) || return 1
-  package_dirs "$os"
-  local out version target bin_dir
-  out=$(realpath -m -- "$OUT")
-  if [[ ! -f $out/THIRD-PARTY-NOTICES.html ]]; then
-    echo "release: no build in $out; run release.sh build first" >&2
-    return 1
-  fi
-  unset DBENTO_MACOS_SIGNING_IDENTITY DBENTO_WINDOWS_SIGN_COMMAND
-  cd "$ROOT"
-  version=$(workspace_version)
-  target=$(rustc -vV | sed -n 's/^host: //p')
-  bin_dir=${CARGO_TARGET_DIR:-$ROOT/target}/release
-  local files=("$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/README.md" "$out/THIRD-PARTY-NOTICES.html")
-  if [[ $os == macos ]]; then
-    package_app "$out" app
-    TAR=gtar macos_dmg "$out" "$version" "${target%%-*}"
-    adhoc_sign "$bin_dir/dbento"
-    TAR=gtar cli_archive "$bin_dir/dbento" "$version" "$target" "$out" "${files[@]}"
-  else
-    package_app "$out" nsis
-    cli_zip "$bin_dir/dbento.exe" "$version" "$target" "$out" "${files[@]}"
-  fi
-  rm -rf -- "$out/.cargo-packager"
-  echo "release: $os artifacts in $out ($([[ $os == macos ]] && echo ad-hoc signed || echo unsigned))"
-}
-
-# The stable name of release file NAME at VERSION, for /releases/latest/download links: the
-# version dropped. Prints nothing for a file that is not an artifact.
-stable_name() {
-  local name=$1 version=$2 out
-  case $name in
-    *.tar.gz | *.deb | *.AppImage | *.dmg | *.exe | *.zip) ;;
-    *) return 0 ;;
-  esac
-  case $name in
-    *"_${version}_"*) out=${name/"_${version}_"/_} ;;
-    *"-${version}-"*) out=${name/"-${version}-"/-} ;;
-    *) return 0 ;;
-  esac
-  echo "$out"
-}
-
-# Copy every versioned artifact under DIR to its stable name at DIR's top level, beside the
-# versioned file. Fails when two files would share one stable name, or when none is copied.
-stable_copies() {
-  local dir=$1 version=$2 f stable seen=" " copied=0
-  while IFS= read -r f; do
-    stable=$(stable_name "$(basename "$f")" "$version")
-    [[ -n $stable ]] || continue
-    if [[ $seen == *" $stable "* ]]; then
-      echo "release: two release files map to the stable name $stable" >&2
-      return 1
-    fi
-    seen="$seen$stable "
-    cp -- "$f" "$dir/$stable" || return 1
-    copied=$((copied + 1))
-  done < <(find "$dir" -type f | LC_ALL=C sort)
-  if ((copied == 0)); then
-    echo "release: no versioned release files under $dir" >&2
-    return 1
-  fi
-}
-
-usage() {
-  echo "usage: release.sh guard TYPE NAME DRY [PLATFORMS] | build | package | stable DIR VERSION | sums DIR" >&2
   exit 2
 }
 
