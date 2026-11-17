@@ -185,3 +185,15 @@ fn a_newer_offer_disarms_the_prepared_release(cx: &mut TestAppContext) {
         "a release the banner no longer shows stayed armed"
     );
 }
+
+#[gpui_kit::test]
+fn skipping_the_offer_disarms_and_drops_the_prepared_release(cx: &mut TestAppContext) {
+    let r = rig(cx, Relaunch::Restart(IMAGE.into()), None, false);
+    prepare(cx, &r);
+    r.updates.update(cx, |u, cx| u.arm(cx));
+    r.updates.update(cx, |u, cx| u.skip(cx));
+    assert!(!armed(cx, &r), "a skipped release stayed armed");
+    assert_eq!(phase(cx, &r), InstallPhase::Idle);
+    r.updates.update(cx, |u, cx| u.arm(cx));
+    assert!(!armed(cx, &r), "the skipped release could be armed again");
+}

@@ -2,17 +2,22 @@
 //! check that reports its result, the offer the banner shows, and the release prepared from
 //! that offer and armed for install when the app quits.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dbento_core::update::{
     self, Available, CheckError, InstallError, InstallKind, Os, Product, Reason, Relaunch, Staged,
 };
-use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Task};
+use gpui_kit::{
+    App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task, Window,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use crate::shell::Shell;
 use crate::{persist, settings_store};
 
 /// When updates were last checked and which release the user chose to skip.
@@ -150,10 +155,73 @@ impl Prepared {
     }
 }
 
+/// Starts the processes an install hands over to; tests record the calls instead.
+pub trait Launcher {
+    /// Starts `path` once this process has exited.
+    fn restart(&self, path: &Path) -> std::io::Result<()>;
+    /// Starts the installer `program` with `args` now.
+    fn start_installer(&self, program: &Path, args: &[OsString]) -> std::io::Result<()>;
+}
+
+/// The launcher that starts real processes.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemLauncher;
+
+impl Launcher for SystemLauncher {
+    // The waiting shell runs in its own process group with no stdio, so it outlives this
+    // process and the terminal it may have been started from.
+    fn restart(&self, path: &Path) -> std::io::Result<()> {
+        let os = Os::current().ok_or_else(|| std::io::Error::other("unsupported system"))?;
+        let mut command = relaunch_command(path, std::process::id(), os)
+            .ok_or_else(|| std::io::Error::other("this system relaunches through its installer"))?;
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+    }
+
+    fn start_installer(&self, program: &Path, args: &[OsString]) -> std::io::Result<()> {
+        Command::new(program).args(args).spawn().map(drop)
+    }
+}
+
+// The launcher of a build that never installs: nothing is started.
+struct NoLauncher;
+
+impl Launcher for NoLauncher {
+    fn restart(&self, _: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn start_installer(&self, _: &Path, _: &[OsString]) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A shell command that waits for process `pid` to exit, then starts the install at `path`:
+/// the AppImage itself on Linux, the bundle through `open` on macOS. `None` on Windows,
+/// where the NSIS installer relaunches the app.
+pub fn relaunch_command(path: &Path, pid: u32, os: Os) -> Option<Command> {
+    let start = match os {
+        Os::Linux => "exec \"$1\"",
+        Os::Macos => "exec /usr/bin/open \"$1\"",
+        Os::Windows => return None,
+        _ => return None,
+    };
+    let script = format!("while kill -0 \"$0\" 2>/dev/null; do sleep 0.1; done; {start}");
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(script).arg(pid.to_string()).arg(path);
+    Some(command)
+}
+
 /// What the update model calls out to; tests pass fakes, the app passes [`UpdateHooks::real`].
 pub struct UpdateHooks {
     checker: Option<Checker>,
     stager: Option<Stager>,
+    launcher: Rc<dyn Launcher>,
 }
 
 impl UpdateHooks {
@@ -162,6 +230,7 @@ impl UpdateHooks {
         UpdateHooks {
             checker: None,
             stager: None,
+            launcher: Rc::new(NoLauncher),
         }
     }
 
@@ -170,6 +239,7 @@ impl UpdateHooks {
         UpdateHooks {
             checker: Some(checker),
             stager: None,
+            launcher: Rc::new(NoLauncher),
         }
     }
 
@@ -177,6 +247,14 @@ impl UpdateHooks {
     pub fn with_stager(self, s: Stager) -> Self {
         UpdateHooks {
             stager: Some(s),
+            ..self
+        }
+    }
+
+    /// Starts processes with `l`.
+    pub fn with_launcher(self, l: Rc<dyn Launcher>) -> Self {
+        UpdateHooks {
+            launcher: l,
             ..self
         }
     }
@@ -211,7 +289,7 @@ impl UpdateHooks {
                 }
             })
         });
-        let hooks = UpdateHooks::checking(checker);
+        let hooks = UpdateHooks::checking(checker).with_launcher(Rc::new(SystemLauncher));
         match stager {
             Some(s) => hooks.with_stager(s),
             None => hooks,
@@ -307,6 +385,7 @@ pub struct Updates {
     report: Option<Report>,
     in_flight: Option<Task<()>>,
     stager: Option<Stager>,
+    launcher: Rc<dyn Launcher>,
     phase: InstallPhase,
     prepared: Option<Prepared>,
     armed: bool,
@@ -331,6 +410,7 @@ impl Updates {
             report: None,
             in_flight: None,
             stager: hooks.stager,
+            launcher: hooks.launcher,
             phase: InstallPhase::Idle,
             prepared: None,
             armed: false,
@@ -381,11 +461,19 @@ impl Updates {
         cx.notify();
     }
 
-    /// Records the offered version as skipped and hides it.
+    /// Records the offered version as skipped and hides it; a release prepared for it is
+    /// disarmed and discarded, so the quit never installs a skipped release.
     pub fn skip(&mut self, cx: &mut Context<Self>) {
         if let Some(offer) = self.offer.take() {
             self.state.skipped_version = Some(offer.version);
             self.save();
+        }
+        self.armed = false;
+        if let Some(skipped) = self.prepared.take() {
+            skipped.discard();
+        }
+        if !matches!(self.phase, InstallPhase::Downloading { .. }) {
+            self.phase = InstallPhase::Idle;
         }
         cx.notify();
     }
@@ -610,6 +698,7 @@ impl Updates {
 struct Installed {
     updates: Entity<Updates>,
     _schedule: Task<()>,
+    _quit: Subscription,
 }
 impl Global for Installed {}
 
@@ -638,9 +727,15 @@ pub fn install(state_path: Option<PathBuf>, hooks: UpdateHooks, cx: &mut App) ->
             cx.background_executor().timer(POLL_INTERVAL).await;
         }
     });
+    // GPUI waits at most 200 ms for a quit hook's future, so the install runs in the body.
+    let quit = cx.on_app_quit(move |cx| {
+        quit_install(cx);
+        async {}
+    });
     cx.set_global(Installed {
         updates: updates.clone(),
         _schedule: schedule,
+        _quit: quit,
     });
     updates
 }
@@ -659,4 +754,55 @@ pub fn check_now(cx: &mut App) {
 
 fn unix_secs(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Installs the armed release and starts what it hands over to; nothing when none is armed.
+/// It runs while the app quits, so it touches no window and does its work synchronously.
+pub fn quit_install(cx: &mut App) {
+    let Some(updates) = global(cx) else {
+        return;
+    };
+    let Some((prepared, launcher)) = updates.update(cx, |u, _| {
+        u.take_armed().map(|p| (p, Rc::clone(&u.launcher)))
+    }) else {
+        return;
+    };
+    let launched = prepared
+        .install()
+        .map_err(|e| e.to_string())
+        .and_then(|relaunch| {
+            match relaunch {
+                Relaunch::Restart(path) => launcher.restart(&path),
+                Relaunch::Installer { program, args } => launcher.start_installer(&program, &args),
+                Relaunch::Nothing => Ok(()),
+                _ => Ok(()),
+            }
+            .map_err(|e| e.to_string())
+        });
+    if let Err(e) = launched {
+        log::error!("update install: {e}");
+    }
+}
+
+/// Prepares the offered release and, once it is ready, arms it and closes the window the way
+/// the title bar does. A close the user keeps open leaves the release armed for a later quit.
+pub fn download_and_restart(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
+    let Some(updates) = global(cx) else {
+        return;
+    };
+    let (handle, shell, armer) = (window.window_handle(), shell.clone(), updates.clone());
+    updates.update(cx, |u, cx| {
+        u.prepare(
+            move |ready, cx| {
+                if !ready {
+                    return;
+                }
+                armer.update(cx, |u, cx| u.arm(cx));
+                let _ = handle.update(cx, |_, window, cx| {
+                    shell.update(cx, |s, cx| s.title_close(window, cx));
+                });
+            },
+            cx,
+        );
+    });
 }
