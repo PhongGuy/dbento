@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "notes": "Fixture signed by the distro minisign 0.11; TEST KEY ONLY.",
+  "targets": {
+    "cli-linux-x86_64": { "url": "https://127.0.0.1/apinata", "format": "binary", "size": 3, "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" }
+  }
+}

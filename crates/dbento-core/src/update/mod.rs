@@ -2,12 +2,16 @@
 //! rules every update request follows. Compiled only with the `update` feature.
 
 mod error;
+mod manifest;
+mod sign;
 
 use std::time::Duration;
 
 use url::{Host, Url};
 
 pub use error::CheckError;
+pub use manifest::evaluate;
+pub use sign::verify_manifest;
 
 /// The signed release manifest; its signature is at the same URL plus `.sig`.
 pub const MANIFEST_URL: &str =
@@ -135,6 +139,51 @@ impl UpdateConfig {
     pub fn with_timeouts(mut self, timeouts: Timeouts) -> Self {
         self.timeouts = timeouts;
         self
+    }
+}
+
+/// A newer stable release with an artifact for this build's target.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Available {
+    version: String,
+    pub_date: Option<String>,
+    format: Format,
+    url: String,
+    sha256: String,
+    size: u64,
+    pub(crate) timeouts: Timeouts,
+}
+
+impl Available {
+    /// The release version.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// The publication time, as the manifest states it.
+    pub fn pub_date(&self) -> Option<&str> {
+        self.pub_date.as_deref()
+    }
+
+    /// How the artifact is packaged.
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    /// Where the artifact downloads from.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The artifact's SHA-256, 64 lowercase hex characters.
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    /// The artifact's size in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
     }
 }
 
