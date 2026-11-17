@@ -29,6 +29,11 @@ redis = { workspace = true, optional = true }
 aws-sdk-dynamodb = { workspace = true, optional = true }
 aws-smithy-http-client = { workspace = true, optional = true }
 
+# The watchdog removes containers on Ctrl-C through Unix signal handling, which does not build on
+# Windows.
+[target.'cfg(unix)'.dependencies]
+testcontainers-modules = { workspace = true, features = ["watchdog"] }
+
 [features]
 duckdb = ["dep:duckdb"]
 mongodb = ["dep:mongodb", "dep:bson"]
