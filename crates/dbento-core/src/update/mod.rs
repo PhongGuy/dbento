@@ -1,6 +1,7 @@
 //! The self-updater: the public release feed, a build's update configuration and the URL
 //! rules every update request follows. Compiled only with the `update` feature.
 
+mod apply;
 mod bundle;
 mod error;
 mod fetch;
@@ -8,11 +9,13 @@ mod install;
 mod manifest;
 mod sign;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use url::{Host, Url};
 
+pub use apply::{install, staging_dir, sweep_staged};
 pub use error::{CheckError, DownloadError, InstallError};
 pub use fetch::{check, download};
 pub use install::{InstallKind, RELEASE_BUILD, Reason, install_kind};
@@ -211,6 +214,23 @@ impl Staged {
     pub fn version(&self) -> &str {
         &self.version
     }
+}
+
+/// How the updated program starts once this process is done.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Relaunch {
+    /// Start this AppImage or `.app` bundle after this process exits.
+    Restart(PathBuf),
+    /// Start this installer now, then exit; it restarts the app itself.
+    Installer {
+        /// The installer executable.
+        program: PathBuf,
+        /// Its command-line arguments.
+        args: Vec<OsString>,
+    },
+    /// Nothing to start (a replaced CLI binary).
+    Nothing,
 }
 
 /// The release notes page for `version`.

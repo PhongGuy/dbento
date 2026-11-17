@@ -161,3 +161,22 @@ pub fn leftovers(dir: &Path) -> Vec<String> {
     names.sort();
     names
 }
+
+/// Sets a directory's mode and puts 0755 back on drop, even after a failed assertion.
+#[cfg(unix)]
+pub struct ModeGuard(std::path::PathBuf);
+#[cfg(unix)]
+impl ModeGuard {
+    pub fn set(p: &Path, mode: u32) -> ModeGuard {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+        ModeGuard(p.to_path_buf())
+    }
+}
+#[cfg(unix)]
+impl Drop for ModeGuard {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}

@@ -53,6 +53,7 @@ minisign-verify = "=0.3.0"
 semver = "1.0.28"
 tar = { version = "=0.4.46", default-features = false }
 flate2 = "1.1.11"
+self-replace = "=1.5.1"
 wiremock = "0.6.5"
 minisign = "=0.10.0"
 sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }

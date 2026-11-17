@@ -9,7 +9,6 @@ use super::InstallError;
 /// Extracts the `.app` tarball at `archive` beside `bundle` and swaps it in under the bundle's
 /// own name. The archive must be a regular file in `bundle`'s directory. Any failure leaves
 /// `bundle` as it was; the work directory and the archive are always removed.
-#[cfg_attr(not(test), expect(dead_code, reason = "install calls it"))]
 pub(crate) fn install_bundle(
     archive: &Path,
     version: &str,
@@ -370,6 +369,7 @@ mod tests {
         assert!(matches!(got, Err(InstallError::Io { .. })), "{got:?}");
         assert_eq!(old_exe(&bundle), b"old exe");
         assert_eq!(leftovers(dir.path()), ["Dbento.app"]);
+        assert!(!archive.exists(), "the refused archive is removed");
     }
 
     #[test]

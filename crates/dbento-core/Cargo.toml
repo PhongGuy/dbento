@@ -72,6 +72,7 @@ apple-native-keyring-store = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = { workspace = true, optional = true }
+self-replace = { workspace = true, optional = true }
 
 [features]
 default = ["keychain", "duckdb", "mongodb", "surrealdb", "redis", "dynamodb"]
@@ -98,7 +99,14 @@ keychain = [
     "dep:windows-native-keyring-store",
 ]
 # The self-updater: a signed manifest check and a verified download over ureq.
-update = ["dep:ureq", "dep:minisign-verify", "dep:semver", "dep:tar", "dep:flate2"]
+update = [
+    "dep:ureq",
+    "dep:minisign-verify",
+    "dep:semver",
+    "dep:tar",
+    "dep:flate2",
+    "dep:self-replace",
+]
 
 [dev-dependencies]
 tempfile.workspace = true
