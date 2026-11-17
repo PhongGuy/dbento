@@ -1,5 +1,6 @@
 # Builds release artifacts on a v* tag and drafts a GitHub release that a human publishes.
-# Build jobs hold no secrets and restore no cache; a tag run attests every file before drafting.
+# Build jobs hold no secrets and restore no cache; a tag run signs the update manifest and attests
+# every file before drafting.
 # A manual run builds a chosen set of platforms; with dry_run it drafts nothing.
 name: Release
 
@@ -50,6 +51,9 @@ jobs:
       matrix: ${{ fromJSON(needs.guard.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    # Marks these binaries as release builds, the only ones the updater may replace.
+    env:
+      DBENTO_RELEASE_BUILD: "1"
     defaults:
       run:
         shell: bash
@@ -86,14 +90,23 @@ jobs:
       # The notices ship inside every package; the checksums job writes the one SHA256SUMS.
       - name: Drop per-runner loose files
         run: rm -f target/dist/*/SHA256SUMS target/dist/*/THIRD-PARTY-NOTICES.html
+      # After packaging, because the macOS package step ad-hoc signs the CLI in place.
+      - name: Stage the raw CLI for the updater
+        run: bash scripts/release.sh update-cli
       # Rooted at the platform directory, so the merged download in checksums is flat.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.target }}
           path: target/dist/${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}/
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: update-${{ matrix.target }}
+          path: target/update/${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}/
+          if-no-files-found: error
 
-  # Adds the stable-named copies and SHA256SUMS, and hands the finished file set on as one artifact.
+  # Adds the stable-named copies and SHA256SUMS, writes the unsigned update manifest on a tag release,
+  # and hands dist/ and update/ on as one artifact.
   checksums:
     needs: [guard, build]
     runs-on: ubuntu-24.04
@@ -107,6 +120,11 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: update-*
+          path: update
+          merge-multiple: true
       # Unversioned copies, so the README links /releases/latest/download/<name> directly.
       - name: Add stable-named copies
         env:
@@ -115,14 +133,24 @@ jobs:
       # write_sums is GNU-only, which is why the sums run here and not on the build runners.
       - name: Write SHA256SUMS
         run: scripts/release.sh sums dist
+      # Only a release that drafts gets a manifest, so a dry run never signs anything.
+      - name: Write the update manifest
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: scripts/release.sh manifest dist update "$VERSION" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+      # Two paths root the artifact at the workspace, so it unpacks as dist/ and update/.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ needs.guard.outputs.version }}
-          path: dist/*
+          path: |
+            dist/
+            update/
           if-no-files-found: error
 
-  # Attests every release file, SHA256SUMS included, so a download verifies with gh attestation verify.
-  # It compiles and runs nothing. The release environment makes a tag run wait here for the owner's approval.
+  # Signs latest.json, then attests every release file, so a download verifies with gh attestation verify.
+  # It compiles nothing and runs only the distro minisign, base64 and shell builtins; the signing key
+  # lives on the sign step alone. The release environment makes a tag run wait here for the owner's approval.
   attest:
     needs: [guard, checksums]
     if: github.ref_type == 'tag'
@@ -138,12 +166,40 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-${{ needs.guard.outputs.version }}
-          path: dist
+      # From Ubuntu's signed archive at a pinned version, before any step holds a secret.
+      - name: Install minisign
+        if: hashFiles('update/latest.json') != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends minisign=0.11-1
+      # The key secret is a base64 minisign key box; the .sig is the signature box base64-wrapped
+      # onto one line. Builtins pipe both secrets, so neither touches disk or a process's arguments.
+      - name: Sign the update manifest
+        if: hashFiles('update/latest.json') != ''
+        shell: bash
+        env:
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          printf '%s\n' "$CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD" |
+            minisign -S -s <(printf '%s' "$CARGO_PACKAGER_SIGN_PRIVATE_KEY" | base64 -d) \
+              -m update/latest.json -x update/latest.json.minisig
+          base64 -w0 update/latest.json.minisig > update/latest.json.sig
+          rm update/latest.json.minisig
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*
+            update/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-${{ needs.guard.outputs.version }}
+          path: |
+            dist/
+            update/
+          if-no-files-found: error
 
-  # Drafts the release from the same artifact the attest job attested.
+  # Drafts the release from the signed set the attest job attested.
   draft:
     needs: [guard, checksums, attest]
     if: github.ref_type == 'tag' && !inputs.dry_run
@@ -159,8 +215,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-${{ needs.guard.outputs.version }}
-          path: dist
+          name: signed-${{ needs.guard.outputs.version }}
       # The script splices GitHub's label-grouped notes into the shared layout, so gh is not asked to generate them again.
       - name: Write the release notes
         env:
@@ -171,4 +226,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.guard.outputs.version }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/*
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/* update/*
