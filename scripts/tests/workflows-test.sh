@@ -29,6 +29,16 @@ step_body() {
   job_body "$1" "$2" | awk -v name="      - name: $3" '$0 == name { on = 1; print; next } on && /^      - / { exit } on'
 }
 
+# Print job JOB of FILE with each folded `run: >-` block joined onto its run: line.
+job_runs() {
+  job_body "$1" "$2" | awk '
+    fold && /^          / { sub(/^ +/, ""); line = line " " $0; next }
+    fold { print line; fold = 0 }
+    /^        run: >-$/ { fold = 1; line = "        run:"; next }
+    { print }
+    END { if (fold) print line }'
+}
+
 # Every uses: must name a 40-hex commit, never a tag or a branch.
 pinned_uses_only() {
   local file=$1 bad
@@ -86,7 +96,7 @@ test_ci_installs_the_cross_and_notices_tools() {
 }
 
 test_ci_gate_timeout_and_pins() {
-  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 pilot=90 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
+  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 pilot=90 windows=90 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
   pinned_uses_only "$CI"
 }
 
@@ -125,6 +135,37 @@ test_ci_checks_each_feature_alone() {
   grep -qE -- 'RUSTFLAGS=-Dwarnings \$\(CARGO\) hack check --each-feature --no-dev-deps \$\(FEATURE_CRATES\)$' "$ROOT/Makefile" \
     || fail "Makefile each-feature does not run cargo hack on the three crates"
   if grep -qE -- '--feature-powerset' "$ROOT/Makefile"; then fail "Makefile checks the feature powerset"; fi
+}
+
+# The Windows run is opt-in from a dispatch, builds what the release ships with the release's
+# Windows features, and runs only updater tests, since the runner has no podman.
+test_ci_windows_run_is_opt_in() {
+  local dispatch job features
+  dispatch=$(awk '/^  workflow_dispatch:$/ { on = 1; next } on && /^([a-z]|  [a-z])/ { on = 0 } on' "$CI")
+  grep -qxF '      windows:' <<<"$dispatch" || fail "ci workflow_dispatch has no windows input"
+  grep -qxF '        type: boolean' <<<"$dispatch" || fail "the windows input is not a boolean"
+  grep -qxF '        default: false' <<<"$dispatch" || fail "the windows input does not default to false"
+  job=$(job_runs "$CI" windows)
+  [[ -n $job ]] || { fail "ci has no windows job"; return 0; }
+  grep -qxF '    if: inputs.windows' <<<"$job" || fail "the windows job is not gated on inputs.windows"
+  grep -qxF '    runs-on: windows-latest' <<<"$job" || fail "the windows job does not run on windows-latest"
+  grep -qxF '          persist-credentials: false' <<<"$job" || fail "the windows checkout persists credentials"
+  grep -qxF '        shell: bash' <<<"$job" || fail "the windows job does not run its steps in bash"
+  features=$(sed -n 's/^  if \[\[ \$os == windows \]\]; then features=(\(.*\)); fi$/\1/p' "$ROOT/scripts/release.sh")
+  [[ -n $features ]] || { fail "release.sh names no Windows features"; return 0; }
+  grep -qxF "        run: cargo build --locked -p dbento-cli -p dbento-app $features" <<<"$job" \
+    || fail "the windows job does not build the CLI and app with the release's features ($features)"
+  local m
+  for m in update:: update_check:: update_config:: update_download:: update_install:: update_install_kind:: \
+    update_manifest:: update_signature::; do
+    grep -qE "^        run: cargo test --locked -p dbento-core --no-default-features --features keychain,update --lib --test integration -- (.* )?$m( |$)" <<<"$job" \
+      || fail "the windows job does not run the core $m tests"
+  done
+  grep -qxF "        run: cargo test --locked -p dbento-cli $features --test integration -- cli_self_update::" <<<"$job" \
+    || fail "the windows job does not run the CLI self-update tests"
+  grep -qxF "        run: cargo test --locked -p dbento-app $features --test integration -- update_arm:: update_banner:: update_quit:: updates::" <<<"$job" \
+    || fail "the windows job does not run the app update tests"
+  if grep -qE 'DOCKER_HOST|ACCEPT_EULA' <<<"$job"; then fail "the windows job reaches for containers"; fi
 }
 
 # Beta clippy plus a check after cargo update, unlocked on purpose, read-only and pinned.

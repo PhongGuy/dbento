@@ -90,8 +90,15 @@ The platform tokens are `linux`, `windows`, `macos-arm64` and `macos-intel`. The
 ## Tagging
 
 1. Set `[workspace.package] version` in `Cargo.toml` and commit.
-2. `git tag v<version>`
-3. `git push origin v<version>`
+2. Once that commit is on `master`, dispatch CI with its Windows run and wait for it to pass. Only that run compiles and tests the updater's Windows code (the NSIS hand-off and the CLI's self-replace); push and pull request runs skip it.
+
+   ```sh
+   gh workflow run ci.yml --ref master -f windows=true
+   gh run watch <id> --exit-status
+   ```
+
+3. `git tag v<version>`
+4. `git push origin v<version>`
 
 The guard fails on a tag that does not match the workspace version, before any build starts. A branch can only start a dry run. A run dispatched on a tag ref with `dry_run=false` drafts a release too, exactly as pushing the tag does. One dispatched on a tag ref with `dry_run=true` attests (after approval) but drafts nothing.
 

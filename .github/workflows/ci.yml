@@ -2,7 +2,8 @@
 # `make check` runs locally, with a locked Cargo.lock, and also cross-checks Windows and checks
 # icons, notices and the release scripts. macOS runs clippy only, since tests need containers.
 # A third job checks each engine feature of the core and its shells on its own, and a fourth
-# drives the app through the headless gpui-pilot scenarios.
+# drives the app through the headless gpui-pilot scenarios. A dispatch with `windows` set also
+# builds on Windows and runs the updater tests there, the only place its Windows code runs.
 name: CI
 
 on:
@@ -10,6 +11,11 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows:
+        description: Also build on windows-latest and run the updater tests there (bills 2x)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -155,3 +161,43 @@ jobs:
           --rev 4d49fa71cf89a5bc61db27721aa45f60f7b86f59
       - name: Pilot scenarios
         run: make LOCKED=--locked PILOT_SKIP="$PILOT_SKIP" pilot-check
+
+  # Opt-in, run before a release: the release's Windows build, then the updater tests that
+  # need no database, since the runner has no podman.
+  windows:
+    if: inputs.windows
+    runs-on: windows-latest
+    # The first cold run sets this; ASSUMED until measured.
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # rust-cache keeps this tree's folders but strips its files, which breaks a libduckdb-sys rerun.
+      - name: Drop the cached DuckDB sources
+        run: rm -rf target/duckdb-sources
+      # The features scripts/release.sh ships on Windows.
+      - name: Build the CLI and the app
+        run: cargo build --locked -p dbento-cli -p dbento-app --no-default-features --features dbento-core/keychain
+      - name: Core updater tests
+        run: >-
+          cargo test --locked -p dbento-core --no-default-features --features keychain,update
+          --lib --test integration --
+          update:: update_check:: update_config:: update_download::
+          update_install:: update_install_kind:: update_manifest:: update_signature::
+      # The CLI and app test builds take the test kit's DuckDB, so libduckdb compiles here under cl.exe.
+      - name: CLI self-update tests
+        run: >-
+          cargo test --locked -p dbento-cli --no-default-features --features dbento-core/keychain
+          --test integration -- cli_self_update::
+      - name: App update tests
+        run: >-
+          cargo test --locked -p dbento-app --no-default-features --features dbento-core/keychain
+          --test integration -- update_arm:: update_banner:: update_quit:: updates::
