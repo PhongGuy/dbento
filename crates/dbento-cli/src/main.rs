@@ -161,7 +161,6 @@ fn color_name(c: Color) -> &'static str {
         Color::Blue => "blue",
         Color::Purple => "purple",
         Color::Gray => "gray",
-        _ => "unknown",
     }
 }
 

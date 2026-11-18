@@ -3049,7 +3049,6 @@ impl Shell {
                     spec,
                 }
             }
-            _ => return,
         };
         self.apply_edit(edit, window, cx);
     }

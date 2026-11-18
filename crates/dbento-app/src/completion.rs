@@ -538,8 +538,7 @@ fn keywords(engine: Engine, prefix: &str) -> Vec<Candidate> {
         | Engine::Mssql
         | Engine::Duckdb
         | Engine::Mongodb
-        | Engine::Redis
-        | _ => KEYWORDS,
+        | Engine::Redis => KEYWORDS,
     };
     let mut out: Vec<Candidate> = list
         .iter()

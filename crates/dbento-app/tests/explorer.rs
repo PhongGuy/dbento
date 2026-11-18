@@ -38,7 +38,6 @@ fn shape(rows: &[ExplorerRow]) -> Vec<String> {
                     format!("{} {}", if r.expanded { "v" } else { ">" }, p.name())
                 }
                 WorkspaceItem::Connection(n) => n.clone(),
-                other => panic!("{other:?}"),
             };
             format!("{}{key}", "  ".repeat(r.depth))
         })

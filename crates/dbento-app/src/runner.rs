@@ -603,7 +603,7 @@ pub fn database_label(engine: Engine, name: &str) -> String {
         | Engine::Duckdb
         | Engine::Mongodb
         | Engine::Redis
-        | _ => "db",
+        | Engine::Dynamodb => "db",
     };
     format!("{kind}: {name}")
 }

@@ -1580,8 +1580,7 @@ impl ConnectionForm {
                         | Engine::Mongodb
                         | Engine::Surrealdb
                         | Engine::Redis
-                        | Engine::Dynamodb
-                        | _ => "Choose SQLite file",
+                        | Engine::Dynamodb => "Choose SQLite file",
                     };
                     rows.push(self.file_row(f.label, id, field, prompt, cx));
                 }
@@ -2047,7 +2046,7 @@ impl Shown {
         let (databases_choice, chosen) = match &spec.databases {
             Some(Databases::All) => (DatabasesChoice::All, Vec::new()),
             Some(Databases::Listed(names)) => (DatabasesChoice::Choose, names.clone()),
-            None | Some(_) => (DatabasesChoice::Only, Vec::new()),
+            None => (DatabasesChoice::Only, Vec::new()),
         };
         let (secret, env_var) = match &spec.secret {
             Some(SecretSource::Env(var)) => (SecretChoice::Env, var.clone()),
@@ -2209,8 +2208,7 @@ fn client_cert(engine: Engine) -> bool {
         | Engine::Mysql
         | Engine::Duckdb
         | Engine::Mongodb
-        | Engine::Redis
-        | _ => true,
+        | Engine::Redis => true,
     }
 }
 

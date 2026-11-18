@@ -2059,7 +2059,7 @@ fn constraint_entry(c: &ConstraintInfo) -> Entry {
         | ConstraintKind::Unique
         | ConstraintKind::ForeignKey
         | ConstraintKind::Check => words.to_lowercase(),
-        ConstraintKind::Other | _ => "constraint".to_owned(),
+        ConstraintKind::Other => "constraint".to_owned(),
     };
     (label, detail, c.object_ref())
 }
@@ -2072,7 +2072,7 @@ pub fn constraint_words(kind: ConstraintKind) -> &'static str {
         ConstraintKind::ForeignKey => "FOREIGN KEY",
         ConstraintKind::Check => "CHECK",
         ConstraintKind::Exclusion => "EXCLUDE",
-        ConstraintKind::Other | _ => "CONSTRAINT",
+        ConstraintKind::Other => "CONSTRAINT",
     }
 }
 
@@ -2370,8 +2370,7 @@ pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
         | Engine::Mssql
         | Engine::Duckdb
         | Engine::Redis
-        | Engine::Dynamodb
-        | _ => select,
+        | Engine::Dynamodb => select,
     }
 }
 

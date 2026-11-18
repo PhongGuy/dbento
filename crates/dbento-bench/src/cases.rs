@@ -184,7 +184,7 @@ impl Targets {
             | Engine::Mongodb
             | Engine::Surrealdb
             | Engine::Redis
-            | _ => {
+            | Engine::Dynamodb => {
                 self.sqlite
                     .as_ref()
                     .context("no SQLite target: pass --sqlite")?;

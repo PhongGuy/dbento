@@ -186,7 +186,7 @@ pub fn read_only_tooltip(engine: Engine) -> &'static str {
         Engine::Mysql => READ_ONLY_MYSQL_TOOLTIP,
         Engine::Duckdb => READ_ONLY_DUCKDB_TOOLTIP,
         Engine::Dynamodb => READ_ONLY_DYNAMODB_TOOLTIP,
-        Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis | _ => {
+        Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis => {
             "Read-only connection."
         }
     }
@@ -222,7 +222,7 @@ pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcem
             return format!("{READ_ONLY_DYNAMODB_TOOLTIP} {residual}");
         }
         Engine::Surrealdb | Engine::Redis => {}
-        Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Mssql | Engine::Duckdb | _ => {
+        Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Mssql | Engine::Duckdb => {
             return read_only_tooltip_of(c).to_owned();
         }
     }
@@ -273,7 +273,14 @@ pub fn explain_warning(err: &ExplainError, engine: Engine, title: &str) -> Strin
         ExplainError::NotExplainable => {
             let statements = match engine {
                 Engine::Sqlite => "SELECT, WITH, VALUES, INSERT, UPDATE, DELETE or REPLACE",
-                Engine::Postgres | _ => {
+                Engine::Postgres
+                | Engine::Mysql
+                | Engine::Mssql
+                | Engine::Duckdb
+                | Engine::Mongodb
+                | Engine::Surrealdb
+                | Engine::Redis
+                | Engine::Dynamodb => {
                     "SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or MERGE"
                 }
             };
@@ -400,12 +407,9 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
             c.namespace().unwrap_or_default(),
             c.database().unwrap_or_default()
         ),
-        Engine::Sqlite
-        | Engine::Duckdb
-        | Engine::Mongodb
-        | Engine::Redis
-        | Engine::Dynamodb
-        | _ => c.display_target(),
+        Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis | Engine::Dynamodb => {
+            c.display_target()
+        }
     };
     format!("{} \u{b7} {} \u{b7} {target}", c.name(), c.engine_label())
 }
@@ -431,7 +435,7 @@ pub fn editor_language(engine: Engine) -> &'static str {
         QueryLanguage::Sql | QueryLanguage::PartiQl => "sql",
         QueryLanguage::MongoShell => "javascript",
         QueryLanguage::RedisCommands => "bash",
-        QueryLanguage::SurrealQl | _ => "text",
+        QueryLanguage::SurrealQl => "text",
     }
 }
 

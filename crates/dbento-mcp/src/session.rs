@@ -98,15 +98,11 @@ static DYNAMODB: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-const UNKNOWN: &str = "The enforcement of read-only sessions on this connection is unknown to \
-    this server.";
-
 /// The level's name in `list_connections`.
 pub(crate) fn enforcement_name(level: ReadOnlyEnforcement) -> &'static str {
     match level {
         ReadOnlyEnforcement::Database => "database",
         ReadOnlyEnforcement::BestEffort => "best_effort",
-        _ => "unknown",
     }
 }
 
@@ -119,7 +115,6 @@ fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static s
         ReadOnlyEnforcement::Database => ENFORCED,
         ReadOnlyEnforcement::BestEffort if engine == Engine::Dynamodb => DYNAMODB.as_str(),
         ReadOnlyEnforcement::BestEffort => BEST_EFFORT,
-        _ => UNKNOWN,
     }
 }
 

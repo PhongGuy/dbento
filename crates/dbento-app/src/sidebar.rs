@@ -209,7 +209,6 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
         SidebarRow::Explorer(r) => match &r.item {
             WorkspaceItem::Folder(path) => Some(Selection::Folder(path.clone())),
             WorkspaceItem::Connection(name) => Some(Selection::Connection(name.clone())),
-            _ => None,
         },
         SidebarRow::Catalog(r, ..) => match &r.kind {
             RowKind::Object { object, .. } => Some(Selection::Object {
@@ -1322,7 +1321,6 @@ impl Sidebar {
                     let key = NodeKey::Connection(name.clone());
                     Some((self.tree.is_expanded(&key), RowToggle::Node(key)))
                 }
-                _ => None,
             },
             // An object row is a leaf, though it carries its group's key.
             SidebarRow::Catalog(r, ..)
@@ -1383,7 +1381,6 @@ impl Sidebar {
                 WorkspaceItem::Connection(name) => {
                     folder_row(self.workspace.connection(name)?.folder()?)
                 }
-                _ => None,
             },
             SidebarRow::Catalog(r, ..) => (0..ix).rev().find(|&i| match &self.rows[i] {
                 SidebarRow::Explorer(_) => true,
@@ -1406,7 +1403,7 @@ impl Sidebar {
         for row in explorer_rows(&self.workspace, &self.collapsed) {
             let conn = match &row.item {
                 WorkspaceItem::Connection(name) => self.workspace.connection(name),
-                WorkspaceItem::Folder(_) | _ => None,
+                WorkspaceItem::Folder(_) => None,
             };
             // Deep folders stop indenting; catalog rows indent from the capped depth.
             let depth = shown_depth(row.depth);
@@ -1741,8 +1738,6 @@ impl Sidebar {
                 let row_el = Self::draggable(row_el, row.item.clone());
                 Self::drop_target(row_el, c.folder().cloned(), selected, cx).into_any_element()
             }
-            // A tree item added to core later has no row until the explorer learns it.
-            _ => Self::row_base(0, guide, settings::active_metrics(cx).tree_row).into_any_element(),
         }
     }
 
@@ -2174,8 +2169,7 @@ pub fn tag_color(color: Color) -> Hsla {
         Color::Teal => (174., 0.70, 0.40),
         Color::Blue => (217., 0.85, 0.58),
         Color::Purple => (270., 0.65, 0.62),
-        // A tag added to core later shows as gray until it gets its own hue.
-        Color::Gray | _ => (220., 0.08, 0.55),
+        Color::Gray => (220., 0.08, 0.55),
     };
     hsla(hue / 360., sat, light, 1.)
 }
@@ -2190,7 +2184,7 @@ pub fn color_name(color: Color) -> &'static str {
         Color::Teal => "teal",
         Color::Blue => "blue",
         Color::Purple => "purple",
-        Color::Gray | _ => "gray",
+        Color::Gray => "gray",
     }
 }
 
@@ -2248,7 +2242,6 @@ pub fn engine_icon(engine: Engine) -> IconName {
         Engine::Mongodb => Icons::FileCode,
         Engine::Redis => Icons::Zap,
         Engine::Dynamodb => Icons::Shapes,
-        _ => Icons::Database,
     }
 }
 
@@ -2285,7 +2278,6 @@ pub fn engine_title(c: &ConnectionConfig) -> &'static str {
         (_, Engine::Surrealdb) => "SurrealDB",
         (_, Engine::Redis) => "Redis",
         (_, Engine::Dynamodb) => "DynamoDB",
-        (label, _) => label,
     }
 }
 
@@ -2399,7 +2391,6 @@ impl Render for DragPreview {
         let name = match &self.0 {
             WorkspaceItem::Folder(path) => path.name().to_owned(),
             WorkspaceItem::Connection(name) => name.clone(),
-            _ => String::new(),
         };
         let theme = cx.theme();
         div()
