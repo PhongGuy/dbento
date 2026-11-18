@@ -8,7 +8,6 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 
 mod duration;
-mod duration_parity;
 mod folder_path;
 mod secret_errors;
 mod workspace;

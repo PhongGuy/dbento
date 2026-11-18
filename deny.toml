@@ -16,5 +16,4 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: zbus 5, used by the Linux keychain (secret-service, zbus-secret-service-keyring-store) and GPUI's portals and accessibility (ashpd, oo7, atspi)" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: zbus 5, used by the Linux keychain (secret-service, zbus-secret-service-keyring-store) and GPUI's portals and accessibility (ashpd, oo7, atspi)" },
     { id = "RUSTSEC-2026-0543", reason = "chrono: gpui-base, gpui-component and gpui-pre 0.3 (GPUI), arrow 60 and rmcp 3 depend on it directly" },
-    { id = "RUSTSEC-2026-0542", reason = "humantime: flagged only for wrapping chrono; it parses statement_timeout and --timeout until Dbento moves to its own parser" },
 ]

@@ -33,7 +33,6 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
-humantime.workspace = true
 tempfile.workspace = true
 dirs.workspace = true
 zeroize.workspace = true

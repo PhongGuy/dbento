@@ -34,7 +34,6 @@ dbento-core = { path = "../dbento-core", default-features = false, features = ["
 dbento-mcp = { path = "../dbento-mcp", default-features = false }
 anyhow.workspace = true
 clap.workspace = true
-humantime.workspace = true
 rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
