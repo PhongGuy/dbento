@@ -92,7 +92,8 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 - Light and dark themes, or follow the system.
 - Shortcuts can be rebound in a `keymap.json`, which Settings (Ctrl+,) opens and reloads.
 - `dbento import datagrip`, `dbento import dbeaver` and `dbento import beekeeper` bring over connections and saved queries from DataGrip, DBeaver and Beekeeper Studio, and saved passwords go to the keychain.
-- `dbento self-update` checks for a newer release and replaces a standalone `dbento` download in place; `--check` only reports.
+- The app checks for a new release at most once a day, and Settings has a switch to turn that off and a Check now button (also Ctrl+K U, or "Check for updates" in the palette). A banner offers the release or lets you skip it; the download is verified against a signed manifest and installed when you quit. This works for the AppImage, the macOS `.app` and the Windows installer. The `.deb` and anything else under `/usr`, builds from source, and a copy running from the mounted disk image are left to you.
+- `dbento self-update` checks for a newer release and replaces a standalone `dbento` download in place; `--yes` skips the question, and `--check` only reports (it exits 2 when a release is available). The CLI that ships with the app updates with the app.
 - Try it without a database server: `make demo` (see [Try the demo](#try-the-demo)).
 
 ## How it works
@@ -209,13 +210,15 @@ xattr -dr com.apple.quarantine /Applications/Dbento.app
 
 **Windows:** the installer and `dbento.exe` are not code-signed, so SmartScreen warns about an unknown publisher; choose "More info", then "Run anyway".
 
-**Checksums:** every package and archive carries `THIRD-PARTY-NOTICES.html`, the licenses of the crates it is built from. One `SHA256SUMS` file covers every file, the unversioned copies included; check your downloads with:
+**Checksums:** every package and archive carries `THIRD-PARTY-NOTICES.html`, the licenses of the crates it is built from. One `SHA256SUMS` file covers every package and archive in the table, the unversioned copies included; check your downloads with:
 
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
 Every file, `SHA256SUMS` included, also carries a build attestation, which `gh attestation verify <file> --repo PhongGuy/dbento` checks.
+
+The release also holds files that only the updater downloads. It checks them against a signed manifest, so they are not in `SHA256SUMS`, and they carry the build attestation too.
 
 ## Build from source
 
