@@ -103,7 +103,7 @@ notices-check:
 	$(CARGO) fetch --locked
 	$(CARGO) xtask notices --check
 
-# dbento-workspace must stay free of drivers, tokio and toml_edit on every target.
+# dbento-workspace and dbento-rules must stay free of drivers, tokio and toml_edit on every target.
 workspace-deps:
 	CARGO="$(CARGO)" LOCKED="$(LOCKED)" scripts/workspace-deps.sh
 
