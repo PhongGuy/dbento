@@ -2,6 +2,7 @@
 //!
 //! Parsing is synchronous and engine-free. No secret is ever read from or kept in the file.
 
+use crate::duration::parse_duration;
 use crate::folder::{FolderPath, parse_written};
 use crate::kinds::{
     Capabilities, ConstraintKind, DefinitionKind, QueryLanguage, ReadOnlyEnforcement,
@@ -1451,7 +1452,7 @@ impl ConnectionConfig {
         let statement_timeout = match raw.statement_timeout.as_deref() {
             None => None,
             Some(t) => {
-                let d = humantime::parse_duration(t)
+                let d = parse_duration(t)
                     .map_err(|e| invalid(format!("statement_timeout `{t}`: {e}")))?;
                 if !timeout_in_range(d) {
                     return Err(invalid(format!(
