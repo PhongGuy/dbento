@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dbento-core", "crates/dbento-workspace", "crates/dbento-cli", "crates/dbento-mcp", "crates/dbento-app", "crates/dbento-testkit", "crates/dbento-bench", "crates/xtask"]
+members = ["crates/dbento-core", "crates/dbento-workspace", "crates/dbento-rules", "crates/dbento-cli", "crates/dbento-mcp", "crates/dbento-app", "crates/dbento-testkit", "crates/dbento-bench", "crates/xtask"]
 resolver = "3"
 # A path dependency under the root would otherwise become a workspace member.
 exclude = ["vendor/tiberius", "vendor/mongodb"]

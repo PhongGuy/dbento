@@ -1,0 +1,23 @@
+[package]
+name = "dbento-rules"
+version = "0.1.0"
+description = "Dbento's push rules for a Potluck team server, as a potluck-kind rule set"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# One integration binary: tests/main.rs declares every test file as a module.
+autotests = false
+
+[dependencies]
+dbento-workspace = { path = "../dbento-workspace" }
+toml.workspace = true
+# The contract, pinned by tag; `version` keeps a breaking potluck-kind release from satisfying it.
+potluck-kind = { git = "https://github.com/PhongGuy/potluck", tag = "potluck-kind-v0.1.0", version = "0.1" }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+[lints]
+workspace = true

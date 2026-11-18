@@ -2599,6 +2599,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbento-rules"
+version = "0.1.0"
+dependencies = [
+ "dbento-workspace",
+ "potluck-kind",
+ "toml 1.2.1+spec-1.1.0",
+]
+
+[[package]]
 name = "dbento-testkit"
 version = "0.2.0"
 dependencies = [
@@ -7921,6 +7930,11 @@ dependencies = [
  "writeable",
  "zerovec",
 ]
+
+[[package]]
+name = "potluck-kind"
+version = "0.1.0"
+source = "git+https://github.com/PhongGuy/potluck?tag=potluck-kind-v0.1.0#e56d4285233ee8a03119d3bd812ad94300602a59"
 
 [[package]]
 name = "powerfmt"
