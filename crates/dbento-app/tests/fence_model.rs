@@ -1,7 +1,8 @@
 //! A fenced model sends nothing new to its old session; a running statement and Stop go on,
 //! and Reconnect or a switch lift the fence before connecting.
 use crate::support::{
-    LONG, MANY, browsing, fixture, init_tokio, ready, spec, wait_prompt, wait_real,
+    Fx, LONG, MANY, browsing, exec, fixture, init_tokio, ready, spec, wait_idle, wait_prompt,
+    wait_real,
 };
 use dbento_app::runner::RunnerTuning;
 use dbento_app::tab_model::{Fence, SaveState, TabModel};
@@ -345,4 +346,166 @@ fn a_discard_question_waits_under_the_fence(cx: &mut TestAppContext) {
             .is_some(),
         "keep still answers"
     );
+}
+
+/// Rows 0 and 1 staged, row 0's row deleted elsewhere, and the save rejected on it.
+fn rejected(cx: &mut TestAppContext, fx: &Fx) -> Entity<TabModel> {
+    let m = ready(cx, fx, "t");
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "row 0 stages"
+    );
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(1, 1, "y", cx)),
+        "row 1 stages"
+    );
+    exec(fx, "DELETE FROM t WHERE id = 1");
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
+    wait_idle(cx, &m);
+    assert!(
+        m.read_with(cx, |m, _| m.can_reload_conflicts()),
+        "a conflict to act on"
+    );
+    m
+}
+
+#[gpui_kit::test]
+fn conflicts_are_not_reloaded_under_the_fence(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = rejected(cx, &fx);
+    fence(cx, &m, Some(Fence::Gone));
+    assert!(
+        !m.update(cx, |m, cx| m.reload_conflicts(cx)),
+        "reload refused"
+    );
+    assert!(!m.read_with(cx, |m, _| m.reloading()), "no reload session");
+    fence(cx, &m, None);
+    assert!(
+        m.update(cx, |m, cx| m.reload_conflicts(cx)),
+        "reload once lifted"
+    );
+    wait_real(cx, "the reload", |cx| {
+        m.read_with(cx, |m, _| !m.reloading())
+    });
+}
+
+#[gpui_kit::test]
+fn conflicts_are_not_dropped_under_the_fence(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = rejected(cx, &fx);
+    fence(cx, &m, Some(Fence::Gone));
+    assert!(!m.update(cx, |m, cx| m.drop_conflicts(cx)), "drop refused");
+    let kept = m.read_with(cx, |m, _| {
+        (m.conflicts().len(), m.edits().len(), m.save_state())
+    });
+    assert_eq!(kept, (1, 2, SaveState::Idle), "conflicts and edits stay");
+    fence(cx, &m, None);
+    assert!(
+        m.update(cx, |m, cx| m.drop_conflicts(cx)),
+        "drop once lifted"
+    );
+}
+
+#[gpui_kit::test]
+fn a_stale_browse_waits_for_reconnect_to_reload(cx: &mut TestAppContext) {
+    let fx = fixture(BIG, "");
+    let m = browsing(cx, &fx, "t", expiring(), "");
+    wait_real(cx, "a continuable browse", |cx| {
+        m.read_with(cx, |m, _| !m.running() && m.continuation().is_some())
+    });
+    exec(&fx, "ALTER TABLE t RENAME COLUMN v TO w");
+    // The continuation sees the rename and marks the browse stale while the fence holds.
+    m.update(cx, |m, cx| {
+        assert!(m.continue_browse(cx), "the continuation starts");
+        m.set_fence(Some(Fence::Gone), cx);
+    });
+    idle(cx, &m);
+    pause(cx);
+    let names = |cx: &mut TestAppContext| {
+        m.read_with(cx, |m, _| {
+            let cols = m.results()[0].store.columns();
+            cols.iter().map(|c| c.name().to_owned()).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(names(cx), ["id", "g", "v"], "no fresh load under the fence");
+    let ws = Arc::clone(&fx.ws);
+    drop(m.update(cx, |m, cx| m.reconnect(ws, cx)));
+    wait_real(cx, "the fresh load after Reconnect", |cx| {
+        !m.read_with(cx, |m, _| m.running()) && names(cx) == ["id", "g", "w"]
+    });
+}
+
+#[gpui_kit::test]
+fn a_key_is_not_opened_under_the_fence(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    m.update(cx, |m, cx| m.run("SELECT x FROM t".into(), cx));
+    idle(cx, &m);
+    fence(cx, &m, Some(Fence::Gone));
+    m.update(cx, |m, cx| m.open_key(0, b"k".to_vec(), cx));
+    let after = m.read_with(cx, |m, _| (m.key_view().is_some(), m.results().len()));
+    assert_eq!(after, (false, 1), "no key view, the results stay");
+    fence(cx, &m, None);
+    m.update(cx, |m, cx| m.open_key(0, b"k".to_vec(), cx));
+    assert!(
+        m.read_with(cx, |m, _| m.key_view().is_some()),
+        "opened once lifted"
+    );
+}
+
+#[gpui_kit::test]
+fn a_save_stopping_its_stream_ends_idle_when_the_fence_lands(cx: &mut TestAppContext) {
+    let fx = fixture(BIG, "");
+    let slow = RunnerTuning {
+        idle_complete: Duration::from_secs(120),
+        ..RunnerTuning::default()
+    };
+    let m = browsing(cx, &fx, "t", slow, "");
+    m.update(cx, |m, _| m.set_max_rows(Some(100_000)));
+    wait_real(cx, "the parked stream", |cx| {
+        m.read_with(cx, |m, _| m.editable() && m.paused().is_some())
+    });
+    assert!(m.update(cx, |m, cx| m.stage_cell(0, 2, "w", cx)), "staged");
+    m.update(cx, |m, cx| {
+        assert!(m.save(cx), "the save starts");
+        assert_eq!(m.save_state(), SaveState::Stopping);
+        m.set_fence(Some(Fence::Gone), cx);
+    });
+    idle(cx, &m);
+    pause(cx);
+    let state = m.read_with(cx, |m, _| {
+        (m.save_state(), m.apply_prompt().is_some(), m.edits().len())
+    });
+    assert_eq!(
+        state,
+        (SaveState::Idle, false, 1),
+        "no apply; the edit stays staged"
+    );
+}
+
+#[gpui_kit::test]
+fn source_columns_under_gone_says_to_pick_a_connection(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = model(cx, &fx);
+    m.update(cx, |m, cx| m.run("SELECT x FROM t".into(), cx));
+    idle(cx, &m);
+    let cols: Arc<[ColumnInfo]> = m.read_with(cx, |m, _| m.results()[0].store.columns().into());
+    let ask = |cx: &mut TestAppContext, cols: Arc<[ColumnInfo]>| {
+        m.update(cx, |m, cx| {
+            m.source_columns(RelationRef::new("main", "t"), cols, cx)
+        })
+        .err()
+    };
+    fence(cx, &m, Some(Fence::Gone));
+    let gone = ask(cx, Arc::clone(&cols)).unwrap_or_default();
+    assert!(gone.contains("pick a connection"), "Gone: {gone}");
+    fence(
+        cx,
+        &m,
+        Some(Fence::Changed {
+            now_read_only: false,
+        }),
+    );
+    let changed = ask(cx, cols).unwrap_or_default();
+    assert!(changed.contains("Reconnect"), "Changed: {changed}");
 }

@@ -1304,8 +1304,10 @@ impl TabModel {
         if self.closed {
             return Err("the tab is closed".to_owned());
         }
-        if self.fence.is_some() {
-            return Err("reconnect the tab first".to_owned());
+        match self.fence {
+            Some(Fence::Gone) => return Err("pick a connection to run".to_owned()),
+            Some(Fence::Changed { .. }) => return Err("Reconnect to run".to_owned()),
+            None => {}
         }
         if self.running {
             return Err("wait for the run to finish".to_owned());
@@ -2231,9 +2233,10 @@ impl TabModel {
     }
 
     /// Unstages the conflicting rows (one undo step), clears banner and marks, then `save`s
-    /// the rest through the normal prompt. False without conflicts or while saving.
+    /// the rest through the normal prompt. False without conflicts, while saving or fenced.
     pub fn drop_conflicts(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.conflicts.is_empty() || self.save != SaveState::Idle {
+        // Its save would be refused, so nothing is unstaged under the fence.
+        if self.fence.is_some() || self.conflicts.is_empty() || self.save != SaveState::Idle {
             return false;
         }
         // Conflicts always hold staged rows, so equal counts mean nothing else would be saved.
@@ -2272,7 +2275,8 @@ impl TabModel {
     /// Reads the conflicting rows by key on a fresh session; staged edits stay. False unless
     /// allowed.
     pub fn reload_conflicts(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.can_reload_conflicts() {
+        // The reload opens its own session from the tab's spec, which the fence no longer trusts.
+        if self.fence.is_some() || !self.can_reload_conflicts() {
             return false;
         }
         let Some(target) = self.browse.as_ref().map(|b| b.target().clone()) else {
@@ -2750,7 +2754,9 @@ impl TabModel {
 
     /// Starts the fresh load a stale browse with nothing staged is due, once nothing runs.
     pub fn flush_stale(&mut self, cx: &mut Context<Self>) {
+        // Under the fence the browse stays stale, so the session after Reconnect reloads it.
         if self.stale
+            && self.fence.is_none()
             && self.edits.is_empty()
             && !self.running
             && self.save == SaveState::Idle
