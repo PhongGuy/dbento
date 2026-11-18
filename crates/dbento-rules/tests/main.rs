@@ -14,5 +14,6 @@ mod common;
 mod content;
 mod contract;
 mod detect;
+mod fixtures;
 mod paths;
 mod relax;
