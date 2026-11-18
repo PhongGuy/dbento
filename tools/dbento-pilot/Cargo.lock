@@ -2386,6 +2386,7 @@ dependencies = [
  "bson",
  "cbc 0.2.1",
  "cbor4ii",
+ "dbento-workspace",
  "dirs 7.0.0",
  "duckdb",
  "flate2",
@@ -2473,6 +2474,19 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-util",
+]
+
+[[package]]
+name = "dbento-workspace"
+version = "0.2.0"
+dependencies = [
+ "humantime",
+ "percent-encoding",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 1.2.1+spec-1.1.0",
+ "url",
 ]
 
 [[package]]
