@@ -5,6 +5,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod content;
+
 use potluck_kind::{Change, Finding, RuleSet, SeedFile};
 
 /// The rule set Potluck registers for kind `dbento`.
@@ -34,8 +36,8 @@ impl RuleSet for DbentoRules {
         "dbento.toml"
     }
 
-    fn detect_format(&self, _format_file: &[u8]) -> Option<String> {
-        None
+    fn detect_format(&self, format_file: &[u8]) -> Option<String> {
+        content::detect_format(format_file)
     }
 
     fn path_rule(&self, _path: &str) -> Option<Finding> {
