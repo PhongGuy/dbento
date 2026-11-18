@@ -8,8 +8,10 @@
 mod content;
 mod detail;
 mod paths;
+mod relax;
 
-use potluck_kind::{Change, Finding, RuleSet, SeedFile};
+use dbento_workspace::Workspace;
+use potluck_kind::{Blob, Change, Finding, RuleSet, SeedFile};
 
 /// The rule set Potluck registers for kind `dbento`.
 #[derive(Debug, Clone, Copy)]
@@ -54,7 +56,16 @@ impl RuleSet for DbentoRules {
         if !paths::reads(change.path()) {
             return Vec::new();
         }
-        content::check_content(change.path(), change.new_blob()).0
+        let (findings, new) = content::check_content(change.path(), change.new_blob());
+        // Relaxation compares only a root dbento.toml the content rules accepted, against an old
+        // side that opens too; an old side Dbento would refuse is no baseline, not a finding.
+        if !findings.is_empty() || !change.has_baseline() || change.path() != "dbento.toml" {
+            return findings;
+        }
+        match (new, change.old_blob().and_then(open_old)) {
+            (Some(new), Some(old)) => relax::relaxations(&old, &new),
+            _ => findings,
+        }
     }
 
     // A new team workspace starts as `dbento init` would leave it, so both agree on the format.
@@ -64,4 +75,12 @@ impl RuleSet for DbentoRules {
             dbento_workspace::TEMPLATE.as_bytes(),
         )]
     }
+}
+
+// The old side of a tip change, opened exactly as the content rules open the new side.
+fn open_old(blob: Blob<'_>) -> Option<Workspace> {
+    let Blob::Bytes(bytes) = blob else {
+        return None;
+    };
+    content::open(std::str::from_utf8(bytes).ok()?).ok()
 }

@@ -1,11 +1,9 @@
 //! Handles shared by the suites.
 
-use potluck_kind::RuleSet;
+use potluck_kind::{Blob, Change, Code, Finding, Role, RuleSet};
 
 /// The rule set under test, held the way Potluck holds it.
 pub const RULES: &dyn RuleSet = &dbento_rules::RULE_SET;
-
-use potluck_kind::{Blob, Change, Code, Finding, Role};
 
 /// Checks `text` as a history change at `path`, the way Potluck checks a pushed blob.
 pub fn history(path: &str, text: &str) -> Vec<Finding> {

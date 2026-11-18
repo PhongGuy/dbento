@@ -42,14 +42,19 @@ pub(crate) fn check_content(
     let Ok(text) = std::str::from_utf8(bytes) else {
         return (vec![Finding::new(Code::SecretValue, "parse", path)], None);
     };
-    match Workspace::from_text(
-        PathBuf::from("/workspace"),
-        Path::new("/workspace/dbento.toml"),
-        text,
-    ) {
+    match open(text) {
         Ok(workspace) => (Vec::new(), Some(workspace)),
         Err(e) => (vec![finding(path, &e)], None),
     }
+}
+
+/// Opens `text` as a root `dbento.toml`, the one way both sides of a change are opened.
+pub(crate) fn open(text: &str) -> Result<Workspace, OpenError> {
+    Workspace::from_text(
+        PathBuf::from("/workspace"),
+        Path::new("/workspace/dbento.toml"),
+        text,
+    )
 }
 
 // One rule per error code, its detail destructured from the variant's own fields.
