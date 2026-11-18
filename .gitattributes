@@ -2,3 +2,6 @@ datasets/chinook/* -text
 assets/icon/generated/** binary
 vendor/** -text
 crates/dbento-core/tests/fixtures/redis/*.resp3 binary
+# Signed and hashed test files must keep their exact bytes on every checkout.
+crates/dbento-core/tests/fixtures/update/* -text
+assets/update/* -text

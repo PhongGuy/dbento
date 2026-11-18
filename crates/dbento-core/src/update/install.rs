@@ -82,7 +82,9 @@ pub fn install_kind(
     if !canonical(os, &text) {
         return InstallKind::NotOwned(Reason::Unrecognised);
     }
-    if os == Os::Linux && exe.starts_with("/usr") && !exe.starts_with("/usr/local") {
+    // Judged on the text like `canonical`, since a Windows host reads `//usr` as a network share.
+    let mut segments = text.split('/').filter(|seg| !seg.is_empty());
+    if os == Os::Linux && segments.next() == Some("usr") && segments.next() != Some("local") {
         return InstallKind::NotOwned(Reason::SystemPackage);
     }
     match product {
