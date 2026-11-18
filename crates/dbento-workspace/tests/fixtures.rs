@@ -88,6 +88,14 @@ fn every_valid_fixture_opens_with_its_expected_effective_values() {
                 .get(conn.name())
                 .and_then(toml::Value::as_table)
                 .unwrap_or_else(|| panic!("{}: no expect for {}", case.display(), conn.name()));
+            for key in w.keys() {
+                assert!(
+                    ["read_only", "color"].contains(&key.as_str()),
+                    "{}: {}: unknown expect key {key}",
+                    case.display(),
+                    conn.name()
+                );
+            }
             let read_only = w
                 .get("read_only")
                 .and_then(toml::Value::as_bool)

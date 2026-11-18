@@ -80,11 +80,11 @@ Further rules:
 - `databases` (Postgres and SQL Server) is `"all"` or a non-empty list of distinct names matching
   `[A-Za-z0-9_-]+`; SQL Server also refuses two names that differ only in case. Each database is a
   child connection named `<parent>/<database>`.
-- `read_only_user` (SQL Server only) is the non-empty reader user that read-only work
-  impersonates.
+- `read_only_user` (SQL Server only) is the non-blank (not empty or only whitespace) reader user
+  that read-only work impersonates.
 - `endpoint` (DynamoDB) is an `http` or `https` URL with no user, path, query or fragment. Plain
   `http` is allowed only to `localhost` or a loopback address. `region` and `access_key_id` must
-  not be empty.
+  be non-blank (not empty or only whitespace).
 
 ## Secrets
 
@@ -95,8 +95,10 @@ No secret is ever written in `dbento.toml`.
 - `secret` says where the secret comes from: `"keychain"` (the default for server engines),
   `"none"`, or `{ env = "NAME" }`. Any other word is refused without quoting it, since it may be
   the password itself.
-- A MongoDB `uri` is refused with `secret` (key `uri`) when it holds a password (a `:` in the
-  userinfo before the last `@`), or the option `tlsCertificateKeyFilePassword`, `proxyPassword`,
+- A MongoDB `uri` is refused with `secret` (key `uri`) when any `:` appears anywhere before its
+  last `@`, since a password may hold `/` and `?`. This also refuses an `@` written after a
+  `host:port`, as in `mongodb://h:27017/db?appName=a@b`: write that `@` as `%40`. The uri is
+  also refused when it holds the option `tlsCertificateKeyFilePassword`, `proxyPassword`,
   or `authMechanismProperties` holding `AWS_SESSION_TOKEN`. Option keys match in any case.
 - A DynamoDB `endpoint` holding a user or password is refused with `secret` (key `endpoint`).
 - A MongoDB `uri` port, when written for a host, must be ASCII digits in 1-65535, bracketed IPv6
@@ -146,7 +148,7 @@ Saved queries are files below `queries/` with the extension of their language, i
 | --- | --- | --- |
 | `not-found` | No `dbento.toml` in the folder (or its parents, when discovering). | |
 | `io` | The file exists but cannot be read. | |
-| `parse` | Not valid TOML, a missing or non-integer `dbento`, or a key the format does not know. | |
+| `parse` | Not valid TOML, a missing or non-integer `dbento`, a key the format does not know, or a value of the wrong type or range for its key (such as `read_only = "yes"` or `port = 70000`). | |
 | `password` | A `password` key. | `key` |
 | `unsupported-version` | `dbento` is an integer other than 1. | |
 | `invalid-name` | A connection name outside `[A-Za-z0-9_-]+`. | `name` |
