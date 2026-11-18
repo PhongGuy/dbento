@@ -8,23 +8,36 @@ fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# The stub records its arguments and prints $TREE as cargo tree would.
+# The stub appends its arguments and prints $TREE as cargo tree would, or $RULES_TREE when that is
+# set and the tree asked for is dbento-rules.
 cat >"$TMP/cargo" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >"$STUB_ARGS"
-printf '%s' "$TREE"
+printf '%s\n' "$*" >>"$STUB_ARGS"
+if [[ " $* " == *" -p dbento-rules "* && -n ${RULES_TREE+x} ]]; then
+  printf '%s' "$RULES_TREE"
+else
+  printf '%s' "$TREE"
+fi
 EOF
 chmod +x "$TMP/cargo"
 
-run() { TREE=$1 STUB_ARGS=$TMP/args CARGO=$TMP/cargo bash "$SCRIPT" 2>&1; }
+run() { : >"$TMP/args"; TREE=$1 STUB_ARGS=$TMP/args CARGO=$TMP/cargo bash "$SCRIPT" 2>&1; }
+run_rules() {
+  : >"$TMP/args"
+  TREE=$1 RULES_TREE=$2 STUB_ARGS=$TMP/args CARGO=$TMP/cargo bash "$SCRIPT" 2>&1
+}
 
 CLEAN=$'dbento-workspace v0.2.0 (/src/crates/dbento-workspace)\nserde v1.0.229\ntoml v1.2.1+spec-1.1.0\ntoml_datetime v1.1.3+spec-1.1.0\ntempfile v3.27.0\n'
+RULES_CLEAN=$'dbento-rules v0.1.0 (/src/crates/dbento-rules)\npotluck-kind v0.1.0 (https://github.com/PhongGuy/potluck?tag=potluck-kind-v0.1.0#e56d4285)\n'"$CLEAN"
 
-test_a_clean_tree_passes_and_asks_for_normal_edges_on_every_target() {
-  local out args
-  out=$(run "$CLEAN") || fail "clean tree refused: $out"
-  args=$(cat "$TMP/args")
-  [[ $args == *"tree"*"-p dbento-workspace"*"-e normal"*"--target all"* ]] || fail "args: $args"
+test_a_clean_tree_passes_for_both_crates_with_normal_edges_on_every_target() {
+  local out crate line
+  out=$(run_rules "$CLEAN" "$RULES_CLEAN") || fail "clean trees refused: $out"
+  for crate in dbento-workspace dbento-rules; do
+    line=$(grep -- "-p $crate " "$TMP/args") || { fail "no tree for $crate: $(cat "$TMP/args")"; continue; }
+    [[ $line == *"tree"*"-e normal"*"--target all"* ]] || fail "args for $crate: $line"
+    [[ $out == *"$crate is driver-free"* ]] || fail "$crate not reported: $out"
+  done
 }
 
 test_each_forbidden_crate_fails_and_is_named() {
@@ -35,6 +48,12 @@ test_each_forbidden_crate_fails_and_is_named() {
   done
 }
 
+test_a_forbidden_crate_only_under_dbento_rules_fails_naming_it() {
+  local out
+  if out=$(run_rules "$CLEAN" "${RULES_CLEAN}tokio v1.53.2"$'\n'); then fail "rules-only tokio passed"; fi
+  [[ $out == *"dbento-rules depends on forbidden crate(s): tokio"* ]] || fail "not named: $out"
+}
+
 test_a_name_that_only_starts_like_a_forbidden_one_passes() {
   local out
   out=$(run "${CLEAN}tokio-util v0.7.20"$'\n'"redis-protocol v1.0.0"$'\n'"duckdb-sys v1.0.0"$'\n') \
@@ -43,6 +62,12 @@ test_a_name_that_only_starts_like_a_forbidden_one_passes() {
 
 test_an_empty_tree_fails() {
   if run "" >/dev/null; then fail "empty tree passed"; fi
+}
+
+test_an_empty_rules_tree_fails_naming_dbento_rules() {
+  local out
+  if out=$(run_rules "$CLEAN" ""); then fail "empty rules tree passed"; fi
+  [[ $out == *"cargo tree printed nothing for dbento-rules"* ]] || fail "not named: $out"
 }
 
 test_make_check_runs_the_tree_check() {
