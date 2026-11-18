@@ -13,3 +13,4 @@
 mod common;
 mod contract;
 mod detect;
+mod paths;

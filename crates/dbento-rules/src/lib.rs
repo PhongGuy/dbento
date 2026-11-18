@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 mod content;
+mod paths;
 
 use potluck_kind::{Change, Finding, RuleSet, SeedFile};
 
@@ -40,12 +41,12 @@ impl RuleSet for DbentoRules {
         content::detect_format(format_file)
     }
 
-    fn path_rule(&self, _path: &str) -> Option<Finding> {
-        None
+    fn path_rule(&self, path: &str) -> Option<Finding> {
+        paths::path_rule(path)
     }
 
-    fn reads(&self, _path: &str) -> bool {
-        false
+    fn reads(&self, path: &str) -> bool {
+        paths::reads(path)
     }
 
     fn check(&self, _change: &Change<'_>) -> Vec<Finding> {
