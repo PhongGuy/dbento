@@ -59,6 +59,8 @@ pub mod update;
 
 #[cfg(feature = "watch")]
 mod watch;
+#[cfg(feature = "watch")]
+pub use watch::{WATCH_DEBOUNCE, WatchError, WatchEvent, WorkspaceWatcher};
 
 mod introspect;
 pub use introspect::{

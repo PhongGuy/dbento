@@ -4,15 +4,206 @@
 //! recursive one. A debounced batch asks for a reread when it touches either; everything else in
 //! the folder (temp files, `.git`) is ignored, and a rescan notice always counts.
 
-use notify_debouncer_full::DebouncedEvent;
-use notify_debouncer_full::notify::EventKind;
-use std::path::Path;
+use notify_debouncer_full::notify::{
+    Error as NotifyError, ErrorKind, EventKind, RecommendedWatcher, RecursiveMode,
+};
+use notify_debouncer_full::{
+    DebounceEventResult, DebouncedEvent, Debouncer, RecommendedCache, new_debouncer,
+};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Sender, channel};
+use std::time::Duration;
+
+/// How long the watcher waits for a burst of file events to settle before reporting it.
+pub const WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// What the watcher reports about the workspace folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WatchEvent {
+    /// `dbento.toml` or something under `queries/` changed; the workspace should be reread.
+    Changed,
+    /// Watching stopped for good; no further events follow.
+    Failed {
+        /// Why watching stopped, readable by a person.
+        reason: String,
+    },
+}
+
+/// Why a workspace folder could not be watched.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum WatchError {
+    /// The folder, or `queries/` in it, could not be watched.
+    #[error("cannot watch {}: {message}", path.display())]
+    Io {
+        /// The path that could not be watched.
+        path: PathBuf,
+        /// The underlying error.
+        message: String,
+    },
+    /// The system's limit on watched files was reached.
+    #[error("the system's file watch limit was reached: {message}")]
+    Limit {
+        /// The underlying error.
+        message: String,
+    },
+}
+
+enum Input {
+    Events(DebounceEventResult),
+    Stop,
+}
+
+/// Watches one workspace folder on a thread of its own until dropped.
+#[derive(Debug)]
+pub struct WorkspaceWatcher {
+    inputs: Sender<Input>,
+    stopped: Arc<AtomicBool>,
+}
+
+impl WorkspaceWatcher {
+    /// Starts watching `dir`, calling `on_event` from the watcher's thread for every report.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchError::Io`] when `dir` (or its `queries/`) cannot be watched, [`WatchError::Limit`]
+    /// when the system's watch limit is reached.
+    pub fn start(
+        dir: &Path,
+        on_event: impl Fn(WatchEvent) + Send + 'static,
+    ) -> Result<WorkspaceWatcher, WatchError> {
+        let root = std::fs::canonicalize(dir).map_err(|e| WatchError::Io {
+            path: dir.to_path_buf(),
+            message: e.to_string(),
+        })?;
+        let queries = root.join("queries");
+        let (inputs, rx) = channel();
+        let events = inputs.clone();
+        let mut debouncer = new_debouncer(WATCH_DEBOUNCE, None, move |r: DebounceEventResult| {
+            let _ = events.send(Input::Events(r));
+        })
+        .map_err(|e| start_error(&root, &e))?;
+        debouncer
+            .watch(&root, RecursiveMode::NonRecursive)
+            .map_err(|e| start_error(&root, &e))?;
+        let mut placed = place(&mut debouncer, &queries)?;
+        let stopped = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stopped);
+        let shown = root.clone();
+        std::thread::Builder::new()
+            .name("workspace-watcher".into())
+            .spawn(move || {
+                let emit = |e: WatchEvent| {
+                    if !flag.load(Ordering::SeqCst) {
+                        on_event(e);
+                    }
+                };
+                // Ends on Stop or a failure; ending drops the debouncer and its watches.
+                while let Ok(Input::Events(result)) = rx.recv() {
+                    if flag.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let events = match result {
+                        Ok(events) => events,
+                        // Only the watch limit is fatal; other stream errors leave watching intact.
+                        Err(errors) => match errors
+                            .iter()
+                            .find(|e| matches!(e.kind, ErrorKind::MaxFilesWatch))
+                        {
+                            Some(e) => {
+                                return emit(WatchEvent::Failed {
+                                    reason: e.to_string(),
+                                });
+                            }
+                            None => continue,
+                        },
+                    };
+                    if !root.is_dir() {
+                        return emit(WatchEvent::Failed {
+                            reason: "the workspace folder was removed or moved".to_owned(),
+                        });
+                    }
+                    // A replaced queries/ leaves a dead watch, so an event naming it, or a folder
+                    // that came or went, places the recursive watch afresh.
+                    if touches(&events, &queries) || placed != queries.is_dir() {
+                        // The old watch may already be gone with its folder (WatchNotFound).
+                        if placed {
+                            let _ = debouncer.unwatch(&queries);
+                        }
+                        placed = match place(&mut debouncer, &queries) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return emit(WatchEvent::Failed {
+                                    reason: e.to_string(),
+                                });
+                            }
+                        };
+                    }
+                    if batch_counts(&root, &queries, &events) {
+                        emit(WatchEvent::Changed);
+                    }
+                }
+            })
+            .map_err(|e| WatchError::Io {
+                path: shown,
+                message: e.to_string(),
+            })?;
+        Ok(WorkspaceWatcher { inputs, stopped })
+    }
+}
+
+impl Drop for WorkspaceWatcher {
+    fn drop(&mut self) {
+        // The flag silences the callback at once and `Stop` wakes the thread so it ends now.
+        // The notify handler holds a sender too, so the channel never disconnects on its own.
+        // There is no join, so dropping inside the callback cannot deadlock.
+        self.stopped.store(true, Ordering::SeqCst);
+        let _ = self.inputs.send(Input::Stop);
+    }
+}
+
+// Places the recursive watch on queries/ when it exists; false means there is nothing to watch.
+fn place(
+    d: &mut Debouncer<RecommendedWatcher, RecommendedCache>,
+    queries: &Path,
+) -> Result<bool, WatchError> {
+    if !queries.is_dir() {
+        return Ok(false);
+    }
+    match d.watch(queries, RecursiveMode::Recursive) {
+        Ok(()) => Ok(true),
+        // Gone again between the check and the watch; the next batch tries again.
+        Err(e) if gone(&e) => Ok(false),
+        Err(e) => Err(start_error(queries, &e)),
+    }
+}
+
+fn gone(e: &NotifyError) -> bool {
+    matches!(e.kind, ErrorKind::PathNotFound)
+        || matches!(&e.kind, ErrorKind::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
+}
+
+fn start_error(path: &Path, e: &NotifyError) -> WatchError {
+    if matches!(e.kind, ErrorKind::MaxFilesWatch) {
+        WatchError::Limit {
+            message: e.to_string(),
+        }
+    } else {
+        WatchError::Io {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        }
+    }
+}
+
+fn touches(events: &[DebouncedEvent], queries: &Path) -> bool {
+    events.iter().any(|e| e.paths.iter().any(|p| p == queries))
+}
 
 // A rescan notice, or any non-access event on dbento.toml, the queries entry or below it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the watcher thread is its first caller")
-)]
 fn batch_counts(root: &Path, queries: &Path, events: &[DebouncedEvent]) -> bool {
     let toml = root.join("dbento.toml");
     events.iter().any(|e| {
@@ -102,7 +293,7 @@ mod measure {
     use std::sync::mpsc::{Receiver, channel};
     use std::time::Duration;
 
-    const WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
+    use super::WATCH_DEBOUNCE;
 
     fn batches(rx: &Receiver<DebounceEventResult>, root: &Path) {
         while let Ok(r) = rx.recv_timeout(Duration::from_millis(800)) {

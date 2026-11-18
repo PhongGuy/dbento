@@ -160,3 +160,4 @@ mod update_install_kind;
 mod update_manifest;
 mod update_signature;
 mod update_support;
+mod workspace_watch;
