@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 mod content;
+mod detail;
 mod paths;
 
 use potluck_kind::{Change, Finding, RuleSet, SeedFile};
@@ -49,8 +50,11 @@ impl RuleSet for DbentoRules {
         paths::reads(path)
     }
 
-    fn check(&self, _change: &Change<'_>) -> Vec<Finding> {
-        Vec::new()
+    fn check(&self, change: &Change<'_>) -> Vec<Finding> {
+        if !paths::reads(change.path()) {
+            return Vec::new();
+        }
+        content::check_content(change.path(), change.new_blob()).0
     }
 
     // A new team workspace starts as `dbento init` would leave it, so both agree on the format.

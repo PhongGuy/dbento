@@ -11,6 +11,7 @@
 )]
 
 mod common;
+mod content;
 mod contract;
 mod detect;
 mod paths;
