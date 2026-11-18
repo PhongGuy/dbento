@@ -227,6 +227,17 @@ pub enum Fence {
     Gone,
 }
 
+/// The chip's text for a fenced tab: why it no longer runs and what lifts the fence.
+pub fn fence_text(f: Fence) -> &'static str {
+    match f {
+        Fence::Changed {
+            now_read_only: true,
+        } => "Now read-only: Reconnect to run (rolls back any open transaction)",
+        Fence::Changed { .. } => "Settings changed: Reconnect to run",
+        Fence::Gone => "Not in dbento.toml: pick a connection to run",
+    }
+}
+
 /// What a connection pick says when the tab's statement still runs.
 pub const SWITCH_WHILE_RUNNING: &str = "Cancel the running statement before switching connection.";
 
@@ -1305,7 +1316,7 @@ impl TabModel {
             return Err("the tab is closed".to_owned());
         }
         if let Some(f) = self.fence {
-            return Err(crate::query_tab::fence_text(f).to_owned());
+            return Err(fence_text(f).to_owned());
         }
         if self.running {
             return Err("wait for the run to finish".to_owned());

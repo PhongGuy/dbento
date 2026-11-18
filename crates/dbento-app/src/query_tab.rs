@@ -49,7 +49,7 @@ use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, 
 use crate::run_target::run_range;
 use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::status_bar::run_elapsed;
-use crate::tab_model::{Discard, Fence, ROW_LIMITS, TabModel};
+use crate::tab_model::{Discard, Fence, ROW_LIMITS, TabModel, fence_text};
 use crate::{staged, theme, ui};
 
 // A restored editor height leaves this much of the window for the results and the chrome
@@ -512,17 +512,6 @@ pub enum ConnState {
     Gone,
 }
 
-/// The chip's text for a fenced tab: why it no longer runs and what lifts the fence.
-pub fn fence_text(f: Fence) -> &'static str {
-    match f {
-        Fence::Changed {
-            now_read_only: true,
-        } => "Now read-only: Reconnect to run (rolls back any open transaction)",
-        Fence::Changed { .. } => "Settings changed: Reconnect to run",
-        Fence::Gone => "Not in dbento.toml: pick a connection to run",
-    }
-}
-
 impl ConnState {
     // The fence the tab model holds for this state; a current session runs unfenced.
     fn fence(self) -> Option<Fence> {
@@ -809,6 +798,12 @@ impl QueryTab {
             .update(cx, |e, cx| e.set_value(sql.to_owned(), window, cx));
         // set_value emits no Change event, so the draft is scheduled here.
         self.schedule_draft(cx);
+    }
+
+    /// Whether Run and Run all are live: the tab is open and its session is not fenced.
+    pub fn runnable(&self, cx: &gpui_kit::App) -> bool {
+        let m = self.model.read(cx);
+        !m.closed() && m.fence().is_none()
     }
 
     /// The editor's text.
@@ -1489,6 +1484,7 @@ impl QueryTab {
                 .child(
                     ui::chip_base(cx)
                         .id("conn-chip")
+                        .role(Role::Status)
                         .aria_label(text)
                         .test_support()
                         .flex_shrink(1.)
@@ -1622,6 +1618,8 @@ impl Render for QueryTab {
             || m.target_pending().is_some();
         // A closed tab only waits for its session to go, so nothing here may act.
         let closed = m.closed();
+        // A fenced session refuses runs too, so Run's halves read as unavailable then.
+        let no_run = !self.runnable(cx);
         // Explain shows only where the session's engine has it; its keys still explain why not.
         let explain = self.session_conn.engine().capabilities().explain;
         let format = formats(self.session_conn.engine());
@@ -1764,7 +1762,7 @@ impl Render for QueryTab {
                                 .when(labelled, |b| b.label("Run"))
                                 .accessibility_label("Run")
                                 .children(run_keys)
-                                .disabled(closed)
+                                .disabled(no_run)
                                 .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
                         )
                         .child(
@@ -1772,9 +1770,9 @@ impl Render for QueryTab {
                                 .w(px(1.))
                                 .h(px(28.))
                                 .bg(primary)
-                                // A closed tab's disabled halves draw primary at 15 %, so the
-                                // divider fades with them.
-                                .when(closed, |d| d.opacity(0.15))
+                                // Disabled halves draw primary at 15 %, so the divider fades
+                                // with them.
+                                .when(no_run, |d| d.opacity(0.15))
                                 .child(div().size_full().bg(primary_fg.opacity(0.4))),
                         )
                         .child(
@@ -1789,7 +1787,7 @@ impl Render for QueryTab {
                                 .when(labelled, |b| b.label("All"))
                                 .accessibility_label("Run all")
                                 .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
-                                .disabled(closed)
+                                .disabled(no_run)
                                 .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
                         ),
                 )
