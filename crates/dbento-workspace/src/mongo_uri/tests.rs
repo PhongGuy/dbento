@@ -1,7 +1,20 @@
-use super::{BAD_PORT, PASSWORD_REFUSED, check};
+use super::{BAD_PORT, PASSWORD_REFUSED, UriFault, check};
 
 fn refused(uri: &str) -> String {
-    check(uri).err().unwrap_or_else(|| panic!("{uri} accepted"))
+    match check(uri) {
+        Ok(_) => panic!("{uri} accepted"),
+        Err(UriFault::Secret(m) | UriFault::Invalid(m)) => m,
+    }
+}
+
+#[test]
+fn each_uri_fault_says_whether_it_is_a_secret() {
+    for uri in ["mongodb://app:x@h/", "mongodb://h/?proxyPassword=x"] {
+        assert!(matches!(check(uri), Err(UriFault::Secret(_))), "{uri}");
+    }
+    for uri in ["postgres://h", "mongodb://h/%FF", "mongodb://u:x/"] {
+        assert!(matches!(check(uri), Err(UriFault::Invalid(_))), "{uri}");
+    }
 }
 
 #[test]
@@ -68,7 +81,7 @@ fn a_harmless_option_is_not_taken_for_a_secret() {
         "mongodb://h/?authMechanismProperties=SERVICE_NAME:mongodb",
         "mongodb://h/?appName=proxyPassword",
     ] {
-        check(uri).unwrap_or_else(|e| panic!("{uri}: {e}"));
+        check(uri).unwrap_or_else(|e| panic!("{uri}: {e:?}"));
     }
 }
 
@@ -122,7 +135,7 @@ fn user_and_database_come_from_the_uri_percent_decoded() {
         ("mongodb://[::1]:27017/", None, "test"),
         ("mongodb://u%3Ap@h", Some("u:p"), "test"),
     ] {
-        let info = check(uri).unwrap_or_else(|e| panic!("{uri}: {e}"));
+        let info = check(uri).unwrap_or_else(|e| panic!("{uri}: {e:?}"));
         assert_eq!(
             (info.user.as_deref(), info.database.as_str()),
             (user, database),
@@ -185,6 +198,6 @@ fn ports_in_range_bracketed_ipv6_and_host_lists_are_accepted() {
         "mongodb+srv://cluster0.example.net/",
         "mongodb://u@h:27017/d?appName=a%40b",
     ] {
-        check(uri).unwrap_or_else(|e| panic!("{uri}: {e}"));
+        check(uri).unwrap_or_else(|e| panic!("{uri}: {e:?}"));
     }
 }

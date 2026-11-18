@@ -19,12 +19,23 @@ pub(crate) struct UriInfo {
     pub(crate) database: String,
 }
 
-/// Checks a `dbento.toml` `uri` and reads its user and default database; the error is the message.
-pub(crate) fn check(uri: &str) -> Result<UriInfo, String> {
+/// Why a `uri` was refused, each holding the message, which never quotes the uri.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UriFault {
+    /// A password or secret option is written in the uri.
+    Secret(String),
+    /// Any other fault: the scheme, percent-encoding or a port.
+    Invalid(String),
+}
+
+/// Checks a `dbento.toml` `uri` and reads its user and default database.
+pub(crate) fn check(uri: &str) -> Result<UriInfo, UriFault> {
     let after_scheme = uri
         .strip_prefix("mongodb://")
         .or_else(|| uri.strip_prefix("mongodb+srv://"))
-        .ok_or("`uri` must start with mongodb:// or mongodb+srv://")?;
+        .ok_or_else(|| {
+            UriFault::Invalid("`uri` must start with mongodb:// or mongodb+srv://".to_owned())
+        })?;
 
     // A password can hold `/` and `?`, so no cut at either is safe: any `:` before the last `@`
     // is refused. That also refuses a port before an `@` in options, which `%40` fixes.
@@ -32,12 +43,14 @@ pub(crate) fn check(uri: &str) -> Result<UriInfo, String> {
         .rsplit_once('@')
         .is_some_and(|(userinfo, _)| userinfo.contains(':'))
     {
-        return Err(PASSWORD_REFUSED.to_owned());
+        return Err(UriFault::Secret(PASSWORD_REFUSED.to_owned()));
     }
 
     let (before_options, options) = after_scheme.split_once('?').unwrap_or((after_scheme, ""));
     if let Some(key) = secret_option(options) {
-        return Err(format!("remove `{key}` from `uri`: it holds a secret"));
+        return Err(UriFault::Secret(format!(
+            "remove `{key}` from `uri`: it holds a secret"
+        )));
     }
 
     // Read in the driver's order: options off at the first `?`, then userinfo at the last `@`.
@@ -50,10 +63,10 @@ pub(crate) fn check(uri: &str) -> Result<UriInfo, String> {
     // A port the driver would refuse is refused here in fixed words: its own message quotes the
     // text, and `u:secret/` reads to it as a host and port.
     if !hosts.split(',').all(port_in_range) {
-        return Err(BAD_PORT.to_owned());
+        return Err(UriFault::Invalid(BAD_PORT.to_owned()));
     }
-    let user = decoded(userinfo)?;
-    let database = decoded(path)?;
+    let user = decoded(userinfo).map_err(UriFault::Invalid)?;
+    let database = decoded(path).map_err(UriFault::Invalid)?;
     Ok(UriInfo {
         user: (!user.is_empty()).then_some(user),
         database: if database.is_empty() {

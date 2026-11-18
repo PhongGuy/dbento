@@ -71,11 +71,13 @@ fn a_mongodb_entry_opens_beside_a_sql_one_and_a_password_is_refused() {
     );
     assert_eq!(a.secret_source(), &SecretSource::None);
     assert_eq!(default_schema(Engine::Mongodb, c).as_deref(), Some("shop"));
-    let m = invalid(&format!("{HEAD}uri = \"mongodb://app:hunter2@h/shop\"\n"));
-    assert!(
-        m.contains("remove the password from `uri`") && !m.contains("hunter2"),
-        "{m}"
-    );
+    match ws_with(&format!("{HEAD}uri = \"mongodb://app:hunter2@h/shop\"\n")).1 {
+        Err(OpenError::Secret { message: m, .. }) => assert!(
+            m.contains("remove the password from `uri`") && !m.contains("hunter2"),
+            "{m}"
+        ),
+        other => panic!("{:?}", other.err()),
+    }
     let m = invalid("dbento = 1\n[connections.x]\nengine = \"oracle\"\n");
     assert!(
         m.contains("unknown engine `oracle`") && m.contains("mongodb"),

@@ -314,6 +314,34 @@ pub enum OpenError {
         /// What is wrong.
         message: String,
     },
+    /// A secret written where the format keeps none: a password or secret option in a MongoDB
+    /// `uri`, or a user in a DynamoDB `endpoint`. The message never quotes the value.
+    #[error("connection `{connection}`: {message}")]
+    Secret {
+        /// The connection name.
+        connection: String,
+        /// The key holding the secret: `uri` or `endpoint`.
+        key: String,
+        /// What is wrong, without the value.
+        message: String,
+    },
+}
+
+impl OpenError {
+    /// A stable kebab-case code per variant; codes are never renamed.
+    pub fn code(&self) -> &'static str {
+        match self {
+            OpenError::NotFound { .. } => "not-found",
+            OpenError::Io { .. } => "io",
+            OpenError::Parse { .. } => "parse",
+            OpenError::Password { .. } => "password",
+            OpenError::UnsupportedVersion { .. } => "unsupported-version",
+            OpenError::InvalidName { .. } => "invalid-name",
+            OpenError::Invalid { .. } => "invalid",
+            OpenError::InvalidFolder { .. } => "invalid-folder",
+            OpenError::Secret { .. } => "secret",
+        }
+    }
 }
 
 /// Why a workspace could not be initialised.
@@ -1347,19 +1375,28 @@ pub fn is_local_host(host: &str) -> bool {
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-/// Ok when `text` is a usable endpoint; the error never holds `text`, which may hold credentials.
-fn endpoint_rule(text: &str) -> Result<(), &'static str> {
-    let url = url::Url::parse(text).map_err(|_| "`endpoint` must be an http or https URL")?;
+/// Why an `endpoint` was refused; neither case holds the text, which may hold credentials.
+enum EndpointFault {
+    /// The endpoint carries a user or password.
+    Secret(&'static str),
+    Invalid(&'static str),
+}
+
+const ENDPOINT_EXTRAS: &str = "`endpoint` must not hold a user, a path, a query or a fragment";
+
+/// Ok when `text` is a usable endpoint. Userinfo is judged after parse and scheme, so a
+/// malformed or non-http endpoint stays invalid even when it also holds a user.
+fn endpoint_rule(text: &str) -> Result<(), EndpointFault> {
+    const NOT_HTTP: &str = "`endpoint` must be an http or https URL";
+    let url = url::Url::parse(text).map_err(|_| EndpointFault::Invalid(NOT_HTTP))?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err("`endpoint` must be an http or https URL");
+        return Err(EndpointFault::Invalid(NOT_HTTP));
     }
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("`endpoint` must not hold a user, a path, a query or a fragment");
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(EndpointFault::Secret(ENDPOINT_EXTRAS));
+    }
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return Err(EndpointFault::Invalid(ENDPOINT_EXTRAS));
     }
     // Plain http is fine only when the request never leaves this machine.
     let loopback = match url.host() {
@@ -1369,9 +1406,9 @@ fn endpoint_rule(text: &str) -> Result<(), &'static str> {
         None => false,
     };
     if url.scheme() == "http" && !loopback {
-        return Err(
+        return Err(EndpointFault::Invalid(
             "`endpoint` uses http on a host that is not this machine: use https; signed requests over http expose the data",
-        );
+        ));
     }
     Ok(())
 }
@@ -1389,6 +1426,11 @@ impl ConnectionConfig {
         }
         let invalid = |message: String| OpenError::Invalid {
             connection: name.clone(),
+            message,
+        };
+        let secret = |key: &str, message: String| OpenError::Secret {
+            connection: name.clone(),
+            key: key.to_owned(),
             message,
         };
 
@@ -1675,7 +1717,10 @@ impl ConnectionConfig {
                 let uri = raw
                     .uri
                     .ok_or_else(|| invalid("mongodb needs `uri`".to_owned()))?;
-                let info = crate::mongo_uri::check(&uri).map_err(invalid)?;
+                let info = crate::mongo_uri::check(&uri).map_err(|fault| match fault {
+                    crate::mongo_uri::UriFault::Secret(m) => secret("uri", m),
+                    crate::mongo_uri::UriFault::Invalid(m) => invalid(m),
+                })?;
                 config.secret_source = match (&info.user, raw.secret) {
                     (Some(_), secret) => secret_source(secret).map_err(invalid)?,
                     (None, None) => SecretSource::None,
@@ -1828,7 +1873,10 @@ impl ConnectionConfig {
                     }
                 }
                 if let Some(endpoint) = &raw.endpoint {
-                    endpoint_rule(endpoint).map_err(|m| invalid(m.to_owned()))?;
+                    endpoint_rule(endpoint).map_err(|fault| match fault {
+                        EndpointFault::Secret(m) => secret("endpoint", m.to_owned()),
+                        EndpointFault::Invalid(m) => invalid(m.to_owned()),
+                    })?;
                 }
                 config.region = raw.region;
                 config.endpoint = raw.endpoint;
@@ -2157,3 +2205,6 @@ impl ConnectionConfig {
         self.consistent_read
     }
 }
+
+#[cfg(test)]
+mod tests;

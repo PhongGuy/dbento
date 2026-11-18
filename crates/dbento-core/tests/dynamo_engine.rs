@@ -329,8 +329,6 @@ fn an_endpoint_is_https_or_loopback_http_with_no_user_path_or_query() {
         "dynamodb.eu-west-1.amazonaws.com",
         "ftp://h",
         "https://",
-        "https://u:hunter2@h",
-        "https://u@h",
         "https://h/path",
         "https://h?x=1",
         "https://h#f",
@@ -339,6 +337,16 @@ fn an_endpoint_is_https_or_loopback_http_with_no_user_path_or_query() {
         let m = invalid(&format!("{HEAD}endpoint = \"{bad}\"\n"));
         assert!(m.contains("`endpoint`"), "{bad}: {m}");
         assert!(!m.contains("hunter2"), "{bad}: {m}");
+    }
+    for bad in ["https://u:hunter2@h", "https://u@h"] {
+        match ws_with(&format!("{HEAD}endpoint = \"{bad}\"\n")).1 {
+            Err(OpenError::Secret { key, message, .. }) => {
+                assert_eq!(key, "endpoint", "{bad}");
+                assert!(message.contains("`endpoint`"), "{bad}: {message}");
+                assert!(!message.contains("hunter2"), "{bad}: {message}");
+            }
+            other => panic!("{bad}: {:?}", other.err()),
+        }
     }
 }
 

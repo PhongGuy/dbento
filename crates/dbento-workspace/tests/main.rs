@@ -8,6 +8,7 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 
 mod folder_path;
+mod secret_errors;
 mod workspace;
 mod workspace_extra;
 mod workspace_files;
