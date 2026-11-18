@@ -2968,7 +2968,7 @@ impl Shell {
                     Err(e) => Some(open_problem(e)),
                 }
             }
-            TomlVerdict::Missing => Some("the file is missing".to_owned()),
+            TomlVerdict::Missing => Some(workspace_reload::TOML_MISSING.to_owned()),
             TomlVerdict::Unreadable(why) => Some(why),
         };
         if let Some(reason) = problem {
@@ -3660,13 +3660,20 @@ impl Shell {
         if self.closing {
             return;
         }
-        match Workspace::open(&dir) {
+        // The same read and wording as the watcher's reload, only done here and now.
+        let file = dir.join("dbento.toml");
+        let opened = match workspace_reload::read_disk(&file) {
+            DiskRead::Text(text) => Workspace::from_text(dir, &file, &text).map_err(open_problem),
+            DiskRead::Missing => Err(workspace_reload::TOML_MISSING.to_owned()),
+            DiskRead::Unreadable(why) => Err(why),
+        };
+        match opened {
             Ok(ws) => {
                 self.toml_problem = None;
                 self.install_workspace(ws, window, cx);
             }
-            Err(e) => {
-                self.toml_problem = Some(open_problem(e));
+            Err(why) => {
+                self.toml_problem = Some(why);
                 cx.notify();
             }
         }

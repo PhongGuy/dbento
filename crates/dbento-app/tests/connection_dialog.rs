@@ -333,6 +333,61 @@ fn reload_after_the_connection_is_gone_keeps_the_dialog(cx: &mut TestAppContext)
     assert!(present(cx, o.win, "conn-name"));
 }
 
+// Edits nopg's colour after `outside` changed the file, so Save is refused and offers Reload,
+// then presses Reload.
+fn reload_after(
+    cx: &mut TestAppContext,
+    o: &support::Opened,
+    outside: impl FnOnce(&std::path::Path),
+) {
+    support::gear(cx, o.win, "nopg");
+    form(cx, o);
+    outside(&o.fx.dir.path().join("dbento.toml"));
+    click_id(cx, o.win, ("conn-color", 0usize));
+    click_id(cx, o.win, "conn-save");
+    assert!(
+        present(cx, o.win, "conn-reload"),
+        "the refused save offers Reload"
+    );
+    click_id(cx, o.win, "conn-reload");
+}
+
+fn declared(cx: &mut TestAppContext, o: &support::Opened, name: &str) -> bool {
+    o.shell
+        .read_with(cx, |s, _| s.workspace().unwrap().declared(name).is_some())
+}
+
+#[gpui_kit::test]
+fn reload_of_a_broken_file_keeps_the_dialog_and_shows_the_banner(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    reload_after(cx, &o, |file| {
+        fs::write(file, "dbento = 1\n[connections.lite]\nengine = \"nope\"\n").unwrap();
+    });
+    let text = label_of(cx, o.win, "workspace-banner-error").unwrap();
+    assert!(text.contains("lite"), "{text}");
+    assert!(!present(cx, o.win, "confirm-detail"), "no error dialog");
+    assert!(declared(cx, &o, "nopg"), "the last good workspace stays");
+    assert!(present(cx, o.win, "conn-name"), "the form stays open");
+    assert!(present(cx, o.win, "conn-reload"), "and still offers Reload");
+}
+
+#[gpui_kit::test]
+fn reload_of_a_missing_file_says_so_like_the_watcher_path(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    reload_after(cx, &o, |file| fs::remove_file(file).unwrap());
+    assert_eq!(
+        label_of(cx, o.win, "workspace-banner-error").as_deref(),
+        Some(
+            dbento_app::workspace_reload::toml_problem_text(
+                dbento_app::workspace_reload::TOML_MISSING
+            )
+            .as_str()
+        )
+    );
+    assert!(declared(cx, &o, "nopg"), "the last good workspace stays");
+    assert!(present(cx, o.win, "conn-name"), "the form stays open");
+}
+
 #[gpui_kit::test]
 fn a_finished_test_and_an_inline_error_clear_when_a_field_changes(cx: &mut TestAppContext) {
     use dbento_app::connection_dialog::TestState;

@@ -85,3 +85,6 @@ pub fn watch_problem_text(reason: &str) -> String {
     let reason = reason.trim_end_matches('.');
     format!("Not watching this folder for changes: {reason}. Use Reload after changing files.")
 }
+
+/// Why a reload could not use dbento.toml when the file is gone.
+pub const TOML_MISSING: &str = "the file is missing";
