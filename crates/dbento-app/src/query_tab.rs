@@ -20,14 +20,15 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, ResizableState, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, ResizableState, Sizable as _, WindowExt as _, h_flex,
     resizable_panel, v_resizable,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EntityId, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, Role, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Task, TestSupportExt, WeakEntity, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Entity, EntityId, EventEmitter, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
+    div, px,
 };
 
 use crate::browse::{BrowseEvent, unavailable_text};
@@ -50,7 +51,8 @@ use crate::run_target::run_range;
 use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::status_bar::run_elapsed;
 use crate::tab_model::{Discard, Fence, ROW_LIMITS, TabModel, fence_text};
-use crate::{staged, theme, ui};
+use crate::workspace_reload::DiskBanner;
+use crate::{staged, theme, ui, update_banner};
 
 // A restored editor height leaves this much of the window for the results and the chrome
 // around them, so a height saved on a taller screen never squeezes the results shut.
@@ -537,6 +539,14 @@ pub enum QueryTabEvent {
     Retry,
     /// The connect error asked to edit the tab's connection.
     EditConnection,
+    /// The disk banner asked to take the file's text.
+    DiskReload,
+    /// The disk banner asked to keep the tab's text.
+    DiskKeep,
+    /// The disk banner asked to compare the tab's text with the file's.
+    DiskCompare,
+    /// The disk banner asked to close the tab whose file is gone.
+    DiskClose,
 }
 
 /// One query tab over a connection.
@@ -566,6 +576,10 @@ pub struct QueryTab {
     file: Option<PathBuf>,
     // The file's text when this tab last read or wrote it, so a save can see an outside change.
     disk: Option<String>,
+    // What an outside change to the file asks of the user, and the banner they last kept, which
+    // stays hidden while reads keep finding it.
+    disk_banner: Option<DiskBanner>,
+    dismissed: Option<DiskBanner>,
     // Where this tab's edited text is kept; None for a tab that never writes a draft.
     draft: Option<DraftSlot>,
     // The pending debounce; replacing or dropping it cancels the write it would make.
@@ -724,6 +738,8 @@ impl QueryTab {
             baseline: String::new(),
             file: None,
             disk: None,
+            disk_banner: None,
+            dismissed: None,
             draft,
             draft_task: None,
             split: cx.new(|_| ResizableState::default()),
@@ -841,6 +857,52 @@ impl QueryTab {
     /// The file's text when this tab last read or wrote it.
     pub fn disk(&self) -> Option<&str> {
         self.disk.as_deref()
+    }
+
+    /// Whether the editor's text differs from the baseline at all, whitespace included.
+    pub fn has_local_edits(&self, cx: &App) -> bool {
+        self.sql(cx) != self.baseline
+    }
+
+    /// The banner an outside change to the file shows, if any.
+    pub fn disk_banner(&self) -> Option<&DiskBanner> {
+        self.disk_banner.as_ref()
+    }
+
+    /// Shows `banner`, unless it is the one the user last kept; None hides the banner and
+    /// forgets that dismissal, as does any other banner.
+    pub fn set_disk_banner(&mut self, banner: Option<DiskBanner>, cx: &mut Context<Self>) {
+        if banner.is_some() && banner == self.dismissed {
+            self.disk_banner = None;
+        } else {
+            self.dismissed = None;
+            self.disk_banner = banner;
+        }
+        cx.notify();
+    }
+
+    /// Keeps the tab's text over the banner's news: a changed file's text becomes the known
+    /// one, a deleted file is forgotten, and a read failure is hidden until another read.
+    pub fn keep_mine(&mut self, cx: &mut Context<Self>) {
+        match self.disk_banner.take() {
+            Some(DiskBanner::Changed { disk }) => self.disk = Some(disk),
+            Some(DiskBanner::Deleted) => self.disk = None,
+            failed @ Some(DiskBanner::Unreadable { .. }) => self.dismissed = failed,
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// Moves the tab's file from under folder `from` to under `to`; false, and nothing
+    /// changes, when the file is not under `from`.
+    pub fn rebase_file(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) -> bool {
+        let Some(rest) = self.file.as_deref().and_then(|f| f.strip_prefix(from).ok()) else {
+            return false;
+        };
+        self.file = Some(to.join(rest));
+        self.schedule_draft(cx);
+        cx.notify();
+        true
     }
 
     /// Unties the tab from its saved query, which another tab now owns: it keeps its text as
@@ -1501,6 +1563,59 @@ impl QueryTab {
 }
 
 impl QueryTab {
+    // The row under the toolbar saying the file changed, went or cannot be read, with the
+    // choices each case offers; the shell acts on them.
+    fn disk_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let banner = self.disk_banner.as_ref()?;
+        let theme = cx.theme();
+        let (says, color) = match banner {
+            DiskBanner::Changed { .. } => ("Changed on disk".to_owned(), theme.foreground),
+            DiskBanner::Deleted => ("Deleted on disk".to_owned(), theme.foreground),
+            DiskBanner::Unreadable { reason } => (
+                format!("Cannot read the file on disk: {reason}"),
+                theme.danger,
+            ),
+        };
+        let changed = matches!(banner, DiskBanner::Changed { .. });
+        let deleted = matches!(banner, DiskBanner::Deleted);
+        let button = |id: &'static str, text: &'static str, event: fn() -> QueryTabEvent| {
+            ui::secondary(Button::new(id))
+                .small()
+                .label(text)
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(event())))
+        };
+        let row = h_flex()
+            .id("disk-banner")
+            .role(Role::Status)
+            .test_support()
+            .h(px(32.))
+            .flex_none()
+            .gap_2()
+            .px_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.secondary)
+            .text_sm()
+            .child(update_banner::label("disk-banner-text", says, color))
+            .when(changed, |d| {
+                d.child(button("disk-reload", "Reload", || {
+                    QueryTabEvent::DiskReload
+                }))
+                .child(button("disk-compare", "Compare", || {
+                    QueryTabEvent::DiskCompare
+                }))
+            })
+            .child(button(
+                "disk-keep",
+                if changed { "Keep mine" } else { "Keep" },
+                || QueryTabEvent::DiskKeep,
+            ))
+            .when(deleted, |d| {
+                d.child(button("disk-close", "Close", || QueryTabEvent::DiskClose))
+            });
+        Some(row.into_any_element())
+    }
+
     // The chip naming the tab's connection. It opens a picker over the current dbento.toml's
     // connections, except on a browsing or closed tab, which cannot switch.
     fn connection_chip(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
@@ -1981,6 +2096,7 @@ impl Render for QueryTab {
             .min_h_0()
             .relative()
             .child(toolbar)
+            .children(self.disk_row(cx))
             .when_some(key, |d, (header, error, more)| {
                 d.child(key_pane(header, error, more, self.results.clone(), cx))
             })

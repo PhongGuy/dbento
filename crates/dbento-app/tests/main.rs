@@ -54,6 +54,7 @@ mod derived_lifecycle;
 mod derived_pickers;
 mod derived_tabs;
 mod derived_tree;
+mod disk_state;
 mod draft_tabs;
 mod drafts;
 mod duckdb_app;

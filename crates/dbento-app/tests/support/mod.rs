@@ -787,3 +787,36 @@ impl Opened {
         );
     }
 }
+/// Writes `queries/<conn>/a.sql` holding `text`, opens it from the palette in a new tab and
+/// returns its path.
+pub fn open_saved(
+    cx: &mut TestAppContext,
+    o: &Opened,
+    conn: &str,
+    text: &str,
+) -> std::path::PathBuf {
+    let file = o.fx.dir.path().join(format!("queries/{conn}/a.sql"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, text).unwrap();
+    let e = o
+        .shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).editor().clone());
+    cx.update_window(o.win, |_, w, cx| {
+        e.update(cx, |e, cx| e.focus(w, cx));
+        w.press("ctrl-o", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let row = format!("{conn}/a.sql");
+    wait_real(cx, "the list", |cx| {
+        palette_rows(cx, o.win).iter().any(|r| r.contains(&row))
+    });
+    palette_pick(cx, o.win, &row);
+    assert_eq!(tab_sql(cx, o), text, "the saved query opened");
+    file
+}
+/// The active tab's editor text.
+pub fn tab_sql(cx: &mut TestAppContext, o: &Opened) -> String {
+    o.shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).sql(cx))
+}

@@ -1500,6 +1500,11 @@ impl Shell {
                 let name = tab.read(cx).model().read(cx).spec().connection.clone();
                 this.edit_connection(&name, window, cx);
             }
+            // Nothing sets a disk banner yet, so its choices have nothing to act on.
+            QueryTabEvent::DiskReload
+            | QueryTabEvent::DiskKeep
+            | QueryTabEvent::DiskCompare
+            | QueryTabEvent::DiskClose => {}
         });
         // A filter, a sort or leaving the browse changes what the session restores.
         let browse = cx.subscribe(&model, |this, _, e: &BrowseEvent, cx| {

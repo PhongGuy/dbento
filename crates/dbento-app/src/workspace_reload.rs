@@ -1,7 +1,8 @@
 //! Reloading the open workspace after outside changes: the per-process watching switch, the
-//! off-thread disk read, and the pure verdict on what that read means for the installed file.
+//! off-thread disk read, and the pure verdicts on what a read means for the installed
+//! dbento.toml and for an open saved-query tab.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::{App, Global};
@@ -62,6 +63,69 @@ pub fn judge_toml(snapshot: &str, installed: &str, read: &DiskRead) -> TomlVerdi
         DiskRead::Text(text) => TomlVerdict::Parse(text.clone()),
         DiskRead::Missing => TomlVerdict::Missing,
         DiskRead::Unreadable(why) => TomlVerdict::Unreadable(why.clone()),
+    }
+}
+
+/// What a saved-query tab knew of its file when a read began: the file and its known text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabDisk {
+    /// The saved query, relative to the workspace.
+    pub file: PathBuf,
+    /// The file's text as the tab last read or wrote it; None once kept after a delete.
+    pub disk: Option<String>,
+}
+
+/// Why a saved-query tab's file needs the user: the banner over its editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiskBanner {
+    /// The file holds other text while the tab has edits of its own.
+    Changed {
+        /// The file's new text.
+        disk: String,
+    },
+    /// The file is gone.
+    Deleted,
+    /// The file could not be read.
+    Unreadable {
+        /// Why, readable by a person.
+        reason: String,
+    },
+}
+
+/// What a read of a tab's file means for the tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabVerdict {
+    /// The tab saved, kept or moved while the read ran, so the read is out of date.
+    Stale,
+    /// The file holds what the tab knows; nothing to do.
+    Same,
+    /// The tab has no edits, so it takes the file's new text.
+    Take(String),
+    /// The user decides, through this banner.
+    Show(DiskBanner),
+}
+
+/// Stale when `now` differs from `snapshot` (saved, kept or moved while the read ran). Text
+/// equal to `disk` is Same; other text is Take without local edits, else Changed. Missing is
+/// Same when `disk` is None, else Deleted. Unreadable always shows.
+pub fn judge_tab(
+    snapshot: &TabDisk,
+    now: &TabDisk,
+    local_edits: bool,
+    read: &DiskRead,
+) -> TabVerdict {
+    if snapshot != now {
+        return TabVerdict::Stale;
+    }
+    match read {
+        DiskRead::Text(text) if now.disk.as_deref() == Some(text.as_str()) => TabVerdict::Same,
+        DiskRead::Text(text) if !local_edits => TabVerdict::Take(text.clone()),
+        DiskRead::Text(text) => TabVerdict::Show(DiskBanner::Changed { disk: text.clone() }),
+        DiskRead::Missing if now.disk.is_none() => TabVerdict::Same,
+        DiskRead::Missing => TabVerdict::Show(DiskBanner::Deleted),
+        DiskRead::Unreadable(why) => TabVerdict::Show(DiskBanner::Unreadable {
+            reason: why.clone(),
+        }),
     }
 }
 
