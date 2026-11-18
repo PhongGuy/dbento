@@ -13,9 +13,9 @@ use std::time::Duration;
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
     EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, RelationKind, RelationRef,
-    SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort, Workspace,
-    WorkspaceItem, WriteError, connect, move_secret, plan_edit, resolve_key_passphrase,
-    resolve_secret, secret_env_var, tls_key_is_encrypted,
+    SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort, WatchEvent,
+    Workspace, WorkspaceItem, WorkspaceWatcher, WriteError, connect, move_secret, plan_edit,
+    resolve_key_passphrase, resolve_secret, secret_env_var, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -85,6 +85,7 @@ use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 use crate::update_banner;
 use crate::updates::{self, UpdatesEvent};
+use crate::workspace_reload::{self, DiskRead, TomlVerdict, judge_toml};
 
 /// The database a Postgres Test opens when the form names none: every server has it.
 const TEST_DATABASE_POSTGRES: &str = crate::connection_dialog::POSTGRES_DATABASE;
@@ -424,6 +425,16 @@ pub struct Shell {
     // The approvals poll, alive as long as the window.
     _approvals: Task<()>,
     _approval_asks: Task<()>,
+    // The open workspace's watcher and the task that hands its events to the shell; each
+    // workspace opened bumps the generation, so a previous watcher's late events are dropped.
+    watch: Option<(WorkspaceWatcher, Task<()>)>,
+    watch_generation: u64,
+    // Why watching could not start or stopped, while it stays off.
+    watch_problem: Option<String>,
+    // A reload is reading; `reload_again` asks for one more pass once it ends.
+    reload_running: bool,
+    reload_again: bool,
+    reloads_run: u64,
 }
 
 impl Shell {
@@ -587,6 +598,12 @@ impl Shell {
             _definition_events: definition_events,
             _approvals: approvals,
             _approval_asks: approval_asks,
+            watch: None,
+            watch_generation: 0,
+            watch_problem: None,
+            reload_running: false,
+            reload_again: false,
+            reloads_run: 0,
         };
         // The OS close goes through `request_close`; a shell already gone lets it close.
         let this = cx.weak_entity();
@@ -2544,6 +2561,9 @@ impl Shell {
         // The dock names an object of the old workspace, whose sidebar would answer its load.
         self.definition_open = false;
         self.definition_panel.update(cx, |p, cx| p.clear(cx));
+        self.watch = None;
+        self.watch_generation = self.watch_generation.wrapping_add(1);
+        self.watch_problem = None;
     }
 
     fn clear_workspace(&mut self) {
@@ -2670,6 +2690,8 @@ impl Shell {
                 // Recent entries name the real folder, so a link or `..` path adds no duplicate.
                 let real = ws.dir().to_path_buf();
                 self.workspace = Some(ws);
+                self.watch_generation = self.watch_generation.wrapping_add(1);
+                self.start_watch(&real, window, cx);
                 self.error = None;
                 // Forgetting the folder next time is a small loss, so it never blocks opening.
                 self.update_saved(
@@ -2799,6 +2821,151 @@ impl Shell {
             }
         }
         self.save_session(cx);
+        cx.notify();
+    }
+
+    /// The open workspace's watcher generation; events tagged with any other are dropped.
+    pub fn watch_generation(&self) -> u64 {
+        self.watch_generation
+    }
+
+    /// Why the open workspace is not being watched, when watching failed.
+    pub fn watch_problem(&self) -> Option<&str> {
+        self.watch_problem.as_deref()
+    }
+
+    /// Whether a reload of the workspace files is running.
+    pub fn reloading(&self) -> bool {
+        self.reload_running
+    }
+
+    /// How many read-and-judge passes over the workspace files have completed.
+    pub fn reloads_run(&self) -> u64 {
+        self.reloads_run
+    }
+
+    /// Takes one report from the watcher of `generation`: a failure is kept for display, a
+    /// change starts a reload. Reports from any watcher but the current one are dropped.
+    pub fn watch_event(
+        &mut self,
+        generation: u64,
+        event: WatchEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.watch_generation {
+            return;
+        }
+        // The watcher stays in place: this runs inside its pump, which ends on its own once
+        // the stopped watcher's channel closes.
+        if let WatchEvent::Failed { reason } = event {
+            self.watch_problem = Some(reason);
+            cx.notify();
+        } else {
+            self.workspace_files_changed(window, cx);
+        }
+    }
+
+    /// Rereads the workspace files off the main thread and installs what changed. Calls made
+    /// while a reload runs fold into one follow-up pass; a closing window starts nothing.
+    pub fn workspace_files_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.workspace.is_none() {
+            return;
+        }
+        if self.reload_running {
+            self.reload_again = true;
+            return;
+        }
+        self.reload_running = true;
+        self.read_workspace_files(false, window, cx);
+    }
+
+    // Watches `dir` when this process asked for watching, pumping each report into
+    // `watch_event` under the current generation. A watcher that cannot start is reported.
+    fn start_watch(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.watch = None;
+        if !workspace_reload::watching_enabled(cx) {
+            return;
+        }
+        let (tx, rx) = async_channel::unbounded();
+        let watcher = match WorkspaceWatcher::start(dir, move |e| {
+            let _ = tx.send_blocking(e);
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                self.watch_problem = Some(e.to_string());
+                return;
+            }
+        };
+        let generation = self.watch_generation;
+        let pump = cx.spawn_in(window, async move |this, cx| {
+            while let Ok(event) = rx.recv().await {
+                let sent = this.update_in(cx, |s, w, cx| s.watch_event(generation, event, w, cx));
+                if sent.is_err() {
+                    return;
+                }
+            }
+        });
+        self.watch = Some((watcher, pump));
+    }
+
+    // Reads dbento.toml on a background thread, then judges the read against the workspace
+    // installed when it began.
+    fn read_workspace_files(&mut self, retried: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ws) = self.workspace.clone() else {
+            self.reload_running = false;
+            return;
+        };
+        let (generation, snapshot) = (self.watch_generation, ws.source_text().to_owned());
+        let file = ws.dir().join("dbento.toml");
+        let read = cx.background_spawn(async move { workspace_reload::read_disk(&file) });
+        cx.spawn_in(window, async move |this, cx| {
+            let toml = read.await;
+            let _ = this.update_in(cx, |s, w, cx| {
+                s.judge_reload(generation, &snapshot, toml, retried, w, cx)
+            });
+        })
+        .detach();
+    }
+
+    // Applies one read's verdict. A read from an earlier generation, or one the app's own
+    // write overtook, is dropped and the files are read again.
+    fn judge_reload(
+        &mut self,
+        generation: u64,
+        snapshot: &str,
+        toml: DiskRead,
+        _retried: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.reloads_run += 1;
+        let current = match &self.workspace {
+            Some(ws) if generation == self.watch_generation => Arc::clone(ws),
+            _ => return self.end_reload(true, window, cx),
+        };
+        match judge_toml(snapshot, current.source_text(), &toml) {
+            TomlVerdict::Stale => self.reload_again = true,
+            TomlVerdict::Parse(text) => {
+                let file = current.dir().join("dbento.toml");
+                if let Ok(ws) = Workspace::from_text(current.dir().to_path_buf(), &file, &text) {
+                    self.install_workspace(ws, window, cx);
+                }
+            }
+            TomlVerdict::Same | TomlVerdict::Missing | TomlVerdict::Unreadable(_) => {}
+        }
+        self.end_reload(false, window, cx);
+    }
+
+    // Ends a pass: another starts when `again` or a change arrived meanwhile, unless the
+    // window is closing; otherwise the reload is over.
+    fn end_reload(&mut self, again: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let again = again || std::mem::take(&mut self.reload_again);
+        if again && !self.closing {
+            return self.read_workspace_files(false, window, cx);
+        }
+        self.reload_running = false;
+        self.reload_again = false;
         cx.notify();
     }
 

@@ -482,6 +482,31 @@ pub fn reload(cx: &mut TestAppContext, win: AnyWindowHandle) {
     right_click_empty_in(cx, win);
     click_id(cx, win, "menu-reload");
 }
+/// Runs the shell's reload path as a watcher event would, and lets it finish.
+pub fn files_changed(cx: &mut TestAppContext, o: &Opened) {
+    let shell = o.shell.clone();
+    cx.update_window(o.win, |_, w, cx| {
+        shell.update(cx, |s, cx| s.workspace_files_changed(w, cx))
+    })
+    .unwrap();
+    settle_reload(cx, &o.shell);
+}
+/// Lets a running reload finish, stepping the clock past its retry wait.
+pub fn settle_reload(cx: &mut TestAppContext, shell: &gpui_kit::Entity<dbento_app::shell::Shell>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if !shell.read_with(cx, |s, _| s.reloading()) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reload never finished"
+        );
+        cx.executor()
+            .advance_clock(dbento_app::workspace_reload::TOML_RETRY);
+    }
+}
 /// Moves the pointer onto `id` and lets the app settle.
 pub fn hover(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) {
     let id = id.into();

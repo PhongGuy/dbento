@@ -74,3 +74,4 @@ pub mod update_banner;
 pub mod updates;
 pub mod user_keymap;
 pub mod window_controls;
+pub mod workspace_reload;
