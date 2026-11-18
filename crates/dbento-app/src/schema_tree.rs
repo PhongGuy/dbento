@@ -2324,7 +2324,9 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
 /// Whether `engine` can show the definition of a listed index, constraint, trigger, type or
 /// routine.
 pub fn offers_definition(engine: Engine, object: &ObjectRef) -> bool {
-    DefinitionKind::of(object).is_some_and(|kind| engine.defines(kind))
+    object
+        .definition_kind()
+        .is_some_and(|kind| engine.defines(kind))
 }
 
 /// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`

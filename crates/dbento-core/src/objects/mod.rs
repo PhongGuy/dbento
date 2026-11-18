@@ -8,26 +8,10 @@ mod sqlite;
 pub(crate) use pg::{pg_definition, pg_relation_objects, pg_schema_objects};
 pub(crate) use sqlite::{sqlite_definition, sqlite_relation_objects};
 
+pub use dbento_workspace::{ConstraintKind, DefinitionKind};
+
 /// The most bytes of definition text one lookup returns.
 pub const DEFINITION_CAP: usize = 1 << 20;
-
-/// What kind of table constraint a key or check is.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ConstraintKind {
-    /// A primary key.
-    PrimaryKey,
-    /// A unique key.
-    Unique,
-    /// A foreign key.
-    ForeignKey,
-    /// A check constraint.
-    Check,
-    /// An exclusion constraint (Postgres).
-    Exclusion,
-    /// Any other kind the engine reports.
-    Other,
-}
 
 /// What kind of user-defined type a type is.
 #[non_exhaustive]
@@ -114,6 +98,19 @@ impl ObjectRef {
     /// The reference to a relation's own definition.
     pub fn relation(rel: RelationRef) -> Self {
         Self::Relation(rel)
+    }
+
+    /// The kind of a listed object; None for a relation, whose reference does not say whether
+    /// it is a table or a view.
+    pub fn definition_kind(&self) -> Option<DefinitionKind> {
+        match self {
+            Self::Relation(_) => None,
+            Self::Index { .. } => Some(DefinitionKind::Index),
+            Self::Constraint { kind, .. } => Some(DefinitionKind::Constraint(*kind)),
+            Self::Trigger { .. } => Some(DefinitionKind::Trigger),
+            Self::Type { .. } => Some(DefinitionKind::Type),
+            Self::Routine { .. } => Some(DefinitionKind::Routine),
+        }
     }
 
     /// The object as errors name it: its kind, its name and the relation or schema it is in.
@@ -575,41 +572,6 @@ impl RoutineInfo {
             schema: self.schema.clone(),
             name: self.name.clone(),
             arguments: self.arguments.clone(),
-        }
-    }
-}
-
-/// The kind of schema object a definition is asked for, as the schema tree tells them apart.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DefinitionKind {
-    /// A table.
-    Table,
-    /// A view or materialized view.
-    View,
-    /// An index.
-    Index,
-    /// A constraint of this kind.
-    Constraint(ConstraintKind),
-    /// A trigger.
-    Trigger,
-    /// A function or procedure.
-    Routine,
-    /// A user-defined type.
-    Type,
-}
-
-impl DefinitionKind {
-    /// The kind of a listed object; None for a relation, whose reference does not say whether
-    /// it is a table or a view.
-    pub fn of(object: &ObjectRef) -> Option<Self> {
-        match object {
-            ObjectRef::Relation(_) => None,
-            ObjectRef::Index { .. } => Some(Self::Index),
-            ObjectRef::Constraint { kind, .. } => Some(Self::Constraint(*kind)),
-            ObjectRef::Trigger { .. } => Some(Self::Trigger),
-            ObjectRef::Type { .. } => Some(Self::Type),
-            ObjectRef::Routine { .. } => Some(Self::Routine),
         }
     }
 }

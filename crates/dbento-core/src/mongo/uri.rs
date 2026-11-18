@@ -1,110 +1,7 @@
-//! The `uri` key's rules: no password in the text, plus its user and default database.
-//!
-//! The password rule needs no crate, so a build without the `mongodb` feature still refuses one.
+//! The MongoDB driver's syntax check of a `uri`, run at connect and on save.
 
-use percent_encoding::percent_decode_str;
-
-pub(crate) const PASSWORD_REFUSED: &str = "remove the password from `uri`; Dbento keeps it in the \
-     keychain. If it holds none, write any `@` after the host as `%40`";
-
-const NOT_UTF8: &str = "`uri` holds percent-encoding that is not UTF-8";
-
-const BAD_PORT: &str =
-    "`uri` is not a MongoDB connection string: the port must be an integer between 1 and 65535";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UriInfo {
-    pub(crate) user: Option<String>,
-    pub(crate) database: String,
-}
-
-/// Checks a `dbento.toml` `uri` and reads its user and default database; the error is the message.
-pub(crate) fn check(uri: &str) -> Result<UriInfo, String> {
-    let after_scheme = uri
-        .strip_prefix("mongodb://")
-        .or_else(|| uri.strip_prefix("mongodb+srv://"))
-        .ok_or("`uri` must start with mongodb:// or mongodb+srv://")?;
-
-    // A password can hold `/` and `?`, so no cut at either is safe: any `:` before the last `@`
-    // is refused. That also refuses a port before an `@` in options, which `%40` fixes.
-    if after_scheme
-        .rsplit_once('@')
-        .is_some_and(|(userinfo, _)| userinfo.contains(':'))
-    {
-        return Err(PASSWORD_REFUSED.to_owned());
-    }
-
-    let (before_options, options) = after_scheme.split_once('?').unwrap_or((after_scheme, ""));
-    if let Some(key) = secret_option(options) {
-        return Err(format!("remove `{key}` from `uri`: it holds a secret"));
-    }
-
-    // Read in the driver's order: options off at the first `?`, then userinfo at the last `@`.
-    let (userinfo, hosts_and_path) = before_options
-        .rsplit_once('@')
-        .unwrap_or(("", before_options));
-    let (hosts, path) = hosts_and_path
-        .split_once('/')
-        .unwrap_or((hosts_and_path, ""));
-    // A port the driver would refuse is refused here in fixed words: its own message quotes the
-    // text, and `u:secret/` reads to it as a host and port.
-    if !hosts.split(',').all(port_in_range) {
-        return Err(BAD_PORT.to_owned());
-    }
-    let user = decoded(userinfo)?;
-    let database = decoded(path)?;
-    Ok(UriInfo {
-        user: (!user.is_empty()).then_some(user),
-        database: if database.is_empty() {
-            "test".to_owned()
-        } else {
-            database
-        },
-    })
-}
-
-// A host's port, when written, is 1-65535 in ASCII digits. An IPv6 host keeps its port after
-// `]:`; an unclosed `[` is left to the driver.
-fn port_in_range(host: &str) -> bool {
-    let port = if host.starts_with('[') {
-        host.split_once(']')
-            .and_then(|(_, rest)| rest.strip_prefix(':'))
-    } else {
-        host.rsplit_once(':').map(|(_, port)| port)
-    };
-    port.is_none_or(|p| {
-        (1..=5).contains(&p.len())
-            && p.bytes().all(|b| b.is_ascii_digit())
-            && p.parse::<u32>().is_ok_and(|n| (1..=65_535).contains(&n))
-    })
-}
-
-fn decoded(text: &str) -> Result<String, String> {
-    match percent_decode_str(text).decode_utf8() {
-        Ok(decoded) => Ok(decoded.into_owned()),
-        Err(_) => Err(NOT_UTF8.to_owned()),
-    }
-}
-
-// The first option holding a secret, by its canonical key. Keys and values are read the way the
-// driver reads them: a key lower-cased, a value percent-decoded.
-fn secret_option(options: &str) -> Option<&'static str> {
-    options.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        match key.to_lowercase().as_str() {
-            "tlscertificatekeyfilepassword" => Some("tlsCertificateKeyFilePassword"),
-            "proxypassword" => Some("proxyPassword"),
-            "authmechanismproperties"
-                if percent_decode_str(value)
-                    .decode_utf8_lossy()
-                    .contains("AWS_SESSION_TOKEN") =>
-            {
-                Some("authMechanismProperties")
-            }
-            _ => None,
-        }
-    })
-}
+#[cfg(feature = "mongodb")]
+use dbento_workspace::MONGO_BAD_PORT as BAD_PORT;
 
 // The driver's own syntax check, run at connect and on save. Its messages quote the text, even with
 // no `@` (`u:secret/` reads as a host and port), so only the port error passes, in fixed words.
@@ -139,5 +36,7 @@ pub(crate) fn driver_syntax(_uri: &str) -> Result<(), String> {
     Ok(())
 }
 
+// Separate attributes, so clippy still sees the module as test code.
 #[cfg(test)]
+#[cfg(feature = "mongodb")]
 mod tests;

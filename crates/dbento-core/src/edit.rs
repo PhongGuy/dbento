@@ -5,150 +5,13 @@
 
 use crate::folder::{FolderPath, WorkspaceItem, visible};
 use crate::workspace::{
-    AuthLevel, Color, Databases, Engine, OpenError, SecretSource, TlsMode, Workspace, color_word,
-    valid_name,
+    Color, Databases, Engine, OpenError, SecretSource, TlsMode, Workspace, color_word, valid_name,
 };
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, InlineTable, Item, Key, Table, Value};
 
-/// A connection's keys as written in `dbento.toml`; `None` means the key is absent.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectionSpec {
-    /// `engine`.
-    pub engine: Engine,
-    /// `path` (SQLite).
-    pub path: Option<String>,
-    /// `host` (Postgres and MySQL).
-    pub host: Option<String>,
-    /// `port` (Postgres and MySQL).
-    pub port: Option<u16>,
-    /// `database` (Postgres and MySQL).
-    pub database: Option<String>,
-    /// `user` (Postgres and MySQL).
-    pub user: Option<String>,
-    /// `tls` (Postgres and MySQL).
-    pub tls: Option<TlsMode>,
-    /// `tls_ca` (Postgres and MySQL), as written.
-    pub tls_ca: Option<String>,
-    /// `tls_cert` (Postgres and MySQL), as written.
-    pub tls_cert: Option<String>,
-    /// `tls_key` (Postgres and MySQL), as written.
-    pub tls_key: Option<String>,
-    /// `read_only_user` (SQL Server).
-    pub read_only_user: Option<String>,
-    /// `databases` (Postgres and SQL Server parents).
-    pub databases: Option<Databases>,
-    /// `secret` (Postgres and MySQL).
-    pub secret: Option<SecretSource>,
-    /// `read_only`.
-    pub read_only: Option<bool>,
-    /// `color`.
-    pub color: Option<Color>,
-    /// `folder`.
-    pub folder: Option<FolderPath>,
-    /// `statement_timeout`, as a humantime duration.
-    pub statement_timeout: Option<String>,
-    /// `uri` (MongoDB).
-    pub uri: Option<String>,
-    /// `namespace` (SurrealDB).
-    pub namespace: Option<String>,
-    /// `auth_level` (SurrealDB).
-    pub auth_level: Option<AuthLevel>,
-    /// `region` (DynamoDB).
-    pub region: Option<String>,
-    /// `endpoint` (DynamoDB).
-    pub endpoint: Option<String>,
-    /// `access_key_id` (DynamoDB).
-    pub access_key_id: Option<String>,
-    /// `consistent_read` (DynamoDB).
-    pub consistent_read: Option<bool>,
-}
-
-impl ConnectionSpec {
-    /// A spec with only `engine` set.
-    pub fn new(engine: Engine) -> Self {
-        ConnectionSpec {
-            engine,
-            path: None,
-            host: None,
-            port: None,
-            database: None,
-            user: None,
-            tls: None,
-            tls_ca: None,
-            tls_cert: None,
-            tls_key: None,
-            read_only_user: None,
-            databases: None,
-            secret: None,
-            read_only: None,
-            color: None,
-            folder: None,
-            statement_timeout: None,
-            uri: None,
-            namespace: None,
-            auth_level: None,
-            region: None,
-            endpoint: None,
-            access_key_id: None,
-            consistent_read: None,
-        }
-    }
-
-    /// Every key in the order a new entry writes them, with its TOML value when present.
-    fn values(&self) -> [(&'static str, Option<Value>); 24] {
-        let engine = self.engine.name();
-        let tls = |t: &TlsMode| match t {
-            TlsMode::Verify => "verify",
-            TlsMode::Off => "off",
-        };
-        let secret = |s: &SecretSource| match s {
-            SecretSource::Keychain => Value::from("keychain"),
-            SecretSource::None => Value::from("none"),
-            SecretSource::Env(name) => {
-                let mut env = InlineTable::new();
-                env.insert("env", Value::from(name.as_str()));
-                Value::InlineTable(env)
-            }
-        };
-        let text = |s: &Option<String>| s.as_deref().map(Value::from);
-        let databases = |d: &Databases| match d {
-            Databases::All => Value::from("all"),
-            Databases::Listed(names) => Value::Array(names.iter().map(String::as_str).collect()),
-        };
-        [
-            ("engine", Some(Value::from(engine))),
-            ("uri", text(&self.uri)),
-            ("path", text(&self.path)),
-            ("host", text(&self.host)),
-            ("port", self.port.map(|p| Value::from(i64::from(p)))),
-            ("database", text(&self.database)),
-            ("databases", self.databases.as_ref().map(databases)),
-            ("namespace", text(&self.namespace)),
-            ("user", text(&self.user)),
-            ("auth_level", self.auth_level.map(|l| Value::from(l.name()))),
-            ("region", text(&self.region)),
-            ("endpoint", text(&self.endpoint)),
-            ("access_key_id", text(&self.access_key_id)),
-            ("secret", self.secret.as_ref().map(secret)),
-            ("tls", self.tls.as_ref().map(|t| Value::from(tls(t)))),
-            ("tls_ca", text(&self.tls_ca)),
-            ("tls_cert", text(&self.tls_cert)),
-            ("tls_key", text(&self.tls_key)),
-            ("read_only_user", text(&self.read_only_user)),
-            ("consistent_read", self.consistent_read.map(Value::from)),
-            ("read_only", self.read_only.map(Value::from)),
-            ("color", self.color.map(|c| Value::from(color_word(c)))),
-            (
-                "folder",
-                self.folder.as_ref().map(|f| Value::from(f.as_str())),
-            ),
-            ("statement_timeout", text(&self.statement_timeout)),
-        ]
-    }
-}
+pub use dbento_workspace::ConnectionSpec;
 
 /// One change to `dbento.toml`.
 // One edit is built per user action and consumed at once, so its size never matters and
@@ -774,7 +637,7 @@ fn add_entry(doc: &mut DocumentMut, name: &str, spec: &ConnectionSpec) -> Result
     let mut table = Table::new();
     table.set_position(Some(last + 1));
     table.decor_mut().set_prefix("\n");
-    for (key, value) in spec.values() {
+    for (key, value) in values(spec) {
         if let Some(value) = value {
             table.insert(key, Item::Value(value));
         }
@@ -843,7 +706,7 @@ fn update_entry(
     new: &ConnectionSpec,
 ) -> Result<(), EditError> {
     let entry = entry_table(doc, name)?;
-    for ((key, before), (_, after)) in old.values().into_iter().zip(new.values()) {
+    for ((key, before), (_, after)) in values(old).into_iter().zip(values(new)) {
         if before.as_ref().map(ToString::to_string) == after.as_ref().map(ToString::to_string) {
             continue;
         }
@@ -867,4 +730,56 @@ fn update_entry(
         entry.remove("databases");
     }
     Ok(())
+}
+
+/// Every key in the order a new entry writes them, with its TOML value when present.
+fn values(spec: &ConnectionSpec) -> [(&'static str, Option<Value>); 24] {
+    let engine = spec.engine.name();
+    let tls = |t: &TlsMode| match t {
+        TlsMode::Verify => "verify",
+        TlsMode::Off => "off",
+    };
+    let secret = |s: &SecretSource| match s {
+        SecretSource::Keychain => Value::from("keychain"),
+        SecretSource::None => Value::from("none"),
+        SecretSource::Env(name) => {
+            let mut env = InlineTable::new();
+            env.insert("env", Value::from(name.as_str()));
+            Value::InlineTable(env)
+        }
+    };
+    let text = |s: &Option<String>| s.as_deref().map(Value::from);
+    let databases = |d: &Databases| match d {
+        Databases::All => Value::from("all"),
+        Databases::Listed(names) => Value::Array(names.iter().map(String::as_str).collect()),
+    };
+    [
+        ("engine", Some(Value::from(engine))),
+        ("uri", text(&spec.uri)),
+        ("path", text(&spec.path)),
+        ("host", text(&spec.host)),
+        ("port", spec.port.map(|p| Value::from(i64::from(p)))),
+        ("database", text(&spec.database)),
+        ("databases", spec.databases.as_ref().map(databases)),
+        ("namespace", text(&spec.namespace)),
+        ("user", text(&spec.user)),
+        ("auth_level", spec.auth_level.map(|l| Value::from(l.name()))),
+        ("region", text(&spec.region)),
+        ("endpoint", text(&spec.endpoint)),
+        ("access_key_id", text(&spec.access_key_id)),
+        ("secret", spec.secret.as_ref().map(secret)),
+        ("tls", spec.tls.as_ref().map(|t| Value::from(tls(t)))),
+        ("tls_ca", text(&spec.tls_ca)),
+        ("tls_cert", text(&spec.tls_cert)),
+        ("tls_key", text(&spec.tls_key)),
+        ("read_only_user", text(&spec.read_only_user)),
+        ("consistent_read", spec.consistent_read.map(Value::from)),
+        ("read_only", spec.read_only.map(Value::from)),
+        ("color", spec.color.map(|c| Value::from(color_word(c)))),
+        (
+            "folder",
+            spec.folder.as_ref().map(|f| Value::from(f.as_str())),
+        ),
+        ("statement_timeout", text(&spec.statement_timeout)),
+    ]
 }

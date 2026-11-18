@@ -239,85 +239,7 @@ pub struct Classification {
     pub categories: Vec<String>,
 }
 
-/// What the session's engine supports.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Capabilities {
-    /// The engine has schemas inside a database.
-    pub schemas: bool,
-    /// A cancel stops the statement inside the engine.
-    pub server_cancel: bool,
-    /// The connection authenticates with a secret from the keychain or the environment.
-    pub password: bool,
-    /// The connection is a database file path.
-    pub file: bool,
-    /// The TLS keys this engine's form shows apply.
-    pub tls: bool,
-    /// Staged row edits can be applied.
-    pub edit_rows: bool,
-    /// EXPLAIN plans can be requested.
-    pub explain: bool,
-    /// A table has its CREATE text in the schema tree.
-    pub table_definition: bool,
-    /// The language the engine's query text is written in.
-    pub language: QueryLanguage,
-    /// Keys can be scanned and their values read in pages.
-    pub key_browser: bool,
-}
-
-/// The language a connection's query text is written in.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueryLanguage {
-    /// SQL.
-    Sql,
-    /// The mongosh statement subset.
-    MongoShell,
-    /// SurrealQL.
-    SurrealQl,
-    /// One redis-cli command per line.
-    RedisCommands,
-    /// DynamoDB's PartiQL dialect.
-    PartiQl,
-}
-
-impl QueryLanguage {
-    /// The name shells show for the language: "SQL", "MongoDB shell", "SurrealQL", "Redis
-    /// commands" or "PartiQL".
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Sql => "SQL",
-            Self::MongoShell => "MongoDB shell",
-            Self::SurrealQl => "SurrealQL",
-            Self::RedisCommands => "Redis commands",
-            Self::PartiQl => "PartiQL",
-        }
-    }
-
-    /// The saved-query file extension, without the dot: "sql", "js", "surql", "redis" or
-    /// "partiql".
-    pub fn file_extension(self) -> &'static str {
-        match self {
-            Self::Sql => "sql",
-            Self::MongoShell => "js",
-            Self::SurrealQl => "surql",
-            Self::RedisCommands => "redis",
-            Self::PartiQl => "partiql",
-        }
-    }
-
-    /// The marker that comments out the rest of a line, as Dbento's own splitter reads it:
-    /// "--" for SQL and PartiQL, "//" for the MongoDB shell and SurrealQL, "#" for Redis
-    /// commands. None would mean the language has no line comment.
-    pub fn line_comment(self) -> Option<&'static str> {
-        // SurrealQL also takes `--` and `#`, but only `//` still comments inside a script body.
-        Some(match self {
-            Self::Sql | Self::PartiQl => "--",
-            Self::MongoShell | Self::SurrealQl => "//",
-            Self::RedisCommands => "#",
-        })
-    }
-}
+pub use dbento_workspace::{Capabilities, QueryLanguage, ReadOnlyEnforcement};
 
 /// Which server of a family a session talks to.
 #[non_exhaustive]
@@ -816,21 +738,6 @@ pub async fn connect(
             reason: "DynamoDB is not available in this build".to_owned(),
         }),
     }
-}
-
-/// How far a read-only session's refusal of writes can be trusted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ReadOnlyEnforcement {
-    /// The database refuses every write: Postgres, MySQL, SQLite, DuckDB, SQL Server with
-    /// read_only_user, MongoDB with a user whose privileges only read, and SurrealDB's fence for
-    /// a VIEWER login.
-    Database,
-    /// SQL Server without read_only_user: Dbento's fence and refusals, with known holes; MongoDB
-    /// with any other user, where Dbento refuses every statement it cannot prove reads; and
-    /// SurrealDB's fence for root OWNER, EDITOR or anonymous, where stored code can reach what
-    /// the fence cannot undo; and DynamoDB, where only IAM, out of Dbento's sight, refuses writes.
-    BestEffort,
 }
 
 /// What a read-only session on `engine` does not undo, in words for a user; None where the
