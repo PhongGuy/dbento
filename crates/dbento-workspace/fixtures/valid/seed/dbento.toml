@@ -1,0 +1,15 @@
+# Dbento workspace. Commit this file; passwords never go here.
+dbento = 1
+
+# [connections.local]
+# engine = "sqlite"
+# path = "data/app.db"
+# read_only = true
+#
+# [connections.prod]
+# engine = "postgres"
+# host = "db.example.com"
+# database = "app"
+# user = "app"
+# secret = { env = "PROD_DB_PASSWORD" }
+# color = "red"

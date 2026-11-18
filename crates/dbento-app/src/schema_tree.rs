@@ -2059,7 +2059,7 @@ fn constraint_entry(c: &ConstraintInfo) -> Entry {
         | ConstraintKind::Unique
         | ConstraintKind::ForeignKey
         | ConstraintKind::Check => words.to_lowercase(),
-        ConstraintKind::Other | _ => "constraint".to_owned(),
+        ConstraintKind::Other => "constraint".to_owned(),
     };
     (label, detail, c.object_ref())
 }
@@ -2072,7 +2072,7 @@ pub fn constraint_words(kind: ConstraintKind) -> &'static str {
         ConstraintKind::ForeignKey => "FOREIGN KEY",
         ConstraintKind::Check => "CHECK",
         ConstraintKind::Exclusion => "EXCLUDE",
-        ConstraintKind::Other | _ => "CONSTRAINT",
+        ConstraintKind::Other => "CONSTRAINT",
     }
 }
 
@@ -2324,7 +2324,9 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
 /// Whether `engine` can show the definition of a listed index, constraint, trigger, type or
 /// routine.
 pub fn offers_definition(engine: Engine, object: &ObjectRef) -> bool {
-    DefinitionKind::of(object).is_some_and(|kind| engine.defines(kind))
+    object
+        .definition_kind()
+        .is_some_and(|kind| engine.defines(kind))
 }
 
 /// `SELECT * FROM <schema>.<name>`, each part through `quote_ident`, laid out by `format_sql`
@@ -2368,8 +2370,7 @@ pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
         | Engine::Mssql
         | Engine::Duckdb
         | Engine::Redis
-        | Engine::Dynamodb
-        | _ => select,
+        | Engine::Dynamodb => select,
     }
 }
 

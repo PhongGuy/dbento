@@ -1,0 +1,29 @@
+dbento = 1
+
+[folders."Prod"]
+color = "red"
+
+[folders."Prod/EU"]
+color = "orange"
+
+[folders."Prod/EU/Archive"]
+
+[connections.eu-main]
+engine = "sqlite"
+path = "eu.db"
+folder = "Prod/EU/Archive"
+
+[connections.us-main]
+engine = "sqlite"
+path = "us.db"
+folder = "Prod/US"
+
+[connections.eu-own]
+engine = "sqlite"
+path = "eu-own.db"
+folder = "Prod/EU"
+color = "teal"
+
+[connections.loose]
+engine = "sqlite"
+path = "loose.db"

@@ -395,7 +395,7 @@ fn engines_offer_a_definition_only_for_kinds_they_answer() {
 #[test]
 fn a_listed_object_names_its_definition_kind() {
     let rel = users();
-    let of = |o: ObjectRef| DefinitionKind::of(&o);
+    let of = |o: ObjectRef| o.definition_kind();
     assert_eq!(of(ObjectRef::relation(rel.clone())), None);
     assert_eq!(
         of(ObjectRef::Index {

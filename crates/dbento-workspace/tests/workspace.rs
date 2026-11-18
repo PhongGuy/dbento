@@ -1,5 +1,5 @@
 // crates/dbento-core/tests/workspace.rs
-use dbento_core::{Color, Engine, OpenError, SecretSource, TlsMode, Workspace};
+use dbento_workspace::{Color, Engine, OpenError, SecretSource, TlsMode, Workspace};
 use std::fs;
 use std::time::Duration;
 

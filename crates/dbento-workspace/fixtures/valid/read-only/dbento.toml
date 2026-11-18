@@ -1,0 +1,14 @@
+dbento = 1
+
+[connections.prod]
+engine = "postgres"
+host = "db.example.com"
+database = "app"
+user = "readonly"
+read_only = true
+color = "red"
+
+[connections.dev]
+engine = "sqlite"
+path = "dev.db"
+read_only = false

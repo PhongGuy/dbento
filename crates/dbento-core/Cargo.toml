@@ -44,6 +44,7 @@ hmac.workspace = true
 base64.workspace = true
 hex.workspace = true
 url.workspace = true
+dbento-workspace = { path = "../dbento-workspace" }
 duckdb = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
@@ -129,7 +130,3 @@ path = "tests/duckdb_stream_memory.rs"
 [[test]]
 name = "mssql_thread"
 path = "tests/mssql_thread.rs"
-
-[[test]]
-name = "query_files"
-path = "tests/query_files.rs"

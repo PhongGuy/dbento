@@ -23,6 +23,7 @@ use super::exec::{
 };
 use super::parse::{MongoMethod, MongoOp, MongoStatement, SyntaxError, parse_script};
 use super::stream::{MongoStream, counted, is_cursor, with_batch_size};
+use super::uri::driver_syntax;
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::session::{
     CancelHandle, Classification, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError,
@@ -191,11 +192,13 @@ impl Driver for MongoDriver {
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
         let fail = |e| open_error(conn, e);
-        // The workspace already refused a `uri` holding a password, so neither this text nor
-        // the error built from it can carry one.
-        let mut options = ClientOptions::parse(conn.uri().unwrap_or_default())
-            .await
-            .map_err(fail)?;
+        let uri = conn.uri().unwrap_or_default();
+        driver_syntax(uri).map_err(|reason| ConnectError::Open {
+            message: format!("connection `{}`: {reason}", conn.name()),
+        })?;
+        // Open refused a password and the syntax check just refused text the driver would quote,
+        // so neither this text nor an error built from it carries one.
+        let mut options = ClientOptions::parse(uri).await.map_err(fail)?;
         options.app_name = Some("dbento".to_owned());
         let limit = fill_timeouts(&mut options);
         if let Some(credential) = &mut options.credential {

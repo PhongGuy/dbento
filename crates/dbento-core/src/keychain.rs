@@ -1,7 +1,8 @@
 //! [`KeychainStore`]: secrets in the platform keychain through `keyring-core`, one entry per
 //! connection under service `dbento`, the account being [`SecretKey`]'s two parts.
 
-use crate::secrets::{Secret, SecretError, SecretKey, SecretStore, Slot};
+use crate::secrets::{Secret, SecretError, SecretKey, SecretStore};
+use dbento_workspace::Slot;
 use keyring_core::{CredentialStore, Entry, Error};
 use std::fmt;
 use std::sync::Arc;

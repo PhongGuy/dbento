@@ -485,8 +485,7 @@ pub(crate) fn sql_literal(
                 | Engine::Mongodb
                 | Engine::Surrealdb
                 | Engine::Redis
-                | Engine::Dynamodb
-                | _ => {
+                | Engine::Dynamodb => {
                     return None;
                 }
             }

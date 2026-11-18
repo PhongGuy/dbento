@@ -1,0 +1,5 @@
+dbento = 1
+
+[connections.docs]
+engine = "mongodb"
+uri = "mongodb://localhost/app?proxyPassword=x"

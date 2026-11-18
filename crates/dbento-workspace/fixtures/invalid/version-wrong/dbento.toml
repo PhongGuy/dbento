@@ -1,0 +1,5 @@
+dbento = 2
+
+[connections.a]
+engine = "sqlite"
+path = "app.db"

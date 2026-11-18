@@ -1,0 +1,6 @@
+[connections.prod]
+read_only = true
+color = "red"
+
+[connections.dev]
+read_only = false

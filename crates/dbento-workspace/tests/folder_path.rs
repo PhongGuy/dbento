@@ -1,5 +1,5 @@
 //! The folder path grammar, its errors and its tree order.
-use dbento_core::{FolderPath, FolderPathError, WorkspaceItem};
+use dbento_workspace::{FolderPath, FolderPathError, WorkspaceItem};
 
 fn p(s: &str) -> FolderPath {
     s.parse().unwrap()

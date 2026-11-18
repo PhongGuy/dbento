@@ -1,0 +1,3 @@
+[connections.a]
+engine = "sqlite"
+path = "app.db"

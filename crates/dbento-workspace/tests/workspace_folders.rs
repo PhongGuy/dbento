@@ -1,5 +1,5 @@
 //! Folders in dbento.toml: grammar errors, implied folders and colour inheritance.
-use dbento_core::{Color, OpenError, Workspace};
+use dbento_workspace::{Color, OpenError, Workspace};
 
 fn open(toml: &str) -> Result<Workspace, OpenError> {
     let dir = tempfile::tempdir().unwrap();
