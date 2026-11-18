@@ -1,4 +1,4 @@
-use dbento_core::{InitError, OpenError, Secret, Workspace};
+use dbento_workspace::{InitError, OpenError, Workspace};
 use std::fs;
 
 fn dir_with(toml: &str) -> tempfile::TempDir {
@@ -95,12 +95,4 @@ fn saved_queries_are_bound_by_their_folder() {
             ("queries/unknown/y.sql".to_owned(), None),
         ]
     );
-}
-
-#[test]
-fn a_secret_never_prints_itself() {
-    let s = Secret::new("hunter2");
-    assert_eq!(s.expose(), "hunter2");
-    assert!(!format!("{s:?}").contains("hunter2"));
-    assert!(!format!("{s}").contains("hunter2"));
 }

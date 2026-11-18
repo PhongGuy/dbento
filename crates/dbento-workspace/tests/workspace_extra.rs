@@ -1,5 +1,5 @@
 // Pins behaviours added after review: strict root keys and case-insensitive query files.
-use dbento_core::{OpenError, Workspace};
+use dbento_workspace::{OpenError, Workspace};
 use std::fs;
 
 #[test]

@@ -130,7 +130,3 @@ path = "tests/duckdb_stream_memory.rs"
 [[test]]
 name = "mssql_thread"
 path = "tests/mssql_thread.rs"
-
-[[test]]
-name = "query_files"
-path = "tests/query_files.rs"

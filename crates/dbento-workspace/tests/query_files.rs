@@ -2,7 +2,7 @@
 // #[test] functions, not the helpers they call.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![warn(clippy::wildcard_enum_match_arm)]
-use dbento_core::{QueryFileError, Workspace};
+use dbento_workspace::{QueryFileError, Workspace};
 use std::fs;
 use std::path::Path;
 
@@ -327,7 +327,8 @@ fn an_oversized_query_is_refused_without_reading_it_all() {
     let (dir, ws) = workspace();
     fs::create_dir_all(dir.path().join("queries")).unwrap();
     let file = fs::File::create(dir.path().join("queries/huge.sql")).unwrap();
-    file.set_len(dbento_core::MAX_QUERY_FILE_BYTES + 1).unwrap();
+    file.set_len(dbento_workspace::MAX_QUERY_FILE_BYTES + 1)
+        .unwrap();
     let q = ws.saved_queries().unwrap().remove(0);
     assert!(matches!(ws.read_query(&q), Err(QueryFileError::Io { .. })));
 }

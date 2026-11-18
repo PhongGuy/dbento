@@ -241,3 +241,11 @@ fn a_panicking_store_is_a_failure_not_a_timeout() {
         "a dead worker is not waited out"
     );
 }
+
+#[test]
+fn a_secret_never_prints_itself() {
+    let s = Secret::new("hunter2");
+    assert_eq!(s.expose(), "hunter2");
+    assert!(!format!("{s:?}").contains("hunter2"));
+    assert!(!format!("{s}").contains("hunter2"));
+}
