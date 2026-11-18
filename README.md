@@ -110,7 +110,7 @@ All of the logic lives in `dbento-core`, a library with no UI: the workspace for
 
 ### A workspace is a folder
 
-A workspace is any folder with a `dbento.toml` in it. Connections live in that file, and saved queries in `queries/<connection>/`, as `.sql` files or the extension of the connection's language, so a query file knows which connection it runs on. Folders group connections and give them a color.
+A workspace is any folder with a `dbento.toml` in it. Connections live in that file, and saved queries in `queries/<connection>/`, as `.sql` files or the extension of the connection's language, so a query file knows which connection it runs on. Folders group connections and give them a color. Every key, rule and error code is described in [the workspace format](crates/dbento-workspace/FORMAT.md).
 
 ```toml
 dbento = 1

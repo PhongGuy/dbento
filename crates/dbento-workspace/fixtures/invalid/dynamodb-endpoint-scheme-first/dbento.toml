@@ -1,0 +1,5 @@
+dbento = 1
+
+[connections.items]
+engine = "dynamodb"
+endpoint = "ftp://u:x@localhost"

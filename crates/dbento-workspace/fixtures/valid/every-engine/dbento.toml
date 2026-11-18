@@ -1,0 +1,44 @@
+dbento = 1
+
+[connections.pg]
+engine = "postgres"
+host = "db.example.com"
+database = "app"
+user = "app"
+
+[connections.my]
+engine = "mysql"
+host = "localhost"
+user = "app"
+
+[connections.ms]
+engine = "mssql"
+host = "localhost"
+user = "sa"
+
+[connections.lite]
+engine = "sqlite"
+path = "data/app.db"
+
+[connections.duck]
+engine = "duckdb"
+path = "data/app.duckdb"
+
+[connections.docs]
+engine = "mongodb"
+uri = "mongodb://app@localhost:27017/app?authSource=admin"
+
+[connections.graph]
+engine = "surrealdb"
+host = "localhost"
+namespace = "app"
+database = "main"
+
+[connections.cache]
+engine = "redis"
+secret = "none"
+
+[connections.items]
+engine = "dynamodb"
+region = "eu-north-1"
+endpoint = "http://127.0.0.1:8000"

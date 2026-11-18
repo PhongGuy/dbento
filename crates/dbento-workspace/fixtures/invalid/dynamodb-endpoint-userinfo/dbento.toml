@@ -1,0 +1,5 @@
+dbento = 1
+
+[connections.items]
+engine = "dynamodb"
+endpoint = "https://u:x@localhost:8000"

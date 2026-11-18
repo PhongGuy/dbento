@@ -26,3 +26,7 @@ path = "tests/main.rs"
 [[test]]
 name = "query_files"
 path = "tests/query_files.rs"
+
+[[test]]
+name = "fixtures"
+path = "tests/fixtures.rs"

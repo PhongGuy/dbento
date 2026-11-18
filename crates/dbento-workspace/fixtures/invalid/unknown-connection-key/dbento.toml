@@ -1,0 +1,6 @@
+dbento = 1
+
+[connections.a]
+engine = "sqlite"
+path = "app.db"
+colour = "red"

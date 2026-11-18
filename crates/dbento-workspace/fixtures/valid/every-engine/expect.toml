@@ -1,0 +1,26 @@
+[connections.cache]
+read_only = false
+
+[connections.docs]
+read_only = false
+
+[connections.duck]
+read_only = false
+
+[connections.graph]
+read_only = false
+
+[connections.items]
+read_only = false
+
+[connections.lite]
+read_only = false
+
+[connections.ms]
+read_only = false
+
+[connections.my]
+read_only = false
+
+[connections.pg]
+read_only = false

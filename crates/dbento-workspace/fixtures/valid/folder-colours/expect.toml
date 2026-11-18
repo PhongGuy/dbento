@@ -1,0 +1,15 @@
+# Nearest coloured ancestor wins; a connection's own colour wins over its folder's.
+[connections.eu-main]
+read_only = false
+color = "orange"
+
+[connections.us-main]
+read_only = false
+color = "red"
+
+[connections.eu-own]
+read_only = false
+color = "teal"
+
+[connections.loose]
+read_only = false

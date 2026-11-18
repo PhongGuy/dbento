@@ -1,0 +1,8 @@
+dbento = 1
+
+[connections.a]
+engine = "postgres"
+host = "db.example.com"
+database = "app"
+user = "app"
+settings = { password = "x" }

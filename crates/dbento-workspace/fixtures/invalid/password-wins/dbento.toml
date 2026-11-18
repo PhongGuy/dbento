@@ -1,0 +1,7 @@
+dbento = 1
+unknown = 1
+
+[connections.a]
+engine = "sqlite"
+path = "app.db"
+password = "x"

@@ -2,8 +2,9 @@
 //! and the `queries/` folder layout.
 //!
 //! The crate holds no database driver and no async runtime, so a tool can read and check a
-//! workspace without pulling in either. Its enums are closed vocabularies of the file format: a
-//! new variant is a format change and a breaking release.
+//! workspace without pulling in either. Its non-error enums are closed vocabularies of the file
+//! format: a new variant is a format change and a breaking release. The error enums stay
+//! non-exhaustive, and each error keeps a stable code.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
