@@ -90,6 +90,7 @@ mod explorer_menu;
 mod explorer_menu_connections;
 mod explorer_quiet;
 mod fence_model;
+mod fence_tab;
 mod fetch_next;
 mod fetch_next_model;
 mod fetch_next_view;

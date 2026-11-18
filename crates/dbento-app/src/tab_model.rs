@@ -1304,10 +1304,8 @@ impl TabModel {
         if self.closed {
             return Err("the tab is closed".to_owned());
         }
-        match self.fence {
-            Some(Fence::Gone) => return Err("pick a connection to run".to_owned()),
-            Some(Fence::Changed { .. }) => return Err("Reconnect to run".to_owned()),
-            None => {}
+        if let Some(f) = self.fence {
+            return Err(crate::query_tab::fence_text(f).to_owned());
         }
         if self.running {
             return Err("wait for the run to finish".to_owned());

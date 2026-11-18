@@ -45,7 +45,7 @@ fn a_session_change_shows_the_chip_and_keeps_the_old_settings(cx: &mut TestAppCo
     reload(cx, o.win);
     assert_eq!(
         label_of(cx, o.win, "conn-chip").as_deref(),
-        Some("Settings changed")
+        Some("Settings changed: Reconnect to run")
     );
     assert!(present(cx, o.win, "conn-reconnect"));
     let model = o.model(cx);
@@ -58,10 +58,9 @@ fn a_session_change_shows_the_chip_and_keeps_the_old_settings(cx: &mut TestAppCo
     });
     assert_eq!(old, None, "the runner keeps the settings it started with");
     o.run(cx, "SELECT 1");
-    o.idle(cx);
-    assert_eq!(
-        model.read_with(cx, |m, _| m.error().map(str::to_owned)),
-        None
+    assert!(
+        model.read_with(cx, |m, _| m.results().is_empty()),
+        "the fenced tab runs nothing"
     );
     assert_eq!(
         tab_state(cx, &o),
@@ -72,13 +71,13 @@ fn a_session_change_shows_the_chip_and_keeps_the_old_settings(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn turning_read_only_on_says_the_tab_is_still_read_write(cx: &mut TestAppContext) {
+fn turning_read_only_on_says_reconnect_rolls_back(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     rewrite(&o.fx, "read_only = true", "");
     reload(cx, o.win);
     assert_eq!(
         label_of(cx, o.win, "conn-chip").as_deref(),
-        Some("Settings changed: still read-write until you reconnect")
+        Some("Now read-only: Reconnect to run (rolls back any open transaction)")
     );
     assert!(
         !present(cx, o.win, "read-only-badge"),
@@ -98,7 +97,7 @@ fn turning_read_only_off_keeps_the_badge_until_reconnect(cx: &mut TestAppContext
     );
     assert_eq!(
         label_of(cx, o.win, "conn-chip").as_deref(),
-        Some("Settings changed")
+        Some("Settings changed: Reconnect to run")
     );
     reconnect(cx, &o);
     wait_real(cx, "the badge going", |cx| {
@@ -118,7 +117,7 @@ fn a_gone_connection_says_so_without_reconnect(cx: &mut TestAppContext) {
     reload(cx, o.win);
     assert_eq!(
         label_of(cx, o.win, "conn-chip").as_deref(),
-        Some("Not in dbento.toml")
+        Some("Not in dbento.toml: pick a connection to run")
     );
     assert!(!present(cx, o.win, "conn-reconnect"));
     assert_eq!(tab_state(cx, &o), ConnState::Gone);

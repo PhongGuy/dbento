@@ -49,7 +49,7 @@ use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, 
 use crate::run_target::run_range;
 use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::status_bar::run_elapsed;
-use crate::tab_model::{Discard, ROW_LIMITS, TabModel};
+use crate::tab_model::{Discard, Fence, ROW_LIMITS, TabModel};
 use crate::{staged, theme, ui};
 
 // A restored editor height leaves this much of the window for the results and the chrome
@@ -510,6 +510,30 @@ pub enum ConnState {
     },
     /// The connection is no longer in dbento.toml.
     Gone,
+}
+
+/// The chip's text for a fenced tab: why it no longer runs and what lifts the fence.
+pub fn fence_text(f: Fence) -> &'static str {
+    match f {
+        Fence::Changed {
+            now_read_only: true,
+        } => "Now read-only: Reconnect to run (rolls back any open transaction)",
+        Fence::Changed { .. } => "Settings changed: Reconnect to run",
+        Fence::Gone => "Not in dbento.toml: pick a connection to run",
+    }
+}
+
+impl ConnState {
+    // The fence the tab model holds for this state; a current session runs unfenced.
+    fn fence(self) -> Option<Fence> {
+        match self {
+            ConnState::Current => None,
+            ConnState::Changed { still_read_write } => Some(Fence::Changed {
+                now_read_only: still_read_write,
+            }),
+            ConnState::Gone => Some(Fence::Gone),
+        }
+    }
 }
 
 /// What a query tab asks of the shell.
@@ -1024,6 +1048,8 @@ impl QueryTab {
                 state
             }
         };
+        let fence = self.state.fence();
+        self.model.update(cx, |m, cx| m.set_fence(fence, cx));
         cx.notify();
     }
 
@@ -1444,14 +1470,7 @@ impl QueryTab {
     // The note that the session no longer matches dbento.toml, with Reconnect when the
     // connection still exists; None while the session is current.
     fn chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let text = match self.state {
-            ConnState::Current => return None,
-            ConnState::Changed {
-                still_read_write: true,
-            } => "Settings changed: still read-write until you reconnect",
-            ConnState::Changed { .. } => "Settings changed",
-            ConnState::Gone => "Not in dbento.toml",
-        };
+        let text = fence_text(self.state.fence()?);
         let warning = cx.theme().warning;
         let reconnect = matches!(self.state, ConnState::Changed { .. }).then(|| {
             Button::new("conn-reconnect")
@@ -1477,7 +1496,8 @@ impl QueryTab {
                         .overflow_hidden()
                         .border_color(warning)
                         .text_color(warning)
-                        .child(div().min_w_0().truncate().child(text)),
+                        .child(div().min_w_0().truncate().child(text))
+                        .tooltip(move |window, cx| theme::tooltip(text, window, cx)),
                 )
                 .children(reconnect),
         )
