@@ -599,12 +599,25 @@ fn engine() -> Result<Docker, String> {
         |key| std::env::var(key).ok(),
         |path| std::path::Path::new(path).exists(),
     );
-    let connected = if host.starts_with("unix://") {
-        Docker::connect_with_unix(&host, 120, API_DEFAULT_VERSION)
-    } else {
-        Docker::connect_with_http(&host, 120, API_DEFAULT_VERSION)
-    };
-    connected.map_err(|e| format!("cannot reach the container engine at {host}: {e}"))
+    if host.starts_with("unix://") {
+        return unix_socket(&host);
+    }
+    Docker::connect_with_http(&host, 120, API_DEFAULT_VERSION)
+        .map_err(|e| format!("cannot reach the container engine at {host}: {e}"))
+}
+
+#[cfg(unix)]
+fn unix_socket(host: &str) -> Result<Docker, String> {
+    Docker::connect_with_unix(host, 120, API_DEFAULT_VERSION)
+        .map_err(|e| format!("cannot reach the container engine at {host}: {e}"))
+}
+
+/// bollard has Unix sockets only on Unix, so elsewhere a unix:// host is refused by name.
+#[cfg(not(unix))]
+fn unix_socket(host: &str) -> Result<Docker, String> {
+    Err(format!(
+        "cannot reach the container engine at {host}: Unix sockets need a Unix host"
+    ))
 }
 
 /// The names of every volume on the engine testcontainers uses.

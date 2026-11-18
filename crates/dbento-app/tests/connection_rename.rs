@@ -180,6 +180,7 @@ fn a_keychain_failure_after_apply_is_shown_and_keeps_the_rename(cx: &mut TestApp
     );
 }
 
+#[cfg(unix)]
 #[gpui_kit::test]
 fn a_folder_failure_after_apply_is_shown_and_keeps_the_rename(cx: &mut TestAppContext) {
     use std::os::unix::fs::PermissionsExt as _;

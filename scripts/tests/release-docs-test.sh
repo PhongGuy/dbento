@@ -126,6 +126,16 @@ test_releasing_doc_covers_update_signing() {
   if grep -nF 'No release job holds a signing secret' "$DOC"; then fail "RELEASING.md still says no job holds a signing secret"; fi
 }
 
+# The Windows-only updater code runs only on a dispatched CI run, so a release waits for one.
+test_releasing_doc_runs_windows_ci_before_tagging() {
+  [[ -f $DOC ]] || return 0
+  local dispatch tag
+  dispatch=$(grep -nF 'gh workflow run ci.yml --ref master -f windows=true' "$DOC" | head -n 1 | cut -d: -f1) || true
+  tag=$(grep -nE '^[0-9]+\. `git tag v<version>`$' "$DOC" | head -n 1 | cut -d: -f1) || true
+  [[ -n $dispatch ]] || { fail "RELEASING.md does not dispatch the Windows CI run"; return 0; }
+  [[ -n $tag && $dispatch -lt $tag ]] || fail "RELEASING.md dispatches the Windows CI run (line $dispatch) after tagging (line $tag)"
+}
+
 test_releasing_doc_covers_the_keys() {
   [[ -f $DOC ]] || return 0
   grep -qx '## Keys' "$DOC" || fail "RELEASING.md has no Keys section"

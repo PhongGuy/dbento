@@ -1,12 +1,17 @@
 //! `install`: the file swaps, the NSIS hand-off, the bundle path and the kinds left alone.
-#![cfg(all(feature = "update", unix))]
+//! Permission bits, links and the bundle are Unix-only; the rest also runs on Windows.
+#![cfg(feature = "update")]
 
-use crate::update_support::{ModeGuard, leftovers, offer_as};
+#[cfg(unix)]
+use crate::update_support::ModeGuard;
+use crate::update_support::{leftovers, offer_as};
 use dbento_core::update::{
     Format, InstallError, InstallKind, Reason, Relaunch, Staged, download, install, staging_dir,
 };
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::io::Write as _;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use wiremock::MockServer;
@@ -23,10 +28,12 @@ async fn staged(dir: &Path, format: &str, body: &[u8]) -> (MockServer, Staged) {
 fn executable(dir: &Path, name: &str) -> PathBuf {
     let target = dir.join(name);
     std::fs::write(&target, b"old").unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
     target
 }
 
+#[cfg(unix)]
 fn mode(p: &Path) -> u32 {
     std::fs::metadata(p).unwrap().permissions().mode() & 0o7777
 }
@@ -64,6 +71,7 @@ async fn a_standalone_binary_is_swapped_and_keeps_its_mode() {
         Ok(Relaunch::Nothing)
     );
     assert_eq!(std::fs::read(&target).unwrap(), NEW);
+    #[cfg(unix)]
     assert_eq!(mode(&target), 0o755);
     assert_eq!(leftovers(dir.path()), ["dbento"]);
 }
@@ -78,10 +86,12 @@ async fn an_appimage_is_swapped_and_restarted() {
         Ok(Relaunch::Restart(target.clone()))
     );
     assert_eq!(std::fs::read(&target).unwrap(), NEW);
+    #[cfg(unix)]
     assert_eq!(mode(&target), 0o755);
     assert_eq!(leftovers(dir.path()), ["Dbento.AppImage"]);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn the_swap_drops_setuid_setgid_and_sticky_bits() {
     let dir = tempfile::tempdir().unwrap();
@@ -92,6 +102,7 @@ async fn the_swap_drops_setuid_setgid_and_sticky_bits() {
     assert_eq!(mode(&target), 0o755);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_read_only_directory_keeps_the_original() {
     let dir = tempfile::tempdir().unwrap();
@@ -110,6 +121,8 @@ async fn a_read_only_directory_keeps_the_original() {
     assert_eq!(std::fs::read(&target).unwrap(), b"old");
 }
 
+// Windows moves a directory aside like a file, so this rename failure is Unix-only.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_failed_swap_keeps_the_original_and_removes_the_staged_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -151,6 +164,7 @@ async fn the_nsis_installer_is_handed_back_passive_with_relaunch() {
     assert_eq!(leftovers(dir.path()), ["dbento-update-99.0.0-setup.exe"]);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_staged_link_is_refused_for_nsis_and_only_the_link_is_removed() {
     let dir = tempfile::tempdir().unwrap();
@@ -182,6 +196,7 @@ async fn kinds_left_alone_are_refused_and_cleaned_up() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn stale_staged_files_are_swept_and_nothing_else() {
     let (dir, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -205,6 +220,7 @@ fn stale_staged_files_are_swept_and_nothing_else() {
     assert_eq!(std::fs::read(&kept).unwrap(), b"keep");
 }
 
+#[cfg(unix)]
 fn bundle_tarball(exe: &[u8]) -> Vec<u8> {
     let mut b = tar::Builder::new(Vec::new());
     for d in [
@@ -228,6 +244,7 @@ fn bundle_tarball(exe: &[u8]) -> Vec<u8> {
     gz.finish().unwrap()
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_mac_app_is_installed_from_its_tarball_and_restarted() {
     let dir = tempfile::tempdir().unwrap();
@@ -244,4 +261,46 @@ async fn a_mac_app_is_installed_from_its_tarball_and_restarted() {
         b"new exe"
     );
     assert_eq!(leftovers(dir.path()), ["Dbento.app"]);
+}
+
+/// Set only in the copy that `a_running_cli_replaces_itself` starts.
+const REPLACE_SELF: &str = "DBENTO_TEST_REPLACE_SELF";
+
+/// The copy's half: installs a release over its own running executable, staged where the CLI
+/// stages it. On Windows only this path reaches `self-replace`.
+#[tokio::test]
+#[ignore = "run by a_running_cli_replaces_itself, inside a copy of this binary"]
+async fn replace_the_running_copy() {
+    if std::env::var_os(REPLACE_SELF).is_none() {
+        return; // never replace the test binary cargo built
+    }
+    let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+    let kind = InstallKind::Standalone(exe);
+    let (_s, st) = staged(&staging_dir(&kind).unwrap(), "binary", NEW).await;
+    assert_eq!(install(&kind, st), Ok(Relaunch::Nothing));
+}
+
+// The test binary is copied out and rerun on one test, so the copy replaces itself while it runs.
+#[test]
+fn a_running_cli_replaces_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir
+        .path()
+        .join(format!("dbento{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(std::env::current_exe().unwrap(), &copy).unwrap();
+    let out = std::process::Command::new(&copy)
+        .env(REPLACE_SELF, "1")
+        .args([
+            "update_install::replace_the_running_copy",
+            "--exact",
+            "--ignored",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("1 passed"),
+        "{out:?}"
+    );
+    assert_eq!(std::fs::read(&copy).unwrap(), NEW);
 }
