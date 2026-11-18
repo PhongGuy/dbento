@@ -228,5 +228,6 @@ mod user_keymap;
 mod version;
 mod widths;
 mod window_identity;
+mod workspace_banner;
 mod workspace_reload;
 mod workspace_switch;

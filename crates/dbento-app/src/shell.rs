@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
-    EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, RelationKind, RelationRef,
-    SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort, WatchEvent,
-    Workspace, WorkspaceItem, WorkspaceWatcher, WriteError, connect, move_secret, plan_edit,
-    resolve_key_passphrase, resolve_secret, secret_env_var, tls_key_is_encrypted,
+    EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, OpenError, RelationKind,
+    RelationRef, SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort,
+    WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError, connect, move_secret,
+    plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -26,16 +26,16 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, ResizableState, Sizable as _, TITLE_BAR_HEIGHT, TitleBar,
-    WindowExt as _, h_resizable, resizable_panel, resize_handle_appearance, v_flex,
+    WindowExt as _, h_flex, h_resizable, resizable_panel, resize_handle_appearance, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Action as _, AnyView, App, AppContext as _, BackgroundExecutor, ClickEvent, Context,
-    Decorations, DismissEvent, Div, ElementId, Entity, EntityId, FocusHandle, Focusable as _,
-    FontWeight, InteractiveElement, IntoElement, ModifiersChangedEvent, MouseButton, ParentElement,
-    PathPromptOptions, Pixels, Render, Role, ScrollHandle, SharedString, Size, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
-    div, img, px, transparent_black,
+    Action as _, AnyElement, AnyView, App, AppContext as _, BackgroundExecutor, ClickEvent,
+    Context, Decorations, DismissEvent, Div, ElementId, Entity, EntityId, FocusHandle,
+    Focusable as _, FontWeight, InteractiveElement, IntoElement, ModifiersChangedEvent,
+    MouseButton, ParentElement, PathPromptOptions, Pixels, Render, Role, ScrollHandle,
+    SharedString, Size, Stateful, StatefulInteractiveElement, Styled, Subscription, Task,
+    TestSupportExt, WeakEntity, Window, div, img, px, transparent_black,
 };
 
 use crate::app::{
@@ -431,6 +431,8 @@ pub struct Shell {
     watch_generation: u64,
     // Why watching could not start or stopped, while it stays off.
     watch_problem: Option<String>,
+    // Why the last read of dbento.toml could not be installed, until a good read or Same.
+    toml_problem: Option<String>,
     // A reload is reading; `reload_again` asks for one more pass once it ends.
     reload_running: bool,
     reload_again: bool,
@@ -601,6 +603,7 @@ impl Shell {
             watch: None,
             watch_generation: 0,
             watch_problem: None,
+            toml_problem: None,
             reload_running: false,
             reload_again: false,
             reloads_run: 0,
@@ -2564,6 +2567,7 @@ impl Shell {
         self.watch = None;
         self.watch_generation = self.watch_generation.wrapping_add(1);
         self.watch_problem = None;
+        self.toml_problem = None;
     }
 
     fn clear_workspace(&mut self) {
@@ -2935,7 +2939,7 @@ impl Shell {
         generation: u64,
         snapshot: &str,
         toml: DiskRead,
-        _retried: bool,
+        retried: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2944,17 +2948,56 @@ impl Shell {
             Some(ws) if generation == self.watch_generation => Arc::clone(ws),
             _ => return self.end_reload(true, window, cx),
         };
-        match judge_toml(snapshot, current.source_text(), &toml) {
-            TomlVerdict::Stale => self.reload_again = true,
+        let problem = match judge_toml(snapshot, current.source_text(), &toml) {
+            TomlVerdict::Stale => {
+                self.reload_again = true;
+                None
+            }
+            TomlVerdict::Same => {
+                self.toml_problem = None;
+                None
+            }
             TomlVerdict::Parse(text) => {
                 let file = current.dir().join("dbento.toml");
-                if let Ok(ws) = Workspace::from_text(current.dir().to_path_buf(), &file, &text) {
-                    self.install_workspace(ws, window, cx);
+                match Workspace::from_text(current.dir().to_path_buf(), &file, &text) {
+                    Ok(ws) => {
+                        self.toml_problem = None;
+                        self.install_workspace(ws, window, cx);
+                        None
+                    }
+                    Err(e) => Some(open_problem(e)),
                 }
             }
-            TomlVerdict::Same | TomlVerdict::Missing | TomlVerdict::Unreadable(_) => {}
+            TomlVerdict::Missing => Some("the file is missing".to_owned()),
+            TomlVerdict::Unreadable(why) => Some(why),
+        };
+        if let Some(reason) = problem {
+            // A first bad read may be an editor's write caught halfway, so it is read once
+            // more after a pause before the banner says anything.
+            if !retried {
+                return self.retry_reload(window, cx);
+            }
+            self.toml_problem = Some(reason);
         }
         self.end_reload(false, window, cx);
+    }
+
+    // Reads the workspace files again after `TOML_RETRY`, keeping the reload running. A
+    // workspace switched meanwhile gets a fresh first read; a closing window reads nothing.
+    fn retry_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = self.watch_generation;
+        let wait = cx.background_executor().timer(workspace_reload::TOML_RETRY);
+        cx.spawn_in(window, async move |this, cx| {
+            wait.await;
+            let _ = this.update_in(cx, |s, w, cx| {
+                if s.closing {
+                    s.end_reload(false, w, cx);
+                } else {
+                    s.read_workspace_files(generation == s.watch_generation, w, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     // Ends a pass: another starts when `again` or a change arrived meanwhile, unless the
@@ -2969,19 +3012,10 @@ impl Shell {
         cx.notify();
     }
 
-    /// Re-reads dbento.toml; on error shows it (`show_error`) and keeps the current workspace.
+    /// Re-reads dbento.toml through the reload path; a file that cannot be used is reported in
+    /// the workspace banner while the current workspace stays.
     pub fn reload_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dir) = self.workspace.as_ref().map(|ws| ws.dir().to_path_buf()) else {
-            return;
-        };
-        // A closing window has handed its sessions to the quit wait; nothing new may start.
-        if self.closing {
-            return;
-        }
-        match Workspace::open(&dir) {
-            Ok(ws) => self.install_workspace(ws, window, cx),
-            Err(e) => show_error("Cannot reload dbento.toml", e.to_string(), window, cx),
-        }
+        self.workspace_files_changed(window, cx);
     }
 
     /// Makes `ws` current for the explorer, the history panel, new tabs and open tabs; an open
@@ -3610,8 +3644,9 @@ impl Shell {
         });
     }
 
-    // Reloads, then moves the form onto the new file so Save diffs against what is there now.
-    // A failed reload keeps the form and its error; a vanished connection says so inline.
+    // Reloads at once, then moves the form onto the new file so Save diffs against what is
+    // there now. A failed reload keeps the form and its error and names the cause in the
+    // banner; a vanished connection says so inline.
     fn rebase_connection_form(
         &mut self,
         form: &Entity<ConnectionForm>,
@@ -3619,7 +3654,22 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let before = self.workspace.clone();
-        self.reload_workspace(window, cx);
+        let Some(dir) = before.as_ref().map(|ws| ws.dir().to_path_buf()) else {
+            return;
+        };
+        if self.closing {
+            return;
+        }
+        match Workspace::open(&dir) {
+            Ok(ws) => {
+                self.toml_problem = None;
+                self.install_workspace(ws, window, cx);
+            }
+            Err(e) => {
+                self.toml_problem = Some(open_problem(e));
+                cx.notify();
+            }
+        }
         let Some(ws) = self.workspace.clone() else {
             return;
         };
@@ -4652,6 +4702,44 @@ impl Shell {
         if active { handle } else { handle.border_b_1() }
     }
 
+    // The row under the title bar saying why the shown workspace may not match the folder: a
+    // dbento.toml that could not be used, and watching that is off, with Reload beside it.
+    fn workspace_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.toml_problem.is_none() && self.watch_problem.is_none() {
+            return None;
+        }
+        let error = self.toml_problem.as_deref().map(|why| {
+            let says = workspace_reload::toml_problem_text(why);
+            update_banner::label("workspace-banner-error", says, cx.theme().danger)
+        });
+        let watch = self.watch_problem.as_deref().map(|why| {
+            let says = workspace_reload::watch_problem_text(why);
+            update_banner::label("workspace-banner-watch", says, cx.theme().foreground)
+        });
+        let reload = self.watch_problem.is_some().then(|| {
+            ui::secondary(Button::new("workspace-banner-reload"))
+                .small()
+                .label("Reload")
+                .on_click(cx.listener(|this, _, w, cx| this.reload_workspace(w, cx)))
+        });
+        let row = h_flex()
+            .id("workspace-banner")
+            .role(Role::Status)
+            .test_support()
+            .h(px(32.))
+            .flex_none()
+            .gap_2()
+            .px_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary)
+            .text_sm()
+            .children(error)
+            .children(watch)
+            .children(reload);
+        Some(row.into_any_element())
+    }
+
     // The status bar over the open tab's connection and model, when there is a tab.
     fn foot(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.tab().map(|t| t.read(cx));
@@ -5124,6 +5212,7 @@ impl Render for Shell {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.title_bar(window, cx))
+            .children(self.workspace_banner(cx))
             .children(update_banner::banner(&cx.entity(), window, cx))
             .child(
                 div().flex_1().min_h_0().flex().children(rail).child(
@@ -5946,6 +6035,15 @@ fn folder_named(
         return Err(format!("A folder `{}` already exists.", path.as_str()).into());
     }
     Ok(path)
+}
+
+// Why a dbento.toml could not be used, for the banner: a parse error's own message, which
+// names the key, without the file path the banner already implies.
+fn open_problem(e: OpenError) -> String {
+    if let OpenError::Parse { message, .. } = e {
+        return message;
+    }
+    e.to_string()
 }
 
 // A one-button error dialog, `save-error-ok`, for a saved query that cannot be read or written.

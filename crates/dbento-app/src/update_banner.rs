@@ -98,7 +98,8 @@ pub fn banner(shell: &Entity<Shell>, _window: &mut Window, cx: &mut App) -> Opti
     Some(row.into_any_element())
 }
 
-fn label(id: &'static str, says: String, color: Hsla) -> AnyElement {
+/// A banner text with its own id, read out by its text.
+pub(crate) fn label(id: &'static str, says: String, color: Hsla) -> AnyElement {
     let says = SharedString::from(says);
     div()
         .id(id)

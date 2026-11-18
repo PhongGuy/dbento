@@ -413,6 +413,9 @@ fn save_refuses_a_form_older_than_the_workspace(cx: &mut TestAppContext) {
     let (fx, _files, win, shell) = idle_app(cx, store);
     let path = fx.dir.path().join("dbento.toml");
     let f = edit_form(cx, win, &shell, "nopg");
+    // An outside change, so the reload installs a workspace newer than the form's.
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{text}\n# touched outside\n")).unwrap();
     cx.update_window(win, |_, w, cx| {
         shell.update(cx, |s, cx| s.reload_workspace(w, cx))
     })

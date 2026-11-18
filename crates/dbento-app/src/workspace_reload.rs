@@ -73,3 +73,15 @@ pub fn read_disk(path: &Path) -> DiskRead {
         Err(e) => DiskRead::Unreadable(e.to_string()),
     }
 }
+
+/// The banner line for a dbento.toml that could not be used, given why.
+pub fn toml_problem_text(reason: &str) -> String {
+    let reason = reason.trim_end_matches('.');
+    format!("dbento.toml has an error: {reason}. Showing the last version that loaded.")
+}
+
+/// The banner line for a workspace folder that is not being watched, given why.
+pub fn watch_problem_text(reason: &str) -> String {
+    let reason = reason.trim_end_matches('.');
+    format!("Not watching this folder for changes: {reason}. Use Reload after changing files.")
+}
