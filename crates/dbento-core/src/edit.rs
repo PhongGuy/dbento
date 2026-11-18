@@ -567,6 +567,15 @@ pub fn plan_edit(ws: &Workspace, edit: &Edit) -> Result<EditPlan, EditError> {
             message: e.to_string(),
         },
     )?;
+    // Open checks only what needs no driver, so a saved MongoDB uri also passes the driver's syntax.
+    if let Edit::PutConnection { name, spec, .. } = edit
+        && spec.engine == Engine::Mongodb
+        && let Some(uri) = &spec.uri
+    {
+        crate::mongo::uri::driver_syntax(uri).map_err(|reason| EditError::Invalid {
+            message: format!("connection `{name}`: {reason}"),
+        })?;
+    }
     Ok(EditPlan {
         new_text,
         workspace,

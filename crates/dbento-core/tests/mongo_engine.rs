@@ -259,3 +259,64 @@ fn a_bad_secret_word_is_never_printed() {
         );
     }
 }
+
+#[cfg(feature = "mongodb")]
+#[tokio::test]
+async fn a_malformed_uri_fails_at_connect_and_never_quotes_the_text() {
+    for uri in ["mongodb://h/?readPreference=secret", "mongodb://[secret/"] {
+        let (_d, ws) = ws_with(&format!(
+            "dbento = 1\n[connections.shop]\nengine = \"mongodb\"\nuri = \"{uri}\"\n"
+        ));
+        let ws = ws.unwrap_or_else(|e| panic!("{uri}: {e}"));
+        let result = dbento_core::connect(
+            &ws,
+            ws.declared("shop").unwrap(),
+            None,
+            dbento_core::SessionOptions::default(),
+        )
+        .await;
+        let Err(err) = result else {
+            panic!("{uri}: a session opened");
+        };
+        assert!(
+            matches!(err, dbento_core::ConnectError::Open { .. }),
+            "{uri}: {err:?}"
+        );
+        let m = err.to_string();
+        assert!(
+            m.contains("connection `shop`: `uri` is not a MongoDB connection string"),
+            "{uri}: {m}"
+        );
+        assert!(!m.contains("secret"), "{uri}: {m}");
+    }
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_save_refuses_a_malformed_uri_without_quoting_it() {
+    let (_d, ws) = ws_with("dbento = 1\n");
+    let ws = ws.unwrap();
+    let mut spec = ConnectionSpec::new(Engine::Mongodb);
+    spec.uri = Some("mongodb://h/?readPreference=secret".into());
+    let edit = Edit::PutConnection {
+        previous: None,
+        name: "shop".into(),
+        spec,
+    };
+    let Err(e) = plan_edit(&ws, &edit) else {
+        panic!("a malformed uri was saved");
+    };
+    assert_eq!(
+        e.to_string(),
+        "connection `shop`: `uri` is not a MongoDB connection string (the driver's reason is hidden because the text may hold a password)"
+    );
+}
+
+#[test]
+fn a_uri_with_a_bad_port_is_refused_at_open_without_quoting_it() {
+    let m = invalid(&format!("{HEAD}uri = \"mongodb://u:secret/\"\n"));
+    assert_eq!(
+        m,
+        "`uri` is not a MongoDB connection string: the port must be an integer between 1 and 65535"
+    );
+}

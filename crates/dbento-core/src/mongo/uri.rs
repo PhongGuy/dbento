@@ -9,6 +9,9 @@ pub(crate) const PASSWORD_REFUSED: &str = "remove the password from `uri`; Dbent
 
 const NOT_UTF8: &str = "`uri` holds percent-encoding that is not UTF-8";
 
+const BAD_PORT: &str =
+    "`uri` is not a MongoDB connection string: the port must be an integer between 1 and 65535";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UriInfo {
     pub(crate) user: Option<String>,
@@ -40,13 +43,16 @@ pub(crate) fn check(uri: &str) -> Result<UriInfo, String> {
     let (userinfo, hosts_and_path) = before_options
         .rsplit_once('@')
         .unwrap_or(("", before_options));
-    let (_, path) = hosts_and_path
+    let (hosts, path) = hosts_and_path
         .split_once('/')
         .unwrap_or((hosts_and_path, ""));
+    // A port the driver would refuse is refused here in fixed words: its own message quotes the
+    // text, and `u:secret/` reads to it as a host and port.
+    if !hosts.split(',').all(port_in_range) {
+        return Err(BAD_PORT.to_owned());
+    }
     let user = decoded(userinfo)?;
     let database = decoded(path)?;
-
-    driver_syntax(uri)?;
     Ok(UriInfo {
         user: (!user.is_empty()).then_some(user),
         database: if database.is_empty() {
@@ -54,6 +60,22 @@ pub(crate) fn check(uri: &str) -> Result<UriInfo, String> {
         } else {
             database
         },
+    })
+}
+
+// A host's port, when written, is 1-65535 in ASCII digits. An IPv6 host keeps its port after
+// `]:`; an unclosed `[` is left to the driver.
+fn port_in_range(host: &str) -> bool {
+    let port = if host.starts_with('[') {
+        host.split_once(']')
+            .and_then(|(_, rest)| rest.strip_prefix(':'))
+    } else {
+        host.rsplit_once(':').map(|(_, port)| port)
+    };
+    port.is_none_or(|p| {
+        (1..=5).contains(&p.len())
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u32>().is_ok_and(|n| (1..=65_535).contains(&n))
     })
 }
 
@@ -84,10 +106,10 @@ fn secret_option(options: &str) -> Option<&'static str> {
     })
 }
 
-// Driver messages quote the text, even with no `@` (`u:secret/` reads as a host and port), so only
-// the port error passes, in fixed words.
+// The driver's own syntax check, run at connect and on save. Its messages quote the text, even with
+// no `@` (`u:secret/` reads as a host and port), so only the port error passes, in fixed words.
 #[cfg(feature = "mongodb")]
-fn driver_syntax(uri: &str) -> Result<(), String> {
+pub(crate) fn driver_syntax(uri: &str) -> Result<(), String> {
     use mongodb::error::ErrorKind;
     use mongodb::options::ConnectionString;
 
@@ -102,11 +124,7 @@ fn driver_syntax(uri: &str) -> Result<(), String> {
         ErrorKind::InvalidArgument { message, .. }
             if !uri.contains('@') && message.contains("the port must be an integer") =>
         {
-            Err(
-                "`uri` is not a MongoDB connection string: the port must be an integer between 1 \
-                 and 65535"
-                    .to_owned(),
-            )
+            Err(BAD_PORT.to_owned())
         }
         _ => Err(
             "`uri` is not a MongoDB connection string (the driver's reason is hidden \
@@ -117,7 +135,7 @@ fn driver_syntax(uri: &str) -> Result<(), String> {
 }
 
 #[cfg(not(feature = "mongodb"))]
-fn driver_syntax(_uri: &str) -> Result<(), String> {
+pub(crate) fn driver_syntax(_uri: &str) -> Result<(), String> {
     Ok(())
 }
 
