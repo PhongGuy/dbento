@@ -174,3 +174,19 @@ fn every_sqlite_drop_kind_is_refused_without_yes() {
     }
     assert_eq!(count(&ws, "select count(*) from sqlite_master"), 4);
 }
+
+#[test]
+fn a_bad_timeout_explains_the_syntax() {
+    let ws = sqlite_ws(T);
+    let out = dbento()
+        .current_dir(ws.path())
+        .args(["query", "lite", "select 1", "--timeout", "30"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "a clap usage error");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("time unit needed, for example 30sec or 30ms"),
+        "{stderr}"
+    );
+}

@@ -39,7 +39,7 @@ pub struct ConnectionSpec {
     pub color: Option<Color>,
     /// `folder`.
     pub folder: Option<FolderPath>,
-    /// `statement_timeout`, as a humantime duration.
+    /// `statement_timeout`, as a duration such as `30s` or `1m 30s`.
     pub statement_timeout: Option<String>,
     /// `uri` (MongoDB).
     pub uri: Option<String>,

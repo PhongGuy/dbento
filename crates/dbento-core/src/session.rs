@@ -311,7 +311,7 @@ pub enum ConnectError {
     /// The effective statement timeout is zero or longer than Postgres accepts.
     #[error(
         "statement timeout {} must be above zero and at most 2147483647ms",
-        humantime::format_duration(*timeout)
+        crate::workspace::format_duration(*timeout)
     )]
     InvalidTimeout {
         /// The rejected timeout.

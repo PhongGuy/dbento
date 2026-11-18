@@ -246,3 +246,15 @@ fn an_engine_is_named_as_dbento_toml_names_it() {
     assert_eq!(ws.declared("prod").unwrap().engine().name(), "postgres");
     assert_eq!(ws.declared("scratch").unwrap().engine().name(), "sqlite");
 }
+
+#[test]
+fn a_bad_statement_timeout_keeps_its_message() {
+    let err = open_err(&format!("{PG}statement_timeout = \"10nights\"\n"));
+    let text = err.to_string();
+    assert!(
+        text.contains(
+            "statement_timeout `10nights`: unknown time unit \"nights\", supported units:"
+        ),
+        "{text}"
+    );
+}

@@ -160,7 +160,7 @@ impl<S: SecretStore + 'static> TimedStore<S> {
         SecretError::Unavailable {
             message: format!(
                 "the keychain did not answer within {}",
-                humantime::format_duration(self.timeout)
+                crate::workspace::format_duration(self.timeout)
             ),
         }
     }

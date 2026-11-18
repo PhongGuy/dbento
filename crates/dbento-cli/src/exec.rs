@@ -30,7 +30,7 @@ pub(crate) struct ExecArgs {
     #[arg(long)]
     pub read_only: bool,
     /// Stop any statement that runs longer than this, for example `30s` or `500ms`.
-    #[arg(long, value_parser = humantime::parse_duration, value_name = "DUR")]
+    #[arg(long, value_parser = dbento_core::parse_duration, value_name = "DUR")]
     pub timeout: Option<Duration>,
     /// Run an UPDATE or DELETE without WHERE, a DROP or a TRUNCATE without asking.
     #[arg(long)]

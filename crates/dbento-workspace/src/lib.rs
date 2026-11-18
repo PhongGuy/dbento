@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 #![warn(clippy::wildcard_enum_match_arm)]
 
+mod duration;
 mod folder;
 mod kinds;
 mod mongo_uri;
@@ -17,6 +18,7 @@ mod secret_key;
 mod spec;
 mod workspace;
 
+pub use duration::{DurationError, FormattedDuration, format_duration, parse_duration};
 pub use folder::{FolderPath, FolderPathError, WorkspaceItem};
 #[doc(hidden)]
 pub use folder::{is_invisible, visible};
