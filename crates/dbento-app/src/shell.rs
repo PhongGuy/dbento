@@ -2985,12 +2985,12 @@ impl Shell {
             let Some(now) = tab_disk(&tab, cx) else {
                 continue;
             };
-            let (edits, sql) = (tab.read(cx).has_local_edits(cx), tab.read(cx).sql(cx));
+            let edits = tab.read(cx).has_local_edits(cx);
             match judge_tab(&snapshot, &now, edits, &read) {
                 TabVerdict::Stale => self.reload_again = true,
                 TabVerdict::Same => tab.update(cx, |t, cx| t.set_disk_banner(None, cx)),
                 TabVerdict::Take(text) | TabVerdict::Show(DiskBanner::Changed { disk: text })
-                    if text == sql =>
+                    if *text == tab.read(cx).sql(cx) =>
                 {
                     tab.update(cx, |t, cx| {
                         t.set_file(now.file, text, cx);

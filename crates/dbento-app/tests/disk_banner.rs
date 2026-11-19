@@ -159,6 +159,7 @@ fn a_rename_during_a_reload_reads_as_stale(cx: &mut TestAppContext) {
     cx.update_window(o.win, |_, w, cx| {
         shell.update(cx, |s, cx| s.workspace_files_changed(w, cx));
         fs::rename(dir.join("queries/lite"), dir.join("queries/lite2")).unwrap();
+        fs::write(dir.join("queries/lite2/a.sql"), "SELECT 2").unwrap();
         tab.update(cx, |t, cx| {
             t.rebase_file(Path::new("queries/lite"), Path::new("queries/lite2"), cx)
         });
@@ -169,7 +170,7 @@ fn a_rename_during_a_reload_reads_as_stale(cx: &mut TestAppContext) {
         !present(cx, o.win, "disk-banner"),
         "a moved tab is not a deleted one"
     );
-    assert_eq!(tab_sql(cx, &o), "SELECT 1");
+    assert_eq!(tab_sql(cx, &o), "SELECT 2", "the stale pass reads again");
 }
 
 #[gpui_kit::test]
