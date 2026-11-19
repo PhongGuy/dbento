@@ -72,7 +72,7 @@ use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
-use crate::rename_secret::{adopt_held, probe, rename_keys};
+use crate::rename_secret::{adopt_held, move_ask, probe, rename_keys, still_renamed};
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
 use crate::runner::RunnerSpec;
@@ -3102,7 +3102,8 @@ impl Shell {
     }
 
     // After an outside edit replaced `old`, moves keychain secrets of renamed connections to
-    // their new names off the UI thread, one rename at a time in name order.
+    // their new names off the UI thread, one rename at a time in name order; a SameLogin
+    // rename asks first.
     fn carry_renamed_secrets(
         &mut self,
         old: &Workspace,
@@ -3116,26 +3117,28 @@ impl Shell {
             .into_iter()
             .map(|r| {
                 let keys = rename_keys(old, &new, &r);
-                (r, keys)
+                let asked = new.declared(&r.to).cloned();
+                (r, keys, asked)
             })
             .collect();
         if jobs.is_empty() {
             return;
         }
+        let dir = new.dir().to_path_buf();
         let store = Arc::clone(&self.services.store);
         let probed = cx.background_spawn({
             let store = Arc::clone(&store);
             async move {
                 jobs.into_iter()
-                    .map(|(r, keys)| {
+                    .map(|(r, keys, asked)| {
                         let held = probe(&*store, &keys);
-                        (r, keys, held)
+                        (r, keys, asked, held)
                     })
                     .collect::<Vec<_>>()
             }
         });
-        cx.spawn_in(window, async move |_this, cx| {
-            for (r, keys, held) in probed.await {
+        cx.spawn_in(window, async move |this, cx| {
+            for (r, keys, asked, held) in probed.await {
                 let not_moved =
                     |e: SecretError| format!("{e}. Enter the password again for {}.", r.to);
                 let held = match held {
@@ -3146,9 +3149,29 @@ impl Shell {
                         continue;
                     }
                 };
-                // A login change waits for a question, so only an exact match moves here.
-                if !held.movable() || r.matched != RenameMatch::Exact {
+                if !held.movable() {
                     continue;
+                }
+                if r.matched != RenameMatch::Exact {
+                    let Ok(reply) = this.update_in(cx, |_, w, cx| ask(move_ask(&r, held), w, cx))
+                    else {
+                        return;
+                    };
+                    if reply.recv().await != Ok(1) {
+                        continue;
+                    }
+                    // The file may have changed while the question was open.
+                    let Ok(still) = this.update(cx, |s, _| {
+                        s.workspace
+                            .as_deref()
+                            .zip(asked.as_ref())
+                            .is_some_and(|(now, a)| still_renamed(now, &dir, &r, a))
+                    }) else {
+                        return;
+                    };
+                    if !still {
+                        continue;
+                    }
                 }
                 let store = Arc::clone(&store);
                 let moved = cx

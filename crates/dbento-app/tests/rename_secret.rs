@@ -1,12 +1,12 @@
 //! An outside rename carries a connection's saved keychain secrets to its new name.
-use crate::support::{self, label_of, present, wait_real};
+use crate::support::{self, click_id, label_of, present, wait_real};
 use dbento_app::app::{EnvLookup, start};
-use dbento_app::rename_secret::{Held, adopt_held, probe, rename_keys};
+use dbento_app::rename_secret::{Held, adopt_held, move_ask, probe, rename_keys, still_renamed};
 use dbento_core::{
     Edit, MemoryStore, Secret, SecretError, SecretKey, SecretStore, Workspace, secret_renames,
 };
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const LITE: &str = "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
@@ -377,4 +377,166 @@ fn a_failed_probe_says_so(cx: &mut TestAppContext) {
     let a = app(cx, &pg("nopg", "x", "x", ""), store, no_env());
     a.outside(cx, &pg("pg2", "x", "x", ""));
     says_not_moved(cx, &a);
+}
+
+#[test]
+fn the_question_names_both_targets_and_the_changed_keys() {
+    let (old, new) = (at_w(&pg("a", "x", "x", KEY)), at_w(&pg("b", "x", "y", KEY)));
+    let r = secret_renames(&old, &new).remove(0);
+    let ask = move_ask(
+        &r,
+        Held {
+            password: true,
+            ..Held::default()
+        },
+    );
+    assert_eq!(ask.title.to_string(), "Move the saved secret to b?");
+    assert_eq!(
+        ask.detail.as_ref().map(|d| d.to_string()).as_deref(),
+        Some(
+            "a was renamed to b in dbento.toml, and these settings changed too: database. Saved password for: x@127.0.0.1:9/x. Now: x@127.0.0.1:9/y. Move it only if this is the same login."
+        )
+    );
+    let ids: Vec<_> = ask.choices.iter().map(|c| c.id).collect();
+    assert_eq!(ids, vec!["rename-secret-keep", "rename-secret-move"]);
+    assert_eq!(ask.choices[0].label.to_string(), "Keep under a");
+    assert_eq!((ask.default, ask.cancel), (0, 0));
+    let both = move_ask(
+        &r,
+        Held {
+            password: true,
+            passphrase: true,
+            ..Held::default()
+        },
+    );
+    assert!(
+        both.detail
+            .unwrap()
+            .contains("Saved password and key passphrase for:")
+    );
+    let phrase = move_ask(
+        &r,
+        Held {
+            password: true,
+            passphrase: true,
+            password_taken: true,
+            ..Held::default()
+        },
+    );
+    assert!(phrase.detail.unwrap().contains("Saved key passphrase for:"));
+}
+
+#[test]
+fn a_move_holds_only_while_the_file_still_says_what_was_asked() {
+    let (old, new) = (at_w(&pg("a", "x", "x", "")), at_w(&pg("b", "x", "y", "")));
+    let r = secret_renames(&old, &new).remove(0);
+    let asked = new.declared("b").unwrap();
+    let w = Path::new("/w");
+    assert!(still_renamed(&new, w, &r, asked));
+    assert!(
+        !still_renamed(&at_w(&pg("b", "x", "z", "")), w, &r, asked),
+        "changed again"
+    );
+    let back = format!("{}{}", pg("a", "x", "x", ""), pg("b", "x", "y", ""));
+    assert!(
+        !still_renamed(&at_w(&back), w, &r, asked),
+        "the old name is back"
+    );
+    assert!(
+        !still_renamed(&at_w(""), w, &r, asked),
+        "the new name is gone"
+    );
+    assert!(
+        !still_renamed(&new, Path::new("/v"), &r, asked),
+        "another workspace"
+    );
+}
+
+fn asked(cx: &mut TestAppContext, a: &App, from: &str) {
+    let lead = format!("{from} was renamed");
+    wait_real(cx, "the question", |cx| {
+        label_of(cx, a.win, "confirm-detail").is_some_and(|d| d.starts_with(&lead))
+    });
+    assert!(
+        !label_of(cx, a.win, "confirm-detail")
+            .unwrap()
+            .contains(SECRET),
+        "the question never shows the secret"
+    );
+}
+
+fn renamed_to_y(a: &App, cx: &mut TestAppContext) {
+    a.outside(cx, &format!("{}{}", pg("pg2", "x", "y", ""), zw("zw2")));
+}
+
+fn with_zw(body: &str) -> String {
+    format!("{body}{}", zw("zw"))
+}
+
+#[gpui_kit::test]
+fn keep_leaves_the_secret_under_the_old_name(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    renamed_to_y(&a, cx);
+    asked(cx, &a, "nopg");
+    click_id(cx, a.win, "rename-secret-keep");
+    a.witnessed(cx);
+    assert!(a.holds(&a.password("nopg")) && !a.holds(&a.password("pg2")));
+}
+
+#[gpui_kit::test]
+fn move_moves_it(cx: &mut TestAppContext) {
+    let a = app(cx, &pg("nopg", "x", "x", ""), memory(), no_env());
+    a.save(&a.password("nopg"));
+    a.outside(cx, &pg("pg2", "x", "y", ""));
+    asked(cx, &a, "nopg");
+    click_id(cx, a.win, "rename-secret-move");
+    wait_real(cx, "the moved secret", |_| a.holds(&a.password("pg2")));
+    assert!(!a.holds(&a.password("nopg")));
+}
+
+#[gpui_kit::test]
+fn a_file_change_while_asking_drops_the_move(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    renamed_to_y(&a, cx);
+    asked(cx, &a, "nopg");
+    a.outside(cx, &format!("{}{}", pg("pg2", "x", "z", ""), zw("zw2")));
+    click_id(cx, a.win, "rename-secret-move");
+    a.witnessed(cx);
+    assert!(a.holds(&a.password("nopg")) && !a.holds(&a.password("pg2")));
+}
+
+#[gpui_kit::test]
+fn a_new_name_that_already_has_every_secret_asks_nothing(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    a.store
+        .set(&a.password("pg2"), &Secret::new("typed"))
+        .unwrap();
+    renamed_to_y(&a, cx);
+    a.witnessed(cx);
+    assert!(!present(cx, a.win, "confirm-dialog"));
+    assert_eq!(
+        a.store.get(&a.password("pg2")).unwrap().unwrap().expose(),
+        "typed"
+    );
+}
+
+#[gpui_kit::test]
+fn two_questions_come_one_at_a_time_in_name_order(cx: &mut TestAppContext) {
+    let before = format!("{}{}", pg("pa", "x", "x", ""), pg("pb", "z", "x", ""));
+    let a = app(cx, &before, memory(), no_env());
+    a.save(&a.password("pa"));
+    a.save(&a.password("pb"));
+    a.outside(
+        cx,
+        &format!("{}{}", pg("pa2", "x", "y", ""), pg("pb2", "z", "y", "")),
+    );
+    asked(cx, &a, "pa");
+    click_id(cx, a.win, "rename-secret-keep");
+    asked(cx, &a, "pb");
+    click_id(cx, a.win, "rename-secret-move");
+    wait_real(cx, "the second move", |_| a.holds(&a.password("pb2")));
+    assert!(a.holds(&a.password("pa")) && !a.holds(&a.password("pa2")));
 }

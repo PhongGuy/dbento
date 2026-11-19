@@ -3,7 +3,13 @@
 //! The pure pieces: which keychain entries a rename pairs, which of them hold a secret,
 //! and the move itself. The shell sequences them after an outside reload.
 
-use dbento_core::{SecretError, SecretKey, SecretRename, SecretStore, Workspace, adopt_secret};
+use std::path::Path;
+
+use dbento_core::{
+    ConnectionConfig, SecretError, SecretKey, SecretRename, SecretStore, Workspace, adopt_secret,
+};
+
+use crate::confirm::{Ask, Choice};
 
 /// The keychain entries one rename moves, each as (key under the old name, key under the new).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,4 +98,59 @@ pub fn adopt_held(
         }
     }
     Ok(())
+}
+
+/// The question for a SameLogin rename: Keep (0, default and cancel) or Move (1).
+pub fn move_ask(r: &SecretRename, held: Held) -> Ask {
+    // Name only the slots the move would carry: held under the old name, free under the new.
+    let what = match (
+        held.password && !held.password_taken,
+        held.passphrase && !held.passphrase_taken,
+    ) {
+        (true, true) => "password and key passphrase",
+        (false, true) => "key passphrase",
+        (true, false) | (false, false) => "password",
+    };
+    let detail = format!(
+        "{from} was renamed to {to} in dbento.toml, and these settings changed too: {keys}. \
+         Saved {what} for: {from_target}. Now: {to_target}. Move it only if this is the same login.",
+        from = r.from,
+        to = r.to,
+        keys = r.changed.join(", "),
+        from_target = r.from_target,
+        to_target = r.to_target,
+    );
+    Ask {
+        title: format!("Move the saved secret to {}?", r.to).into(),
+        detail: Some(detail.into()),
+        sql: None,
+        language: "text",
+        choices: vec![
+            Choice {
+                id: "rename-secret-keep",
+                label: format!("Keep under {}", r.from).into(),
+                danger: false,
+            },
+            Choice {
+                id: "rename-secret-move",
+                label: "Move".into(),
+                danger: false,
+            },
+        ],
+        default: 0,
+        cancel: 0,
+    }
+}
+
+/// Whether `now` still says what was asked: same directory, `to` declared and same_session
+/// with `asked`, `from` undeclared.
+pub fn still_renamed(
+    now: &Workspace,
+    dir: &Path,
+    r: &SecretRename,
+    asked: &ConnectionConfig,
+) -> bool {
+    now.dir() == dir
+        && now.declared(&r.from).is_none()
+        && now.declared(&r.to).is_some_and(|c| c.same_session(asked))
 }
