@@ -387,6 +387,16 @@ fn a_backdrop_click_answers_nothing(cx: &mut TestAppContext) {
     let r = file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 1);
     tick(cx);
     assert!(present(cx, s.win, "approval-dialog"));
+    // Guard: the click must miss the approval surface, or this half passes without testing anything.
+    cx.update_window(s.win, |_, w, cx| {
+        w.render_frame(cx);
+        let surface = w.find("approval-dialog").bounds();
+        assert!(
+            surface.left() > spot + px(32.),
+            "the approval surface covers the backdrop click point: {surface:?}"
+        );
+    })
+    .unwrap();
     cx.update_window(s.win, |_, w, cx| {
         w.click_at("dialog", gpui_kit::point(spot, below_title), cx)
     })
