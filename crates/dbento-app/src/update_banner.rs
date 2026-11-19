@@ -101,8 +101,11 @@ pub fn banner(shell: &Entity<Shell>, _window: &mut Window, cx: &mut App) -> Opti
 /// A banner text with its own id, read out by its text.
 pub(crate) fn label(id: &'static str, says: String, color: Hsla) -> AnyElement {
     let says = SharedString::from(says);
+    // The text may shrink below its one-line width, so a narrow row wraps it.
     div()
         .id(id)
+        .min_w_0()
+        .flex_shrink(1.)
         .text_color(color)
         .role(Role::Label)
         .aria_label(says.clone())

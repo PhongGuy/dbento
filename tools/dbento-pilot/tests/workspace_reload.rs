@@ -3,7 +3,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{Pilot, find_node, launch_args, node, sqlite_workspace};
+use common::{Pilot, bounds, find_node, launch_args, node, sqlite_workspace};
 use serde_json::{Value, json};
 
 async fn until(pilot: &Pilot, what: &str, done: impl Fn(&Value) -> bool) -> Value {
@@ -49,6 +49,17 @@ async fn resize(pilot: &Pilot, width: u32) {
     pilot
         .ok("resize", json!({ "width": width, "height": 800 }))
         .await;
+}
+
+// At a narrow width a banner's `part` still shows in full: inside the window and its row.
+async fn fits(pilot: &Pilot, row: &str, part: &str, width: f64) {
+    let tree = pilot.ok("tree", json!({})).await;
+    let (r, p) = (bounds(&tree, row), bounds(&tree, part));
+    assert!(p.x + p.w <= width, "{part} runs past the window: {p:?}");
+    assert!(
+        p.y + p.h <= r.y + r.h,
+        "{part} hangs below {row}: {p:?} in {r:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -108,6 +119,7 @@ async fn outside_edits_reach_the_window() {
     .await;
     shot(&pilot, "disk-banner.png").await;
     resize(&pilot, 560).await;
+    fits(&pilot, "disk-banner", "disk-keep", 560.0).await;
     shot(&pilot, "disk-banner-narrow.png").await;
     resize(&pilot, 1280).await;
 
@@ -148,6 +160,7 @@ async fn outside_edits_reach_the_window() {
     .await;
     shot(&pilot, "workspace-banner.png").await;
     resize(&pilot, 560).await;
+    fits(&pilot, "workspace-banner", "workspace-banner-error", 560.0).await;
     shot(&pilot, "workspace-banner-narrow.png").await;
 
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));

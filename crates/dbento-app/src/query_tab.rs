@@ -1588,7 +1588,10 @@ impl QueryTab {
             .id("disk-banner")
             .role(Role::Status)
             .test_support()
-            .h(px(32.))
+            // A narrow window wraps the row onto more lines instead of clipping its actions.
+            .min_h(px(32.))
+            .py_1()
+            .flex_wrap()
             .flex_none()
             .gap_2()
             .px_3()
