@@ -2,7 +2,7 @@
 use crate::derived_tabs::{tab_conns, with_shell};
 use crate::support::{Started, label_of, present, reload, right_click, started, wait_real};
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
-use dbento_app::explorer::part_id;
+use dbento_app::explorer::{connection_id, part_id};
 use dbento_app::link::LinkState;
 use dbento_app::schema_tree::NodeKey;
 use dbento_core::{Relation, RelationKind, RelationList, RelationRef, SchemaInfo};
@@ -393,5 +393,20 @@ fn a_listed_parent_shows_a_neutral_marker_not_a_state(cx: &mut TestAppContext) {
     assert!(
         present(cx, s.win, part_id("connection-listed", "listed")),
         "the marker stays while expanded"
+    );
+}
+
+#[gpui_kit::test]
+fn a_listed_parent_with_a_session_shows_its_state_not_the_marker(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    click(cx, s.win, connection_id("listed"));
+    with_shell(cx, &s, |sh, w, cx| sh.new_tab(w, cx));
+    assert_eq!(tab_conns(cx, &s), ["listed"]);
+    wait_real(cx, "the parent's own state", |cx| {
+        present(cx, s.win, part_id("connection-status", "listed"))
+    });
+    assert!(
+        !present(cx, s.win, part_id("connection-listed", "listed")),
+        "a session state wins over the listed marker"
     );
 }
