@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{
-    Pilot, Rect, bounds, find_node, launch_args, sqlite_workspace, sqlite_workspace_named,
+    Pilot, Rect, approval_target, bounds, find_node, launch_args, sqlite_workspace,
+    sqlite_workspace_named,
 };
 use dbento_app::app::AppPaths;
 use dbento_app::approvals::FOLDER_TIP_DROP;
@@ -203,7 +204,14 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
         let store = ApprovalStore::open(&AppPaths::in_dir(state.path()).approvals).unwrap();
         let sql = "UPDATE t SET name = 'z' WHERE id = 1";
         store
-            .request(&ApprovalRequest::new(&ws, "lite", sql, Writes::Yes, vec![]))
+            .request(&ApprovalRequest::new(
+                &ws,
+                "lite",
+                approval_target(&ws, "lite"),
+                sql,
+                Writes::Yes,
+                vec![],
+            ))
             .unwrap();
         let pilot = Pilot::start().await;
         let mut args = launch_args("headless", &ws);
@@ -219,8 +227,9 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
         hover(&pilot, "approval-workspace", 1500).await;
         let tipped = dir.join(format!("approval-path-tooltip-{theme}.png"));
         shot(&pilot, &tipped).await;
-        let (headline, label, sql_box) = (
+        let (headline, target, label, sql_box) = (
             bounds(&tree, "approval-connection"),
+            bounds(&tree, "approval-target"),
             bounds(&tree, "approval-workspace"),
             bounds(&tree, "approval-sql"),
         );
@@ -230,7 +239,16 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
             ..label
         };
         // The lines sit a gap_2 apart and the SQL box adds its mt_1: half a gap more.
-        let gap = line.y - headline.y - headline.h;
+        let gap = target.y - headline.y - headline.h;
+        assert_eq!(
+            target.h, headline.h,
+            "the target line has the headline's height"
+        );
+        assert_eq!(
+            line.y - target.y - target.h,
+            gap,
+            "the target line sits a gap above the folder line"
+        );
         assert_eq!(
             (line.h, sql_box.y - line.y - line.h),
             (headline.h, gap * 1.5),

@@ -291,3 +291,23 @@ pub async fn demo_workspace() -> (tempfile::TempDir, PathBuf) {
     s.close().await.unwrap();
     (dir, ws)
 }
+
+/// The approval target of `conn` as `ws` resolves it now, or a fixed stand-in for a name
+/// it cannot resolve.
+pub fn approval_target(ws: &Path, conn: &str) -> dbento_core::ApprovalTarget {
+    let resolved = dbento_core::Workspace::open(ws)
+        .ok()
+        .and_then(|w| w.connection(conn).map(std::borrow::Cow::into_owned));
+    let config = resolved.unwrap_or_else(|| {
+        dbento_core::Workspace::from_text(
+            PathBuf::from("/nowhere"),
+            Path::new("/nowhere/dbento.toml"),
+            "dbento = 1\n[connections.x]\nengine = \"sqlite\"\npath = \"x.db\"\n",
+        )
+        .unwrap()
+        .declared("x")
+        .unwrap()
+        .clone()
+    });
+    dbento_core::ApprovalTarget::of(&config)
+}

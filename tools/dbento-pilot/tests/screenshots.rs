@@ -5,7 +5,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{Pilot, bounds, demo_workspace, find_node};
+use common::{Pilot, approval_target, bounds, demo_workspace, find_node};
 use dbento_app::app::AppPaths;
 use dbento_core::{ApprovalRequest, ApprovalStore, Writes};
 use serde_json::{Value, json};
@@ -196,6 +196,7 @@ async fn the_readme_screenshots() {
         .request(&ApprovalRequest::new(
             &ws,
             "shop",
+            approval_target(&ws, "shop"),
             APPROVAL_SQL,
             Writes::Yes,
             vec![],
