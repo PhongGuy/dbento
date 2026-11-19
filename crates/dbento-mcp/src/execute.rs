@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use dbento_core::{
-    ApprovalRequest, ApprovalStore, Claim, Classification, ExecuteError, HistoryEntry,
-    HistorySource, Limits, Outcome, Session, Writes, statement_count,
+    ApprovalRequest, ApprovalStore, ApprovalTarget, Claim, Classification, ExecuteError,
+    HistoryEntry, HistorySource, Limits, Outcome, Session, Writes, statement_count,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -76,6 +76,7 @@ pub(crate) async fn run(
     let request = ApprovalRequest::new(
         server.root(),
         &args.connection,
+        ApprovalTarget::of(&found.conn),
         &args.sql,
         classification.writes,
         classification.unguarded,

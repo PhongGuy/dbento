@@ -29,8 +29,15 @@ fn file(
     unguarded: Vec<Unguarded>,
     age_s: u64,
 ) -> ApprovalRequest {
-    let r = ApprovalRequest::new(s.dir.path(), conn, sql, Writes::Yes, unguarded)
-        .with_time(SystemTime::now() - Duration::from_secs(age_s));
+    let r = ApprovalRequest::new(
+        s.dir.path(),
+        conn,
+        crate::support::approval_target(s.dir.path(), conn),
+        sql,
+        Writes::Yes,
+        unguarded,
+    )
+    .with_time(SystemTime::now() - Duration::from_secs(age_s));
     store(s).request(&r).unwrap();
     r
 }
@@ -198,7 +205,14 @@ fn a_request_for_another_workspace_shows_its_folder_name(cx: &mut TestAppContext
         "dbento = 1\n[connections.far]\nengine = \"sqlite\"\npath = \"f.db\"\n",
     )
     .unwrap();
-    let r = ApprovalRequest::new(elsewhere.path(), "far", "DROP TABLE x", Writes::Yes, vec![]);
+    let r = ApprovalRequest::new(
+        elsewhere.path(),
+        "far",
+        crate::support::approval_target(elsewhere.path(), "far"),
+        "DROP TABLE x",
+        Writes::Yes,
+        vec![],
+    );
     store(&s).request(&r).unwrap();
     tick(cx);
     assert_eq!(
@@ -383,7 +397,14 @@ fn pending_count_counts_live_requests() {
     assert_eq!(pending_count(dir.path()), 0);
     let store = ApprovalStore::open(dir.path()).unwrap();
     for sql in ["INSERT INTO t VALUES (1)", "INSERT INTO t VALUES (2)"] {
-        let r = ApprovalRequest::new(dir.path(), "calm", sql, Writes::Yes, vec![]);
+        let r = ApprovalRequest::new(
+            dir.path(),
+            "calm",
+            crate::support::approval_target(dir.path(), "calm"),
+            sql,
+            Writes::Yes,
+            vec![],
+        );
         store.request(&r).unwrap();
     }
     assert_eq!(pending_count(dir.path()), 2);
@@ -633,7 +654,14 @@ fn a_redis_headline_names_the_command() {
 /// The dialog's view of one request for `conn` in the workspace at `ws`.
 fn shown_for(ws: &std::path::Path, conn: &str) -> dbento_app::approvals::Shown {
     let approvals = tempfile::tempdir().unwrap();
-    let r = ApprovalRequest::new(ws, conn, "DELETE FROM t", Writes::Yes, vec![]);
+    let r = ApprovalRequest::new(
+        ws,
+        conn,
+        crate::support::approval_target(ws, conn),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
     ApprovalStore::open(approvals.path())
         .unwrap()
         .request(&r)

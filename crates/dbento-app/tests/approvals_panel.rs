@@ -22,8 +22,15 @@ fn store(s: &Started) -> ApprovalStore {
     ApprovalStore::open(&AppPaths::in_dir(s.files.path()).approvals).unwrap()
 }
 fn file(s: &Started, age_s: u64) -> ApprovalRequest {
-    let r = ApprovalRequest::new(s.dir.path(), "calm", SQL, Writes::Yes, vec![])
-        .with_time(SystemTime::now() - Duration::from_secs(age_s));
+    let r = ApprovalRequest::new(
+        s.dir.path(),
+        "calm",
+        crate::support::approval_target(s.dir.path(), "calm"),
+        SQL,
+        Writes::Yes,
+        vec![],
+    )
+    .with_time(SystemTime::now() - Duration::from_secs(age_s));
     store(s).request(&r).unwrap();
     r
 }
@@ -214,7 +221,14 @@ fn setting_the_same_lists_again_does_not_redraw_the_panel(cx: &mut TestAppContex
         cx.observe(&panel, move |_, _| seen.set(seen.get() + 1))
             .detach()
     });
-    let r = ApprovalRequest::new(Path::new("/w"), "calm", SQL, Writes::Yes, vec![]);
+    let r = ApprovalRequest::new(
+        Path::new("/w"),
+        "calm",
+        crate::support::approval_target(Path::new("/w"), "calm"),
+        SQL,
+        Writes::Yes,
+        vec![],
+    );
     let set = |cx: &mut TestAppContext| {
         let decided = vec![Decided::new(r.clone(), Outcome::Denied)];
         win.update(cx, |p, _, cx| {
@@ -381,7 +395,14 @@ fn a_long_statement_never_hides_its_outcome(cx: &mut TestAppContext) {
     let s = started(cx, TOML);
     click_id(cx, s.win, "rail-approvals");
     let sql = "UPDATE products SET price = price * 1.1, name = upper(name) WHERE id = 3";
-    let r = ApprovalRequest::new(s.dir.path(), "calm", sql, Writes::Yes, vec![]);
+    let r = ApprovalRequest::new(
+        s.dir.path(),
+        "calm",
+        crate::support::approval_target(s.dir.path(), "calm"),
+        sql,
+        Writes::Yes,
+        vec![],
+    );
     store(&s).request(&r).unwrap();
     tick(cx);
     click_id(cx, s.win, "approval-approve");

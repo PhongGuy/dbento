@@ -29,7 +29,7 @@ pub use edit::{ConnectionSpec, Edit, EditError, EditPlan, WriteError, plan_edit}
 
 mod approval;
 pub use approval::{
-    ApprovalError, ApprovalRequest, ApprovalStore, Claim, Decision, GrantState,
+    ApprovalError, ApprovalRequest, ApprovalStore, ApprovalTarget, Claim, Decision, GrantState,
     MAX_DENY_REASON_CHARS, Verdict, approval_id,
 };
 

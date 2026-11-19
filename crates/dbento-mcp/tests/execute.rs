@@ -17,7 +17,17 @@ async fn a_write_files_a_request_and_runs_nothing() {
     let e = exec(&server, "INSERT INTO t VALUES (1)").await;
     assert_eq!(e["code"], "approval_required", "{e}");
     let root = std::fs::canonicalize(server.root()).unwrap();
-    let id = approval_id(&root, "lite", "INSERT INTO t VALUES (1)");
+    let conn = dbento_core::Workspace::open(&root)
+        .unwrap()
+        .declared("lite")
+        .unwrap()
+        .clone();
+    let id = approval_id(
+        &root,
+        "lite",
+        "INSERT INTO t VALUES (1)",
+        &dbento_core::ApprovalTarget::of(&conn),
+    );
     assert_eq!(e["request_id"], id.as_str());
     assert!(e["message"].as_str().unwrap().contains("Dbento app"), "{e}");
     let pending = server.approvals().pending();
