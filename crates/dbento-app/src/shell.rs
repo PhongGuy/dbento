@@ -2989,7 +2989,7 @@ impl Shell {
                 TabVerdict::Stale => self.reload_again = true,
                 TabVerdict::Same => tab.update(cx, |t, cx| t.set_disk_banner(None, cx)),
                 TabVerdict::Take(text) | TabVerdict::Show(DiskBanner::Changed { disk: text })
-                    if *text == tab.read(cx).sql(cx) =>
+                    if text == tab.read(cx).sql(cx) =>
                 {
                     tab.update(cx, |t, cx| {
                         t.set_file(now.file, text, cx);

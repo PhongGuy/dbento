@@ -74,3 +74,20 @@ fn compare_cancel_changes_nothing(cx: &mut TestAppContext) {
     assert_eq!(tab_sql(cx, &o), "SELECT 1 -- mine");
     assert!(present(cx, o.win, "disk-banner"), "the banner stays");
 }
+
+#[gpui_kit::test]
+fn an_answer_after_the_file_moved_on_does_nothing(cx: &mut TestAppContext) {
+    let o = changed(cx);
+    fs::write(o.fx.dir.path().join("queries/lite/a.sql"), "SELECT 3").unwrap();
+    files_changed(cx, &o);
+    click_id(cx, o.win, "disk-compare-reload");
+    assert_eq!(
+        tab_sql(cx, &o),
+        "SELECT 1 -- mine",
+        "compared SELECT 2, not SELECT 3"
+    );
+    assert!(
+        present(cx, o.win, "disk-banner"),
+        "the newer change still shows"
+    );
+}
