@@ -72,7 +72,9 @@ use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
-use crate::rename_secret::{adopt_held, move_ask, probe, rename_keys, still_renamed};
+use crate::rename_secret::{
+    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+};
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
 use crate::runner::RunnerSpec;
@@ -3103,7 +3105,7 @@ impl Shell {
 
     // After an outside edit replaced `old`, moves keychain secrets of renamed connections to
     // their new names off the UI thread, one rename at a time in name order; a SameLogin
-    // rename asks first.
+    // rename asks first, and variables that cannot be renamed are listed once at the end.
     fn carry_renamed_secrets(
         &mut self,
         old: &Workspace,
@@ -3126,6 +3128,7 @@ impl Shell {
         }
         let dir = new.dir().to_path_buf();
         let store = Arc::clone(&self.services.store);
+        let env = Arc::clone(&self.services.env);
         let probed = cx.background_spawn({
             let store = Arc::clone(&store);
             async move {
@@ -3138,6 +3141,7 @@ impl Shell {
             }
         });
         cx.spawn_in(window, async move |this, cx| {
+            let mut lines = Vec::new();
             for (r, keys, asked, held) in probed.await {
                 let not_moved =
                     |e: SecretError| format!("{e}. Enter the password again for {}.", r.to);
@@ -3149,6 +3153,7 @@ impl Shell {
                         continue;
                     }
                 };
+                lines.extend(env_lines(&r, held, &env));
                 if !held.movable() {
                     continue;
                 }
@@ -3182,6 +3187,11 @@ impl Shell {
                     let detail = not_moved(e);
                     let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
                 }
+            }
+            if !lines.is_empty() {
+                let _ = cx.update(|w, cx| {
+                    let _ = ask(env_notice(&lines), w, cx);
+                });
             }
         })
         .detach();

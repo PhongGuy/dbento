@@ -1,7 +1,9 @@
 //! An outside rename carries a connection's saved keychain secrets to its new name.
 use crate::support::{self, click_id, label_of, present, wait_real};
 use dbento_app::app::{EnvLookup, start};
-use dbento_app::rename_secret::{Held, adopt_held, move_ask, probe, rename_keys, still_renamed};
+use dbento_app::rename_secret::{
+    Held, adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+};
 use dbento_core::{
     Edit, MemoryStore, Secret, SecretError, SecretKey, SecretStore, Workspace, secret_renames,
 };
@@ -539,4 +541,132 @@ fn two_questions_come_one_at_a_time_in_name_order(cx: &mut TestAppContext) {
     click_id(cx, a.win, "rename-secret-move");
     wait_real(cx, "the second move", |_| a.holds(&a.password("pb2")));
     assert!(a.holds(&a.password("pa")) && !a.holds(&a.password("pa2")));
+}
+
+fn env_with(vars: &'static [&'static str]) -> EnvLookup {
+    Arc::new(move |v: &str| vars.contains(&v).then(|| SECRET.to_owned()))
+}
+
+#[test]
+fn env_lines_name_the_variables_to_rename() {
+    let (old, new) = (at_w(&pg("a", "x", "x", KEY)), at_w(&pg("b", "x", "x", KEY)));
+    let r = secret_renames(&old, &new).remove(0);
+    let none = Held::default();
+    let a = env_with(&["DBENTO_SECRET_A"]);
+    assert_eq!(
+        env_lines(&r, none, &a),
+        vec!["DBENTO_SECRET_A -> DBENTO_SECRET_B".to_owned()]
+    );
+    assert!(
+        env_lines(
+            &r,
+            Held {
+                password: true,
+                ..none
+            },
+            &a
+        )
+        .is_empty(),
+        "the keychain has it"
+    );
+    assert!(
+        env_lines(
+            &r,
+            Held {
+                password_taken: true,
+                ..none
+            },
+            &a
+        )
+        .is_empty(),
+        "the new name has one"
+    );
+    assert!(env_lines(&r, none, &env_with(&["DBENTO_SECRET_A", "DBENTO_SECRET_B"])).is_empty());
+    assert_eq!(
+        env_lines(&r, none, &env_with(&["DBENTO_KEY_PASSPHRASE_A"])),
+        vec!["DBENTO_KEY_PASSPHRASE_A -> DBENTO_KEY_PASSPHRASE_B".to_owned()]
+    );
+    let (old, new) = (at_w(&pg("a", "x", "x", "")), at_w(&pg("b", "x", "y", "")));
+    let r = secret_renames(&old, &new).remove(0);
+    assert_eq!(
+        env_lines(&r, none, &a),
+        vec!["DBENTO_SECRET_A -> DBENTO_SECRET_B: saved for x@127.0.0.1:9/x, now x@127.0.0.1:9/y (database changed); rename it only if this is the same login".to_owned()]
+    );
+}
+
+#[test]
+fn the_notice_lists_every_line_after_the_reason() {
+    let ask = env_notice(&["L1".to_owned(), "L2".to_owned()]);
+    assert_eq!(ask.title.to_string(), "Rename the environment variables");
+    assert_eq!(
+        ask.detail.map(|d| d.to_string()).as_deref(),
+        Some(
+            "These passwords come from environment variables, which Dbento cannot rename. Rename them and restart Dbento.\nL1\nL2"
+        )
+    );
+    let ids: Vec<_> = ask.choices.iter().map(|c| c.id).collect();
+    assert_eq!(ids, vec!["rename-env-ok"]);
+}
+
+fn shows_env_notice(cx: &mut TestAppContext, a: &App) {
+    wait_real(cx, "the notice", |cx| present(cx, a.win, "rename-env-ok"));
+    let detail = label_of(cx, a.win, "confirm-detail").unwrap();
+    assert!(
+        detail.contains("DBENTO_SECRET_NOPG -> DBENTO_SECRET_PG2"),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains(SECRET),
+        "a variable's value is never shown"
+    );
+}
+
+#[gpui_kit::test]
+fn an_env_only_secret_shows_the_notice(cx: &mut TestAppContext) {
+    let a = app(
+        cx,
+        &pg("nopg", "x", "x", ""),
+        memory(),
+        env_with(&["DBENTO_SECRET_NOPG"]),
+    );
+    a.outside(cx, &pg("pg2", "x", "x", ""));
+    shows_env_notice(cx, &a);
+    click_id(cx, a.win, "rename-env-ok");
+    assert!(!a.holds(&a.password("pg2")));
+}
+
+#[gpui_kit::test]
+fn without_a_keychain_the_notice_shows_and_no_error(cx: &mut TestAppContext) {
+    let store = Arc::new(Broken {
+        inner: MemoryStore::new(),
+        get: Some(unavailable()),
+        set_fails: false,
+    });
+    let a = app(
+        cx,
+        &pg("nopg", "x", "x", ""),
+        store,
+        env_with(&["DBENTO_SECRET_NOPG"]),
+    );
+    a.outside(cx, &pg("pg2", "x", "x", ""));
+    shows_env_notice(cx, &a);
+    assert!(
+        !present(cx, a.win, "save-error-ok"),
+        "an absent keychain is no error"
+    );
+}
+
+#[gpui_kit::test]
+fn the_notice_comes_after_the_questions(cx: &mut TestAppContext) {
+    let before = format!("{}{}", pg("pa", "x", "x", ""), pg("pb", "z", "x", ""));
+    let a = app(cx, &before, memory(), env_with(&["DBENTO_SECRET_PB"]));
+    a.save(&a.password("pa"));
+    a.outside(
+        cx,
+        &format!("{}{}", pg("pa2", "x", "y", ""), pg("pb2", "z", "x", "")),
+    );
+    asked(cx, &a, "pa");
+    assert!(!present(cx, a.win, "rename-env-ok"));
+    click_id(cx, a.win, "rename-secret-keep");
+    wait_real(cx, "the notice", |cx| present(cx, a.win, "rename-env-ok"));
 }

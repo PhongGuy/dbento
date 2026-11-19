@@ -6,9 +6,11 @@
 use std::path::Path;
 
 use dbento_core::{
-    ConnectionConfig, SecretError, SecretKey, SecretRename, SecretStore, Workspace, adopt_secret,
+    ConnectionConfig, RenameMatch, SecretError, SecretKey, SecretRename, SecretStore, Workspace,
+    adopt_secret, key_passphrase_env_var, secret_env_var,
 };
 
+use crate::app::EnvLookup;
 use crate::confirm::{Ask, Choice};
 
 /// The keychain entries one rename moves, each as (key under the old name, key under the new).
@@ -153,4 +155,65 @@ pub fn still_renamed(
     now.dir() == dir
         && now.declared(&r.from).is_none()
         && now.declared(&r.to).is_some_and(|c| c.same_session(asked))
+}
+
+/// One line per carried slot with nothing under either name in the keychain whose old variable
+/// is set and new one is not; only whether a variable is set is read.
+pub fn env_lines(r: &SecretRename, held: Held, env: &EnvLookup) -> Vec<String> {
+    let set = |var: &str| env(var).is_some();
+    let slots = [
+        (
+            r.password,
+            held.password || held.password_taken,
+            secret_env_var as fn(&str) -> String,
+        ),
+        (
+            r.passphrase,
+            held.passphrase || held.passphrase_taken,
+            key_passphrase_env_var,
+        ),
+    ];
+    // A SameLogin line repeats the targets, since the user decides whether it is the same login.
+    let tail = if r.matched == RenameMatch::Exact {
+        String::new()
+    } else {
+        format!(
+            ": saved for {}, now {} ({} changed); rename it only if this is the same login",
+            r.from_target,
+            r.to_target,
+            r.changed.join(", "),
+        )
+    };
+    slots
+        .into_iter()
+        .filter(|(carried, in_keychain, _)| *carried && !in_keychain)
+        .map(|(_, _, var)| (var(&r.from), var(&r.to)))
+        .filter(|(old, new)| set(old) && !set(new))
+        .map(|(old, new)| format!("{old} -> {new}{tail}"))
+        .collect()
+}
+
+/// The one notice per reload listing `lines` after the reason; its only choice is `rename-env-ok`.
+pub fn env_notice(lines: &[String]) -> Ask {
+    let mut detail = String::from(
+        "These passwords come from environment variables, which Dbento cannot rename. \
+         Rename them and restart Dbento.",
+    );
+    for line in lines {
+        detail.push('\n');
+        detail.push_str(line);
+    }
+    Ask {
+        title: "Rename the environment variables".into(),
+        detail: Some(detail.into()),
+        sql: None,
+        language: "text",
+        choices: vec![Choice {
+            id: "rename-env-ok",
+            label: "OK".into(),
+            danger: false,
+        }],
+        default: 0,
+        cancel: 0,
+    }
 }
