@@ -605,6 +605,15 @@ pub fn panel_header(label: &str, cx: &App) -> Div {
         .child(div().flex_1())
 }
 
+/// A dock panel's close X under `id`: a ghost xsmall button with a 12 px X and a "Close" tooltip.
+pub fn panel_close(id: &'static str, cx: &App) -> Button {
+    accessibility_id(Button::new(id), id)
+        .ghost()
+        .xsmall()
+        .child(icon(Icons::X, px(12.), cx.theme().muted_foreground))
+        .tooltip("Close")
+}
+
 /// A side panel's search box under `id`: a 28 px filled input with a Search prefix.
 pub fn search_input(
     id: impl Into<ElementId>,

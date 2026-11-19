@@ -53,6 +53,8 @@ pub enum HistoryPanelEvent {
         /// The statement's SQL.
         sql: String,
     },
+    /// Close the dock.
+    Close,
 }
 
 /// The history dock: entries of one workspace, newest first, narrowed by text and connection.
@@ -499,6 +501,10 @@ impl Render for HistoryPanel {
                         .collect();
                     filter_menu(menu, &panel, &picks, current.as_deref())
                 }),
+        );
+        let header = header.child(
+            ui::panel_close("history-close", cx)
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(HistoryPanelEvent::Close))),
         );
         let search = ui::search_input("history-search", &self.search, cx);
         let filtered = self.connection.is_some() || !self.search.read(cx).value().trim().is_empty();

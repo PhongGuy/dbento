@@ -5,14 +5,16 @@ use crate::support::{Started, click_id, label_of, present, started, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::approvals::{
     APPROVAL_POLL, CHANGED_NOTE, answered_elsewhere_notice, approve_is_danger, approved_notice,
-    class_label, headline, next_pending, pending_count,
+    class_label, denied_notice, headline, next_pending, pending_count,
 };
 use dbento_app::confirm::DIALOG_TOP;
+use dbento_app::ui::NoticeKind;
 use dbento_core::{
     ApprovalRequest, ApprovalStore, Claim, Color, Decision, Unguarded, Verdict, Writes,
 };
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AppContext as _, TestAppContext, px};
+use gpui_kit::{AppContext as _, ParentElement as _, TestAppContext, px};
 
 // `lite` is production through its red tag; `calm` is untagged.
 const TOML: &str = "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"l.db\"\ncolor = \"red\"\n\n[connections.calm]\nengine = \"sqlite\"\npath = \"c.db\"\n";
@@ -298,17 +300,115 @@ fn approving_shows_what_to_do_next(cx: &mut TestAppContext) {
     });
 }
 
+#[test]
+fn the_denied_notice_says_what_the_ai_will_see() {
+    assert_eq!(
+        denied_notice(true).text.to_string(),
+        "Denied. Your AI sees your reason on its next try."
+    );
+    assert_eq!(
+        denied_notice(false).text.to_string(),
+        "Denied. Your AI is told no on its next try."
+    );
+    assert_eq!(denied_notice(true).kind, NoticeKind::Info);
+    assert_eq!(denied_notice(false).kind, NoticeKind::Info);
+}
+
 #[gpui_kit::test]
-fn denying_shows_no_notice(cx: &mut TestAppContext) {
+fn denying_without_a_reason_says_the_ai_is_told_no(cx: &mut TestAppContext) {
     let s = started(cx, TOML);
     let r = file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 1);
     tick(cx);
-    click_id(cx, s.win, "approval-deny");
-    // The decision lands off the main thread; only once it has can "no notice" mean anything.
-    wait_real(cx, "the denial to land", |_| store(&s).pending().is_empty());
-    tick(cx);
     assert!(!present(cx, s.win, "notice"));
+    click_id(cx, s.win, "approval-deny");
+    wait_real(cx, "the denied notice", |cx| {
+        label_of(cx, s.win, "notice").as_deref()
+            == Some("Denied. Your AI is told no on its next try.")
+    });
     assert_eq!(store(&s).claim(r.id()).unwrap(), Claim::Denied);
+}
+
+#[gpui_kit::test]
+fn denying_with_a_reason_says_the_ai_sees_it(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 1);
+    tick(cx);
+    click_id(cx, s.win, "approval-reason");
+    cx.update_window(s.win, |_, w, cx| w.input("use staging", cx))
+        .unwrap();
+    cx.run_until_parked();
+    click_id(cx, s.win, "approval-deny");
+    wait_real(cx, "the denied notice", |cx| {
+        label_of(cx, s.win, "notice").as_deref()
+            == Some("Denied. Your AI sees your reason on its next try.")
+    });
+}
+
+#[gpui_kit::test]
+fn a_blank_reason_counts_as_none_in_the_denied_notice(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 1);
+    tick(cx);
+    click_id(cx, s.win, "approval-reason");
+    cx.update_window(s.win, |_, w, cx| w.input("   ", cx))
+        .unwrap();
+    cx.run_until_parked();
+    click_id(cx, s.win, "approval-deny");
+    wait_real(cx, "the denied notice", |cx| {
+        label_of(cx, s.win, "notice").as_deref()
+            == Some("Denied. Your AI is told no on its next try.")
+    });
+}
+
+#[gpui_kit::test]
+fn a_backdrop_click_answers_nothing(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    // Control: the same point closes an ordinary dialog, so it is backdrop, not the surface.
+    let spot = px(8.);
+    let below_title = px(200.);
+    cx.update_window(s.win, |_, w, cx| {
+        w.open_dialog(cx, |d, _, _| d.title("Plain").child("body"));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(s.win, |_, w, cx| {
+        w.click_at("dialog", gpui_kit::point(spot, below_title), cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let plain_open = cx
+        .update_window(s.win, |_, w, cx| w.has_active_dialog(cx))
+        .unwrap();
+    assert!(
+        !plain_open,
+        "the control click did not land on the backdrop"
+    );
+
+    let r = file(&s, "calm", "INSERT INTO t VALUES (1)", vec![], 1);
+    tick(cx);
+    assert!(present(cx, s.win, "approval-dialog"));
+    // Guard: the click must miss the approval surface, or this half passes without testing anything.
+    cx.update_window(s.win, |_, w, cx| {
+        w.render_frame(cx);
+        let surface = w.find("approval-dialog").bounds();
+        assert!(
+            surface.left() > spot + px(32.),
+            "the approval surface covers the backdrop click point: {surface:?}"
+        );
+    })
+    .unwrap();
+    cx.update_window(s.win, |_, w, cx| {
+        w.click_at("dialog", gpui_kit::point(spot, below_title), cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    tick(cx);
+    assert!(
+        present(cx, s.win, "approval-dialog"),
+        "a backdrop click closed it"
+    );
+    assert_eq!(store(&s).claim(r.id()).unwrap(), Claim::None);
+    assert_eq!(store(&s).pending().len(), 1);
 }
 
 #[gpui_kit::test]

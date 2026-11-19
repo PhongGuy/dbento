@@ -7,13 +7,24 @@ use dbento_core::{ApprovalRequest, Decision, GrantState};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    ClipboardItem, Context, ElementId, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement as _, Styled, TestSupportExt, Window, div,
+    ClipboardItem, Context, ElementId, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, TestSupportExt,
+    Window, div,
 };
 
 use crate::approvals::{CliPath, cli_hint, connect_command};
 use crate::status_bar::first_line;
 use crate::{theme, ui};
+
+/// What the approvals panel asks of the shell.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalsPanelEvent {
+    /// Close the dock.
+    Close,
+}
+
+impl EventEmitter<ApprovalsPanelEvent> for ApprovalsPanel {}
 
 /// What became of a request decided in this session.
 #[non_exhaustive]
@@ -218,20 +229,25 @@ impl Render for ApprovalsPanel {
                     ),
                 )
         });
+        // The dock's own name above its sections, with the X that closes it.
+        let title = ui::panel_header("Approvals", cx)
+            .id("approvals-title")
+            .aria_label("Approvals")
+            .test_support()
+            .child(
+                ui::panel_close("approvals-close", cx)
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ApprovalsPanelEvent::Close))),
+            );
         let no_pending = pending.is_empty().then(|| empty("No requests waiting."));
         let no_decided = decided.is_empty().then(|| empty("No decisions yet."));
-        div()
-            .id("approvals-panel")
-            .test_support()
-            .size_full()
+        // Only the sections scroll; the title row stays pinned above them like the History dock.
+        let body = div()
+            .id("approvals-body")
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .rounded(radius)
-            .border_1()
-            .border_color(edge)
-            .bg(chrome)
-            .text_color(fg)
             .child(section("Waiting for you"))
             .children(pending)
             .children(no_pending)
@@ -239,6 +255,20 @@ impl Render for ApprovalsPanel {
             .children(decided)
             .children(no_decided)
             .child(section("Connect an AI client"))
-            .children(connect)
+            .children(connect);
+        div()
+            .id("approvals-panel")
+            .test_support()
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(radius)
+            .border_1()
+            .border_color(edge)
+            .bg(chrome)
+            .text_color(fg)
+            .child(title)
+            .child(body)
     }
 }

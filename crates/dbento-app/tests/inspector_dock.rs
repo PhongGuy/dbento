@@ -133,3 +133,16 @@ fn the_header_follows_the_active_tab(cx: &mut TestAppContext) {
         Some("Row 1")
     );
 }
+
+#[gpui_kit::test]
+fn the_history_dock_closes_from_its_own_x(cx: &mut TestAppContext) {
+    let o = opened(cx, T, "", 0);
+    click_id(cx, o.win, "history-toggle");
+    assert!(present(cx, o.win, "history-panel"));
+    assert!(present(cx, o.win, "history-close"));
+    click_id(cx, o.win, "history-close");
+    assert!(!o.shell.read_with(cx, |s, _| s.history_open()));
+    assert!(!present(cx, o.win, "history-panel"));
+    let saved: SavedState = load_json(&AppPaths::in_dir(o.files.path()).state).value;
+    assert!(!saved.history_open);
+}
