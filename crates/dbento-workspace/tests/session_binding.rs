@@ -235,3 +235,27 @@ fn the_binding_holds_only_the_bound_keys_and_the_secret_source_by_name() {
     let t: serde_json::Value = serde_json::from_str(&timed.session_binding()).unwrap();
     assert_eq!(t["statement_timeout_ns"], 5_000_000_000u64);
 }
+
+#[cfg(unix)]
+#[test]
+fn paths_differing_only_in_an_invalid_byte_bind_apart() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    // The text must be UTF-8, so the invalid byte rides in on the workspace folder.
+    let at = |byte: u8| {
+        let dir = PathBuf::from(OsStr::from_bytes(&[b'/', b'w', byte]));
+        let text = format!("dbento = 1\n[connections.c]\n{SQL}");
+        Workspace::from_text(dir.clone(), &dir.join("dbento.toml"), &text)
+            .unwrap_or_else(|e| panic!("{text}: {e}"))
+            .declared("c")
+            .unwrap()
+            .clone()
+    };
+    let (a, b) = (at(0xfe), at(0xff));
+    assert_ne!(
+        a.session_binding(),
+        b.session_binding(),
+        "invalid byte lost"
+    );
+    assert!(!a.same_session(&b), "invalid byte lost");
+}

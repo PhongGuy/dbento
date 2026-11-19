@@ -2231,10 +2231,24 @@ enum SecretWire<'a> {
 }
 
 // Components, not text, so `/w/./a.db` and `/w/a.db` encode alike, as Path equality has them.
+// A component that is not UTF-8 becomes `/` and its bytes in hex: no component holds a `/`
+// and the root is `/` alone, so the encoding stays injective.
 fn path_parts(path: Option<&PathBuf>) -> Option<Vec<String>> {
     path.map(|p| {
         p.components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .map(|c| {
+                let part = c.as_os_str();
+                part.to_str().map_or_else(
+                    || {
+                        let bytes = part.as_encoded_bytes();
+                        bytes.iter().fold(String::from("/"), |mut hex, b| {
+                            hex.push_str(&format!("{b:02x}"));
+                            hex
+                        })
+                    },
+                    str::to_owned,
+                )
+            })
             .collect()
     })
 }
