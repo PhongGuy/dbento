@@ -3101,8 +3101,6 @@ impl Shell {
         cx.notify();
     }
 
-    // Applies one pass's reads, dbento.toml's then the tabs'. A pass from an earlier
-    // generation, or one the app's own write overtook, is dropped and the files read again.
     // After an outside edit replaced `old`, moves keychain secrets of renamed connections to
     // their new names off the UI thread, one rename at a time in name order.
     fn carry_renamed_secrets(
@@ -3166,6 +3164,8 @@ impl Shell {
         .detach();
     }
 
+    // Applies one pass's reads, dbento.toml's then the tabs'. A pass from an earlier
+    // generation, or one the app's own write overtook, is dropped and the files read again.
     fn judge_reload(
         &mut self,
         generation: u64,
