@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dbento_core::{
-    Color, ConnectionConfig, Definition, Engine, FolderPath, KeyKind, ObjectRef, RelationKind,
-    RelationRef, Workspace, WorkspaceItem, quote_ident,
+    Color, ConnectionConfig, Databases, Definition, Engine, FolderPath, KeyKind, ObjectRef,
+    RelationKind, RelationRef, Workspace, WorkspaceItem, quote_ident,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -1680,6 +1680,9 @@ impl Sidebar {
                 let tip_key = NodeKey::Connection(c.name().to_owned());
                 let click_key = tip_key.clone();
                 let show_tip = self.tip_allowed(&tip_key, false);
+                let link = self.link(c.name());
+                let listed =
+                    link == LinkState::Idle && matches!(c.databases(), Some(Databases::Listed(_)));
                 let row_el = base
                     .id(connection_id(c.name()))
                     .role(Role::TreeItem)
@@ -1716,10 +1719,12 @@ impl Sidebar {
                     .child(Self::glyph(Some(engine_icon(c.engine())), muted))
                     .child(dot)
                     .child(div().min_w_0().truncate().child(c.name().to_owned()))
-                    .when_some(
-                        link_glyph(c.name(), &self.link(c.name()), cx),
-                        |row, glyph| row.child(glyph),
-                    )
+                    .when_some(link_glyph(c.name(), &link, cx), |row, glyph| {
+                        row.child(glyph)
+                    })
+                    // A parent with a written list has no session of its own, so while idle it
+                    // says so instead of leaving the status slot empty.
+                    .when(listed, |row| row.child(listed_marker(c.name(), cx)))
                     .child(div().flex_1())
                     .when(self.shows_lock(c), |row| {
                         row.child(
@@ -2092,7 +2097,21 @@ impl Sidebar {
                     )
             }
             RowKind::Truncated => base.text_color(muted).child(name(row.label.clone())),
-            RowKind::Database { invalid: None } => base.child(name(row.label.clone())),
+            // A child is a connection of its own, so its row shows its own session's state.
+            RowKind::Database { invalid: None } => {
+                let glyph = match &row.key {
+                    NodeKey::Connection(child) => link_glyph(child, &self.link(child), cx),
+                    NodeKey::Schema { .. }
+                    | NodeKey::Kind { .. }
+                    | NodeKey::Relation { .. }
+                    | NodeKey::RelationGroup { .. }
+                    | NodeKey::SchemaGroup { .. }
+                    | NodeKey::KeyFolder { .. }
+                    | NodeKey::Objects(_) => None,
+                };
+                base.child(name(row.label.clone()))
+                    .when_some(glyph, |row, glyph| row.child(glyph))
+            }
             // A name that cannot be a child connection says why on hover.
             RowKind::Database { invalid: Some(why) } => {
                 let tip: SharedString = why.clone().into();
@@ -2157,6 +2176,24 @@ fn link_glyph(conn: &str, link: &LinkState, cx: &App) -> Option<AnyElement> {
             g.tooltip(move |window, cx| theme::tooltip(tip.clone(), window, cx))
         });
     Some(glyph.into_any_element())
+}
+
+// A parent with a written `databases` list as a muted 12 px mark keyed `connection-listed`,
+// apart from the `connection-status` namespace since it is not a session state.
+fn listed_marker(conn: &str, cx: &App) -> AnyElement {
+    let tip = SharedString::from("Databases listed in dbento.toml. Each connects when opened.");
+    div()
+        .id(part_id("connection-listed", conn))
+        .aria_label("lists its databases")
+        .test_support()
+        .size(px(12.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(ui::icon(Icons::ListTree, px(12.), theme::dim(cx)))
+        .tooltip(move |window, cx| theme::tooltip(tip.clone(), window, cx))
+        .into_any_element()
 }
 
 /// The dot color of a tag: one fixed hue per color, readable on both themes.

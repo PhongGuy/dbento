@@ -2,7 +2,8 @@
 use crate::derived_tabs::{tab_conns, with_shell};
 use crate::support::{Started, label_of, present, reload, right_click, started, wait_real};
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
-use dbento_app::explorer::part_id;
+use dbento_app::explorer::{connection_id, part_id};
+use dbento_app::link::LinkState;
 use dbento_app::schema_tree::NodeKey;
 use dbento_core::{Relation, RelationKind, RelationList, RelationRef, SchemaInfo};
 use gpui_kit::test::TestWindowExt as _;
@@ -338,4 +339,74 @@ fn an_invalid_database_row_only_copies_its_name(cx: &mut TestAppContext) {
     for id in ["menu-new-query", "menu-refresh-schema", "menu-disconnect"] {
         assert!(!present(cx, s.win, id), "{id}");
     }
+}
+
+#[gpui_kit::test]
+fn a_child_row_shows_its_own_session_state(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    listed_srv(cx, &s, &["app", "booking"]);
+    wait_srv(cx, s.win, &["srv/app", "srv/booking"]);
+    assert!(
+        !present(cx, s.win, part_id("connection-status", "srv/app")),
+        "an idle child draws nothing"
+    );
+    click(cx, s.win, ("tree-toggle", 0usize));
+    wait_srv(cx, s.win, &["srv/app", "srv/app:error", "srv/booking"]);
+    let shown = label_of(cx, s.win, part_id("connection-status", "srv/app"))
+        .expect("a failed child shows its state on its own row");
+    let sidebar = s.sidebar(cx);
+    assert_eq!(
+        sidebar.read_with(cx, |sb, _| sb.link("srv/app")),
+        LinkState::Failed(shown),
+        "the row shows the child's own link"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-status", "srv/booking")),
+        "a child with no session still draws nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn a_listed_parent_shows_a_neutral_marker_not_a_state(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    assert_eq!(
+        label_of(cx, s.win, part_id("connection-listed", "listed")).as_deref(),
+        Some("lists its databases"),
+        "a listed parent marks itself without a session"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-status", "listed")),
+        "a listed parent has no session state to show"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-listed", "srv")),
+        "an all parent follows its listing session instead"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-listed", "lite")),
+        "a plain connection gets no marker"
+    );
+    click(cx, s.win, part_id("connection-toggle", "listed"));
+    wait_real(cx, "the list", |cx| {
+        tree(cx, s.win) == ["listed/app", "listed/booking"]
+    });
+    assert!(
+        present(cx, s.win, part_id("connection-listed", "listed")),
+        "the marker stays while expanded"
+    );
+}
+
+#[gpui_kit::test]
+fn a_listed_parent_with_a_session_shows_its_state_not_the_marker(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    click(cx, s.win, connection_id("listed"));
+    with_shell(cx, &s, |sh, w, cx| sh.new_tab(w, cx));
+    assert_eq!(tab_conns(cx, &s), ["listed"]);
+    wait_real(cx, "the parent's own state", |cx| {
+        present(cx, s.win, part_id("connection-status", "listed"))
+    });
+    assert!(
+        !present(cx, s.win, part_id("connection-listed", "listed")),
+        "a session state wins over the listed marker"
+    );
 }
