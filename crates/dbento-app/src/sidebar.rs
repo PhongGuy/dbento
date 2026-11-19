@@ -2092,7 +2092,21 @@ impl Sidebar {
                     )
             }
             RowKind::Truncated => base.text_color(muted).child(name(row.label.clone())),
-            RowKind::Database { invalid: None } => base.child(name(row.label.clone())),
+            // A child is a connection of its own, so its row shows its own session's state.
+            RowKind::Database { invalid: None } => {
+                let glyph = match &row.key {
+                    NodeKey::Connection(child) => link_glyph(child, &self.link(child), cx),
+                    NodeKey::Schema { .. }
+                    | NodeKey::Kind { .. }
+                    | NodeKey::Relation { .. }
+                    | NodeKey::RelationGroup { .. }
+                    | NodeKey::SchemaGroup { .. }
+                    | NodeKey::KeyFolder { .. }
+                    | NodeKey::Objects(_) => None,
+                };
+                base.child(name(row.label.clone()))
+                    .when_some(glyph, |row, glyph| row.child(glyph))
+            }
             // A name that cannot be a child connection says why on hover.
             RowKind::Database { invalid: Some(why) } => {
                 let tip: SharedString = why.clone().into();

@@ -3,6 +3,7 @@ use crate::derived_tabs::{tab_conns, with_shell};
 use crate::support::{Started, label_of, present, reload, right_click, started, wait_real};
 use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::explorer::part_id;
+use dbento_app::link::LinkState;
 use dbento_app::schema_tree::NodeKey;
 use dbento_core::{Relation, RelationKind, RelationList, RelationRef, SchemaInfo};
 use gpui_kit::test::TestWindowExt as _;
@@ -338,4 +339,29 @@ fn an_invalid_database_row_only_copies_its_name(cx: &mut TestAppContext) {
     for id in ["menu-new-query", "menu-refresh-schema", "menu-disconnect"] {
         assert!(!present(cx, s.win, id), "{id}");
     }
+}
+
+#[gpui_kit::test]
+fn a_child_row_shows_its_own_session_state(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    listed_srv(cx, &s, &["app", "booking"]);
+    wait_srv(cx, s.win, &["srv/app", "srv/booking"]);
+    assert!(
+        !present(cx, s.win, part_id("connection-status", "srv/app")),
+        "an idle child draws nothing"
+    );
+    click(cx, s.win, ("tree-toggle", 0usize));
+    wait_srv(cx, s.win, &["srv/app", "srv/app:error", "srv/booking"]);
+    let shown = label_of(cx, s.win, part_id("connection-status", "srv/app"))
+        .expect("a failed child shows its state on its own row");
+    let sidebar = s.sidebar(cx);
+    assert_eq!(
+        sidebar.read_with(cx, |sb, _| sb.link("srv/app")),
+        LinkState::Failed(shown),
+        "the row shows the child's own link"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-status", "srv/booking")),
+        "a child with no session still draws nothing"
+    );
 }
