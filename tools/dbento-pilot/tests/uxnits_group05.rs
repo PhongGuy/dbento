@@ -6,7 +6,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{Pilot, Rect, bounds, find_node, launch_args, sqlite_workspace};
+use common::{Pilot, Rect, approval_target, bounds, find_node, launch_args, sqlite_workspace};
 use dbento_app::app::AppPaths;
 use dbento_core::{ApprovalRequest, ApprovalStore, Writes};
 use serde_json::{Value, json};
@@ -209,6 +209,7 @@ async fn amber_note_sql_wells_and_secondary_buttons_in_light() {
         .request(&ApprovalRequest::new(
             ws.path(),
             "lite",
+            approval_target(ws.path(), "lite"),
             "UPDATE t SET name = 'z' WHERE id = 1",
             Writes::Yes,
             vec![],

@@ -5,7 +5,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
-use common::{Pilot, bounds, find_node, launch_args, sqlite_workspace};
+use common::{Pilot, approval_target, bounds, find_node, launch_args, sqlite_workspace};
 use dbento_app::app::AppPaths;
 use dbento_core::{ApprovalRequest, ApprovalStore, Writes};
 use serde_json::{Value, json};
@@ -42,8 +42,15 @@ fn file(state: &Path, ws: &Path, from: usize, to: usize) {
         let sql = format!("INSERT INTO t VALUES ({i})");
         store
             .request(
-                &ApprovalRequest::new(ws, "lite", &sql, Writes::Yes, vec![])
-                    .with_time(SystemTime::now() - Duration::from_secs((to - i) as u64)),
+                &ApprovalRequest::new(
+                    ws,
+                    "lite",
+                    approval_target(ws, "lite"),
+                    &sql,
+                    Writes::Yes,
+                    vec![],
+                )
+                .with_time(SystemTime::now() - Duration::from_secs((to - i) as u64)),
             )
             .unwrap();
     }

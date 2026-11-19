@@ -5,7 +5,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{Pilot, find_node, launch_args, session_app, sqlite_workspace};
+use common::{Pilot, approval_target, find_node, launch_args, session_app, sqlite_workspace};
 use dbento_core::{ApprovalRequest, ApprovalStore, Writes};
 use serde_json::{Value, json};
 
@@ -42,6 +42,7 @@ async fn the_session_tree_names_the_chrome_and_the_approval_buttons() {
     let request = ApprovalRequest::new(
         ws.path(),
         "lite",
+        approval_target(ws.path(), "lite"),
         "INSERT INTO t VALUES (1)",
         Writes::Yes,
         vec![],

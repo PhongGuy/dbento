@@ -14,6 +14,7 @@ mod dynamo;
 mod execute;
 mod execute_grant;
 mod execute_pg;
+mod execute_target;
 mod explain;
 mod history;
 mod introspect;

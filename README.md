@@ -67,7 +67,7 @@ Edit cells, add rows and delete rows in a browsed Postgres or SQLite table. Chan
 - `query` always runs read-only, one statement in the connection's own language: SQL, a mongosh statement, SurrealQL, one Redis command, or PartiQL. Redis commands in the `@dangerous`, `@blocking`, `@scripting` and `@pubsub` categories are refused. It returns 100 rows by default and at most 1,000, about 64 KiB, under a statement timeout of 30 seconds by default.
 - `explain` shows the plan of one statement on Postgres and SQLite in the same read-only session, so an AI can preview an `UPDATE` or `DELETE` without running it. `ANALYZE` is refused.
 - `list_saved_queries` and `read_saved_query` read the saved query files (`.sql`, `.js`, `.surql`, `.redis`, `.partiql`) under the workspace's `queries/` folder and nothing outside it, not even through a symlink.
-- `execute` waits until you approve that exact call in the desktop app, once. When you deny a call you can type a reason, and the AI gets it back with the denial.
+- `execute` waits until you approve that exact call in the desktop app, once. When you deny a call you can type a reason, and the AI gets it back with the denial. If the connection's target or session settings change after you approve, the old approval never runs against the changed connection; the AI gets `connection_changed` with a new request to approve.
 
 Query results are passed to the AI as untrusted data. The app's approvals panel shows the command to connect your AI client.
 

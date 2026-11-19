@@ -8,7 +8,7 @@ use crate::kinds::{
     Capabilities, ConstraintKind, DefinitionKind, QueryLanguage, ReadOnlyEnforcement,
 };
 use crate::spec::ConnectionSpec;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -1973,30 +1973,15 @@ impl ConnectionConfig {
 
     /// Whether a session opened with either would be the same: everything but colour and folder.
     pub fn same_session(&self, other: &ConnectionConfig) -> bool {
-        // Resolved values, so an absent key and its default compare equal; the name is the
-        // caller's key and the file path as written resolves into `file_path`.
-        self.engine == other.engine
-            && self.read_only == other.read_only
-            && self.statement_timeout == other.statement_timeout
-            && self.secret_source == other.secret_source
-            && self.file_path == other.file_path
-            && self.host == other.host
-            && self.port == other.port
-            && self.database == other.database
-            && self.user == other.user
-            && self.tls == other.tls
-            && self.tls_ca == other.tls_ca
-            && self.tls_cert == other.tls_cert
-            && self.tls_key == other.tls_key
-            && self.settings == other.settings
-            && self.read_only_user == other.read_only_user
-            && self.uri == other.uri
-            && self.namespace == other.namespace
-            && self.auth_level == other.auth_level
-            && self.region == other.region
-            && self.endpoint == other.endpoint
-            && self.access_key_id == other.access_key_id
-            && self.consistent_read == other.consistent_read
+        self.session_key() == other.session_key()
+    }
+
+    /// The canonical, versioned, secret-free encoding of every field `same_session` compares:
+    /// equal for two configs exactly when `same_session` is true.
+    pub fn session_binding(&self) -> String {
+        #[allow(clippy::expect_used)] // a struct of strings and numbers has no unserializable value
+        serde_json::to_string(&self.session_key())
+            .expect("a struct of strings and numbers serializes")
     }
 
     /// `user@host:port/database` for Postgres, `user@host:port` plus any `/database` for
@@ -2204,6 +2189,140 @@ impl ConnectionConfig {
     /// Whether DynamoDB reads are strongly consistent; `false` when absent.
     pub fn consistent_read(&self) -> bool {
         self.consistent_read
+    }
+}
+
+// Everything a session depends on, in the form session_binding encodes. Built from one
+// exhaustive destructuring so a new field fails to compile until it is classed bound or not.
+#[derive(PartialEq, Serialize)]
+struct SessionKey<'a> {
+    b: u32,
+    engine: &'static str,
+    read_only: bool,
+    statement_timeout_ns: Option<u64>,
+    secret_source: SecretWire<'a>,
+    file_path: Option<Vec<String>>,
+    host: Option<&'a str>,
+    port: Option<u16>,
+    database: Option<&'a str>,
+    user: Option<&'a str>,
+    tls: Option<&'static str>,
+    tls_ca: Option<Vec<String>>,
+    tls_cert: Option<Vec<String>>,
+    tls_key: Option<Vec<String>>,
+    settings: &'a BTreeMap<String, String>,
+    read_only_user: Option<&'a str>,
+    uri: Option<&'a str>,
+    namespace: Option<&'a str>,
+    auth_level: Option<&'static str>,
+    region: Option<&'a str>,
+    endpoint: Option<&'a str>,
+    access_key_id: Option<&'a str>,
+    consistent_read: bool,
+}
+
+// Where the secret comes from, by kind and variable name only; never the secret.
+#[derive(PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SecretWire<'a> {
+    Keychain,
+    None,
+    Env(&'a str),
+}
+
+// Components, not text, so `/w/./a.db` and `/w/a.db` encode alike, as Path equality has them.
+// A component that is not UTF-8 becomes `/` and its bytes in hex: no component holds a `/`
+// and the root is `/` alone, so the encoding stays injective.
+fn path_parts(path: Option<&PathBuf>) -> Option<Vec<String>> {
+    path.map(|p| {
+        p.components()
+            .map(|c| {
+                let part = c.as_os_str();
+                part.to_str().map_or_else(
+                    || {
+                        let bytes = part.as_encoded_bytes();
+                        bytes.iter().fold(String::from("/"), |mut hex, b| {
+                            hex.push_str(&format!("{b:02x}"));
+                            hex
+                        })
+                    },
+                    str::to_owned,
+                )
+            })
+            .collect()
+    })
+}
+
+impl ConnectionConfig {
+    fn session_key(&self) -> SessionKey<'_> {
+        // Excluded: the name is the caller's key; colour, folder and the derived colour are
+        // labels; mariadb is MySQL's driver and target; path resolves into file_path; parent
+        // and databases describe listing, not where a statement runs.
+        let ConnectionConfig {
+            name: _,
+            color: _,
+            folder: _,
+            effective_color: _,
+            mariadb: _,
+            path: _,
+            parent: _,
+            databases: _,
+            engine,
+            read_only,
+            statement_timeout,
+            secret_source,
+            file_path,
+            host,
+            port,
+            database,
+            user,
+            tls,
+            tls_ca,
+            tls_cert,
+            tls_key,
+            settings,
+            read_only_user,
+            uri,
+            namespace,
+            auth_level,
+            region,
+            endpoint,
+            access_key_id,
+            consistent_read,
+        } = self;
+        SessionKey {
+            b: 1,
+            engine: engine.name(),
+            read_only: *read_only,
+            statement_timeout_ns: statement_timeout
+                .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)),
+            secret_source: match secret_source {
+                SecretSource::Keychain => SecretWire::Keychain,
+                SecretSource::None => SecretWire::None,
+                SecretSource::Env(var) => SecretWire::Env(var),
+            },
+            file_path: path_parts(file_path.as_ref()),
+            host: host.as_deref(),
+            port: *port,
+            database: database.as_deref(),
+            user: user.as_deref(),
+            tls: tls.map(|t| match t {
+                TlsMode::Verify => "verify",
+                TlsMode::Off => "off",
+            }),
+            tls_ca: path_parts(tls_ca.as_ref()),
+            tls_cert: path_parts(tls_cert.as_ref()),
+            tls_key: path_parts(tls_key.as_ref()),
+            settings,
+            read_only_user: read_only_user.as_deref(),
+            uri: uri.as_deref(),
+            namespace: namespace.as_deref(),
+            auth_level: auth_level.map(AuthLevel::name),
+            region: region.as_deref(),
+            endpoint: endpoint.as_deref(),
+            access_key_id: access_key_id.as_deref(),
+            consistent_read: *consistent_read,
+        }
     }
 }
 

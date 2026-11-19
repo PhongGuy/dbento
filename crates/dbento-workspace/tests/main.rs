@@ -10,6 +10,7 @@
 mod duration;
 mod folder_path;
 mod secret_errors;
+mod session_binding;
 mod workspace;
 mod workspace_extra;
 mod workspace_files;

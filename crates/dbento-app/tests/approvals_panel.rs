@@ -22,8 +22,15 @@ fn store(s: &Started) -> ApprovalStore {
     ApprovalStore::open(&AppPaths::in_dir(s.files.path()).approvals).unwrap()
 }
 fn file(s: &Started, age_s: u64) -> ApprovalRequest {
-    let r = ApprovalRequest::new(s.dir.path(), "calm", SQL, Writes::Yes, vec![])
-        .with_time(SystemTime::now() - Duration::from_secs(age_s));
+    let r = ApprovalRequest::new(
+        s.dir.path(),
+        "calm",
+        crate::support::approval_target(s.dir.path(), "calm"),
+        SQL,
+        Writes::Yes,
+        vec![],
+    )
+    .with_time(SystemTime::now() - Duration::from_secs(age_s));
     store(s).request(&r).unwrap();
     r
 }
@@ -214,7 +221,14 @@ fn setting_the_same_lists_again_does_not_redraw_the_panel(cx: &mut TestAppContex
         cx.observe(&panel, move |_, _| seen.set(seen.get() + 1))
             .detach()
     });
-    let r = ApprovalRequest::new(Path::new("/w"), "calm", SQL, Writes::Yes, vec![]);
+    let r = ApprovalRequest::new(
+        Path::new("/w"),
+        "calm",
+        crate::support::approval_target(Path::new("/w"), "calm"),
+        SQL,
+        Writes::Yes,
+        vec![],
+    );
     let set = |cx: &mut TestAppContext| {
         let decided = vec![Decided::new(r.clone(), Outcome::Denied)];
         win.update(cx, |p, _, cx| {
@@ -277,7 +291,7 @@ fn the_panel_lists_pending_requests(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         label_of(cx, s.win, ("approvals-pending", 0usize)).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1)")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1)")
     );
 }
 
@@ -292,13 +306,13 @@ fn an_approval_waits_then_reads_ran_once_the_ai_retries(cx: &mut TestAppContext)
     assert!(!present(cx, s.win, ("approvals-pending", 0usize)));
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
     );
     assert_eq!(store(&s).claim(r.id()).unwrap(), Claim::Granted);
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
     );
 }
 
@@ -312,7 +326,7 @@ fn a_denial_reads_denied(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} denied")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} denied")
     );
 }
 
@@ -343,18 +357,18 @@ fn an_expired_reading_waits_one_tick_for_the_marker(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
     );
     let ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let marker = format!(r#"{{"v":1,"id":"{}","at_ms":{ms}}}"#, r.id());
+    let marker = format!(r#"{{"v":2,"id":"{}","at_ms":{ms}}}"#, r.id());
     std::fs::write(dir.join("used").join(format!("{}.json", r.id())), marker).unwrap();
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
     );
 }
 
@@ -372,7 +386,7 @@ fn a_grant_gone_without_a_marker_reads_expired_on_the_second_tick(cx: &mut TestA
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} expired")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} expired")
     );
 }
 
@@ -381,7 +395,14 @@ fn a_long_statement_never_hides_its_outcome(cx: &mut TestAppContext) {
     let s = started(cx, TOML);
     click_id(cx, s.win, "rail-approvals");
     let sql = "UPDATE products SET price = price * 1.1, name = upper(name) WHERE id = 3";
-    let r = ApprovalRequest::new(s.dir.path(), "calm", sql, Writes::Yes, vec![]);
+    let r = ApprovalRequest::new(
+        s.dir.path(),
+        "calm",
+        crate::support::approval_target(s.dir.path(), "calm"),
+        sql,
+        Writes::Yes,
+        vec![],
+    );
     store(&s).request(&r).unwrap();
     tick(cx);
     click_id(cx, s.win, "approval-approve");
@@ -417,4 +438,26 @@ fn the_mcp_command_follows_a_workspace_switch_at_once(cx: &mut TestAppContext) {
         .read_with(cx, |sh, _| sh.workspace().unwrap().dir().to_path_buf());
     let want = connect_command(&CliPath::current(), &ws);
     assert_eq!(label_of(cx, s.win, "approvals-connect"), Some(want));
+}
+
+#[gpui_kit::test]
+fn each_pending_row_shows_its_own_target(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    click_id(cx, s.win, "rail-approvals");
+    file(&s, 2);
+    std::fs::write(
+        s.dir.path().join("dbento.toml"),
+        TOML.replace("c.db", "d.db"),
+    )
+    .unwrap();
+    file(&s, 1);
+    tick(cx);
+    assert_eq!(
+        label_of(cx, s.win, ("approvals-pending", 0usize)).as_deref(),
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1)")
+    );
+    assert_eq!(
+        label_of(cx, s.win, ("approvals-pending", 1usize)).as_deref(),
+        Some("calm \u{B7} d.db \u{B7} INSERT INTO t VALUES (1)")
+    );
 }

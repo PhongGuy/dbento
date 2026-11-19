@@ -1,19 +1,50 @@
 //! The approval inbox: requests filed by the MCP server, decided in the app, claimed once.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dbento_core::{
-    ApprovalError, ApprovalRequest, ApprovalStore, Claim, Decision, GrantState,
-    MAX_DENY_REASON_CHARS, Unguarded, Verdict, Writes, approval_id,
+    ApprovalError, ApprovalRequest, ApprovalStore, ApprovalTarget, Claim, ConnectionConfig,
+    Decision, GrantState, MAX_DENY_REASON_CHARS, Unguarded, Verdict, Workspace, Writes,
+    approval_id,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 const W: &str = "/w";
+
+/// Connection `name` of the dbento.toml `text`, for a workspace at /w.
+fn conn(text: &str, name: &str) -> ConnectionConfig {
+    Workspace::from_text(PathBuf::from(W), &Path::new(W).join("dbento.toml"), text)
+        .unwrap()
+        .declared(name)
+        .unwrap()
+        .clone()
+}
+
+/// The target of a SQLite `lite` at `path`, plus any `extra` lines.
+fn lite_at(path: &str, extra: &str) -> ApprovalTarget {
+    ApprovalTarget::of(&conn(
+        &format!("dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"{path}\"\n{extra}"),
+        "lite",
+    ))
+}
+
+fn lite() -> ApprovalTarget {
+    lite_at("a.db", "")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 
 fn insert() -> ApprovalRequest {
     ApprovalRequest::new(
         Path::new(W),
         "lite",
+        lite(),
         "INSERT INTO t VALUES (1)",
         Writes::Yes,
         vec![],
@@ -30,33 +61,75 @@ fn ms(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
-/// Writes a grant or denial file by hand, as the format documents it.
-fn forge(root: &Path, sub: &str, id: &str, at: SystemTime) {
-    let body = json!({"v": 1, "id": id, "at_ms": ms(at)}).to_string();
+/// Writes a grant, denial or used marker by hand at format version `v`.
+fn forge_v(root: &Path, sub: &str, id: &str, at: SystemTime, v: u32) {
+    let body = json!({"v": v, "id": id, "at_ms": ms(at)}).to_string();
     std::fs::write(root.join(sub).join(format!("{id}.json")), body).unwrap();
 }
 
+/// The store's current file format, as forged files must carry it.
+const FORMAT: u32 = 2;
+
+fn forge(root: &Path, sub: &str, id: &str, at: SystemTime) {
+    forge_v(root, sub, id, at, FORMAT);
+}
+
 #[test]
-fn the_id_binds_workspace_connection_and_exact_text() {
+fn the_id_binds_workspace_connection_exact_text_and_target() {
     let ws = Path::new(W);
-    // sha256 of {"v":1,"workspace":"/w","connection":"lite","sql":"DELETE FROM t"}
+    let id = approval_id(ws, "lite", "DELETE FROM t", &lite());
     assert_eq!(
-        approval_id(ws, "lite", "DELETE FROM t"),
-        "ba1c9c9ba39b49f987fc5c46442f71c6738e94bb48f1ccbb31d044838b73360e"
+        id,
+        "d8f341cca98e01448bfac7617d8b7122de484624605ead079bf4a68c965030fe"
     );
-    let id = approval_id(ws, "lite", "DELETE FROM t");
+    let input = json!({"v": 2, "workspace": "/w", "connection": "lite", "sql": "DELETE FROM t",
+                       "target": lite().fingerprint()});
+    assert_eq!(id, hex(input.to_string().as_bytes()));
     for other in [
-        approval_id(Path::new("/w2"), "lite", "DELETE FROM t"),
-        approval_id(ws, "lite2", "DELETE FROM t"),
-        approval_id(ws, "lite", "DELETE FROM t "),
-        approval_id(ws, "lite", "delete from t"),
+        approval_id(Path::new("/w2"), "lite", "DELETE FROM t", &lite()),
+        approval_id(ws, "lite2", "DELETE FROM t", &lite()),
+        approval_id(ws, "lite", "DELETE FROM t ", &lite()),
+        approval_id(ws, "lite", "delete from t", &lite()),
+        approval_id(ws, "lite", "DELETE FROM t", &lite_at("b.db", "")),
+        approval_id(
+            ws,
+            "lite",
+            "DELETE FROM t",
+            &lite_at("a.db", "read_only = true\n"),
+        ),
     ] {
         assert_ne!(id, other);
     }
     assert_eq!(
-        insert().id(),
-        approval_id(ws, "lite", "INSERT INTO t VALUES (1)")
+        id,
+        approval_id(
+            ws,
+            "lite",
+            "DELETE FROM t",
+            &lite_at("a.db", "color = \"red\"\n")
+        )
     );
+    assert_eq!(
+        insert().id(),
+        approval_id(ws, "lite", "INSERT INTO t VALUES (1)", &lite())
+    );
+}
+
+#[test]
+fn a_target_is_the_hashed_binding_and_the_display() {
+    let c = conn(
+        "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n",
+        "lite",
+    );
+    let t = ApprovalTarget::of(&c);
+    assert_eq!(
+        t.fingerprint(),
+        "1be41e82ba6713978921dd5cfc084c0a3af4755174f4421bff2b55b55afd3f38"
+    );
+    assert_eq!(t.fingerprint(), hex(c.session_binding().as_bytes()));
+    assert_eq!(t.display(), "a.db");
+    assert_eq!(t, lite_at("a.db", "color = \"red\"\n"));
+    assert_ne!(t, lite_at("b.db", ""));
 }
 
 #[test]
@@ -65,6 +138,7 @@ fn the_request_file_holds_the_documented_fields() {
     let r = ApprovalRequest::new(
         Path::new(W),
         "lite",
+        lite(),
         "UPDATE t SET a = 1",
         Writes::Yes,
         vec![Unguarded::UpdateWithoutWhere],
@@ -79,10 +153,86 @@ fn the_request_file_holds_the_documented_fields() {
         serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
     assert_eq!(
         v,
-        json!({"v": 1, "id": r.id(), "at_ms": 1_700_000_000_123u64, "workspace": "/w",
+        json!({"v": FORMAT, "id": r.id(), "at_ms": 1_700_000_000_123u64, "workspace": "/w",
                "connection": "lite", "sql": "UPDATE t SET a = 1", "writes": "yes",
-               "unguarded": ["update_without_where"]})
+               "unguarded": ["update_without_where"],
+               "target": "1be41e82ba6713978921dd5cfc084c0a3af4755174f4421bff2b55b55afd3f38",
+               "target_display": "a.db"})
     );
+}
+
+#[test]
+fn a_filed_request_reads_back_with_its_target() {
+    let (_d, store) = store();
+    let r = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite_at("b.db", ""),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    store.request(&r).unwrap();
+    let pending = store.pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].target(), &lite_at("b.db", ""));
+    assert_eq!(pending[0].target().display(), "b.db");
+    assert_eq!(r.target(), &lite_at("b.db", ""));
+}
+
+#[test]
+fn a_grant_for_one_target_never_serves_another() {
+    let (_d, store) = store();
+    let x = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite(),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let y = approval_id(Path::new(W), "lite", "DELETE FROM t", &lite_at("b.db", ""));
+    assert_eq!(store.claim(&y).unwrap(), Claim::None);
+    assert_eq!(store.claim(x.id()).unwrap(), Claim::Granted);
+}
+
+#[test]
+fn a_request_whose_target_was_edited_is_dropped() {
+    let (d, store) = store();
+    let r = insert();
+    store.request(&r).unwrap();
+    let file = d
+        .path()
+        .join("approvals/inbox")
+        .join(format!("{}.json", r.id()));
+    let text = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace(lite().fingerprint(), lite_at("b.db", "").fingerprint());
+    std::fs::write(&file, text).unwrap();
+    assert!(store.pending().is_empty());
+    assert!(!file.exists());
+    assert!(matches!(
+        store.decide(r.id(), Decision::Approve),
+        Err(ApprovalError::NotPending { .. })
+    ));
+}
+
+#[test]
+fn a_request_without_its_target_fields_is_dropped() {
+    let (d, store) = store();
+    let r = insert();
+    store.request(&r).unwrap();
+    let file = d
+        .path()
+        .join("approvals/inbox")
+        .join(format!("{}.json", r.id()));
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    v.as_object_mut().unwrap().remove("target_display");
+    std::fs::write(&file, v.to_string()).unwrap();
+    assert!(store.pending().is_empty());
 }
 
 #[test]
@@ -92,6 +242,7 @@ fn a_request_is_pending_until_decided_and_filing_it_twice_keeps_the_first() {
     let r = ApprovalRequest::new(
         Path::new(W),
         "lite",
+        lite(),
         "DELETE FROM t",
         Writes::Unknown,
         vec![Unguarded::DeleteWithoutWhere],
@@ -241,7 +392,7 @@ fn a_verdict_from_before_the_request_is_unknown() {
 #[test]
 fn deciding_an_unknown_or_malformed_id_is_refused() {
     let (_d, store) = store();
-    let unknown = approval_id(Path::new(W), "lite", "X");
+    let unknown = approval_id(Path::new(W), "lite", "X", &lite());
     assert!(matches!(
         store.decide(&unknown, Decision::Approve),
         Err(ApprovalError::NotPending { .. })
@@ -273,7 +424,7 @@ fn deciding_an_unknown_or_malformed_id_is_refused() {
 fn a_grant_or_denial_older_than_an_hour_is_discarded() {
     let (d, store) = store();
     let root = d.path().join("approvals");
-    let id = approval_id(Path::new(W), "lite", "X");
+    let id = approval_id(Path::new(W), "lite", "X", &lite());
     let old = SystemTime::now() - Duration::from_secs(3601);
     forge(&root, "grants", &id, old);
     assert_eq!(store.claim(&id).unwrap(), Claim::None);
@@ -295,11 +446,18 @@ fn pending_prunes_stale_requests_and_decisions() {
     let root = d.path().join("approvals");
     let day = Duration::from_secs(24 * 3600);
     let stale = insert().with_time(SystemTime::now() - day - Duration::from_secs(1));
-    let fresh = ApprovalRequest::new(Path::new(W), "lite", "DELETE FROM t", Writes::Yes, vec![])
-        .with_time(SystemTime::now() - day + Duration::from_secs(60));
+    let fresh = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite(),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    )
+    .with_time(SystemTime::now() - day + Duration::from_secs(60));
     store.request(&stale).unwrap();
     store.request(&fresh).unwrap();
-    let old_grant = approval_id(Path::new(W), "lite", "G");
+    let old_grant = approval_id(Path::new(W), "lite", "G", &lite());
     forge(
         &root,
         "grants",
@@ -328,8 +486,15 @@ fn pending_is_oldest_first_and_drops_a_file_whose_id_does_not_match_its_content(
     let root = d.path().join("approvals");
     let now = SystemTime::now();
     let a = insert().with_time(now - Duration::from_secs(5));
-    let b = ApprovalRequest::new(Path::new(W), "lite", "DELETE FROM t", Writes::Yes, vec![])
-        .with_time(now - Duration::from_secs(10));
+    let b = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite(),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    )
+    .with_time(now - Duration::from_secs(10));
     store.request(&a).unwrap();
     store.request(&b).unwrap();
     let ids = |s: &ApprovalStore| -> Vec<String> {
@@ -417,6 +582,7 @@ fn drop_and_truncate_round_trip_and_an_unknown_kind_is_skipped() {
     let r = ApprovalRequest::new(
         Path::new(W),
         "lite",
+        lite(),
         "DROP TABLE t",
         Writes::Yes,
         vec![Unguarded::Drop, Unguarded::Truncate],
@@ -522,7 +688,7 @@ fn a_used_marker_older_than_an_hour_is_expired_and_pruned() {
 fn a_time_far_in_the_future_is_expired_and_a_little_skew_is_not() {
     let (d, store) = store();
     let root = d.path().join("approvals");
-    let id = approval_id(Path::new(W), "lite", "X");
+    let id = approval_id(Path::new(W), "lite", "X", &lite());
     forge(
         &root,
         "grants",
@@ -547,7 +713,14 @@ fn deciding_an_inbox_file_that_is_not_its_request_is_not_pending() {
     let (d, store) = store();
     let root = d.path().join("approvals");
     let a = insert();
-    let b = ApprovalRequest::new(Path::new(W), "lite", "DELETE FROM t", Writes::Yes, vec![]);
+    let b = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite(),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
     let inbox = |id: &str| root.join("inbox").join(format!("{id}.json"));
     std::fs::write(inbox(a.id()), "{").unwrap();
     assert!(matches!(
@@ -631,7 +804,14 @@ fn a_blank_reason_is_none_and_a_long_one_is_cut_at_a_char_boundary() {
         store.claim_with_reason(blank.id()).unwrap(),
         (Claim::Denied, None)
     );
-    let long = ApprovalRequest::new(Path::new(W), "lite", "DELETE FROM t", Writes::Yes, vec![]);
+    let long = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite(),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
     store.request(&long).unwrap();
     store
         .decide_with_reason(long.id(), Decision::Deny, Some(&"é".repeat(2000)))
@@ -673,6 +853,7 @@ fn the_document_kinds_round_trip_through_a_request_file() {
     let r = ApprovalRequest::new(
         Path::new(W),
         "shop",
+        lite(),
         "db.t.deleteMany({})",
         Writes::Yes,
         kinds.clone(),
@@ -697,6 +878,7 @@ fn flush_keys_round_trips_through_a_request_file() {
     let r = ApprovalRequest::new(
         Path::new(W),
         "cache",
+        lite(),
         "FLUSHALL",
         Writes::Yes,
         vec![Unguarded::FlushKeys],
@@ -709,4 +891,248 @@ fn flush_keys_round_trips_through_a_request_file() {
         .join(format!("{}.json", r.id()));
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.contains(r#""unguarded":["flush_keys"]"#), "{text}");
+}
+
+#[test]
+fn a_v1_request_is_pruned_and_cannot_be_decided() {
+    let (d, store) = store();
+    let v1 = json!({"v": 1, "workspace": "/w", "connection": "lite", "sql": "DELETE FROM t"});
+    let id = hex(v1.to_string().as_bytes());
+    let body = json!({"v": 1, "id": id, "at_ms": ms(SystemTime::now()), "workspace": "/w",
+                      "connection": "lite", "sql": "DELETE FROM t", "writes": "yes", "unguarded": []});
+    let file = d.path().join("approvals/inbox").join(format!("{id}.json"));
+    std::fs::write(&file, body.to_string()).unwrap();
+    assert!(store.pending().is_empty());
+    assert!(!file.exists());
+    std::fs::write(&file, body.to_string()).unwrap();
+    assert!(matches!(
+        store.decide(&id, Decision::Approve),
+        Err(ApprovalError::NotPending { .. })
+    ));
+}
+
+#[test]
+fn a_v1_grant_never_claims() {
+    let (d, store) = store();
+    let id = insert().id().to_owned();
+    forge_v(
+        &d.path().join("approvals"),
+        "grants",
+        &id,
+        SystemTime::now(),
+        1,
+    );
+    assert_eq!(store.grant_state(&id), GrantState::Expired);
+    assert_eq!(store.claim(&id).unwrap(), Claim::None);
+}
+
+#[test]
+fn a_v1_denial_never_claims() {
+    let (d, store) = store();
+    let id = insert().id().to_owned();
+    forge_v(
+        &d.path().join("approvals"),
+        "denied",
+        &id,
+        SystemTime::now(),
+        1,
+    );
+    assert_eq!(store.claim(&id).unwrap(), Claim::None);
+}
+
+#[test]
+fn a_v1_verdict_reads_unknown() {
+    let (d, store) = store();
+    let r = insert().with_time(SystemTime::now() - Duration::from_secs(5));
+    let body = json!({"v": 1, "id": r.id(), "at_ms": ms(SystemTime::now()), "verdict": "approved"});
+    std::fs::write(
+        d.path()
+            .join("approvals/decided")
+            .join(format!("{}.json", r.id())),
+        body.to_string(),
+    )
+    .unwrap();
+    assert_eq!(store.verdict(&r), Verdict::Unknown);
+}
+
+#[test]
+fn a_v1_used_marker_does_not_read_ran() {
+    let (d, store) = store();
+    let id = insert().id().to_owned();
+    forge_v(
+        &d.path().join("approvals"),
+        "used",
+        &id,
+        SystemTime::now(),
+        1,
+    );
+    assert_eq!(store.grant_state(&id), GrantState::Expired);
+}
+
+#[test]
+fn a_request_file_keeps_the_binding_hashed() {
+    let (d, store) = store();
+    let pg = conn(
+        "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"db.internal\"\n\
+                   database = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_T_PGPW\" }\n\
+                   settings = { search_path = \"app\" }\n",
+        "pg",
+    );
+    let r = ApprovalRequest::new(
+        Path::new(W),
+        "pg",
+        ApprovalTarget::of(&pg),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    store.request(&r).unwrap();
+    let text = std::fs::read_to_string(
+        d.path()
+            .join("approvals/inbox")
+            .join(format!("{}.json", r.id())),
+    )
+    .unwrap();
+    assert!(
+        text.contains(r#""target_display":"u@db.internal:5432/d""#),
+        "{text}"
+    );
+    for hidden in ["DBENTO_T_PGPW", "search_path", "session_binding", "secret"] {
+        assert!(!text.contains(hidden), "{hidden} in {text}");
+    }
+}
+
+fn grant_json(store: &ApprovalStore, id: &str) -> serde_json::Value {
+    let path = store.dir().join("grants").join(format!("{id}.json"));
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn delete_at(path: &str) -> ApprovalRequest {
+    ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite_at(path, ""),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    )
+}
+
+#[test]
+fn an_approval_records_the_call_and_a_denial_does_not() {
+    let (_d, store) = store();
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let call = hex(
+        json!({"v": 2, "workspace": "/w", "connection": "lite", "sql": "DELETE FROM t"})
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(
+        call,
+        "9fcb06c2842ff6e587b27d22a2c549586c3286b077cc8975035e82dbe93f9737"
+    );
+    let g = grant_json(&store, x.id());
+    assert_eq!((g["v"].clone(), g["call"].clone()), (json!(2), json!(call)));
+    let y = delete_at("b.db");
+    store.request(&y).unwrap();
+    store.decide(y.id(), Decision::Deny).unwrap();
+    let denial =
+        std::fs::read_to_string(store.dir().join("denied").join(format!("{}.json", y.id())))
+            .unwrap();
+    assert!(!denial.contains("call"), "{denial}");
+}
+
+#[test]
+fn changed_grant_finds_the_grant_for_the_old_target() {
+    let (_d, store) = store();
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let y = delete_at("b.db");
+    assert_eq!(store.changed_grant(&y).as_deref(), Some(x.id()));
+    assert_eq!(
+        store.changed_grant(&x),
+        None,
+        "its own grant is not a changed one"
+    );
+    let other_sql = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite_at("b.db", ""),
+        "DELETE FROM u",
+        Writes::Yes,
+        vec![],
+    );
+    assert_eq!(store.changed_grant(&other_sql), None);
+    let other_conn = ApprovalRequest::new(
+        Path::new(W),
+        "lite2",
+        lite_at("b.db", ""),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    assert_eq!(store.changed_grant(&other_conn), None);
+    assert_eq!(store.claim(x.id()).unwrap(), Claim::Granted);
+    assert_eq!(store.changed_grant(&y), None, "a claimed grant is gone");
+}
+
+#[test]
+fn changed_grant_ignores_expired_callless_and_malformed_grants() {
+    let (d, store) = store();
+    let root = d.path().join("approvals");
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let path = root.join("grants").join(format!("{}.json", x.id()));
+    let mut g = grant_json(&store, x.id());
+    g["at_ms"] = json!(ms(SystemTime::now() - Duration::from_secs(3601)));
+    std::fs::write(&path, g.to_string()).unwrap();
+    std::fs::write(root.join("grants").join("junk.json"), "{").unwrap();
+    std::fs::write(
+        root.join("grants").join(format!("{}.json", "f".repeat(64))),
+        "{",
+    )
+    .unwrap();
+    let y = delete_at("b.db");
+    assert_eq!(store.changed_grant(&y), None, "expired");
+    forge(&root, "grants", x.id(), SystemTime::now());
+    assert_eq!(store.changed_grant(&y), None, "a grant without a call");
+    g["at_ms"] = json!(ms(SystemTime::now()));
+    g["v"] = json!(1);
+    std::fs::write(&path, g.to_string()).unwrap();
+    assert_eq!(store.changed_grant(&y), None, "a v1 grant");
+}
+
+#[test]
+fn changed_grant_without_a_grants_folder_is_none() {
+    let (d, store) = store();
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    std::fs::remove_dir_all(d.path().join("approvals/grants")).unwrap();
+    assert_eq!(store.changed_grant(&delete_at("b.db")), None);
+}
+
+#[test]
+fn of_two_live_changed_grants_the_newest_is_named() {
+    let (_d, store) = store();
+    let (a, b) = (delete_at("a.db"), delete_at("b.db"));
+    for r in [&a, &b] {
+        store.request(r).unwrap();
+        store.decide(r.id(), Decision::Approve).unwrap();
+    }
+    let mut g = grant_json(&store, a.id());
+    g["at_ms"] = json!(ms(SystemTime::now() - Duration::from_secs(60)));
+    std::fs::write(
+        store.dir().join("grants").join(format!("{}.json", a.id())),
+        g.to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.changed_grant(&delete_at("c.db")).as_deref(),
+        Some(b.id())
+    );
 }

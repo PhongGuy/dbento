@@ -88,7 +88,7 @@ async fn a_grant_older_than_an_hour_is_not_used() {
             .approvals_dir()
             .join("grants")
             .join(format!("{id}.json")),
-        json!({"v": 1, "id": id, "at_ms": at_ms}).to_string(),
+        json!({"v": 2, "id": id, "at_ms": at_ms}).to_string(),
     )
     .unwrap();
     let e = server.err("execute", call("DELETE FROM t")).await;

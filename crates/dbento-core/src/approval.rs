@@ -4,8 +4,9 @@
 //! `denied/<id>.json`, and the server claims the answer by renaming it away, so each answer
 //! is used once; a claimed grant leaves a `used/<id>.json` marker. The first answer wins and
 //! leaves `decided/<id>.json`, so a window that lost the race can show what won. The id is a
-//! SHA-256 over workspace, connection and exact SQL, so an answer covers only the call that
-//! was shown. Every write is a temp file renamed into place.
+//! SHA-256 over workspace, connection, exact SQL and the fingerprint of what the connection
+//! resolves to, so an answer covers only the call that was shown, against the database it
+//! was shown for. Every write is a temp file renamed into place.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,9 +15,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::ConnectionConfig;
 use crate::session::{Unguarded, Writes};
 
-const VERSION: u32 = 1;
+/// The file format every store file carries; a file at any other version reads as absent.
+const VERSION: u32 = 2;
+/// The version of the id's hashed encoding, kept apart from the file format's.
+const ID_VERSION: u32 = 2;
 /// A grant or denial, and any stray file, is discarded after this long.
 const DECISION_TTL: Duration = Duration::from_secs(3600);
 /// An unanswered request is discarded after this long.
@@ -35,8 +40,14 @@ const USED: &str = "used";
 /// The winning answer to each request, kept after the claim for any window that lost.
 const DECIDED: &str = "decided";
 
-/// Lowercase hex SHA-256 of the compact JSON `{"v":1,"workspace":..,"connection":..,"sql":..}`.
-pub fn approval_id(workspace: &Path, connection: &str, sql: &str) -> String {
+/// Lowercase hex SHA-256 of the compact JSON
+/// `{"v":2,"workspace":..,"connection":..,"sql":..,"target":<fingerprint>}`.
+pub fn approval_id(
+    workspace: &Path,
+    connection: &str,
+    sql: &str,
+    target: &ApprovalTarget,
+) -> String {
     // A struct, not a map, so the key order is fixed by declaration.
     #[derive(Serialize)]
     struct Binding<'a> {
@@ -44,20 +55,77 @@ pub fn approval_id(workspace: &Path, connection: &str, sql: &str) -> String {
         workspace: &'a str,
         connection: &'a str,
         sql: &'a str,
+        target: &'a str,
     }
     let workspace = workspace.to_string_lossy();
     #[allow(clippy::expect_used)] // a struct of strings has no unserializable value
     let json = serde_json::to_string(&Binding {
-        v: VERSION,
+        v: ID_VERSION,
         workspace: &workspace,
         connection,
         sql,
+        target: &target.fingerprint,
     })
     .expect("a struct of strings serializes");
-    Sha256::digest(json.as_bytes())
+    sha256_hex(json.as_bytes())
+}
+
+/// Lowercase hex SHA-256 of `{"v":2,"workspace":..,"connection":..,"sql":..}`: the call a
+/// grant answered with its target left out, so a grant for another target can be found.
+fn call_id(request: &ApprovalRequest) -> String {
+    #[derive(Serialize)]
+    struct Call<'a> {
+        v: u32,
+        workspace: &'a str,
+        connection: &'a str,
+        sql: &'a str,
+    }
+    let workspace = request.workspace.to_string_lossy();
+    #[allow(clippy::expect_used)] // a struct of strings has no unserializable value
+    let json = serde_json::to_string(&Call {
+        v: ID_VERSION,
+        workspace: &workspace,
+        connection: &request.connection,
+        sql: &request.sql,
+    })
+    .expect("a struct of strings serializes");
+    sha256_hex(json.as_bytes())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// What a connection resolves to when a call is filed: a fingerprint of everything that
+/// decides which database a session reaches and how, and the target as the user reads it.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalTarget {
+    fingerprint: String,
+    display: String,
+}
+
+impl ApprovalTarget {
+    /// The target of `conn` as it resolves now; holds no secret.
+    pub fn of(conn: &ConnectionConfig) -> ApprovalTarget {
+        ApprovalTarget {
+            fingerprint: sha256_hex(conn.session_binding().as_bytes()),
+            display: conn.display_target(),
+        }
+    }
+
+    /// Lowercase hex SHA-256 of the connection's session binding.
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+
+    /// The host, database or file the connection reaches, as the user reads it.
+    pub fn display(&self) -> &str {
+        &self.display
+    }
 }
 
 /// A write the MCP server asks the user to approve.
@@ -68,25 +136,28 @@ pub struct ApprovalRequest {
     at: SystemTime,
     workspace: PathBuf,
     connection: String,
+    target: ApprovalTarget,
     sql: String,
     writes: Writes,
     unguarded: Vec<Unguarded>,
 }
 
 impl ApprovalRequest {
-    /// A request filed now; `id` is `approval_id(workspace, connection, sql)`.
+    /// A request filed now; `id` is `approval_id(workspace, connection, sql, &target)`.
     pub fn new(
         workspace: &Path,
         connection: &str,
+        target: ApprovalTarget,
         sql: &str,
         writes: Writes,
         unguarded: Vec<Unguarded>,
     ) -> Self {
         ApprovalRequest {
-            id: approval_id(workspace, connection, sql),
+            id: approval_id(workspace, connection, sql, &target),
             at: to_time(millis(SystemTime::now())),
             workspace: workspace.to_path_buf(),
             connection: connection.to_owned(),
+            target,
             sql: sql.to_owned(),
             writes,
             unguarded,
@@ -99,7 +170,7 @@ impl ApprovalRequest {
         self
     }
 
-    /// The id binding workspace, connection and SQL.
+    /// The id binding workspace, connection, SQL and target.
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -117,6 +188,11 @@ impl ApprovalRequest {
     /// The connection's name in that workspace.
     pub fn connection(&self) -> &str {
         &self.connection
+    }
+
+    /// What the connection resolved to when the call was filed.
+    pub fn target(&self) -> &ApprovalTarget {
+        &self.target
     }
 
     /// The exact statement a grant would run.
@@ -344,10 +420,18 @@ impl ApprovalStore {
         };
         let target = self.file(sub, id);
         let record = self.file(DECIDED, id);
+        let request = self.file(INBOX, id);
+        // A grant records its call, so the request is peeked before staging; the check after
+        // the rename below still decides which file was actually taken.
+        let Some(peeked) = read_request(&request, id) else {
+            return Err(ApprovalError::NotPending { id: id.to_owned() });
+        };
         // Both files are staged before the race so the winner publishes them right after
         // winning; renaming the request away is the race, and exactly one renamer wins it.
         let mut raw_answer = RawDecision::now(id);
-        if decision == Decision::Deny {
+        if decision == Decision::Approve {
+            raw_answer.call = Some(call_id(&peeked));
+        } else {
             raw_answer.reason = reason
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
@@ -365,7 +449,6 @@ impl ApprovalStore {
         let verdict = self
             .staged(DECIDED, &raw)
             .map_err(|e| unavailable(&record, e))?;
-        let request = self.file(INBOX, id);
         let taken = self.unique(INBOX, id, "decide");
         match std::fs::rename(&request, &taken) {
             Ok(()) => {}
@@ -409,6 +492,30 @@ impl ApprovalStore {
             }
             _ => Verdict::Unknown,
         }
+    }
+
+    /// The id of a live grant for the same workspace, connection and SQL as `request` but
+    /// another target, else None. Read-only and never fails.
+    pub fn changed_grant(&self, request: &ApprovalRequest) -> Option<String> {
+        let call = call_id(request);
+        let now = SystemTime::now();
+        // Newest grant wins; equal times fall back to the smallest id so the answer is stable.
+        std::fs::read_dir(self.dir.join(GRANTS))
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name();
+                let id = name.to_str()?.strip_suffix(".json")?;
+                if !valid_id(id) || id == request.id {
+                    return None;
+                }
+                let raw = read_raw_decision(&entry.path(), id)?;
+                let live = !expired(now, to_time(raw.at_ms), DECISION_TTL);
+                (live && raw.call.as_deref() == Some(call.as_str()))
+                    .then(|| (raw.at_ms, id.to_owned()))
+            })
+            .min_by(|(at_a, id_a), (at_b, id_b)| at_b.cmp(at_a).then_with(|| id_a.cmp(id_b)))
+            .map(|(_, id)| id)
     }
 
     fn file(&self, sub: &str, id: &str) -> PathBuf {
@@ -507,6 +614,8 @@ struct RawRequest {
     sql: String,
     writes: RawWrites,
     unguarded: Vec<RawUnguarded>,
+    target: String,
+    target_display: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -517,6 +626,9 @@ struct RawDecision {
     /// Why the user denied the call; absent on grants and on files from before reasons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+    /// The call an approval answered, target left out; absent on denials and markers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    call: Option<String>,
 }
 
 impl RawDecision {
@@ -526,6 +638,7 @@ impl RawDecision {
             id: id.to_owned(),
             at_ms: millis(SystemTime::now()),
             reason: None,
+            call: None,
         }
     }
 }
@@ -577,6 +690,8 @@ impl From<&ApprovalRequest> for RawRequest {
             workspace: r.workspace.to_string_lossy().into_owned(),
             connection: r.connection.clone(),
             sql: r.sql.clone(),
+            target: r.target.fingerprint.clone(),
+            target_display: r.target.display.clone(),
             writes: match r.writes {
                 Writes::Yes => RawWrites::Yes,
                 Writes::No => RawWrites::No,
@@ -604,7 +719,14 @@ impl From<&ApprovalRequest> for RawRequest {
 fn read_request(path: &Path, id: &str) -> Option<ApprovalRequest> {
     let raw: RawRequest = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     let workspace = PathBuf::from(raw.workspace);
-    if raw.v != VERSION || raw.id != id || approval_id(&workspace, &raw.connection, &raw.sql) != id
+    let target = ApprovalTarget {
+        fingerprint: raw.target,
+        display: raw.target_display,
+    };
+    if raw.v != VERSION
+        || raw.id != id
+        || !valid_id(&target.fingerprint)
+        || approval_id(&workspace, &raw.connection, &raw.sql, &target) != id
     {
         return None;
     }
@@ -613,6 +735,7 @@ fn read_request(path: &Path, id: &str) -> Option<ApprovalRequest> {
         at: to_time(raw.at_ms),
         workspace,
         connection: raw.connection,
+        target,
         sql: raw.sql,
         writes: match raw.writes {
             RawWrites::Yes => Writes::Yes,
