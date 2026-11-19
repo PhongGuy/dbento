@@ -1979,7 +1979,7 @@ impl ConnectionConfig {
     /// The canonical, versioned, secret-free encoding of every field `same_session` compares:
     /// equal for two configs exactly when `same_session` is true.
     pub fn session_binding(&self) -> String {
-        #[allow(clippy::expect_used)]
+        #[allow(clippy::expect_used)] // a struct of strings and numbers has no unserializable value
         serde_json::to_string(&self.session_key())
             .expect("a struct of strings and numbers serializes")
     }
