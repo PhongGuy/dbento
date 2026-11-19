@@ -13,9 +13,10 @@ use std::time::Duration;
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
     EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, OpenError, RelationKind,
-    RelationRef, SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort,
-    WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError, connect, move_secret,
-    plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, tls_key_is_encrypted,
+    RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
+    SessionOptions, Sort, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError,
+    connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var,
+    secret_renames, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -71,6 +72,7 @@ use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
+use crate::rename_secret::{adopt_held, probe, rename_keys};
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
 use crate::runner::RunnerSpec;
@@ -3101,6 +3103,69 @@ impl Shell {
 
     // Applies one pass's reads, dbento.toml's then the tabs'. A pass from an earlier
     // generation, or one the app's own write overtook, is dropped and the files read again.
+    // After an outside edit replaced `old`, moves keychain secrets of renamed connections to
+    // their new names off the UI thread, one rename at a time in name order.
+    fn carry_renamed_secrets(
+        &mut self,
+        old: &Workspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(new) = self.workspace.clone() else {
+            return;
+        };
+        let jobs: Vec<_> = secret_renames(old, &new)
+            .into_iter()
+            .map(|r| {
+                let keys = rename_keys(old, &new, &r);
+                (r, keys)
+            })
+            .collect();
+        if jobs.is_empty() {
+            return;
+        }
+        let store = Arc::clone(&self.services.store);
+        let probed = cx.background_spawn({
+            let store = Arc::clone(&store);
+            async move {
+                jobs.into_iter()
+                    .map(|(r, keys)| {
+                        let held = probe(&*store, &keys);
+                        (r, keys, held)
+                    })
+                    .collect::<Vec<_>>()
+            }
+        });
+        cx.spawn_in(window, async move |_this, cx| {
+            for (r, keys, held) in probed.await {
+                let not_moved =
+                    |e: SecretError| format!("{e}. Enter the password again for {}.", r.to);
+                let held = match held {
+                    Ok(held) => held,
+                    Err(e) => {
+                        let detail = not_moved(e);
+                        let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
+                        continue;
+                    }
+                };
+                // A login change waits for a question, so only an exact match moves here.
+                if !held.movable() || r.matched != RenameMatch::Exact {
+                    continue;
+                }
+                let store = Arc::clone(&store);
+                let moved = cx
+                    .background_executor()
+                    .spawn(async move { adopt_held(&*store, &keys, held) })
+                    .await;
+                if let Err(e) = moved {
+                    let detail = not_moved(e);
+                    let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
+                }
+            }
+        })
+        .detach();
+    }
+
     fn judge_reload(
         &mut self,
         generation: u64,
@@ -3130,6 +3195,7 @@ impl Shell {
                     Ok(ws) => {
                         self.toml_problem = None;
                         self.install_workspace(ws, window, cx);
+                        self.carry_renamed_secrets(&current, window, cx);
                         None
                     }
                     Err(e) => Some(open_problem(e)),
