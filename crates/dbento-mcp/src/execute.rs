@@ -73,24 +73,29 @@ pub(crate) async fn run(
     let Some(dir) = server.approvals().map(PathBuf::from) else {
         return Err(unavailable("this server has no approvals folder"));
     };
+    let target = ApprovalTarget::of(&found.conn);
+    let display = target.display().to_owned();
     let request = ApprovalRequest::new(
         server.root(),
         &args.connection,
-        ApprovalTarget::of(&found.conn),
+        target,
         &args.sql,
         classification.writes,
         classification.unguarded,
     );
     let id = request.id().to_owned();
     // The store's file operations block, so they run off the async runtime. A call with no
-    // answer yet files its request in the same hop.
-    let claimed = tokio::task::spawn_blocking(move || {
+    // answer yet files its request in the same hop and looks for a grant of the same call
+    // made while the connection pointed elsewhere, so the AI learns why it must ask again.
+    let (claimed, changed) = tokio::task::spawn_blocking(move || {
         let store = ApprovalStore::open(&dir)?;
         let claimed = store.claim_with_reason(request.id())?;
+        let mut changed = None;
         if claimed.0 == Claim::None {
             store.request(&request)?;
+            changed = store.changed_grant(&request);
         }
-        Ok::<_, dbento_core::ApprovalError>(claimed)
+        Ok::<_, dbento_core::ApprovalError>((claimed, changed))
     })
     .await
     .map_err(|_| unavailable("reading the approvals folder failed"))?
@@ -107,13 +112,28 @@ pub(crate) async fn run(
             .with_request_id(&id)
             .with_reason(reason))
         }
-        (Claim::None, _) => Err(ToolError::new(
-            "approval_required",
-            format!(
-                "ask the user to approve request {id} in the Dbento app, then retry the identical call"
-            ),
-        )
-        .with_request_id(&id)),
+        (Claim::None, _) => {
+            let name = &args.connection;
+            let error = match changed {
+                Some(old) => ToolError::new(
+                    "connection_changed",
+                    format!(
+                        "connection {name:?} changed (target or session settings) after request \
+                         {old} was approved, so it was not run; it now points at {display}; ask \
+                         the user to approve request {id} in the Dbento app, then retry the \
+                         identical call"
+                    ),
+                ),
+                None => ToolError::new(
+                    "approval_required",
+                    format!(
+                        "ask the user to approve request {id} for connection {name:?} \
+                         ({display}) in the Dbento app, then retry the identical call"
+                    ),
+                ),
+            };
+            Err(error.with_request_id(&id))
+        }
         // A claim this build does not know must not read as "ask again".
         _ => Err(unavailable("the approval store answered an unknown claim")),
     }

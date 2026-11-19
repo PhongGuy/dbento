@@ -43,7 +43,9 @@ with `SCAN 0 MATCH <pattern> COUNT 100` and `TYPE <key>`. \
 A parent connection's databases are listed by `list_databases`, and each is a connection \
 named `<parent>/<database>`. \
 `execute` runs one write or DDL statement only after the user approves that exact call in the \
-Dbento app, and answers `approval_required` until then; a denial may carry the user's `reason`.";
+Dbento app, and answers `approval_required` until then, or `connection_changed` with a new \
+request when the connection's target or session settings changed since the approval; a denial \
+may carry the user's `reason`.";
 
 /// How long `list_databases` waits for the open and the listing together.
 const LIST_DATABASES_CAP: Duration = Duration::from_secs(5);
@@ -648,7 +650,9 @@ impl DbentoServer {
         description = "Run exactly one write or DDL statement, once the user has approved \
                        this exact call in the Dbento app. The first call files a request and \
                        answers `approval_required` with a `request_id`; ask the user to approve \
-                       it, then retry the identical call. Reads go through `query`; \
+                       it, then retry the identical call. It answers `connection_changed` \
+                       with a new request when the connection's target or session settings \
+                       changed since the approval. Reads go through `query`; \
                        transaction control and read-only connections are refused. A call \
                        cancelled after its statement committed still answers `cancelled`, \
                        though the write took effect: check before retrying it.",
