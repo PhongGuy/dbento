@@ -3165,18 +3165,18 @@ impl Shell {
                     if reply.recv().await != Ok(1) {
                         continue;
                     }
-                    // The file may have changed while the question was open.
-                    let Ok(still) = this.update(cx, |s, _| {
-                        s.workspace
-                            .as_deref()
-                            .zip(asked.as_ref())
-                            .is_some_and(|(now, a)| still_renamed(now, &dir, &r, a))
-                    }) else {
-                        return;
-                    };
-                    if !still {
-                        continue;
-                    }
+                }
+                // The file may have changed while this or an earlier question was open.
+                let Ok(still) = this.update(cx, |s, _| {
+                    s.workspace
+                        .as_deref()
+                        .zip(asked.as_ref())
+                        .is_some_and(|(now, a)| still_renamed(now, &dir, &r, a))
+                }) else {
+                    return;
+                };
+                if !still {
+                    continue;
                 }
                 let store = Arc::clone(&store);
                 let moved = cx

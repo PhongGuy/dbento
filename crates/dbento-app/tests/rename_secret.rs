@@ -601,7 +601,7 @@ fn the_notice_lists_every_line_after_the_reason() {
     assert_eq!(
         ask.detail.map(|d| d.to_string()).as_deref(),
         Some(
-            "These passwords come from environment variables, which Dbento cannot rename. Rename them and restart Dbento.\nL1\nL2"
+            "These secrets come from environment variables, which Dbento cannot rename. Rename them and restart Dbento.\nL1\nL2"
         )
     );
     let ids: Vec<_> = ask.choices.iter().map(|c| c.id).collect();
@@ -669,4 +669,28 @@ fn the_notice_comes_after_the_questions(cx: &mut TestAppContext) {
     assert!(!present(cx, a.win, "rename-env-ok"));
     click_id(cx, a.win, "rename-secret-keep");
     wait_real(cx, "the notice", |cx| present(cx, a.win, "rename-env-ok"));
+}
+
+#[gpui_kit::test]
+fn an_exact_rename_waiting_behind_a_question_rechecks_the_file(cx: &mut TestAppContext) {
+    let before = format!("{}{}", pg("a", "x", "x", ""), pg("b", "v", "x", ""));
+    let a = app(cx, &with_zw(&before), memory(), no_env());
+    a.save(&a.password("a"));
+    a.save(&a.password("b"));
+    let y = pg("y", "v", "x", "");
+    a.outside(cx, &format!("{}{y}{}", pg("a2", "x", "y", ""), zw("zw2")));
+    asked(cx, &a, "a");
+    // While the question is open, y moves to another host.
+    let elsewhere = y.replace("127.0.0.1", "127.0.0.2");
+    a.outside(
+        cx,
+        &format!("{}{elsewhere}{}", pg("a2", "x", "y", ""), zw("zw2")),
+    );
+    click_id(cx, a.win, "rename-secret-keep");
+    a.witnessed(cx);
+    assert!(
+        !a.holds(&a.password("y")),
+        "b's password never reaches the new host"
+    );
+    assert!(a.holds(&a.password("b")), "b's entry stays");
 }

@@ -196,7 +196,7 @@ pub fn env_lines(r: &SecretRename, held: Held, env: &EnvLookup) -> Vec<String> {
 /// The one notice per reload listing `lines` after the reason; its only choice is `rename-env-ok`.
 pub fn env_notice(lines: &[String]) -> Ask {
     let mut detail = String::from(
-        "These passwords come from environment variables, which Dbento cannot rename. \
+        "These secrets come from environment variables, which Dbento cannot rename. \
          Rename them and restart Dbento.",
     );
     for line in lines {
