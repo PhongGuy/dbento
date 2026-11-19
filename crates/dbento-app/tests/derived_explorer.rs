@@ -365,3 +365,33 @@ fn a_child_row_shows_its_own_session_state(cx: &mut TestAppContext) {
         "a child with no session still draws nothing"
     );
 }
+
+#[gpui_kit::test]
+fn a_listed_parent_shows_a_neutral_marker_not_a_state(cx: &mut TestAppContext) {
+    let s = started(cx, &toml("", ""));
+    assert_eq!(
+        label_of(cx, s.win, part_id("connection-listed", "listed")).as_deref(),
+        Some("lists its databases"),
+        "a listed parent marks itself without a session"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-status", "listed")),
+        "a listed parent has no session state to show"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-listed", "srv")),
+        "an all parent follows its listing session instead"
+    );
+    assert!(
+        !present(cx, s.win, part_id("connection-listed", "lite")),
+        "a plain connection gets no marker"
+    );
+    click(cx, s.win, part_id("connection-toggle", "listed"));
+    wait_real(cx, "the list", |cx| {
+        tree(cx, s.win) == ["listed/app", "listed/booking"]
+    });
+    assert!(
+        present(cx, s.win, part_id("connection-listed", "listed")),
+        "the marker stays while expanded"
+    );
+}
