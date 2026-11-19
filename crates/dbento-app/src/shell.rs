@@ -16,7 +16,7 @@ use dbento_core::{
     RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
     SessionOptions, Sort, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError,
     connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var,
-    secret_renames, tls_key_is_encrypted,
+    secret_renames, seen_text, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -370,6 +370,8 @@ pub struct Shell {
     recent_tables: Vec<TableRef>,
     requested: Option<PathBuf>,
     workspace: Option<Arc<Workspace>>,
+    // The installed workspace's connection list as the session keeps it, computed once per install.
+    seen: Option<String>,
     sidebar: Option<Entity<Sidebar>>,
     tabs: Vec<Entity<QueryTab>>,
     // Per tab, index for index: the model observation the status bar follows, the tab's own
@@ -575,6 +577,7 @@ impl Shell {
             recent_tables: Vec::new(),
             requested: dir.clone(),
             workspace: None,
+            seen: None,
             sidebar: None,
             tabs: Vec::new(),
             tab_observes: Vec::new(),
@@ -946,6 +949,7 @@ impl Shell {
                 .as_ref()
                 .map(|s| s.read(cx).collapsed_paths())
                 .unwrap_or_default(),
+            seen: self.seen.clone(),
         };
         self.update_saved(move |s| s.put_session(session.clone()), cx);
     }
@@ -2598,6 +2602,7 @@ impl Shell {
 
     fn clear_workspace(&mut self) {
         self.workspace = None;
+        self.seen = None;
         self.sidebar = None;
         self._sidebar_events = None;
         self._sidebar_notify = None;
@@ -2719,6 +2724,7 @@ impl Shell {
                 self.history_panel = Some(panel);
                 // Recent entries name the real folder, so a link or `..` path adds no duplicate.
                 let real = ws.dir().to_path_buf();
+                self.seen = seen_text(&ws);
                 self.workspace = Some(ws);
                 self.watch_generation = self.watch_generation.wrapping_add(1);
                 self.start_watch(&real, window, cx);
@@ -3295,6 +3301,7 @@ impl Shell {
     ) {
         // One shared value, so every view and every later tab agrees on the same workspace.
         let ws = Arc::new(ws);
+        self.seen = seen_text(&ws);
         self.workspace = Some(Arc::clone(&ws));
         let closings = self
             .sidebar
