@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::{App, Global};
+use similar::TextDiff;
 
 /// How long a reload waits before rereading a file it could not use the first time.
 pub const TOML_RETRY: Duration = Duration::from_millis(250);
@@ -127,6 +128,15 @@ pub fn judge_tab(
             reason: why.clone(),
         }),
     }
+}
+
+/// A unified line diff of the disk text against the tab's, headed "--- disk" / "+++ this tab".
+pub fn disk_diff(disk: &str, mine: &str) -> String {
+    TextDiff::from_lines(disk, mine)
+        .unified_diff()
+        .context_radius(3)
+        .header("disk", "this tab")
+        .to_string()
 }
 
 /// Reads `path` as text: a missing file is `Missing`, any other failure `Unreadable`.

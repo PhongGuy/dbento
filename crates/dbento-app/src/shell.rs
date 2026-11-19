@@ -86,7 +86,7 @@ use crate::ui::{self, Icons};
 use crate::update_banner;
 use crate::updates::{self, UpdatesEvent};
 use crate::workspace_reload::{
-    self, DiskBanner, DiskRead, TabDisk, TabVerdict, TomlVerdict, judge_tab, judge_toml,
+    self, DiskBanner, DiskRead, TabDisk, TabVerdict, TomlVerdict, disk_diff, judge_tab, judge_toml,
 };
 
 /// The database a Postgres Test opens when the form names none: every server has it.
@@ -1521,8 +1521,7 @@ impl Shell {
                     this.close_tab_at(ix, window, cx);
                 }
             }
-            // Compare has no dialog yet, so it does nothing.
-            QueryTabEvent::DiskCompare => {}
+            QueryTabEvent::DiskCompare => this.ask_disk_compare(tab, window, cx),
         });
         // A filter, a sort or leaving the browse changes what the session restores.
         let browse = cx.subscribe(&model, |this, _, e: &BrowseEvent, cx| {
@@ -3014,6 +3013,73 @@ impl Shell {
         if taken {
             self.save_session(cx);
         }
+    }
+
+    // Shows the changed file against the tab's text, then reloads or keeps as the banner's own
+    // buttons do. An answer counts only while the banner still reports the text it compared,
+    // since a reload may have replaced it while the dialog was up.
+    fn ask_disk_compare(
+        &mut self,
+        tab: &Entity<QueryTab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let t = tab.read(cx);
+        let (Some(DiskBanner::Changed { disk }), Some(file)) =
+            (t.disk_banner().cloned(), t.file().map(Path::to_path_buf))
+        else {
+            return;
+        };
+        let reply = ask(
+            Ask {
+                title: "Changed on disk".into(),
+                detail: Some(
+                    format!("{}: lines on disk (-) and in this tab (+).", file.display()).into(),
+                ),
+                sql: Some(disk_diff(&disk, &t.sql(cx)).into()),
+                language: "text",
+                choices: vec![
+                    Choice {
+                        id: "disk-compare-cancel",
+                        label: "Cancel".into(),
+                        danger: false,
+                    },
+                    Choice {
+                        id: "disk-compare-reload",
+                        label: "Reload".into(),
+                        danger: false,
+                    },
+                    Choice {
+                        id: "disk-compare-keep",
+                        label: "Keep mine".into(),
+                        danger: false,
+                    },
+                ],
+                default: 0,
+                cancel: 0,
+            },
+            window,
+            cx,
+        );
+        let tab = tab.downgrade();
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = reply.recv().await;
+            let _ = this.update_in(cx, |shell, window, cx| {
+                let Some(tab) = tab.upgrade() else {
+                    return;
+                };
+                let same = matches!(
+                    tab.read(cx).disk_banner(),
+                    Some(DiskBanner::Changed { disk: now }) if *now == disk
+                );
+                match answer {
+                    Ok(1) if same => shell.take_disk_text(&tab, window, cx),
+                    Ok(2) if same => tab.update(cx, |t, cx| t.keep_mine(cx)),
+                    _ => {}
+                }
+            });
+        })
+        .detach();
     }
 
     // Takes the text the disk banner reported into `tab`, as a reload applies a read.

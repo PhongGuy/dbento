@@ -2472,6 +2472,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "similar",
  "tempfile",
  "tokio",
  "winresource",

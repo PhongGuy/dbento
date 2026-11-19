@@ -55,6 +55,7 @@ mod derived_pickers;
 mod derived_tabs;
 mod derived_tree;
 mod disk_banner;
+mod disk_compare;
 mod disk_state;
 mod draft_tabs;
 mod drafts;
