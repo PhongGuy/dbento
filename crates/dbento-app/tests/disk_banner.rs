@@ -250,3 +250,60 @@ fn a_kept_delete_rewritten_with_my_text_is_in_sync(cx: &mut TestAppContext) {
     );
     assert_eq!(tab_sql(cx, &o), "SELECT 1 -- mine");
 }
+
+// An edited tab whose file changed outside: the Changed banner shows, then Ctrl+S asks.
+fn changed_then_save(cx: &mut TestAppContext) -> (Opened, PathBuf) {
+    let o = opened(cx, "", "", 0);
+    let file = open_saved(cx, &o, "lite", "SELECT 1");
+    type_sql(cx, &o, "SELECT 1 -- mine");
+    fs::write(&file, "SELECT 2").unwrap();
+    files_changed(cx, &o);
+    assert_eq!(
+        banner(cx, &o).as_deref(),
+        Some("Changed on disk"),
+        "the banner shows before the save"
+    );
+    press_save(cx, &o);
+    wait_real(cx, "the conflict question", |cx| {
+        present(cx, o.win, "save-conflict-cancel")
+    });
+    (o, file)
+}
+
+#[gpui_kit::test]
+fn the_save_conflicts_reload_clears_the_banner(cx: &mut TestAppContext) {
+    let (o, _) = changed_then_save(cx);
+    click_id(cx, o.win, "save-conflict-reload");
+    assert_eq!(tab_sql(cx, &o), "SELECT 2");
+    assert!(
+        !present(cx, o.win, "disk-banner"),
+        "the tab holds the file's text, so nothing is left to report"
+    );
+}
+
+#[gpui_kit::test]
+fn the_save_conflicts_overwrite_clears_the_banner(cx: &mut TestAppContext) {
+    let (o, file) = changed_then_save(cx);
+    click_id(cx, o.win, "save-conflict-overwrite");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "SELECT 1 -- mine");
+    assert!(
+        !present(cx, o.win, "disk-banner"),
+        "the file holds the tab's text, so nothing is left to report"
+    );
+}
+
+#[gpui_kit::test]
+fn unbinding_a_tab_clears_its_banner(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let file = open_saved(cx, &o, "lite", "SELECT 1");
+    fs::remove_file(&file).unwrap();
+    files_changed(cx, &o);
+    assert_eq!(banner(cx, &o).as_deref(), Some("Deleted on disk"));
+    let tab = o.shell.read_with(cx, |s, _| s.tab().unwrap().clone());
+    tab.update(cx, |t, cx| t.unbind_file(cx));
+    cx.run_until_parked();
+    assert!(
+        !present(cx, o.win, "disk-banner"),
+        "a tab with no file has no file to report on"
+    );
+}

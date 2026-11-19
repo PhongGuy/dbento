@@ -2855,11 +2855,6 @@ impl Shell {
         self.watch_generation
     }
 
-    /// Why the open workspace is not being watched, when watching failed.
-    pub fn watch_problem(&self) -> Option<&str> {
-        self.watch_problem.as_deref()
-    }
-
     /// Whether a reload of the workspace files is running.
     pub fn reloading(&self) -> bool {
         self.reload_running

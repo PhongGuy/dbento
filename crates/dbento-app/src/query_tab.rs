@@ -847,11 +847,19 @@ impl QueryTab {
     }
 
     /// Ties the tab to the saved query `rel`, whose file now holds `disk`, and takes the
-    /// current text as saved.
+    /// current text as saved; any disk banner and its dismissal are cleared.
     pub fn set_file(&mut self, rel: PathBuf, disk: String, cx: &mut Context<Self>) {
         self.file = Some(rel);
         self.disk = Some(disk);
+        self.clear_disk_banner();
         self.mark_saved(cx);
+        cx.notify();
+    }
+
+    // A fresh file binding leaves no outside change to report and no kept one to hide.
+    fn clear_disk_banner(&mut self) {
+        self.disk_banner = None;
+        self.dismissed = None;
     }
 
     /// The file's text when this tab last read or wrote it.
@@ -910,6 +918,7 @@ impl QueryTab {
     pub fn unbind_file(&mut self, cx: &mut Context<Self>) {
         self.file = None;
         self.disk = None;
+        self.clear_disk_banner();
         self.baseline.clear();
         self.schedule_draft(cx);
         cx.notify();
