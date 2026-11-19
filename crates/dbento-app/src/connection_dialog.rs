@@ -157,6 +157,11 @@ const DATABASES_CHOICES: [DatabasesChoice; 3] = [
 /// server has it, and an empty-Database Test opens it too.
 pub const POSTGRES_DATABASE: &str = "postgres";
 
+// Database's help while a parent lists its databases (All or Choose).
+const PG_PARENT_DATABASE_HELP: &str = "The database the others are listed from.";
+const MSSQL_PARENT_DATABASE_HELP: &str =
+    "The database the others are listed from. Leave empty to use the login's default.";
+
 // The tooltip on a database that cannot be a child connection's name.
 const BAD_DATABASE_NAME: &str =
     "Only a database named in letters, digits, - and _ can be opened as a connection.";
@@ -1268,6 +1273,25 @@ impl ConnectionForm {
             .into_any_element()
     }
 
+    // A parent lists its databases through Database, so in All or Choose its help says so
+    // instead of reading as a duplicate of the Databases row.
+    fn field_help(&self, f: &FormField) -> Option<&'static str> {
+        if f.key != "database" || self.databases_choice == DatabasesChoice::Only {
+            return f.help;
+        }
+        match self.engine {
+            Engine::Postgres => Some(PG_PARENT_DATABASE_HELP),
+            Engine::Mssql => Some(MSSQL_PARENT_DATABASE_HELP),
+            Engine::Sqlite
+            | Engine::Mysql
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Surrealdb
+            | Engine::Redis
+            | Engine::Dynamodb => f.help,
+        }
+    }
+
     // The field an error is about takes the danger border the kit gives an invalid control.
     fn marked(&self, input: Input, field: Field, cx: &App) -> Input {
         if self.error_at == Some(ErrorAt::Field(field)) {
@@ -1609,7 +1633,7 @@ impl ConnectionForm {
                 rows.extend(self.error_line(Some(ErrorAt::Field(field)), cx));
             }
             for f in shown {
-                if let Some(says) = f.help {
+                if let Some(says) = self.field_help(f) {
                     let id = SharedString::from(format!("conn-{}-help", f.key.replace('_', "-")));
                     rows.push(Self::help_line(id, says, cx));
                 }
