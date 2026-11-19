@@ -182,6 +182,10 @@ pub struct WorkspaceSession {
     pub active: Option<usize>,
     /// Collapsed explorer folder paths.
     pub collapsed: Vec<String>,
+    /// The connection list of the last dbento.toml installed for this workspace, without
+    /// comments; absent from sessions saved before it was kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seen: Option<String>,
 }
 
 /// One saved tab: where it runs, its draft id and the saved query it edits.

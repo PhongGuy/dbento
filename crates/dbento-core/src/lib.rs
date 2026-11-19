@@ -43,7 +43,10 @@ pub use history::{
 pub mod paths;
 
 mod rename_secret;
-pub use rename_secret::{Adopted, RenameMatch, SecretRename, adopt_secret, secret_renames};
+pub use rename_secret::{
+    Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, adopt_secret, secret_renames, seen_text,
+    seen_workspace,
+};
 
 mod secrets;
 pub use secrets::{

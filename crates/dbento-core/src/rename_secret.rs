@@ -60,6 +60,38 @@ pub fn secret_renames(old: &Workspace, new: &Workspace) -> Vec<SecretRename> {
     renames
 }
 
+/// The largest snapshot `seen_text` returns, in bytes.
+pub const SEEN_TEXT_MAX: usize = 256 * 1024;
+
+/// The text the app keeps as `ws`'s last-seen connection list: its validated dbento.toml
+/// re-serialized without comments. None when serializing fails, the result is over
+/// SEEN_TEXT_MAX bytes, or it does not validate again as a workspace with the same declared names.
+pub fn seen_text(ws: &Workspace) -> Option<String> {
+    // A round trip through a plain table keeps every key but no comment, so nothing a user
+    // wrote beside a setting ends up in the app's state file.
+    let table: toml::Table = toml::from_str(ws.source_text()).ok()?;
+    let text = toml::to_string(&table).ok()?;
+    if text.len() > SEEN_TEXT_MAX {
+        return None;
+    }
+    let back = seen_workspace(&text, ws)?;
+    let same = back.connections().len() == ws.connections().len()
+        && back
+            .connections()
+            .iter()
+            .zip(ws.connections())
+            .all(|(a, b)| a.name() == b.name());
+    same.then_some(text)
+}
+
+/// `text` validated as an earlier dbento.toml of `current`'s folder, so `secret_renames`
+/// can compare it with `current`. None when it does not validate under today's rules.
+pub fn seen_workspace(text: &str, current: &Workspace) -> Option<Workspace> {
+    let dir = current.dir().to_path_buf();
+    let file = dir.join("dbento.toml");
+    Workspace::from_text(dir, &file, text).ok()
+}
+
 /// Declared connections of `this` missing by name from `other`, file engines left out.
 fn vanished<'a>(this: &'a Workspace, other: &Workspace) -> Vec<&'a ConnectionConfig> {
     this.connections()
