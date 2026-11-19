@@ -16,7 +16,7 @@ use dbento_core::{
     RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
     SessionOptions, Sort, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError,
     connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var,
-    secret_renames, seen_text, tls_key_is_encrypted,
+    secret_renames, seen_text, seen_workspace, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -2627,7 +2627,10 @@ impl Shell {
         self.shut_workspace(window, cx);
         match Workspace::open(&dir) {
             Ok(ws) => {
+                // Read the last installed list before any save of this folder replaces it.
+                let previous = self.saved.session(ws.dir()).and_then(|s| s.seen.clone());
                 let ws = Arc::new(ws);
+                let opened = Arc::clone(&ws);
                 let services = self.services.clone();
                 let sidebar = cx.new(|cx| Sidebar::new(Arc::clone(&ws), services, window, cx));
                 self._sidebar_events = Some(cx.subscribe_in(
@@ -2738,6 +2741,14 @@ impl Shell {
                     cx,
                 );
                 self.restore_tabs(window, cx);
+                // A rename made while this folder was not open moves its secrets now, unless
+                // the window is closing or the list is the one last installed.
+                if !self.closing
+                    && let Some(p) = previous.filter(|p| Some(p) != self.seen.as_ref())
+                    && let Some(old) = seen_workspace(&p, &opened)
+                {
+                    self.carry_renamed_secrets(&old, window, cx);
+                }
             }
             Err(e) => {
                 self.clear_workspace();

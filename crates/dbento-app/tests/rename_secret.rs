@@ -1,6 +1,7 @@
 //! An outside rename carries a connection's saved keychain secrets to its new name.
 use crate::support::{self, click_id, label_of, present, wait_real};
-use dbento_app::app::{EnvLookup, start};
+use dbento_app::app::{AppPaths, EnvLookup, SavedState, start};
+use dbento_app::persist::{load_json, save_json};
 use dbento_app::rename_secret::{
     Held, adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
 };
@@ -693,4 +694,211 @@ fn an_exact_rename_waiting_behind_a_question_rechecks_the_file(cx: &mut TestAppC
         "b's password never reaches the new host"
     );
     assert!(a.holds(&a.password("b")), "b's entry stays");
+}
+
+/// A dbento.toml that does not parse.
+const BROKEN: &str = "dbento = 1\n[connections.\n";
+
+impl App {
+    /// Opens `dir` in this window through the path every start, switch and recent takes.
+    fn open(&self, cx: &mut TestAppContext, dir: &Path) {
+        let (shell, dir) = (self.shell.clone(), dir.to_path_buf());
+        cx.update_window(self.win, |_, w, cx| {
+            shell.update(cx, |s, cx| s.open_workspace(dir, w, cx))
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+    /// Opens another workspace, so this one's file changes with nothing watching it, and
+    /// waits until state.json holds the other workspace's session first and this one's
+    /// snapshot: every write the switch queued has landed and this shell has nothing pending.
+    fn away(&self, cx: &mut TestAppContext) -> support::Fx {
+        let other = support::fixture("", "");
+        self.open(cx, other.dir.path());
+        let there = other.ws.dir().to_path_buf();
+        wait_real(cx, "the switch's state write", |_| {
+            let saved = load_json::<SavedState>(&self.state()).value;
+            saved.sessions.first().is_some_and(|s| s.workspace == there)
+                && saved.session(&self.dir).is_some_and(|s| s.seen.is_some())
+        });
+        other
+    }
+    /// Rewrites dbento.toml as `lite` then `body` while another workspace is open, then
+    /// opens this one again.
+    fn while_closed(&self, cx: &mut TestAppContext, body: &str) {
+        let _other = self.away(cx);
+        std::fs::write(self.dir.join("dbento.toml"), format!("{LITE}{body}")).unwrap();
+        self.open(cx, &self.dir);
+    }
+    fn state(&self) -> PathBuf {
+        AppPaths::in_dir(self._files.path()).state
+    }
+    /// The snapshot state.json holds for this workspace.
+    fn seen_on_disk(&self) -> Option<String> {
+        load_json::<SavedState>(&self.state())
+            .value
+            .session(&self.dir)
+            .and_then(|s| s.seen.clone())
+    }
+    /// Replaces this workspace's snapshot in state.json, as an older app or damage would.
+    fn put_seen_on_disk(&self, seen: Option<&str>) {
+        let mut saved = load_json::<SavedState>(&self.state()).value;
+        saved
+            .sessions
+            .iter_mut()
+            .find(|s| s.workspace == self.dir)
+            .expect("the first open saved a session")
+            .seen = seen.map(str::to_owned);
+        save_json(&self.state(), &saved).unwrap();
+    }
+    /// A second start on the same files, keychain and workspace: the next launch.
+    fn restart(&self, cx: &mut TestAppContext) -> AnyWindowHandle {
+        let mut services = support::services(self._files.path());
+        services.store = Arc::clone(&self.store);
+        let (win, _shell) = cx
+            .update(|cx| start(services, Some(self.dir.clone()), cx))
+            .unwrap();
+        present(cx, win, "connection-list");
+        win
+    }
+}
+
+#[gpui_kit::test]
+fn closed_an_exact_rename_moves_both_slots_on_the_next_open(cx: &mut TestAppContext) {
+    let a = app(cx, &pg("nopg", "x", "x", KEY), memory(), no_env());
+    a.save(&a.password("nopg"));
+    a.save(&a.passphrase("nopg"));
+    a.while_closed(cx, &pg("pg2", "x", "x", KEY));
+    wait_real(cx, "the moved secrets", |_| {
+        a.holds(&a.password("pg2")) && a.holds(&a.passphrase("pg2"))
+    });
+    assert!(!a.holds(&a.password("nopg")) && !a.holds(&a.passphrase("nopg")));
+    assert!(
+        !present(cx, a.win, "confirm-dialog"),
+        "an exact rename asks nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn closed_a_same_login_rename_asks_and_a_reopen_asks_nothing(cx: &mut TestAppContext) {
+    let a = app(cx, &pg("nopg", "x", "x", ""), memory(), no_env());
+    a.save(&a.password("nopg"));
+    a.while_closed(cx, &pg("pg2", "x", "y", ""));
+    asked(cx, &a, "nopg");
+    click_id(cx, a.win, "rename-secret-move");
+    wait_real(cx, "the moved secret", |_| a.holds(&a.password("pg2")));
+    assert!(!a.holds(&a.password("nopg")));
+    a.while_closed(cx, &pg("pg2", "x", "y", ""));
+    assert!(!present(cx, a.win, "confirm-dialog"));
+    assert!(a.holds(&a.password("pg2")));
+}
+
+#[gpui_kit::test]
+fn closed_a_kept_secret_is_not_asked_about_again(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    a.while_closed(cx, &with_zw(&pg("pg2", "x", "y", "")));
+    asked(cx, &a, "nopg");
+    click_id(cx, a.win, "rename-secret-keep");
+    // The open already remembered pg2, so only the zw rename is found this time.
+    a.while_closed(cx, &format!("{}{}", pg("pg2", "x", "y", ""), zw("zw2")));
+    a.witnessed(cx);
+    assert!(!present(cx, a.win, "confirm-dialog"));
+    assert!(a.holds(&a.password("nopg")) && !a.holds(&a.password("pg2")));
+}
+
+#[gpui_kit::test]
+fn closed_another_host_moves_nothing(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    let elsewhere = pg("pg2", "x", "x", "").replace("127.0.0.1", "127.0.0.2");
+    a.while_closed(cx, &format!("{elsewhere}{}", zw("zw2")));
+    a.witnessed(cx);
+    assert!(!present(cx, a.win, "confirm-dialog"));
+    assert!(a.holds(&a.password("nopg")) && !a.holds(&a.password("pg2")));
+}
+
+/// Leaves this workspace, sets its stored snapshot to `seen`, renames nopg to pg2 and zw to
+/// zw2 exactly, and starts the app again on it; answers the new window and the workspace
+/// the first window moved to, which must outlive the test. The first window stays open but
+/// quiescent: `away` waited for its last state write, and nothing after it changes its state,
+/// so no queued change can replay over the edited snapshot.
+fn restarted_with(
+    cx: &mut TestAppContext,
+    a: &App,
+    seen: Option<&str>,
+) -> (AnyWindowHandle, support::Fx) {
+    let other = a.away(cx);
+    a.put_seen_on_disk(seen);
+    let body = format!("{LITE}{}{}", pg("pg2", "x", "x", ""), zw("zw2"));
+    std::fs::write(a.dir.join("dbento.toml"), body).unwrap();
+    (a.restart(cx), other)
+}
+
+fn nothing_moved_and_snapshot_rewritten(cx: &mut TestAppContext, a: &App, win: AnyWindowHandle) {
+    wait_real(cx, "the new snapshot", |_| {
+        a.seen_on_disk()
+            .is_some_and(|s| s.contains("[connections.pg2]"))
+    });
+    assert!(!present(cx, win, "confirm-dialog"), "nothing is asked");
+    assert!(
+        a.holds(&a.password("nopg")) && !a.holds(&a.password("pg2")),
+        "nopg's password stays"
+    );
+    assert!(
+        a.holds(&a.password("zw")) && !a.holds(&a.password("zw2")),
+        "no compare ran"
+    );
+}
+
+#[gpui_kit::test]
+fn closed_without_a_snapshot_nothing_moves_and_one_is_written(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    let (win, _other) = restarted_with(cx, &a, None);
+    nothing_moved_and_snapshot_rewritten(cx, &a, win);
+}
+
+#[gpui_kit::test]
+fn closed_a_corrupt_snapshot_moves_nothing_and_is_rewritten(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    let (win, _other) = restarted_with(cx, &a, Some(BROKEN));
+    nothing_moved_and_snapshot_rewritten(cx, &a, win);
+}
+
+#[gpui_kit::test]
+fn closed_an_invalid_file_at_open_keeps_the_old_snapshot(cx: &mut TestAppContext) {
+    let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
+    a.save(&a.password("nopg"));
+    let _other = a.away(cx);
+    let before = a.seen_on_disk().expect("away waited for the snapshot");
+    std::fs::write(a.dir.join("dbento.toml"), BROKEN).unwrap();
+    a.open(cx, &a.dir);
+    assert!(
+        a.shell.read_with(cx, |s, _| s.workspace().is_none()),
+        "the open failed"
+    );
+    // A failed open saves no session; any last_workspace write it queues replays onto the
+    // file and leaves the sessions as they are, and writes are atomic renames.
+    cx.run_until_parked();
+    assert_eq!(a.seen_on_disk(), Some(before));
+    a.while_closed(cx, &format!("{}{}", pg("pg2", "x", "x", ""), zw("zw2")));
+    wait_real(cx, "the moved secret", |_| a.holds(&a.password("pg2")));
+    assert!(!a.holds(&a.password("nopg")));
+}
+
+#[gpui_kit::test]
+fn closed_a_folder_opened_by_another_path_still_finds_its_snapshot(cx: &mut TestAppContext) {
+    let a = app(cx, &pg("nopg", "x", "x", ""), memory(), no_env());
+    a.save(&a.password("nopg"));
+    let _other = a.away(cx);
+    std::fs::write(
+        a.dir.join("dbento.toml"),
+        format!("{LITE}{}", pg("pg2", "x", "x", "")),
+    )
+    .unwrap();
+    // The fixture's data folder exists, so this path canonicalizes to the workspace.
+    a.open(cx, &a.dir.join("data").join(".."));
+    wait_real(cx, "the moved secret", |_| a.holds(&a.password("pg2")));
 }
