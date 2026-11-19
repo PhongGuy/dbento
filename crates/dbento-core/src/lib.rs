@@ -42,6 +42,9 @@ pub use history::{
 
 pub mod paths;
 
+mod rename_secret;
+pub use rename_secret::{RenameMatch, SecretRename, secret_renames};
+
 mod secrets;
 pub use secrets::{
     MemoryStore, Secret, SecretError, SecretKey, SecretStore, TimedStore, key_passphrase_env_var,
