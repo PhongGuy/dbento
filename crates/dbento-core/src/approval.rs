@@ -70,6 +70,28 @@ pub fn approval_id(
     sha256_hex(json.as_bytes())
 }
 
+/// Lowercase hex SHA-256 of `{"v":2,"workspace":..,"connection":..,"sql":..}`: the call a
+/// grant answered with its target left out, so a grant for another target can be found.
+fn call_id(request: &ApprovalRequest) -> String {
+    #[derive(Serialize)]
+    struct Call<'a> {
+        v: u32,
+        workspace: &'a str,
+        connection: &'a str,
+        sql: &'a str,
+    }
+    let workspace = request.workspace.to_string_lossy();
+    #[allow(clippy::expect_used)] // a struct of strings has no unserializable value
+    let json = serde_json::to_string(&Call {
+        v: ID_VERSION,
+        workspace: &workspace,
+        connection: &request.connection,
+        sql: &request.sql,
+    })
+    .expect("a struct of strings serializes");
+    sha256_hex(json.as_bytes())
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -398,10 +420,18 @@ impl ApprovalStore {
         };
         let target = self.file(sub, id);
         let record = self.file(DECIDED, id);
+        let request = self.file(INBOX, id);
+        // A grant records its call, so the request is peeked before staging; the check after
+        // the rename below still decides which file was actually taken.
+        let Some(peeked) = read_request(&request, id) else {
+            return Err(ApprovalError::NotPending { id: id.to_owned() });
+        };
         // Both files are staged before the race so the winner publishes them right after
         // winning; renaming the request away is the race, and exactly one renamer wins it.
         let mut raw_answer = RawDecision::now(id);
-        if decision == Decision::Deny {
+        if decision == Decision::Approve {
+            raw_answer.call = Some(call_id(&peeked));
+        } else {
             raw_answer.reason = reason
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
@@ -419,7 +449,6 @@ impl ApprovalStore {
         let verdict = self
             .staged(DECIDED, &raw)
             .map_err(|e| unavailable(&record, e))?;
-        let request = self.file(INBOX, id);
         let taken = self.unique(INBOX, id, "decide");
         match std::fs::rename(&request, &taken) {
             Ok(()) => {}
@@ -463,6 +492,30 @@ impl ApprovalStore {
             }
             _ => Verdict::Unknown,
         }
+    }
+
+    /// The id of a live grant for the same workspace, connection and SQL as `request` but
+    /// another target, else None. Read-only and never fails.
+    pub fn changed_grant(&self, request: &ApprovalRequest) -> Option<String> {
+        let call = call_id(request);
+        let now = SystemTime::now();
+        // Newest grant wins; equal times fall back to the smallest id so the answer is stable.
+        std::fs::read_dir(self.dir.join(GRANTS))
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name();
+                let id = name.to_str()?.strip_suffix(".json")?;
+                if !valid_id(id) || id == request.id {
+                    return None;
+                }
+                let raw = read_raw_decision(&entry.path(), id)?;
+                let live = !expired(now, to_time(raw.at_ms), DECISION_TTL);
+                (live && raw.call.as_deref() == Some(call.as_str()))
+                    .then(|| (raw.at_ms, id.to_owned()))
+            })
+            .min_by(|(at_a, id_a), (at_b, id_b)| at_b.cmp(at_a).then_with(|| id_a.cmp(id_b)))
+            .map(|(_, id)| id)
     }
 
     fn file(&self, sub: &str, id: &str) -> PathBuf {
@@ -573,6 +626,9 @@ struct RawDecision {
     /// Why the user denied the call; absent on grants and on files from before reasons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+    /// The call an approval answered, target left out; absent on denials and markers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    call: Option<String>,
 }
 
 impl RawDecision {
@@ -582,6 +638,7 @@ impl RawDecision {
             id: id.to_owned(),
             at_ms: millis(SystemTime::now()),
             reason: None,
+            call: None,
         }
     }
 }

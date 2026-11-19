@@ -1001,3 +1001,138 @@ fn a_request_file_keeps_the_binding_hashed() {
         assert!(!text.contains(hidden), "{hidden} in {text}");
     }
 }
+
+fn grant_json(store: &ApprovalStore, id: &str) -> serde_json::Value {
+    let path = store.dir().join("grants").join(format!("{id}.json"));
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn delete_at(path: &str) -> ApprovalRequest {
+    ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite_at(path, ""),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    )
+}
+
+#[test]
+fn an_approval_records_the_call_and_a_denial_does_not() {
+    let (_d, store) = store();
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let call = hex(
+        json!({"v": 2, "workspace": "/w", "connection": "lite", "sql": "DELETE FROM t"})
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(
+        call,
+        "9fcb06c2842ff6e587b27d22a2c549586c3286b077cc8975035e82dbe93f9737"
+    );
+    let g = grant_json(&store, x.id());
+    assert_eq!((g["v"].clone(), g["call"].clone()), (json!(2), json!(call)));
+    let y = delete_at("b.db");
+    store.request(&y).unwrap();
+    store.decide(y.id(), Decision::Deny).unwrap();
+    let denial =
+        std::fs::read_to_string(store.dir().join("denied").join(format!("{}.json", y.id())))
+            .unwrap();
+    assert!(!denial.contains("call"), "{denial}");
+}
+
+#[test]
+fn changed_grant_finds_the_grant_for_the_old_target() {
+    let (_d, store) = store();
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let y = delete_at("b.db");
+    assert_eq!(store.changed_grant(&y).as_deref(), Some(x.id()));
+    assert_eq!(
+        store.changed_grant(&x),
+        None,
+        "its own grant is not a changed one"
+    );
+    let other_sql = ApprovalRequest::new(
+        Path::new(W),
+        "lite",
+        lite_at("b.db", ""),
+        "DELETE FROM u",
+        Writes::Yes,
+        vec![],
+    );
+    assert_eq!(store.changed_grant(&other_sql), None);
+    let other_conn = ApprovalRequest::new(
+        Path::new(W),
+        "lite2",
+        lite_at("b.db", ""),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    assert_eq!(store.changed_grant(&other_conn), None);
+    assert_eq!(store.claim(x.id()).unwrap(), Claim::Granted);
+    assert_eq!(store.changed_grant(&y), None, "a claimed grant is gone");
+}
+
+#[test]
+fn changed_grant_ignores_expired_callless_and_malformed_grants() {
+    let (d, store) = store();
+    let root = d.path().join("approvals");
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    let path = root.join("grants").join(format!("{}.json", x.id()));
+    let mut g = grant_json(&store, x.id());
+    g["at_ms"] = json!(ms(SystemTime::now() - Duration::from_secs(3601)));
+    std::fs::write(&path, g.to_string()).unwrap();
+    std::fs::write(root.join("grants").join("junk.json"), "{").unwrap();
+    std::fs::write(
+        root.join("grants").join(format!("{}.json", "f".repeat(64))),
+        "{",
+    )
+    .unwrap();
+    let y = delete_at("b.db");
+    assert_eq!(store.changed_grant(&y), None, "expired");
+    forge(&root, "grants", x.id(), SystemTime::now());
+    assert_eq!(store.changed_grant(&y), None, "a grant without a call");
+    g["at_ms"] = json!(ms(SystemTime::now()));
+    g["v"] = json!(1);
+    std::fs::write(&path, g.to_string()).unwrap();
+    assert_eq!(store.changed_grant(&y), None, "a v1 grant");
+}
+
+#[test]
+fn changed_grant_without_a_grants_folder_is_none() {
+    let (d, store) = store();
+    let x = delete_at("a.db");
+    store.request(&x).unwrap();
+    store.decide(x.id(), Decision::Approve).unwrap();
+    std::fs::remove_dir_all(d.path().join("approvals/grants")).unwrap();
+    assert_eq!(store.changed_grant(&delete_at("b.db")), None);
+}
+
+#[test]
+fn of_two_live_changed_grants_the_newest_is_named() {
+    let (_d, store) = store();
+    let (a, b) = (delete_at("a.db"), delete_at("b.db"));
+    for r in [&a, &b] {
+        store.request(r).unwrap();
+        store.decide(r.id(), Decision::Approve).unwrap();
+    }
+    let mut g = grant_json(&store, a.id());
+    g["at_ms"] = json!(ms(SystemTime::now() - Duration::from_secs(60)));
+    std::fs::write(
+        store.dir().join("grants").join(format!("{}.json", a.id())),
+        g.to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.changed_grant(&delete_at("c.db")).as_deref(),
+        Some(b.id())
+    );
+}
