@@ -18,7 +18,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::ConnectionConfig;
 use crate::session::{Unguarded, Writes};
 
-const VERSION: u32 = 1;
+/// The file format every store file carries; a file at any other version reads as absent.
+const VERSION: u32 = 2;
 /// The version of the id's hashed encoding, kept apart from the file format's.
 const ID_VERSION: u32 = 2;
 /// A grant or denial, and any stray file, is discarded after this long.

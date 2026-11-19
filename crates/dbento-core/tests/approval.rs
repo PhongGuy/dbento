@@ -68,7 +68,7 @@ fn forge_v(root: &Path, sub: &str, id: &str, at: SystemTime, v: u32) {
 }
 
 /// The store's current file format, as forged files must carry it.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 fn forge(root: &Path, sub: &str, id: &str, at: SystemTime) {
     forge_v(root, sub, id, at, FORMAT);
@@ -891,4 +891,113 @@ fn flush_keys_round_trips_through_a_request_file() {
         .join(format!("{}.json", r.id()));
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.contains(r#""unguarded":["flush_keys"]"#), "{text}");
+}
+
+#[test]
+fn a_v1_request_is_pruned_and_cannot_be_decided() {
+    let (d, store) = store();
+    let v1 = json!({"v": 1, "workspace": "/w", "connection": "lite", "sql": "DELETE FROM t"});
+    let id = hex(v1.to_string().as_bytes());
+    let body = json!({"v": 1, "id": id, "at_ms": ms(SystemTime::now()), "workspace": "/w",
+                      "connection": "lite", "sql": "DELETE FROM t", "writes": "yes", "unguarded": []});
+    let file = d.path().join("approvals/inbox").join(format!("{id}.json"));
+    std::fs::write(&file, body.to_string()).unwrap();
+    assert!(store.pending().is_empty());
+    assert!(!file.exists());
+    std::fs::write(&file, body.to_string()).unwrap();
+    assert!(matches!(
+        store.decide(&id, Decision::Approve),
+        Err(ApprovalError::NotPending { .. })
+    ));
+}
+
+#[test]
+fn a_v1_grant_never_claims() {
+    let (d, store) = store();
+    let id = insert().id().to_owned();
+    forge_v(
+        &d.path().join("approvals"),
+        "grants",
+        &id,
+        SystemTime::now(),
+        1,
+    );
+    assert_eq!(store.grant_state(&id), GrantState::Expired);
+    assert_eq!(store.claim(&id).unwrap(), Claim::None);
+}
+
+#[test]
+fn a_v1_denial_never_claims() {
+    let (d, store) = store();
+    let id = insert().id().to_owned();
+    forge_v(
+        &d.path().join("approvals"),
+        "denied",
+        &id,
+        SystemTime::now(),
+        1,
+    );
+    assert_eq!(store.claim(&id).unwrap(), Claim::None);
+}
+
+#[test]
+fn a_v1_verdict_reads_unknown() {
+    let (d, store) = store();
+    let r = insert().with_time(SystemTime::now() - Duration::from_secs(5));
+    let body = json!({"v": 1, "id": r.id(), "at_ms": ms(SystemTime::now()), "verdict": "approved"});
+    std::fs::write(
+        d.path()
+            .join("approvals/decided")
+            .join(format!("{}.json", r.id())),
+        body.to_string(),
+    )
+    .unwrap();
+    assert_eq!(store.verdict(&r), Verdict::Unknown);
+}
+
+#[test]
+fn a_v1_used_marker_does_not_read_ran() {
+    let (d, store) = store();
+    let id = insert().id().to_owned();
+    forge_v(
+        &d.path().join("approvals"),
+        "used",
+        &id,
+        SystemTime::now(),
+        1,
+    );
+    assert_eq!(store.grant_state(&id), GrantState::Expired);
+}
+
+#[test]
+fn a_request_file_keeps_the_binding_hashed() {
+    let (d, store) = store();
+    let pg = conn(
+        "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"db.internal\"\n\
+                   database = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_T_PGPW\" }\n\
+                   settings = { search_path = \"app\" }\n",
+        "pg",
+    );
+    let r = ApprovalRequest::new(
+        Path::new(W),
+        "pg",
+        ApprovalTarget::of(&pg),
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    store.request(&r).unwrap();
+    let text = std::fs::read_to_string(
+        d.path()
+            .join("approvals/inbox")
+            .join(format!("{}.json", r.id())),
+    )
+    .unwrap();
+    assert!(
+        text.contains(r#""target_display":"u@db.internal:5432/d""#),
+        "{text}"
+    );
+    for hidden in ["DBENTO_T_PGPW", "search_path", "session_binding", "secret"] {
+        assert!(!text.contains(hidden), "{hidden} in {text}");
+    }
 }

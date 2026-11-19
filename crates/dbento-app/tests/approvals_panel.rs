@@ -363,7 +363,7 @@ fn an_expired_reading_waits_one_tick_for_the_marker(cx: &mut TestAppContext) {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let marker = format!(r#"{{"v":1,"id":"{}","at_ms":{ms}}}"#, r.id());
+    let marker = format!(r#"{{"v":2,"id":"{}","at_ms":{ms}}}"#, r.id());
     std::fs::write(dir.join("used").join(format!("{}.json", r.id())), marker).unwrap();
     tick(cx);
     assert_eq!(
