@@ -2722,6 +2722,12 @@ impl Shell {
                         HistoryPanelEvent::Open { connection, sql } => {
                             this.open_history(connection, sql, window, cx)
                         }
+                        // Same path as the rail toggle, so the closed dock is saved alike.
+                        HistoryPanelEvent::Close => {
+                            if this.history_open {
+                                this.toggle_history(cx);
+                            }
+                        }
                     },
                 ));
                 self.history_panel = Some(panel);

@@ -334,11 +334,7 @@ impl Render for Inspector {
             theme.mono_font_family.clone(),
             theme.mono_font_size,
         );
-        let close = Button::new("inspector-close")
-            .ghost()
-            .xsmall()
-            .child(ui::icon(Icons::X, px(12.), muted))
-            .tooltip("Close")
+        let close = ui::panel_close("inspector-close", cx)
             .on_click(cx.listener(|_, _, _, cx| cx.emit(InspectorEvent::Close)));
         let (back, forward) = self.nav_live(cx);
         // Each tooltip names the effective key, or only the verb when the action is unbound.

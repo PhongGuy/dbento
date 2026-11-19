@@ -12,7 +12,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex};
 use gpui_kit::{
     AnyElement, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable as _,
     InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
-    StatefulInteractiveElement as _, Styled, TestSupportExt, Window, div, px,
+    StatefulInteractiveElement as _, Styled, TestSupportExt, Window, div,
 };
 
 use crate::confirm::sql_preview;
@@ -20,7 +20,7 @@ use crate::schema_tree::constraint_words;
 use crate::smooth_scroll::{self, Animator};
 use crate::status_bar::first_line;
 use crate::theme;
-use crate::ui::{self, Icons};
+use crate::ui;
 
 // The editor's accessibility name is its first line cut to this many chars, never the text.
 const EDITOR_LABEL_CHARS: usize = 200;
@@ -256,11 +256,7 @@ impl Render for DefinitionPanel {
                 }
             }))
         });
-        let close = ui::accessibility_id(Button::new("definition-close"), "definition-close")
-            .ghost()
-            .xsmall()
-            .child(ui::icon(Icons::X, px(12.), muted))
-            .tooltip("Close")
+        let close = ui::panel_close("definition-close", cx)
             .on_click(cx.listener(|_, _, _, cx| cx.emit(DefinitionPanelEvent::Close)));
         let header = ui::panel_header("Definition", cx)
             .gap_1()
