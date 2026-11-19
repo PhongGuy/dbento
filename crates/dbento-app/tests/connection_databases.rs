@@ -376,3 +376,68 @@ fn postgres_keeps_names_that_differ_in_case_apart(cx: &mut TestAppContext) {
     );
     assert!(present(cx, win, ("conn-databases-gone", 1usize)));
 }
+
+const PG_PARENT_HELP: &str = "The database the others are listed from.";
+const MS_PARENT_HELP: &str =
+    "The database the others are listed from. Leave empty to use the login's default.";
+
+fn database_help(cx: &mut TestAppContext, win: AnyWindowHandle) -> Option<String> {
+    label_of(cx, win, "conn-database-help")
+}
+
+#[gpui_kit::test]
+fn a_postgres_parent_says_database_is_where_the_others_are_listed_from(cx: &mut TestAppContext) {
+    let (win, _f) = open(cx, Some(("pg", pg())));
+    assert_eq!(
+        database_help(cx, win),
+        None,
+        "Only this one keeps Postgres without Database help"
+    );
+    choose(cx, win, DatabasesChoice::All);
+    assert_eq!(
+        database_help(cx, win).as_deref(),
+        Some(PG_PARENT_HELP),
+        "All explains Database"
+    );
+    choose(cx, win, DatabasesChoice::Choose);
+    assert_eq!(
+        database_help(cx, win).as_deref(),
+        Some(PG_PARENT_HELP),
+        "Choose explains Database"
+    );
+    choose(cx, win, DatabasesChoice::Only);
+    assert_eq!(
+        database_help(cx, win),
+        None,
+        "back on Only this one the line goes"
+    );
+}
+
+#[gpui_kit::test]
+fn a_sql_server_parent_swaps_its_database_help(cx: &mut TestAppContext) {
+    let (win, _f) = open(cx, Some(("ms", ms())));
+    let plain = Some("Leave empty to use the login's default database.");
+    assert_eq!(
+        database_help(cx, win).as_deref(),
+        plain,
+        "Only this one keeps the descriptor's help"
+    );
+    choose(cx, win, DatabasesChoice::All);
+    assert_eq!(
+        database_help(cx, win).as_deref(),
+        Some(MS_PARENT_HELP),
+        "All swaps the help, one line only"
+    );
+    choose(cx, win, DatabasesChoice::Choose);
+    assert_eq!(
+        database_help(cx, win).as_deref(),
+        Some(MS_PARENT_HELP),
+        "Choose swaps the help"
+    );
+    choose(cx, win, DatabasesChoice::Only);
+    assert_eq!(
+        database_help(cx, win).as_deref(),
+        plain,
+        "back on Only this one the descriptor's help returns"
+    );
+}
