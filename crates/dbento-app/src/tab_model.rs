@@ -214,6 +214,30 @@ pub enum SwitchBlocked {
     Running,
 }
 
+/// Why a tab's session no longer matches the workspace: its connection changed, or is gone.
+/// While set, the tab starts nothing new on that session; a run already going goes on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fence {
+    /// The connection's settings changed.
+    Changed {
+        /// The connection's new `read_only`.
+        now_read_only: bool,
+    },
+    /// The connection is no longer in the workspace.
+    Gone,
+}
+
+/// The chip's text for a fenced tab: why it no longer runs and what lifts the fence.
+pub fn fence_text(f: Fence) -> &'static str {
+    match f {
+        Fence::Changed {
+            now_read_only: true,
+        } => "Now read-only: Reconnect to run (rolls back any open transaction)",
+        Fence::Changed { .. } => "Settings changed: Reconnect to run",
+        Fence::Gone => "Not in dbento.toml: pick a connection to run",
+    }
+}
+
 /// What a connection pick says when the tab's statement still runs.
 pub const SWITCH_WHILE_RUNNING: &str = "Cancel the running statement before switching connection.";
 
@@ -341,6 +365,8 @@ pub struct TabModel {
     discard_start: usize,
     /// Closed for good: a run would open a session nothing waits to close.
     closed: bool,
+    /// Set while the session no longer matches the workspace; refuses new session work.
+    fence: Option<Fence>,
     history: Option<Entity<HistoryLog>>,
     /// When each statement of the current run first reported, for its history entry.
     started: HashMap<usize, SystemTime>,
@@ -518,6 +544,7 @@ impl TabModel {
             explain: None,
             discard_start: 0,
             closed: false,
+            fence: None,
             history: None,
             started: HashMap::new(),
             unrecorded: Vec::new(),
@@ -560,9 +587,9 @@ impl TabModel {
     }
 
     /// Opens the session ahead of the first run. A failure shows as `error()`, and the next
-    /// run retries. Does nothing once closed.
+    /// run retries. Does nothing once closed or while fenced.
     pub fn connect(&mut self, cx: &mut Context<Self>) {
-        if self.closed {
+        if self.closed || self.fence.is_some() {
             return;
         }
         if self.runner.is_none() {
@@ -603,6 +630,9 @@ impl TabModel {
         start: usize,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         let asked = self.discard.is_some();
         if !self.ask_discard(Discard::Explain(request.clone()), cx) {
             if !asked {
@@ -633,7 +663,7 @@ impl TabModel {
     /// in progress. False when the run may not start (closed, a commit holding edits, or a
     /// stale browse that reloads its table instead).
     fn begin_run(&mut self, text: &str, start: usize, cx: &mut Context<Self>) -> bool {
-        if self.closed || self.commit_holds_edits() {
+        if self.closed || self.fence.is_some() || self.commit_holds_edits() {
             return false;
         }
         // The session this tab dropped had switched database or settings; a run now would land
@@ -723,6 +753,10 @@ impl TabModel {
     /// Runs (`run`) the statement waiting on a confirmation, or cancels: the statement is
     /// skipped and the whole run stops, as Cancel does everywhere else.
     pub fn answer(&mut self, run: bool, cx: &mut Context<Self>) {
+        // Under the fence the question stays pending, so Cancel can still answer it.
+        if run && self.fence.is_some() {
+            return;
+        }
         let (Some(p), Some(r)) = (self.confirm.take(), &self.runner) else {
             return;
         };
@@ -847,6 +881,7 @@ impl TabModel {
         self.read_only_level = None;
         self.error = None;
         self.failure = None;
+        self.fence = None;
         self.start_runner(cx);
         if let Some(r) = &self.runner {
             r.send(Command::Connect);
@@ -894,6 +929,7 @@ impl TabModel {
         self.read_only_level = None;
         self.error = None;
         self.failure = None;
+        self.fence = None;
         self.start_runner(cx);
         if let Some(r) = &self.runner {
             r.send(Command::Connect);
@@ -1279,6 +1315,9 @@ impl TabModel {
         if self.closed {
             return Err("the tab is closed".to_owned());
         }
+        if let Some(f) = self.fence {
+            return Err(fence_text(f).to_owned());
+        }
         if self.running {
             return Err("wait for the run to finish".to_owned());
         }
@@ -1299,7 +1338,7 @@ impl TabModel {
     /// Shows the value of Redis key `key` in DB `db` as result 0, reading its first page now
     /// and later pages on `load_more_value`.
     pub fn open_key(&mut self, db: u32, key: Vec<u8>, cx: &mut Context<Self>) {
-        if self.closed {
+        if self.closed || self.fence.is_some() {
             return;
         }
         self.key_task = None;
@@ -1323,7 +1362,7 @@ impl TabModel {
 
     // Sends the key view's next read to the runner and lands its answer in result 0.
     fn read_value(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.closed || self.running {
+        if self.closed || self.fence.is_some() || self.running {
             return false;
         }
         let Some(read) = self.key_view.as_ref().and_then(KeyView::read) else {
@@ -1407,7 +1446,7 @@ impl TabModel {
 
     /// `load_target` whose first browse state carries `browse`'s filter and sort.
     pub fn load_target_browse(&mut self, rel: RelationRef, browse: Browse, cx: &mut Context<Self>) {
-        if self.closed {
+        if self.closed || self.fence.is_some() {
             return;
         }
         // A run drops a Target, so the target replaces the run as a new Run would: the run is
@@ -1530,6 +1569,9 @@ impl TabModel {
     /// filter with edits staged asks `Discard::Filter` instead. False without a browse state,
     /// on Err, or when it asks.
     pub fn apply_filter(&mut self, filter: &str, cx: &mut Context<Self>) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         let Some(state) = &self.browse else {
             return false;
         };
@@ -1546,6 +1588,9 @@ impl TabModel {
     /// `with_next_sort` then `set_browse`; a valid sort with edits staged asks
     /// `Discard::Sort` instead. False without a browse state, on Err, or when it asks.
     pub fn cycle_sort(&mut self, column: &str, cx: &mut Context<Self>) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         match self.browse.as_ref().map(|s| s.with_next_sort(column)) {
             Some(Ok(next)) => self.guard(Discard::Sort(column.to_owned()), next, cx),
             _ => false,
@@ -1555,6 +1600,9 @@ impl TabModel {
     /// The browse sort set outright, through the discard guard. False without a browse, on an
     /// unknown or unsortable column, when unchanged, or when it asks.
     pub fn set_sort(&mut self, sort: Option<Sort>, cx: &mut Context<Self>) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         let Some(state) = &self.browse else {
             return false;
         };
@@ -1633,6 +1681,9 @@ impl TabModel {
     /// `request_run` for text that begins at editor offset `start`; Discard runs it there.
     /// A restored table tab's first run loads its target instead, browsing as it was left.
     pub fn request_run_at(&mut self, sql: String, start: usize, cx: &mut Context<Self>) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         if let Some((rel, browse)) = self.deferred_target.take() {
             self.load_target_browse(rel, browse, cx);
             return true;
@@ -1651,6 +1702,9 @@ impl TabModel {
 
     /// `clear_browse` at once (true) with nothing staged; otherwise asks (false).
     pub fn request_clear_browse(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         if self.ask_discard(Discard::Edit, cx) {
             self.clear_browse(cx);
             true
@@ -1666,7 +1720,7 @@ impl TabModel {
 
     /// Answers question `id`. Discard performs the action and, once it took effect, clears
     /// the edits, history and banner; Keep drops the question. Returns the action; None for
-    /// a stale id.
+    /// a stale id, or a Discard refused under the fence.
     pub fn answer_discard(
         &mut self,
         id: u64,
@@ -1674,6 +1728,10 @@ impl TabModel {
         cx: &mut Context<Self>,
     ) -> Option<Discard> {
         if self.discard.as_ref().map(|q| q.id) != Some(id) {
+            return None;
+        }
+        // Discard would drop the edits for an action the fence refuses, so the question waits.
+        if discard && self.fence.is_some() {
             return None;
         }
         let action = self.discard.take()?.action;
@@ -2103,7 +2161,7 @@ impl TabModel {
     /// behind `apply_prompt`; a rejected batch sets the banner and row marks. A parked stream
     /// is stopped first (`Stopping`). False when `can_save` is not.
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.can_save() {
+        if self.fence.is_some() || !self.can_save() {
             return false;
         }
         self.banner = None;
@@ -2161,6 +2219,10 @@ impl TabModel {
 
     /// Commits the open transaction; on success clears the edits and runs the browse again.
     pub fn commit(&mut self, cx: &mut Context<Self>) {
+        // The prompt stays, so Roll back still ends the transaction.
+        if self.fence.is_some() {
+            return;
+        }
         self.finish(true, cx);
     }
 
@@ -2180,9 +2242,10 @@ impl TabModel {
     }
 
     /// Unstages the conflicting rows (one undo step), clears banner and marks, then `save`s
-    /// the rest through the normal prompt. False without conflicts or while saving.
+    /// the rest through the normal prompt. False without conflicts, while saving or fenced.
     pub fn drop_conflicts(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.conflicts.is_empty() || self.save != SaveState::Idle {
+        // Its save would be refused, so nothing is unstaged under the fence.
+        if self.fence.is_some() || self.conflicts.is_empty() || self.save != SaveState::Idle {
             return false;
         }
         // Conflicts always hold staged rows, so equal counts mean nothing else would be saved.
@@ -2221,7 +2284,8 @@ impl TabModel {
     /// Reads the conflicting rows by key on a fresh session; staged edits stay. False unless
     /// allowed.
     pub fn reload_conflicts(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.can_reload_conflicts() {
+        // The reload opens its own session from the tab's spec, which the fence no longer trusts.
+        if self.fence.is_some() || !self.can_reload_conflicts() {
             return false;
         }
         let Some(target) = self.browse.as_ref().map(|b| b.target().clone()) else {
@@ -2436,6 +2500,11 @@ impl TabModel {
     }
 
     fn start_apply(&mut self, cx: &mut Context<Self>) {
+        // A save stopping its stream when the fence landed ends here, its edits still staged.
+        if self.fence.is_some() {
+            self.save = SaveState::Idle;
+            return;
+        }
         let Some(state) = &self.browse else {
             self.save = SaveState::Idle;
             return;
@@ -2680,6 +2749,13 @@ impl TabModel {
             return;
         }
         self.target_queued = false;
+        // A fence that landed while the target waited drops it rather than send it.
+        if self.fence.is_some() {
+            self.target_pending = None;
+            self.target_filter = None;
+            self.target_sort = None;
+            return;
+        }
         if let (Some(rel), Some(r)) = (&self.target_pending, &self.runner) {
             r.send(Command::Target { rel: rel.clone() });
         }
@@ -2687,7 +2763,9 @@ impl TabModel {
 
     /// Starts the fresh load a stale browse with nothing staged is due, once nothing runs.
     pub fn flush_stale(&mut self, cx: &mut Context<Self>) {
+        // Under the fence the browse stays stale, so the session after Reconnect reloads it.
         if self.stale
+            && self.fence.is_none()
             && self.edits.is_empty()
             && !self.running
             && self.save == SaveState::Idle
@@ -2758,6 +2836,19 @@ impl TabModel {
     /// Whether the model was closed; it starts nothing new.
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// Fences the tab off its session (`Some`) or lifts the fence (`None`).
+    pub fn set_fence(&mut self, fence: Option<Fence>, cx: &mut Context<Self>) {
+        if self.fence != fence {
+            self.fence = fence;
+            cx.notify();
+        }
+    }
+
+    /// Why the tab's session no longer matches the workspace, if it does not.
+    pub fn fence(&self) -> Option<Fence> {
+        self.fence
     }
 
     /// The parked statement's script index.
@@ -2870,6 +2961,9 @@ impl TabModel {
     /// row limit more; result 0's SQL, source, staged edits and undo steps stay. A Skip emits
     /// `BrowseEvent::Skipped { rows: n }`. False when `continuation()` is None.
     pub fn continue_browse(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.fence.is_some() {
+            return false;
+        }
         // A continuation implies the browse, the row limit and the expired cap unpacked here.
         let (Some(how), Some(state), Some(limit), Some(cap), Some(expired)) = (
             self.continuation(),
@@ -2960,7 +3054,7 @@ impl TabModel {
     /// Sets the limit to the next `ROW_LIMITS` step and re-runs the run text with `run_at`
     /// from the editor offset it started at. False unless `can_run_again`.
     pub fn run_again(&mut self, cx: &mut Context<Self>) -> bool {
-        let ready = self.can_run_again() && !self.commit_holds_edits();
+        let ready = self.can_run_again() && self.fence.is_none() && !self.commit_holds_edits();
         let Some((_, text)) = self.run_text.clone().filter(|_| ready) else {
             return false;
         };

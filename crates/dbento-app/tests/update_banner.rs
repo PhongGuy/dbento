@@ -270,3 +270,24 @@ fn a_long_failure_wraps_in_settings_beside_a_default_size_button(cx: &mut TestAp
         "Check now is not the section's size"
     );
 }
+
+#[gpui_kit::test]
+fn a_narrow_window_wraps_the_banner_and_a_wide_one_keeps_one_row(cx: &mut TestAppContext) {
+    let o = open(cx, None);
+    for (width, one_row) in [(1280., true), (560., false)] {
+        cx.simulate_window_resize(o.win, size(px(width), px(800.)));
+        cx.run_until_parked();
+        let row = bounds_of(cx, o.win, "update-banner");
+        let last = bounds_of(cx, o.win, "update-skip");
+        assert!(
+            row.contains(&last.origin) && row.contains(&last.bottom_right()),
+            "at {width} px Skip sits inside the row: {last:?} in {row:?}"
+        );
+        assert_eq!(
+            row.size.height == px(32.),
+            one_row,
+            "at {width} px the row is {:?} high",
+            row.size.height
+        );
+    }
+}

@@ -24,7 +24,10 @@ pub fn banner(shell: &Entity<Shell>, _window: &mut Window, cx: &mut App) -> Opti
     let row = h_flex()
         .id("update-banner")
         .test_support()
-        .h(px(32.))
+        // A narrow window wraps the row onto more lines instead of clipping its actions.
+        .min_h(px(32.))
+        .py_1()
+        .flex_wrap()
         .flex_none()
         .gap_2()
         .px_3()
@@ -98,10 +101,14 @@ pub fn banner(shell: &Entity<Shell>, _window: &mut Window, cx: &mut App) -> Opti
     Some(row.into_any_element())
 }
 
-fn label(id: &'static str, says: String, color: Hsla) -> AnyElement {
+/// A banner text with its own id, read out by its text.
+pub(crate) fn label(id: &'static str, says: String, color: Hsla) -> AnyElement {
     let says = SharedString::from(says);
+    // The text may shrink below its one-line width, so a narrow row wraps it.
     div()
         .id(id)
+        .min_w_0()
+        .flex_shrink(1.)
         .text_color(color)
         .role(Role::Label)
         .aria_label(says.clone())

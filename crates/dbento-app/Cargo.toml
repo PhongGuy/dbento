@@ -30,7 +30,7 @@ dynamodb = ["dbento-core/dynamodb"]
 bench = ["dep:dbento-bench"]
 
 [dependencies]
-dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain", "update"] }
+dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain", "update", "watch"] }
 # Only the bench mode uses it, for its targets workspace and memory reading.
 dbento-bench = { path = "../dbento-bench", optional = true }
 gpui-kit.workspace = true
@@ -46,6 +46,8 @@ serde_json.workspace = true
 # Same version gpui links, so `RgbaImage` is the type `WindowOptions.icon` takes.
 image = { version = "=0.25.10", default-features = false, features = ["png", "gif", "jpeg", "webp", "bmp"] }
 tempfile.workspace = true
+# Line diffs for comparing a saved query with its changed file.
+similar.workspace = true
 # Unused directly: turns on `debug-embed` for the kit's icon set, so debug builds carry
 # their SVGs instead of reading them from the cargo registry at runtime.
 rust-embed.workspace = true

@@ -47,6 +47,8 @@ fn main() {
             gpui_kit::init(cx);
             dbento_app::theme::install(cx);
             dbento_app::tokio_bridge::init(cx);
+            // The real app follows outside edits to its workspace; test processes never ask to.
+            dbento_app::workspace_reload::enable_watching(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

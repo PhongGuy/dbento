@@ -56,6 +56,7 @@ flate2 = "1.1.11"
 self-replace = "=1.5.1"
 wiremock = "0.6.5"
 minisign = "=0.10.0"
+notify-debouncer-full = "=0.7.0"
 sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] }
 tokio-postgres-rustls = "0.14.0"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
@@ -82,6 +83,7 @@ lsp-types = { version = "=0.97.0", features = ["proposed"] }
 rpassword = "7.5.4"
 assert_cmd = "2.2.2"
 insta = { version = "1.49.0", features = ["json"] }
+similar = "2.7.0"
 sha2 = "0.11.0"
 gpui-kit = { version = "=0.10.0", features = ["tree-sitter", "tree-sitter-bash", "tree-sitter-javascript", "tree-sitter-sql"] }
 async-channel = "2.5.0"

@@ -20,14 +20,15 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, ResizableState, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, ResizableState, Sizable as _, WindowExt as _, h_flex,
     resizable_panel, v_resizable,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EntityId, EventEmitter, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, Role, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Task, TestSupportExt, WeakEntity, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Entity, EntityId, EventEmitter, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
+    div, px,
 };
 
 use crate::browse::{BrowseEvent, unavailable_text};
@@ -49,8 +50,9 @@ use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, 
 use crate::run_target::run_range;
 use crate::sidebar::{Sidebar, color_name, tag_color};
 use crate::status_bar::run_elapsed;
-use crate::tab_model::{Discard, ROW_LIMITS, TabModel};
-use crate::{staged, theme, ui};
+use crate::tab_model::{Discard, Fence, ROW_LIMITS, TabModel, fence_text};
+use crate::workspace_reload::DiskBanner;
+use crate::{staged, theme, ui, update_banner};
 
 // A restored editor height leaves this much of the window for the results and the chrome
 // around them, so a height saved on a taller screen never squeezes the results shut.
@@ -512,6 +514,19 @@ pub enum ConnState {
     Gone,
 }
 
+impl ConnState {
+    // The fence the tab model holds for this state; a current session runs unfenced.
+    fn fence(self) -> Option<Fence> {
+        match self {
+            ConnState::Current => None,
+            ConnState::Changed { still_read_write } => Some(Fence::Changed {
+                now_read_only: still_read_write,
+            }),
+            ConnState::Gone => Some(Fence::Gone),
+        }
+    }
+}
+
 /// What a query tab asks of the shell.
 pub enum QueryTabEvent {
     /// The user asked to reconnect on the workspace's current settings.
@@ -524,6 +539,14 @@ pub enum QueryTabEvent {
     Retry,
     /// The connect error asked to edit the tab's connection.
     EditConnection,
+    /// The disk banner asked to take the file's text.
+    DiskReload,
+    /// The disk banner asked to keep the tab's text.
+    DiskKeep,
+    /// The disk banner asked to compare the tab's text with the file's.
+    DiskCompare,
+    /// The disk banner asked to close the tab whose file is gone.
+    DiskClose,
 }
 
 /// One query tab over a connection.
@@ -553,6 +576,10 @@ pub struct QueryTab {
     file: Option<PathBuf>,
     // The file's text when this tab last read or wrote it, so a save can see an outside change.
     disk: Option<String>,
+    // What an outside change to the file asks of the user, and the banner they last kept, which
+    // stays hidden while reads keep finding it.
+    disk_banner: Option<DiskBanner>,
+    dismissed: Option<DiskBanner>,
     // Where this tab's edited text is kept; None for a tab that never writes a draft.
     draft: Option<DraftSlot>,
     // The pending debounce; replacing or dropping it cancels the write it would make.
@@ -711,6 +738,8 @@ impl QueryTab {
             baseline: String::new(),
             file: None,
             disk: None,
+            disk_banner: None,
+            dismissed: None,
             draft,
             draft_task: None,
             split: cx.new(|_| ResizableState::default()),
@@ -787,6 +816,12 @@ impl QueryTab {
         self.schedule_draft(cx);
     }
 
+    /// Whether Run and Run all are live: the tab is open and its session is not fenced.
+    pub fn runnable(&self, cx: &gpui_kit::App) -> bool {
+        let m = self.model.read(cx);
+        !m.closed() && m.fence().is_none()
+    }
+
     /// The editor's text.
     pub fn sql(&self, cx: &gpui_kit::App) -> String {
         self.editor.read(cx).value().to_string()
@@ -812,11 +847,19 @@ impl QueryTab {
     }
 
     /// Ties the tab to the saved query `rel`, whose file now holds `disk`, and takes the
-    /// current text as saved.
+    /// current text as saved; any disk banner and its dismissal are cleared.
     pub fn set_file(&mut self, rel: PathBuf, disk: String, cx: &mut Context<Self>) {
         self.file = Some(rel);
         self.disk = Some(disk);
+        self.clear_disk_banner();
         self.mark_saved(cx);
+        cx.notify();
+    }
+
+    // A fresh file binding leaves no outside change to report and no kept one to hide.
+    fn clear_disk_banner(&mut self) {
+        self.disk_banner = None;
+        self.dismissed = None;
     }
 
     /// The file's text when this tab last read or wrote it.
@@ -824,11 +867,58 @@ impl QueryTab {
         self.disk.as_deref()
     }
 
+    /// Whether the editor's text differs from the baseline at all, whitespace included.
+    pub fn has_local_edits(&self, cx: &App) -> bool {
+        self.sql(cx) != self.baseline
+    }
+
+    /// The banner an outside change to the file shows, if any.
+    pub fn disk_banner(&self) -> Option<&DiskBanner> {
+        self.disk_banner.as_ref()
+    }
+
+    /// Shows `banner`, unless it is the one the user last kept; None hides the banner and
+    /// forgets that dismissal, as does any other banner.
+    pub fn set_disk_banner(&mut self, banner: Option<DiskBanner>, cx: &mut Context<Self>) {
+        if banner.is_some() && banner == self.dismissed {
+            self.disk_banner = None;
+        } else {
+            self.dismissed = None;
+            self.disk_banner = banner;
+        }
+        cx.notify();
+    }
+
+    /// Keeps the tab's text over the banner's news: a changed file's text becomes the known
+    /// one, a deleted file is forgotten, and a read failure is hidden until another read.
+    pub fn keep_mine(&mut self, cx: &mut Context<Self>) {
+        match self.disk_banner.take() {
+            Some(DiskBanner::Changed { disk }) => self.disk = Some(disk),
+            Some(DiskBanner::Deleted) => self.disk = None,
+            failed @ Some(DiskBanner::Unreadable { .. }) => self.dismissed = failed,
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// Moves the tab's file from under folder `from` to under `to`; false, and nothing
+    /// changes, when the file is not under `from`.
+    pub fn rebase_file(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) -> bool {
+        let Some(rest) = self.file.as_deref().and_then(|f| f.strip_prefix(from).ok()) else {
+            return false;
+        };
+        self.file = Some(to.join(rest));
+        self.schedule_draft(cx);
+        cx.notify();
+        true
+    }
+
     /// Unties the tab from its saved query, which another tab now owns: it keeps its text as
     /// an edited tab with an empty baseline, and its draft follows.
     pub fn unbind_file(&mut self, cx: &mut Context<Self>) {
         self.file = None;
         self.disk = None;
+        self.clear_disk_banner();
         self.baseline.clear();
         self.schedule_draft(cx);
         cx.notify();
@@ -1024,6 +1114,8 @@ impl QueryTab {
                 state
             }
         };
+        let fence = self.state.fence();
+        self.model.update(cx, |m, cx| m.set_fence(fence, cx));
         cx.notify();
     }
 
@@ -1444,14 +1536,7 @@ impl QueryTab {
     // The note that the session no longer matches dbento.toml, with Reconnect when the
     // connection still exists; None while the session is current.
     fn chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let text = match self.state {
-            ConnState::Current => return None,
-            ConnState::Changed {
-                still_read_write: true,
-            } => "Settings changed: still read-write until you reconnect",
-            ConnState::Changed { .. } => "Settings changed",
-            ConnState::Gone => "Not in dbento.toml",
-        };
+        let text = fence_text(self.state.fence()?);
         let warning = cx.theme().warning;
         let reconnect = matches!(self.state, ConnState::Changed { .. }).then(|| {
             Button::new("conn-reconnect")
@@ -1470,6 +1555,7 @@ impl QueryTab {
                 .child(
                     ui::chip_base(cx)
                         .id("conn-chip")
+                        .role(Role::Status)
                         .aria_label(text)
                         .test_support()
                         .flex_shrink(1.)
@@ -1477,7 +1563,8 @@ impl QueryTab {
                         .overflow_hidden()
                         .border_color(warning)
                         .text_color(warning)
-                        .child(div().min_w_0().truncate().child(text)),
+                        .child(div().min_w_0().truncate().child(text))
+                        .tooltip(move |window, cx| theme::tooltip(text, window, cx)),
                 )
                 .children(reconnect),
         )
@@ -1485,6 +1572,62 @@ impl QueryTab {
 }
 
 impl QueryTab {
+    // The row under the toolbar saying the file changed, went or cannot be read, with the
+    // choices each case offers; the shell acts on them.
+    fn disk_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let banner = self.disk_banner.as_ref()?;
+        let theme = cx.theme();
+        let (says, color) = match banner {
+            DiskBanner::Changed { .. } => ("Changed on disk".to_owned(), theme.foreground),
+            DiskBanner::Deleted => ("Deleted on disk".to_owned(), theme.foreground),
+            DiskBanner::Unreadable { reason } => (
+                format!("Cannot read the file on disk: {reason}"),
+                theme.danger,
+            ),
+        };
+        let changed = matches!(banner, DiskBanner::Changed { .. });
+        let deleted = matches!(banner, DiskBanner::Deleted);
+        let button = |id: &'static str, text: &'static str, event: fn() -> QueryTabEvent| {
+            ui::secondary(Button::new(id))
+                .small()
+                .label(text)
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(event())))
+        };
+        let row = h_flex()
+            .id("disk-banner")
+            .role(Role::Status)
+            .test_support()
+            // A narrow window wraps the row onto more lines instead of clipping its actions.
+            .min_h(px(32.))
+            .py_1()
+            .flex_wrap()
+            .flex_none()
+            .gap_2()
+            .px_3()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.secondary)
+            .text_sm()
+            .child(update_banner::label("disk-banner-text", says, color))
+            .when(changed, |d| {
+                d.child(button("disk-reload", "Reload", || {
+                    QueryTabEvent::DiskReload
+                }))
+                .child(button("disk-compare", "Compare", || {
+                    QueryTabEvent::DiskCompare
+                }))
+            })
+            .child(button(
+                "disk-keep",
+                if changed { "Keep mine" } else { "Keep" },
+                || QueryTabEvent::DiskKeep,
+            ))
+            .when(deleted, |d| {
+                d.child(button("disk-close", "Close", || QueryTabEvent::DiskClose))
+            });
+        Some(row.into_any_element())
+    }
+
     // The chip naming the tab's connection. It opens a picker over the current dbento.toml's
     // connections, except on a browsing or closed tab, which cannot switch.
     fn connection_chip(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
@@ -1602,6 +1745,8 @@ impl Render for QueryTab {
             || m.target_pending().is_some();
         // A closed tab only waits for its session to go, so nothing here may act.
         let closed = m.closed();
+        // A fenced session refuses runs too, so Run's halves read as unavailable then.
+        let no_run = !self.runnable(cx);
         // Explain shows only where the session's engine has it; its keys still explain why not.
         let explain = self.session_conn.engine().capabilities().explain;
         let format = formats(self.session_conn.engine());
@@ -1744,7 +1889,7 @@ impl Render for QueryTab {
                                 .when(labelled, |b| b.label("Run"))
                                 .accessibility_label("Run")
                                 .children(run_keys)
-                                .disabled(closed)
+                                .disabled(no_run)
                                 .on_click(cx.listener(|this, _, _, cx| this.run_statement(cx))),
                         )
                         .child(
@@ -1752,9 +1897,9 @@ impl Render for QueryTab {
                                 .w(px(1.))
                                 .h(px(28.))
                                 .bg(primary)
-                                // A closed tab's disabled halves draw primary at 15 %, so the
-                                // divider fades with them.
-                                .when(closed, |d| d.opacity(0.15))
+                                // Disabled halves draw primary at 15 %, so the divider fades
+                                // with them.
+                                .when(no_run, |d| d.opacity(0.15))
                                 .child(div().size_full().bg(primary_fg.opacity(0.4))),
                         )
                         .child(
@@ -1769,7 +1914,7 @@ impl Render for QueryTab {
                                 .when(labelled, |b| b.label("All"))
                                 .accessibility_label("Run all")
                                 .tooltip_with_action("Run all", &RunAll, Some("QueryTab"))
-                                .disabled(closed)
+                                .disabled(no_run)
                                 .on_click(cx.listener(|this, _, _, cx| this.run_all(cx))),
                         ),
                 )
@@ -1963,6 +2108,7 @@ impl Render for QueryTab {
             .min_h_0()
             .relative()
             .child(toolbar)
+            .children(self.disk_row(cx))
             .when_some(key, |d, (header, error, more)| {
                 d.child(key_pane(header, error, more, self.results.clone(), cx))
             })

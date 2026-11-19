@@ -33,6 +33,8 @@ impl PilotApp for Dbento {
         gpui_kit::init(cx);
         dbento_app::theme::install(cx);
         dbento_app::tokio_bridge::init(cx);
+        // Like the real binary, a piloted run follows outside edits to its workspace.
+        dbento_app::workspace_reload::enable_watching(cx);
     }
 
     fn open(&self, launch: &Launch, cx: &mut App) -> anyhow::Result<()> {

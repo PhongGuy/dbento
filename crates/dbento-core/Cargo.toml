@@ -60,6 +60,7 @@ minisign-verify = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
+notify-debouncer-full = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -107,6 +108,8 @@ update = [
     "dep:flate2",
     "dep:self-replace",
 ]
+# The workspace folder watcher: debounced notify events turned into a reload signal.
+watch = ["dep:notify-debouncer-full"]
 
 [dev-dependencies]
 tempfile.workspace = true

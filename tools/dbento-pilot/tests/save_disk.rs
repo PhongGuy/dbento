@@ -75,8 +75,19 @@ async fn saving_over_a_file_changed_on_disk_asks_then_overwrites() {
     })
     .await;
 
+    // The edit goes in before the outside write, so a watcher reload shows the banner
+    // instead of taking the new text, and the save still finds a conflict.
+    pilot
+        .ok("click", json!({ "target": { "id": ["editor"] } }))
+        .await;
+    pilot
+        .ok(
+            "type",
+            json!({ "target": { "id": ["editor"] }, "text": " -- a" }),
+        )
+        .await;
     std::fs::write(&file, "SELECT 9").unwrap();
-    save(&pilot, " -- a").await;
+    key(&pilot, "ctrl-s").await;
     until(&pilot, "the conflict question", |t| {
         find_node(t, "save-conflict-cancel").is_some()
             && find_node(t, "save-conflict-reload").is_some()

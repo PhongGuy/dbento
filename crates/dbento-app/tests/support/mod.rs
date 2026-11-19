@@ -482,6 +482,31 @@ pub fn reload(cx: &mut TestAppContext, win: AnyWindowHandle) {
     right_click_empty_in(cx, win);
     click_id(cx, win, "menu-reload");
 }
+/// Runs the shell's reload path as a watcher event would, and lets it finish.
+pub fn files_changed(cx: &mut TestAppContext, o: &Opened) {
+    let shell = o.shell.clone();
+    cx.update_window(o.win, |_, w, cx| {
+        shell.update(cx, |s, cx| s.workspace_files_changed(w, cx))
+    })
+    .unwrap();
+    settle_reload(cx, &o.shell);
+}
+/// Lets a running reload finish, stepping the clock past its retry wait.
+pub fn settle_reload(cx: &mut TestAppContext, shell: &gpui_kit::Entity<dbento_app::shell::Shell>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if !shell.read_with(cx, |s, _| s.reloading()) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reload never finished"
+        );
+        cx.executor()
+            .advance_clock(dbento_app::workspace_reload::TOML_RETRY);
+    }
+}
 /// Moves the pointer onto `id` and lets the app settle.
 pub fn hover(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) {
     let id = id.into();
@@ -761,4 +786,37 @@ impl Opened {
             "{id} asked nothing"
         );
     }
+}
+/// Writes `queries/<conn>/a.sql` holding `text`, opens it from the palette in a new tab and
+/// returns its path.
+pub fn open_saved(
+    cx: &mut TestAppContext,
+    o: &Opened,
+    conn: &str,
+    text: &str,
+) -> std::path::PathBuf {
+    let file = o.fx.dir.path().join(format!("queries/{conn}/a.sql"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, text).unwrap();
+    let e = o
+        .shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).editor().clone());
+    cx.update_window(o.win, |_, w, cx| {
+        e.update(cx, |e, cx| e.focus(w, cx));
+        w.press("ctrl-o", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let row = format!("{conn}/a.sql");
+    wait_real(cx, "the list", |cx| {
+        palette_rows(cx, o.win).iter().any(|r| r.contains(&row))
+    });
+    palette_pick(cx, o.win, &row);
+    assert_eq!(tab_sql(cx, o), text, "the saved query opened");
+    file
+}
+/// The active tab's editor text.
+pub fn tab_sql(cx: &mut TestAppContext, o: &Opened) -> String {
+    o.shell
+        .read_with(cx, |s, cx| s.tab().unwrap().read(cx).sql(cx))
 }

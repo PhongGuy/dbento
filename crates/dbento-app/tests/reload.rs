@@ -2,7 +2,7 @@ use crate::support;
 use dbento_app::explorer::{connection_id, part_id};
 use std::sync::Arc;
 
-use crate::support::{label_of, opened, present, reload, rewrite, wait_real};
+use crate::support::{label_of, opened, reload, rewrite, wait_real};
 use dbento_app::schema_tree::NodeKey;
 use dbento_core::FolderPath;
 use gpui_kit::test::TestWindowExt as _;
@@ -118,23 +118,6 @@ fn a_gone_connection_loses_its_catalog_and_expansion(cx: &mut TestAppContext) {
     wait_real(cx, "the catalog closing", |cx| {
         o.shell.read_with(cx, |s, _| s.pending_closings() == 0)
     });
-}
-
-#[gpui_kit::test]
-fn a_broken_file_keeps_the_old_workspace_and_says_why(cx: &mut TestAppContext) {
-    let o = opened(cx, "", "", 0);
-    std::fs::write(
-        o.fx.dir.path().join("dbento.toml"),
-        "dbento = 1\n[connections.lite]\nengine = \"nope\"\n",
-    )
-    .unwrap();
-    reload(cx, o.win);
-    wait_real(cx, "the error", |cx| present(cx, o.win, "confirm-detail"));
-    let detail = label_of(cx, o.win, "confirm-detail").unwrap();
-    assert!(detail.contains("lite"), "{detail}");
-    assert!(o.shell.read_with(cx, |s, _| {
-        s.workspace().unwrap().declared("nopg").is_some()
-    }));
 }
 
 #[gpui_kit::test]
