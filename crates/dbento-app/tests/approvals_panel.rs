@@ -461,3 +461,19 @@ fn each_pending_row_shows_its_own_target(cx: &mut TestAppContext) {
         Some("calm \u{B7} d.db \u{B7} INSERT INTO t VALUES (1)")
     );
 }
+
+#[gpui_kit::test]
+fn the_approvals_panel_is_titled_and_closes_from_its_own_x(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    click_id(cx, s.win, "rail-approvals");
+    assert!(present(cx, s.win, "approvals-panel"));
+    assert_eq!(
+        label_of(cx, s.win, "approvals-title").map(|l| l.to_lowercase()),
+        Some("approvals".to_owned())
+    );
+    click_id(cx, s.win, "approvals-close");
+    assert!(!present(cx, s.win, "approvals-panel"));
+    // The rail opens it again: the X closed the dock, it did not break it.
+    click_id(cx, s.win, "rail-approvals");
+    assert!(present(cx, s.win, "approvals-panel"));
+}

@@ -47,7 +47,7 @@ use crate::approvals::{
     APPROVAL_POLL, Answer, answered_elsewhere_notice, approved_notice, ask_approval, next_pending,
     pending_requests, still_pending, verdict_of,
 };
-use crate::approvals_panel::{ApprovalsPanel, Decided, Outcome};
+use crate::approvals_panel::{ApprovalsPanel, ApprovalsPanelEvent, Decided, Outcome};
 use crate::browse::BrowseEvent;
 use crate::catalog::CatalogClosing;
 use crate::confirm::{self, Ask, Choice, TextAsk, ask, ask_text};
@@ -442,6 +442,8 @@ pub struct Shell {
     definition_panel: Entity<DefinitionPanel>,
     definition_open: bool,
     _definition_events: Subscription,
+    // Listens for the approvals panel's close X.
+    _approvals_panel_events: Subscription,
     // The approvals poll, alive as long as the window.
     _approvals: Task<()>,
     _approval_asks: Task<()>,
@@ -550,6 +552,15 @@ impl Shell {
                 DefinitionPanelEvent::Close => this.set_dock(false, false, false, false, cx),
             },
         );
+        let approvals_panel = cx.new(ApprovalsPanel::new);
+        // Same path as the rail toggle, so the X and the rail close the dock alike.
+        let approvals_events = cx.subscribe(&approvals_panel, |this, _, event, cx| match event {
+            ApprovalsPanelEvent::Close => {
+                if this.approvals_open {
+                    this.toggle_approvals(cx);
+                }
+            }
+        });
         // A walk ends on releasing Ctrl, and on any keystroke other than its own steps.
         let walk_keys = cx.observe_keystrokes(|this: &mut Shell, e, _, _| {
             let step = e.action.as_ref().is_some_and(|a| {
@@ -614,7 +625,8 @@ impl Shell {
             connection_test: None,
             approvals_waiting: Vec::new(),
             approvals_decided: Vec::new(),
-            approvals_panel: cx.new(ApprovalsPanel::new),
+            approvals_panel,
+            _approvals_panel_events: approvals_events,
             approvals_open: false,
             definition_panel,
             definition_open: false,
