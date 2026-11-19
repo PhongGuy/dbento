@@ -85,7 +85,9 @@ use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 use crate::update_banner;
 use crate::updates::{self, UpdatesEvent};
-use crate::workspace_reload::{self, DiskRead, TomlVerdict, judge_toml};
+use crate::workspace_reload::{
+    self, DiskBanner, DiskRead, TabDisk, TabVerdict, TomlVerdict, judge_tab, judge_toml,
+};
 
 /// The database a Postgres Test opens when the form names none: every server has it.
 const TEST_DATABASE_POSTGRES: &str = crate::connection_dialog::POSTGRES_DATABASE;
@@ -108,6 +110,18 @@ async fn listed_within<E>(
 ) -> Option<Vec<String>> {
     let listed = tokio::time::timeout(cap, list).await.ok()?;
     Some(listed.unwrap_or_default())
+}
+
+// One open saved query's read in a reload pass: the tab, what it knew then, what was read.
+type TabRead = (WeakEntity<QueryTab>, TabDisk, DiskRead);
+
+// What `tab` knows of its saved query now; None for a tab with no file.
+fn tab_disk(tab: &Entity<QueryTab>, cx: &App) -> Option<TabDisk> {
+    let t = tab.read(cx);
+    Some(TabDisk {
+        file: t.file()?.to_path_buf(),
+        disk: t.disk().map(str::to_owned),
+    })
 }
 
 // A failed save of the app state is logged, never fatal.
@@ -1500,11 +1514,15 @@ impl Shell {
                 let name = tab.read(cx).model().read(cx).spec().connection.clone();
                 this.edit_connection(&name, window, cx);
             }
-            // Nothing sets a disk banner yet, so its choices have nothing to act on.
-            QueryTabEvent::DiskReload
-            | QueryTabEvent::DiskKeep
-            | QueryTabEvent::DiskCompare
-            | QueryTabEvent::DiskClose => {}
+            QueryTabEvent::DiskReload => this.take_disk_text(tab, window, cx),
+            QueryTabEvent::DiskKeep => tab.update(cx, |t, cx| t.keep_mine(cx)),
+            QueryTabEvent::DiskClose => {
+                if let Some(ix) = this.tabs.iter().position(|t| t == tab) {
+                    this.close_tab_at(ix, window, cx);
+                }
+            }
+            // Compare has no dialog yet, so it does nothing.
+            QueryTabEvent::DiskCompare => {}
         });
         // A filter, a sort or leaving the browse changes what the session restores.
         let browse = cx.subscribe(&model, |this, _, e: &BrowseEvent, cx| {
@@ -2918,32 +2936,115 @@ impl Shell {
         self.watch = Some((watcher, pump));
     }
 
-    // Reads dbento.toml on a background thread, then judges the read against the workspace
-    // installed when it began.
+    // Reads dbento.toml and every open saved query's file on a background thread, then judges
+    // the reads against the workspace and the tabs as they were when it began.
     fn read_workspace_files(&mut self, retried: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ws) = self.workspace.clone() else {
             self.reload_running = false;
             return;
         };
         let (generation, snapshot) = (self.watch_generation, ws.source_text().to_owned());
-        let file = ws.dir().join("dbento.toml");
-        let read = cx.background_spawn(async move { workspace_reload::read_disk(&file) });
+        let tabs: Vec<_> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab_disk(tab, cx).map(|disk| (tab.downgrade(), disk)))
+            .collect();
+        let read = cx.background_spawn(async move {
+            let toml = workspace_reload::read_disk(&ws.dir().join("dbento.toml"));
+            let tabs: Vec<TabRead> = tabs
+                .into_iter()
+                .map(|(tab, disk)| {
+                    let read = match ws.read_query_at(&disk.file) {
+                        Ok(Some(text)) => DiskRead::Text(text),
+                        Ok(None) => DiskRead::Missing,
+                        Err(e) => DiskRead::Unreadable(e.to_string()),
+                    };
+                    (tab, disk, read)
+                })
+                .collect();
+            (toml, tabs)
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let toml = read.await;
+            let reads = read.await;
             let _ = this.update_in(cx, |s, w, cx| {
-                s.judge_reload(generation, &snapshot, toml, retried, w, cx)
+                s.judge_reload(generation, &snapshot, reads, retried, w, cx)
             });
         })
         .detach();
     }
 
-    // Applies one read's verdict. A read from an earlier generation, or one the app's own
-    // write overtook, is dropped and the files are read again.
+    // Applies each open saved query's read: a read the tab moved past asks for another pass,
+    // a clean tab takes new text, and an edited one shows the banner. Text equal to the
+    // editor's is in sync whatever the tab knew, so it is taken as saved.
+    fn judge_tabs(&mut self, reads: Vec<TabRead>, window: &mut Window, cx: &mut Context<Self>) {
+        let mut taken = false;
+        for (weak, snapshot, read) in reads {
+            let Some(tab) = weak.upgrade().filter(|t| self.tabs.contains(t)) else {
+                continue;
+            };
+            let Some(now) = tab_disk(&tab, cx) else {
+                continue;
+            };
+            let (edits, sql) = (tab.read(cx).has_local_edits(cx), tab.read(cx).sql(cx));
+            match judge_tab(&snapshot, &now, edits, &read) {
+                TabVerdict::Stale => self.reload_again = true,
+                TabVerdict::Same => tab.update(cx, |t, cx| t.set_disk_banner(None, cx)),
+                TabVerdict::Take(text) | TabVerdict::Show(DiskBanner::Changed { disk: text })
+                    if text == sql =>
+                {
+                    tab.update(cx, |t, cx| {
+                        t.set_file(now.file, text, cx);
+                        t.set_disk_banner(None, cx);
+                    });
+                    taken = true;
+                }
+                TabVerdict::Take(text) => {
+                    tab.update(cx, |t, cx| {
+                        t.set_sql(&text, window, cx);
+                        t.set_file(now.file, text, cx);
+                        t.set_disk_banner(None, cx);
+                    });
+                    taken = true;
+                }
+                TabVerdict::Show(banner) => {
+                    tab.update(cx, |t, cx| t.set_disk_banner(Some(banner), cx))
+                }
+            }
+        }
+        if taken {
+            self.save_session(cx);
+        }
+    }
+
+    // Takes the text the disk banner reported into `tab`, as a reload applies a read.
+    fn take_disk_text(
+        &mut self,
+        tab: &Entity<QueryTab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let t = tab.read(cx);
+        let (Some(DiskBanner::Changed { disk }), Some(file)) =
+            (t.disk_banner().cloned(), t.file().map(Path::to_path_buf))
+        else {
+            return;
+        };
+        tab.update(cx, |t, cx| {
+            t.set_sql(&disk, window, cx);
+            t.set_file(file, disk, cx);
+            t.set_disk_banner(None, cx);
+        });
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    // Applies one pass's reads, dbento.toml's then the tabs'. A pass from an earlier
+    // generation, or one the app's own write overtook, is dropped and the files read again.
     fn judge_reload(
         &mut self,
         generation: u64,
         snapshot: &str,
-        toml: DiskRead,
+        (toml, tabs): (DiskRead, Vec<TabRead>),
         retried: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -2976,6 +3077,7 @@ impl Shell {
             TomlVerdict::Missing => Some(workspace_reload::TOML_MISSING.to_owned()),
             TomlVerdict::Unreadable(why) => Some(why),
         };
+        self.judge_tabs(tabs, window, cx);
         if let Some(reason) = problem {
             // A first bad read may be an editor's write caught halfway, so it is read once
             // more after a pause before the banner says anything.
@@ -4016,7 +4118,8 @@ impl Shell {
         let renamed = plan
             .renamed_connection()
             .map(|(old, new)| (old.to_owned(), new.to_owned()));
-        let folder = renamed.as_ref().filter(|_| plan.move_queries().is_err());
+        let moved = renamed.as_ref().map(|_| plan.move_queries());
+        let folder = renamed.as_ref().filter(|_| matches!(moved, Some(Err(_))));
         let folder =
             folder.map(|(old, new)| format!("Move queries/{old} to queries/{new} by hand."));
         let old_keychain = base.declared(old_name).is_some_and(keychain_backed);
@@ -4026,7 +4129,20 @@ impl Shell {
         let passphrase_from = base
             .key_passphrase_target(old_name)
             .or_else(|| plan.workspace().key_passphrase_target(name));
+        // Open tabs follow the moved folder before install, so no reload reads them as deleted.
+        if let (Some(Ok(())), Some((old, new))) = (&moved, &renamed) {
+            let (from, to) = (
+                Path::new("queries").join(old),
+                Path::new("queries").join(new),
+            );
+            for tab in &self.tabs {
+                tab.update(cx, |t, cx| t.rebase_file(&from, &to, cx));
+            }
+        }
         self.install_workspace(plan.into_workspace(), window, cx);
+        if matches!(moved, Some(Ok(()))) {
+            self.save_session(cx);
+        }
         self.close_connection_form(window, cx);
         let old_key = base.secret_target(old_name).filter(|_| old_keychain);
         match (old_key, new_keychain, renamed.and(new_key)) {
