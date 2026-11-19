@@ -240,19 +240,14 @@ impl Render for ApprovalsPanel {
             );
         let no_pending = pending.is_empty().then(|| empty("No requests waiting."));
         let no_decided = decided.is_empty().then(|| empty("No decisions yet."));
-        div()
-            .id("approvals-panel")
-            .test_support()
-            .size_full()
+        // Only the sections scroll; the title row stays pinned above them like the History dock.
+        let body = div()
+            .id("approvals-body")
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .rounded(radius)
-            .border_1()
-            .border_color(edge)
-            .bg(chrome)
-            .text_color(fg)
-            .child(title)
             .child(section("Waiting for you"))
             .children(pending)
             .children(no_pending)
@@ -260,6 +255,20 @@ impl Render for ApprovalsPanel {
             .children(decided)
             .children(no_decided)
             .child(section("Connect an AI client"))
-            .children(connect)
+            .children(connect);
+        div()
+            .id("approvals-panel")
+            .test_support()
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(radius)
+            .border_1()
+            .border_color(edge)
+            .bg(chrome)
+            .text_color(fg)
+            .child(title)
+            .child(body)
     }
 }

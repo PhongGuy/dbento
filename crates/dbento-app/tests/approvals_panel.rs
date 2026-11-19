@@ -13,7 +13,7 @@ use dbento_app::approvals::{
 use dbento_app::approvals_panel::{ApprovalsPanel, Decided, Outcome};
 use dbento_core::{ApprovalRequest, ApprovalStore, Claim, Decision, GrantState, Writes};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AppContext as _, TestAppContext};
+use gpui_kit::{AppContext as _, ScrollDelta, TestAppContext, point, px};
 
 const TOML: &str = "dbento = 1\n[connections.calm]\nengine = \"sqlite\"\npath = \"c.db\"\n";
 const SQL: &str = "INSERT INTO t VALUES (1)";
@@ -476,4 +476,50 @@ fn the_approvals_panel_is_titled_and_closes_from_its_own_x(cx: &mut TestAppConte
     // The rail opens it again: the X closed the dock, it did not break it.
     click_id(cx, s.win, "rail-approvals");
     assert!(present(cx, s.win, "approvals-panel"));
+}
+
+#[gpui_kit::test]
+fn the_title_and_its_x_stay_put_while_the_list_scrolls(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    cx.simulate_window_resize(s.win, gpui_kit::size(px(1280.), px(360.)));
+    click_id(cx, s.win, "rail-approvals");
+    for age in 1..=4 {
+        file(&s, age);
+        tick(cx);
+        click_id(cx, s.win, "approval-deny");
+        tick(cx);
+    }
+    let at = |cx: &mut TestAppContext, id: &'static str| {
+        cx.update_window(s.win, |_, w, cx| {
+            w.render_frame(cx);
+            w.find(id).bounds()
+        })
+        .unwrap()
+    };
+    let connect_before = at(cx, "approvals-connect");
+    cx.update_window(s.win, |_, w, cx| {
+        w.scroll(
+            "approvals-panel",
+            ScrollDelta::Pixels(point(px(0.), px(-400.))),
+            cx,
+        )
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let connect_after = at(cx, "approvals-connect");
+    assert!(
+        connect_after.top() < connect_before.top(),
+        "the list did not scroll: {connect_before:?} -> {connect_after:?}"
+    );
+    let panel = at(cx, "approvals-panel");
+    let title = at(cx, "approvals-title");
+    let close = at(cx, "approvals-close");
+    assert!(
+        (title.top() - panel.top()).abs() <= px(2.),
+        "the title scrolled away: panel {panel:?}, title {title:?}"
+    );
+    assert!(
+        close.top() >= panel.top() && close.bottom() <= title.bottom(),
+        "the close X left the title row: title {title:?}, close {close:?}"
+    );
 }
