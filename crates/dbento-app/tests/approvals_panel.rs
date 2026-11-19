@@ -291,7 +291,7 @@ fn the_panel_lists_pending_requests(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         label_of(cx, s.win, ("approvals-pending", 0usize)).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1)")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1)")
     );
 }
 
@@ -306,13 +306,13 @@ fn an_approval_waits_then_reads_ran_once_the_ai_retries(cx: &mut TestAppContext)
     assert!(!present(cx, s.win, ("approvals-pending", 0usize)));
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
     );
     assert_eq!(store(&s).claim(r.id()).unwrap(), Claim::Granted);
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
     );
 }
 
@@ -326,7 +326,7 @@ fn a_denial_reads_denied(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} denied")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} denied")
     );
 }
 
@@ -357,7 +357,7 @@ fn an_expired_reading_waits_one_tick_for_the_marker(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} waiting for retry")
     );
     let ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -368,7 +368,7 @@ fn an_expired_reading_waits_one_tick_for_the_marker(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} ran")
     );
 }
 
@@ -386,7 +386,7 @@ fn a_grant_gone_without_a_marker_reads_expired_on_the_second_tick(cx: &mut TestA
     tick(cx);
     assert_eq!(
         decided(cx, &s).as_deref(),
-        Some("calm \u{B7} INSERT INTO t VALUES (1) \u{B7} expired")
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1) \u{B7} expired")
     );
 }
 
@@ -438,4 +438,26 @@ fn the_mcp_command_follows_a_workspace_switch_at_once(cx: &mut TestAppContext) {
         .read_with(cx, |sh, _| sh.workspace().unwrap().dir().to_path_buf());
     let want = connect_command(&CliPath::current(), &ws);
     assert_eq!(label_of(cx, s.win, "approvals-connect"), Some(want));
+}
+
+#[gpui_kit::test]
+fn each_pending_row_shows_its_own_target(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    click_id(cx, s.win, "rail-approvals");
+    file(&s, 2);
+    std::fs::write(
+        s.dir.path().join("dbento.toml"),
+        TOML.replace("c.db", "d.db"),
+    )
+    .unwrap();
+    file(&s, 1);
+    tick(cx);
+    assert_eq!(
+        label_of(cx, s.win, ("approvals-pending", 0usize)).as_deref(),
+        Some("calm \u{B7} c.db \u{B7} INSERT INTO t VALUES (1)")
+    );
+    assert_eq!(
+        label_of(cx, s.win, ("approvals-pending", 1usize)).as_deref(),
+        Some("calm \u{B7} d.db \u{B7} INSERT INTO t VALUES (1)")
+    );
 }

@@ -106,11 +106,12 @@ fn outcome_word(o: Outcome) -> &'static str {
     }
 }
 
-// "conn · first line of the SQL", the summary both lists lead with.
+// "conn · target · first line of the SQL", the summary both lists lead with.
 fn summary(r: &ApprovalRequest) -> String {
     format!(
-        "{} \u{b7} {}",
+        "{} \u{b7} {} \u{b7} {}",
         r.connection(),
+        r.target().display(),
         first_line(r.sql()).unwrap_or_default()
     )
 }

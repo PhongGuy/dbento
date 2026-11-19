@@ -6,8 +6,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use dbento_core::{
-    ApprovalRequest, ApprovalStore, Color, Decision, Unguarded, Verdict, Workspace, Writes,
-    leading_keyword,
+    ApprovalRequest, ApprovalStore, ApprovalTarget, Color, Decision, Unguarded, Verdict, Workspace,
+    Writes, leading_keyword,
 };
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -30,17 +30,22 @@ pub const APPROVAL_POLL: Duration = Duration::from_secs(1);
 /// the SQL box, which then draws over the shadow's lower tail.
 pub const FOLDER_TIP_DROP: f32 = 6.;
 
+/// What the dialog says when the connection now resolves to another target than the request's.
+pub const CHANGED_NOTE: &str = "This connection changed after the AI asked. Approving can only ever run against the target shown.";
+
 /// One request as the dialog shows it, with its connection's tag read from its own workspace.
 #[derive(Debug, Clone)]
 pub struct Shown {
     /// The request as filed.
     pub request: ApprovalRequest,
-    /// The connection's effective tag, if its workspace still names it.
+    /// The connection's effective tag; None when unknown or changed.
     pub color: Option<Color>,
-    /// Whether the connection is tagged production.
+    /// Whether the connection is tagged production; true when unknown or changed.
     pub production: bool,
     /// Whether the name no longer resolves in its workspace, or the workspace will not open.
     pub unknown: bool,
+    /// The connection resolves, but to another target than the request's.
+    pub changed: bool,
 }
 
 /// The oldest pending request under `dir` (pruning as `pending()` does), or None when there
@@ -51,19 +56,26 @@ pub fn next_pending(dir: &Path) -> Option<Shown> {
         .pending()
         .into_iter()
         .next()?;
-    // The tag comes from the request's own workspace; a name it cannot resolve, or a workspace
-    // that will not open, fails closed and reads as production.
-    let tag = Workspace::open(request.workspace()).ok().and_then(|ws| {
-        ws.connection(request.connection())
-            .map(|c| (c.effective_color(), c.is_production()))
-    });
-    let unknown = tag.is_none();
-    let (color, production) = tag.unwrap_or((None, true));
+    // The tag comes from the request's own workspace. A name it cannot resolve, a workspace that
+    // will not open, or a connection now bound to another target fails closed: its current tag
+    // says nothing about the target the request names, so it reads as production.
+    let current = Workspace::open(request.workspace())
+        .ok()
+        .and_then(|ws| ws.connection(request.connection()).map(|c| c.into_owned()));
+    let unknown = current.is_none();
+    let changed = current
+        .as_ref()
+        .is_some_and(|c| ApprovalTarget::of(c).fingerprint() != request.target().fingerprint());
+    let (color, production) = match current {
+        Some(c) if !changed => (c.effective_color(), c.is_production()),
+        _ => (None, true),
+    };
     Some(Shown {
         request,
         color,
         production,
         unknown,
+        changed,
     })
 }
 
@@ -371,12 +383,14 @@ pub fn ask_approval(
     let class: Option<SharedString> = class_label(r.writes(), r.unguarded()).map(Into::into);
     // The folder name reads at a glance; the full path stays in the tooltip.
     let path: SharedString = r.workspace().display().to_string().into();
+    let target: SharedString = r.target().display().to_owned().into();
     let workspace: SharedString = r
         .workspace()
         .file_name()
         .map_or(path.clone(), |n| n.to_string_lossy().into_owned().into());
     let danger = approve_is_danger(shown.production, r.unguarded());
-    let (color, production, unknown) = (shown.color, shown.production, shown.unknown);
+    let (color, production, unknown, changed) =
+        (shown.color, shown.production, shown.unknown, shown.changed);
     window.defer(cx, move |window, cx| {
         window.open_dialog(cx, move |dialog, window, cx| {
             if !focused.replace(true) {
@@ -461,12 +475,18 @@ pub fn ask_approval(
                                 .text_sm()
                                 .text_color(dim)
                                 .children(chip)
+                                .children(changed.then(|| {
+                                    text("approval-changed", CHANGED_NOTE.into())
+                                        .text_color(warning)
+                                }))
                                 .child(
                                     h_flex()
                                         .gap_2()
                                         .children(dot)
                                         .child(text("approval-connection", connection.clone())),
                                 )
+                                // The target wraps rather than truncates: it is what will run.
+                                .child(text("approval-target", target.clone()))
                                 .children(class.clone().map(|c| text("approval-class", c)))
                                 // A plain-looking kit button, for the one tooltip that can sit
                                 // beside its line: below it the path would cover the SQL. Its

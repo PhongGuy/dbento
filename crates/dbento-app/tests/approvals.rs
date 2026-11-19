@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime};
 use crate::support::{Started, click_id, label_of, present, started, wait_real};
 use dbento_app::app::AppPaths;
 use dbento_app::approvals::{
-    APPROVAL_POLL, answered_elsewhere_notice, approve_is_danger, approved_notice, class_label,
-    headline, next_pending, pending_count,
+    APPROVAL_POLL, CHANGED_NOTE, answered_elsewhere_notice, approve_is_danger, approved_notice,
+    class_label, headline, next_pending, pending_count,
 };
 use dbento_app::confirm::DIALOG_TOP;
 use dbento_core::{
@@ -682,12 +682,20 @@ fn a_name_that_no_longer_resolves_reads_as_production() {
         (child.color, child.production, child.unknown),
         (Some(Color::Green), false, false)
     );
+    assert!(
+        !child.changed,
+        "a resolving child bound as filed has not changed"
+    );
     for gone in ["pg/b", "pg/my.db", "nope"] {
         let s = shown_for(ws.path(), gone);
         assert_eq!(
             (s.color, s.production, s.unknown),
             (None, true, true),
             "{gone}"
+        );
+        assert!(
+            !s.changed,
+            "an unresolved name is unknown, not changed: {gone}"
         );
     }
 }
@@ -697,6 +705,10 @@ fn a_workspace_that_cannot_open_reads_as_production() {
     let gone = tempfile::tempdir().unwrap();
     let s = shown_for(gone.path(), "pg");
     assert_eq!((s.color, s.production, s.unknown), (None, true, true));
+    assert!(
+        !s.changed,
+        "a workspace that will not open is unknown, not changed"
+    );
 }
 
 #[gpui_kit::test]
@@ -712,5 +724,78 @@ fn an_unknown_connection_shows_production_and_says_so(cx: &mut TestAppContext) {
     assert_eq!(
         label_of(cx, s.win, "approval-unknown").as_deref(),
         Some("Unknown connection")
+    );
+}
+
+#[gpui_kit::test]
+fn the_dialog_names_the_target_it_will_run_against(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "lite", "DELETE FROM t WHERE a = 1", vec![], 1);
+    tick(cx);
+    assert_eq!(
+        label_of(cx, s.win, "approval-target").as_deref(),
+        Some("l.db")
+    );
+    assert!(!present(cx, s.win, "approval-changed"));
+}
+
+#[gpui_kit::test]
+fn a_connection_changed_since_filing_shows_production_and_says_so(cx: &mut TestAppContext) {
+    let s = started(cx, TOML);
+    file(&s, "calm", "DELETE FROM t WHERE a = 1", vec![], 1);
+    std::fs::write(
+        s.dir.path().join("dbento.toml"),
+        TOML.replace("path = \"c.db\"", "path = \"other.db\""),
+    )
+    .unwrap();
+    tick(cx);
+    assert!(present(cx, s.win, "approval-dialog"));
+    assert!(
+        present(cx, s.win, "approval-production"),
+        "a changed target is production"
+    );
+    assert_eq!(
+        label_of(cx, s.win, "approval-changed").as_deref(),
+        Some(CHANGED_NOTE)
+    );
+    assert_eq!(
+        label_of(cx, s.win, "approval-target").as_deref(),
+        Some("c.db")
+    );
+    assert!(!present(cx, s.win, "approval-unknown"));
+}
+
+#[test]
+fn only_a_bound_field_marks_a_request_changed() {
+    let ws = tempfile::tempdir().unwrap();
+    let toml = ws.path().join("dbento.toml");
+    let text =
+        "dbento = 1\n[connections.calm]\nengine = \"sqlite\"\npath = \"c.db\"\ncolor = \"green\"\n";
+    std::fs::write(&toml, text).unwrap();
+    let approvals = tempfile::tempdir().unwrap();
+    let target = crate::support::approval_target(ws.path(), "calm");
+    let r = ApprovalRequest::new(
+        ws.path(),
+        "calm",
+        target,
+        "DELETE FROM t",
+        Writes::Yes,
+        vec![],
+    );
+    ApprovalStore::open(approvals.path())
+        .unwrap()
+        .request(&r)
+        .unwrap();
+    std::fs::write(&toml, text.replace("green", "blue")).unwrap();
+    let s = next_pending(approvals.path()).unwrap();
+    assert_eq!(
+        (s.color, s.production, s.unknown, s.changed),
+        (Some(Color::Blue), false, false, false)
+    );
+    std::fs::write(&toml, text.replace("c.db", "d.db")).unwrap();
+    let s = next_pending(approvals.path()).unwrap();
+    assert_eq!(
+        (s.color, s.production, s.unknown, s.changed),
+        (None, true, false, true)
     );
 }
