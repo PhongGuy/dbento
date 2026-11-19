@@ -1976,6 +1976,127 @@ impl ConnectionConfig {
         self.session_key() == other.session_key()
     }
 
+    /// Whether a secret saved for one is sent to the same server as the same user by the other.
+    /// Name, colour, folder and session settings are ignored.
+    pub fn same_login(&self, other: &ConnectionConfig) -> bool {
+        // Only the fields that pick the server and the account count; everything else shapes
+        // the session or the label, and a secret stays valid across those.
+        let ConnectionConfig {
+            name: _,
+            color: _,
+            folder: _,
+            effective_color: _,
+            mariadb: _,
+            read_only: _,
+            statement_timeout: _,
+            secret_source: _,
+            path: _,
+            file_path: _,
+            database: _,
+            tls: _,
+            tls_ca: _,
+            tls_cert: _,
+            tls_key: _,
+            settings: _,
+            read_only_user: _,
+            databases: _,
+            parent: _,
+            consistent_read: _,
+            engine,
+            host,
+            port,
+            user,
+            uri,
+            namespace,
+            auth_level,
+            region,
+            endpoint,
+            access_key_id,
+        } = self;
+        *engine == other.engine
+            && *host == other.host
+            && *port == other.port
+            && *user == other.user
+            && *uri == other.uri
+            && *namespace == other.namespace
+            && *auth_level == other.auth_level
+            && *region == other.region
+            && *endpoint == other.endpoint
+            && *access_key_id == other.access_key_id
+    }
+
+    /// The dbento.toml keys whose resolved values differ, in FORMAT.md order (`mariadb` reports
+    /// as `engine`); name, colour and folder are never listed.
+    pub fn differing_keys(&self, other: &ConnectionConfig) -> Vec<&'static str> {
+        // Labels and derived fields are skipped; `path` is judged by the file it resolves to.
+        let ConnectionConfig {
+            name: _,
+            color: _,
+            folder: _,
+            effective_color: _,
+            parent: _,
+            path: _,
+            engine,
+            mariadb,
+            read_only,
+            statement_timeout,
+            file_path,
+            host,
+            database,
+            user,
+            port,
+            secret_source,
+            tls,
+            tls_ca,
+            tls_cert,
+            tls_key,
+            settings,
+            databases,
+            read_only_user,
+            uri,
+            namespace,
+            auth_level,
+            region,
+            endpoint,
+            access_key_id,
+            consistent_read,
+        } = self;
+        [
+            (
+                "engine",
+                *engine != other.engine || *mariadb != other.mariadb,
+            ),
+            ("read_only", *read_only != other.read_only),
+            (
+                "statement_timeout",
+                *statement_timeout != other.statement_timeout,
+            ),
+            ("path", *file_path != other.file_path),
+            ("host", *host != other.host),
+            ("database", *database != other.database),
+            ("user", *user != other.user),
+            ("port", *port != other.port),
+            ("secret", *secret_source != other.secret_source),
+            ("tls", *tls != other.tls),
+            ("tls_ca", *tls_ca != other.tls_ca),
+            ("tls_cert", *tls_cert != other.tls_cert),
+            ("tls_key", *tls_key != other.tls_key),
+            ("settings", *settings != other.settings),
+            ("databases", *databases != other.databases),
+            ("read_only_user", *read_only_user != other.read_only_user),
+            ("uri", *uri != other.uri),
+            ("namespace", *namespace != other.namespace),
+            ("auth_level", *auth_level != other.auth_level),
+            ("region", *region != other.region),
+            ("endpoint", *endpoint != other.endpoint),
+            ("access_key_id", *access_key_id != other.access_key_id),
+            ("consistent_read", *consistent_read != other.consistent_read),
+        ]
+        .into_iter()
+        .filter_map(|(key, differs)| differs.then_some(key))
+        .collect()
+    }
+
     /// The canonical, versioned, secret-free encoding of every field `same_session` compares:
     /// equal for two configs exactly when `same_session` is true.
     pub fn session_binding(&self) -> String {

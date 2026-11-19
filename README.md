@@ -174,6 +174,8 @@ A Postgres or SQL Server connection can also reach the other databases on its se
 
 No password is ever written to `dbento.toml`. A server connection's secret is stored in the OS keychain (the Secret Service on Linux, Keychain on macOS, Credential Manager on Windows), and only the secret, never the whole connection URL. When the keychain has no entry, Dbento reads the environment variable `DBENTO_SECRET_<NAME>`, the connection name in upper case with `-` as `_` (so `app-prod` reads `DBENTO_SECRET_APP_PROD`). A connection can also name its own variable with `secret = { env = "PGPASSWORD" }`, or say it needs none with `secret = "none"`.
 
+When `dbento.toml` changes while the app is open (a `git pull`, another editor) and a connection was renamed, the app moves its keychain password and key passphrase to the new name. It does so without asking when only the name changed, asks first when the server and user stay the same but another setting changed, and never moves them when the server or user changed. A password kept in an environment variable such as `DBENTO_SECRET_<NAME>` cannot be moved, so the app names the variable to rename instead. A rename pulled while the app was closed still leaves the password under the old name: enter it again, or store it with `dbento secret set`.
+
 ## Download
 
 | System | Desktop app | Command line |

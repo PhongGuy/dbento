@@ -164,6 +164,7 @@ mod record_view;
 mod record_was;
 mod references;
 mod reload;
+mod rename_secret;
 mod restore;
 mod result_error;
 mod result_marks;

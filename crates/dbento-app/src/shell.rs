@@ -13,9 +13,10 @@ use std::time::Duration;
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
     EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, OpenError, RelationKind,
-    RelationRef, SavedQuery, Secret, SecretError, SecretKey, SecretSource, SessionOptions, Sort,
-    WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError, connect, move_secret,
-    plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, tls_key_is_encrypted,
+    RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
+    SessionOptions, Sort, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError,
+    connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var,
+    secret_renames, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -71,6 +72,9 @@ use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
+use crate::rename_secret::{
+    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+};
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
 use crate::runner::RunnerSpec;
@@ -3099,6 +3103,100 @@ impl Shell {
         cx.notify();
     }
 
+    // After an outside edit replaced `old`, moves keychain secrets of renamed connections to
+    // their new names off the UI thread, one rename at a time in name order; a SameLogin
+    // rename asks first, and variables that cannot be renamed are listed once at the end.
+    fn carry_renamed_secrets(
+        &mut self,
+        old: &Workspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(new) = self.workspace.clone() else {
+            return;
+        };
+        let jobs: Vec<_> = secret_renames(old, &new)
+            .into_iter()
+            .map(|r| {
+                let keys = rename_keys(old, &new, &r);
+                let asked = new.declared(&r.to).cloned();
+                (r, keys, asked)
+            })
+            .collect();
+        if jobs.is_empty() {
+            return;
+        }
+        let dir = new.dir().to_path_buf();
+        let store = Arc::clone(&self.services.store);
+        let env = Arc::clone(&self.services.env);
+        let probed = cx.background_spawn({
+            let store = Arc::clone(&store);
+            async move {
+                jobs.into_iter()
+                    .map(|(r, keys, asked)| {
+                        let held = probe(&*store, &keys);
+                        (r, keys, asked, held)
+                    })
+                    .collect::<Vec<_>>()
+            }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let mut lines = Vec::new();
+            for (r, keys, asked, held) in probed.await {
+                let not_moved =
+                    |e: SecretError| format!("{e}. Enter the password again for {}.", r.to);
+                let held = match held {
+                    Ok(held) => held,
+                    Err(e) => {
+                        let detail = not_moved(e);
+                        let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
+                        continue;
+                    }
+                };
+                lines.extend(env_lines(&r, held, &env));
+                if !held.movable() {
+                    continue;
+                }
+                if r.matched != RenameMatch::Exact {
+                    let Ok(reply) = this.update_in(cx, |_, w, cx| ask(move_ask(&r, held), w, cx))
+                    else {
+                        return;
+                    };
+                    if reply.recv().await != Ok(1) {
+                        continue;
+                    }
+                }
+                // The file may have changed while this or an earlier question was open.
+                let Ok(still) = this.update(cx, |s, _| {
+                    s.workspace
+                        .as_deref()
+                        .zip(asked.as_ref())
+                        .is_some_and(|(now, a)| still_renamed(now, &dir, &r, a))
+                }) else {
+                    return;
+                };
+                if !still {
+                    continue;
+                }
+                let store = Arc::clone(&store);
+                let moved = cx
+                    .background_executor()
+                    .spawn(async move { adopt_held(&*store, &keys, held) })
+                    .await;
+                if let Err(e) = moved {
+                    let detail = not_moved(e);
+                    let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
+                }
+            }
+            if !lines.is_empty() {
+                let _ = cx.update(|w, cx| {
+                    let _ = ask(env_notice(&lines), w, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
     // Applies one pass's reads, dbento.toml's then the tabs'. A pass from an earlier
     // generation, or one the app's own write overtook, is dropped and the files read again.
     fn judge_reload(
@@ -3130,6 +3228,7 @@ impl Shell {
                     Ok(ws) => {
                         self.toml_problem = None;
                         self.install_workspace(ws, window, cx);
+                        self.carry_renamed_secrets(&current, window, cx);
                         None
                     }
                     Err(e) => Some(open_problem(e)),

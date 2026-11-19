@@ -9,6 +9,7 @@
 
 mod duration;
 mod folder_path;
+mod same_login;
 mod secret_errors;
 mod session_binding;
 mod workspace;
