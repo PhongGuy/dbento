@@ -3,7 +3,9 @@
 //! A rename shows up as one declared name vanishing and another appearing; the pair is kept
 //! only when the two point at the same login and the pairing is unambiguous.
 
-use crate::{ConnectionConfig, Engine, SecretSource, Workspace};
+use crate::{
+    ConnectionConfig, Engine, SecretError, SecretKey, SecretSource, SecretStore, Workspace,
+};
 
 /// How closely a renamed connection matches the one it replaced.
 #[non_exhaustive]
@@ -96,4 +98,38 @@ fn pair(a: &ConnectionConfig, b: &ConnectionConfig) -> Option<SecretRename> {
 /// Whether the connection's password lives in the keychain.
 fn keychain_backed(c: &ConnectionConfig) -> bool {
     c.engine().capabilities().password && matches!(c.secret_source(), SecretSource::Keychain)
+}
+
+/// What `adopt_secret` did.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adopted {
+    /// The secret now lives under the new name and the old entry is gone.
+    Moved,
+    /// The old name held no secret, so nothing was written.
+    NothingStored,
+    /// The new name already held a secret, so neither entry was touched.
+    TargetTaken,
+}
+
+/// Moves `from`'s secret to `to` unless `to` already holds one; `from` is deleted only after
+/// `to` is written, so a failed delete leaves the secret under both names, never under none.
+pub fn adopt_secret(
+    store: &dyn SecretStore,
+    from: &SecretKey,
+    to: &SecretKey,
+) -> Result<Adopted, SecretError> {
+    // Checking the target first also covers `from == to`: a held secret is never rewritten.
+    if store.get(to)?.is_some() {
+        return Ok(Adopted::TargetTaken);
+    }
+    if from == to {
+        return Ok(Adopted::NothingStored);
+    }
+    let Some(secret) = store.get(from)? else {
+        return Ok(Adopted::NothingStored);
+    };
+    store.set(to, &secret)?;
+    store.delete(from)?;
+    Ok(Adopted::Moved)
 }

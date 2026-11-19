@@ -1,5 +1,8 @@
 //! Renames found between two versions of dbento.toml, and moving a secret without overwriting.
-use dbento_core::{RenameMatch, SecretRename, Workspace, secret_renames};
+use dbento_core::{
+    Adopted, MemoryStore, RenameMatch, Secret, SecretError, SecretKey, SecretRename, SecretStore,
+    Workspace, adopt_secret, secret_renames,
+};
 use std::path::{Path, PathBuf};
 
 fn ws(body: &str) -> Workspace {
@@ -150,4 +153,99 @@ fn the_output_is_sorted_by_the_old_name() {
     );
     let from: Vec<String> = renames(&old, &new).into_iter().map(|r| r.from).collect();
     assert_eq!(from, vec!["m", "z"]);
+}
+
+fn key(name: &str) -> SecretKey {
+    SecretKey::new("/w", name)
+}
+
+fn value(store: &dyn SecretStore, k: &SecretKey) -> Option<String> {
+    store.get(k).unwrap().map(|s| s.expose().to_owned())
+}
+
+#[test]
+fn adopt_moves_into_an_empty_name() {
+    let store = MemoryStore::new();
+    store.set(&key("a"), &Secret::new("old")).unwrap();
+    assert_eq!(
+        adopt_secret(&store, &key("a"), &key("b")).unwrap(),
+        Adopted::Moved
+    );
+    assert_eq!(value(&store, &key("b")).as_deref(), Some("old"));
+    assert_eq!(value(&store, &key("a")), None);
+}
+
+#[test]
+fn adopt_with_nothing_stored_writes_nothing() {
+    let store = MemoryStore::new();
+    assert_eq!(
+        adopt_secret(&store, &key("a"), &key("b")).unwrap(),
+        Adopted::NothingStored
+    );
+    assert_eq!(value(&store, &key("b")), None);
+}
+
+#[test]
+fn adopt_leaves_a_taken_name_and_the_old_entry_alone() {
+    let store = MemoryStore::new();
+    store.set(&key("a"), &Secret::new("old")).unwrap();
+    store.set(&key("b"), &Secret::new("new")).unwrap();
+    assert_eq!(
+        adopt_secret(&store, &key("a"), &key("b")).unwrap(),
+        Adopted::TargetTaken
+    );
+    assert_eq!(value(&store, &key("a")).as_deref(), Some("old"));
+    assert_eq!(value(&store, &key("b")).as_deref(), Some("new"));
+}
+
+#[test]
+fn adopt_onto_itself_never_writes() {
+    let store = MemoryStore::new();
+    assert_eq!(
+        adopt_secret(&store, &key("a"), &key("a")).unwrap(),
+        Adopted::NothingStored
+    );
+    store.set(&key("a"), &Secret::new("old")).unwrap();
+    assert_eq!(
+        adopt_secret(&store, &key("a"), &key("a")).unwrap(),
+        Adopted::TargetTaken
+    );
+    assert_eq!(value(&store, &key("a")).as_deref(), Some("old"));
+}
+
+#[test]
+fn adopt_moves_a_passphrase_slot_without_touching_the_password_slot() {
+    let store = MemoryStore::new();
+    let (from, to) = (
+        SecretKey::key_passphrase("/w", "a"),
+        SecretKey::key_passphrase("/w", "b"),
+    );
+    store.set(&from, &Secret::new("phrase")).unwrap();
+    assert_eq!(adopt_secret(&store, &from, &to).unwrap(), Adopted::Moved);
+    assert_eq!(value(&store, &to).as_deref(), Some("phrase"));
+    assert_eq!(value(&store, &key("b")), None);
+}
+
+struct FailingDelete(MemoryStore);
+impl SecretStore for FailingDelete {
+    fn get(&self, k: &SecretKey) -> Result<Option<Secret>, SecretError> {
+        self.0.get(k)
+    }
+    fn set(&self, k: &SecretKey, s: &Secret) -> Result<(), SecretError> {
+        self.0.set(k, s)
+    }
+    fn delete(&self, _: &SecretKey) -> Result<(), SecretError> {
+        Err(SecretError::Failed {
+            message: "locked".into(),
+        })
+    }
+}
+
+#[test]
+fn a_failed_delete_reports_the_error_after_the_new_entry_is_written() {
+    let store = FailingDelete(MemoryStore::new());
+    store.set(&key("a"), &Secret::new("old")).unwrap();
+    assert!(adopt_secret(&store, &key("a"), &key("b")).is_err());
+    assert_eq!(value(&store, &key("b")).as_deref(), Some("old"));
+    assert_eq!(value(&store, &key("a")).as_deref(), Some("old"));
 }
