@@ -1,0 +1,95 @@
+//! Carries a renamed connection's saved keychain secrets to its new name.
+//!
+//! The pure pieces: which keychain entries a rename pairs, which of them hold a secret,
+//! and the move itself. The shell sequences them after an outside reload.
+
+use dbento_core::{SecretError, SecretKey, SecretRename, SecretStore, Workspace, adopt_secret};
+
+/// The keychain entries one rename moves, each as (key under the old name, key under the new).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameKeys {
+    /// The password entry pair, when both sides keep a password in the keychain.
+    pub password: Option<(SecretKey, SecretKey)>,
+    /// The key passphrase entry pair, when both sides have a client key.
+    pub passphrase: Option<(SecretKey, SecretKey)>,
+}
+
+/// Per slot: whether the old name holds a secret, and whether the new name already does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Held {
+    /// The old name holds a password.
+    pub password: bool,
+    /// The old name holds a key passphrase.
+    pub passphrase: bool,
+    /// The new name already holds a password.
+    pub password_taken: bool,
+    /// The new name already holds a key passphrase.
+    pub passphrase_taken: bool,
+}
+
+impl Held {
+    /// Whether some slot holds a secret under the old name and none under the new.
+    pub fn movable(&self) -> bool {
+        (self.password && !self.password_taken) || (self.passphrase && !self.passphrase_taken)
+    }
+}
+
+/// The key pairs for `r`'s carried slots, taken only from each workspace's declared targets.
+pub fn rename_keys(old: &Workspace, new: &Workspace, r: &SecretRename) -> RenameKeys {
+    let both = |a: Option<SecretKey>, b: Option<SecretKey>| a.zip(b);
+    RenameKeys {
+        password: r
+            .password
+            .then(|| both(old.secret_target(&r.from), new.secret_target(&r.to)))
+            .flatten(),
+        passphrase: r
+            .passphrase
+            .then(|| {
+                both(
+                    old.key_passphrase_target(&r.from),
+                    new.key_passphrase_target(&r.to),
+                )
+            })
+            .flatten(),
+    }
+}
+
+/// Reads both names of every carried slot; an unavailable keychain reads as empty, as
+/// secret resolution treats it, and any other failure is returned.
+pub fn probe(store: &dyn SecretStore, keys: &RenameKeys) -> Result<Held, SecretError> {
+    let has = |key: &SecretKey| match store.get(key) {
+        Ok(found) => Ok(found.is_some()),
+        Err(SecretError::Unavailable { .. }) => Ok(false),
+        Err(e) => Err(e),
+    };
+    let mut held = Held::default();
+    if let Some((from, to)) = &keys.password {
+        held.password = has(from)?;
+        held.password_taken = has(to)?;
+    }
+    if let Some((from, to)) = &keys.passphrase {
+        held.passphrase = has(from)?;
+        held.passphrase_taken = has(to)?;
+    }
+    Ok(held)
+}
+
+/// Moves each slot `held` marks as present and not taken; a slot that turns out taken or
+/// empty by now is left alone.
+pub fn adopt_held(
+    store: &dyn SecretStore,
+    keys: &RenameKeys,
+    held: Held,
+) -> Result<(), SecretError> {
+    let slots = [
+        (&keys.password, held.password && !held.password_taken),
+        (&keys.passphrase, held.passphrase && !held.passphrase_taken),
+    ];
+    for (pair, wanted) in slots {
+        if let (Some((from, to)), true) = (pair, wanted) {
+            // TargetTaken and NothingStored both leave the store as it was, which is fine here.
+            adopt_secret(store, from, to)?;
+        }
+    }
+    Ok(())
+}
