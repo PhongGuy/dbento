@@ -127,6 +127,7 @@ mod rowedit_sqlite;
 mod rowedit_target;
 mod secret_hint;
 mod secrets;
+mod seen_text;
 mod settle;
 mod single_source;
 mod smoke;
