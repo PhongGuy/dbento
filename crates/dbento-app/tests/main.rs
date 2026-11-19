@@ -236,3 +236,4 @@ mod window_identity;
 mod workspace_banner;
 mod workspace_reload;
 mod workspace_switch;
+mod workspace_watch;
