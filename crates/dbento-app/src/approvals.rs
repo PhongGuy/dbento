@@ -301,6 +301,19 @@ pub fn approved_notice() -> Notice {
     }
 }
 
+/// The notice shown once a Deny is recorded: the AI learns of it, and of any reason, on its next call.
+pub fn denied_notice(reason_given: bool) -> Notice {
+    let text = if reason_given {
+        "Denied. Your AI sees your reason on its next try."
+    } else {
+        "Denied. Your AI is told no on its next try."
+    };
+    Notice {
+        text: text.to_owned(),
+        kind: NoticeKind::Info,
+    }
+}
+
 /// The notice for a request another window answered first. It names a side only when the
 /// store recorded one, so it never says approved for a denial or the reverse.
 pub fn answered_elsewhere_notice(verdict: Verdict) -> Notice {

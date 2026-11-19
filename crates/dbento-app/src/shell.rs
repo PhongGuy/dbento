@@ -44,8 +44,8 @@ use crate::app::{
     WorkspaceSession, recent_status,
 };
 use crate::approvals::{
-    APPROVAL_POLL, Answer, answered_elsewhere_notice, approved_notice, ask_approval, next_pending,
-    pending_requests, still_pending, verdict_of,
+    APPROVAL_POLL, Answer, answered_elsewhere_notice, approved_notice, ask_approval, denied_notice,
+    next_pending, pending_requests, still_pending, verdict_of,
 };
 use crate::approvals_panel::{ApprovalsPanel, ApprovalsPanelEvent, Decided, Outcome};
 use crate::browse::BrowseEvent;
@@ -269,6 +269,7 @@ async fn record_answer(
     let bg = cx.background_executor().clone();
     let (store_dir, id) = (dir.to_path_buf(), request.id().to_owned());
     let Answer { decision, reason } = answered;
+    let reason_given = reason.is_some();
     let recorded = bg
         .spawn(async move {
             ApprovalStore::open(&store_dir)
@@ -281,6 +282,8 @@ async fn record_answer(
                 shell.approvals_decided(request, decision, cx);
                 if decision == Decision::Approve {
                     ui::notice(window, cx, approved_notice());
+                } else if decision == Decision::Deny {
+                    ui::notice(window, cx, denied_notice(reason_given));
                 }
             });
         }
