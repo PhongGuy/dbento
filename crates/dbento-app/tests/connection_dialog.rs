@@ -750,3 +750,58 @@ fn every_engine_card_hint_matches_its_form() {
         }
     }
 }
+
+#[gpui_kit::test]
+fn a_squeezed_dialog_shows_the_engine_cards_two_to_a_row(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    // At the app's minimum width the kit clamps the 560 px dialog to the window.
+    cx.simulate_window_resize(o.win, gpui_kit::size(px(480.), px(800.)));
+    cx.update_window(o.win, |_, w, cx| w.press("ctrl-shift-n", cx))
+        .unwrap();
+    cx.run_until_parked();
+    form(cx, &o);
+    cx.update_window(o.win, |_, w, cx| {
+        w.render_frame(cx);
+        let dialog = w.find("conn-dialog").bounds();
+        assert!(dialog.size.width < px(560.), "squeezed: {dialog:?}");
+        let name = w.find("conn-name").bounds();
+        let body = w.find("conn-body").bounds();
+        let cards: Vec<_> = (0..9usize)
+            .map(|ix| w.within("conn-engine").find(ix).bounds())
+            .collect();
+        for (ix, card) in cards.iter().enumerate() {
+            assert!(
+                card.left() >= name.left() && card.right() <= name.right(),
+                "{ix}: {card:?} leaves the field column {name:?}"
+            );
+            assert!(
+                card.left() >= body.left() && card.right() <= body.right(),
+                "{ix}: {card:?} leaves the form {body:?}"
+            );
+        }
+        assert_eq!(cards[1].top(), cards[0].top(), "0 and 1 share a row");
+        assert!(
+            cards[2].top() >= cards[0].bottom() && cards[2].left() == cards[0].left(),
+            "2 starts the next row: {:?} vs {:?}",
+            cards[2],
+            cards[0]
+        );
+    })
+    .unwrap();
+    cx.update_window(o.win, |_, w, cx| w.within("conn-engine").click(1usize, cx))
+        .unwrap();
+    cx.run_until_parked();
+    cx.update_window(o.win, |_, w, cx| w.press("down", cx))
+        .unwrap();
+    cx.run_until_parked();
+    cx.update_window(o.win, |_, w, cx| {
+        w.render_frame(cx);
+        let within = w.within("conn-engine");
+        assert_eq!(
+            within.find(3usize).selected(),
+            Some(true),
+            "Down from SQLite moves a two-card row to DuckDB"
+        );
+    })
+    .unwrap();
+}

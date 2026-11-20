@@ -51,7 +51,9 @@ use crate::approvals_panel::{ApprovalsPanel, ApprovalsPanelEvent, Decided, Outco
 use crate::browse::BrowseEvent;
 use crate::catalog::CatalogClosing;
 use crate::confirm::{self, Ask, Choice, TextAsk, ask, ask_text};
-use crate::connection_dialog::{ConnectionForm, ConnectionFormEvent, ErrorAt, Field, TestState};
+use crate::connection_dialog::{
+    ConnectionForm, ConnectionFormEvent, ErrorAt, FORM_WIDTH, Field, TestState,
+};
 use crate::definition_panel::{DefinitionPanel, DefinitionPanelEvent};
 use crate::drafts::{DraftSlot, Drafts};
 use crate::history::HistoryLog;
@@ -3863,7 +3865,7 @@ impl Shell {
                 let viewport = content_size(window).height;
                 let top = (viewport / 10.).max(px(64.));
                 let tallest = (viewport - top - px(FORM_FOOT_GAP)).max(px(0.));
-                confirm::frame(dialog, px(560.), None, cx)
+                confirm::frame(dialog, FORM_WIDTH, None, cx)
                     .margin_top(top)
                     .overlay_closable(false)
                     .on_close(move |_, window, cx| {

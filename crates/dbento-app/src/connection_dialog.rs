@@ -16,7 +16,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Pixels, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
     Window, div, px,
 };
@@ -1848,7 +1848,7 @@ impl Render for ConnectionForm {
         let engine = ui::card_grid(
             "conn-engine",
             &cards.collect::<Vec<_>>(),
-            ENGINE_COLUMNS,
+            engine_columns(window, cx),
             // An engine the picker does not offer highlights no card.
             ENGINES
                 .iter()
@@ -2137,10 +2137,24 @@ pub fn engine_hint(engine: Engine) -> &'static str {
     }
 }
 
-/// The engine cards per row: three keep "SQL Server" and its icon whole at the dialog's width.
-/// Keep the row count odd: the kit snaps a dialog's top by half a pixel by its height's parity,
-/// and an odd grid keeps that snap the same for every engine's form.
-const ENGINE_COLUMNS: usize = 3;
+/// The connection dialog's width when the window has room for it.
+pub(crate) const FORM_WIDTH: Pixels = px(560.);
+
+/// The engine cards per row: three keep "SQL Server" and its icon whole at [`FORM_WIDTH`], and
+/// two keep every label whole once a narrow window squeezes the dialog. Rendering and the
+/// arrow keys both take the count from here.
+fn engine_columns(window: &Window, cx: &App) -> usize {
+    // The kit keeps its large spacing clear beside a dialog and narrows it to fit the rest.
+    let room = crate::shell::content_size(window).width - cx.theme().spacing_tokens().lg * 2.;
+    if room < FORM_WIDTH { 2 } else { 3 }
+}
+
+// Keep the row count odd for both column counts: the kit snaps a dialog's top by half a pixel
+// by its height's parity, and an odd grid keeps that snap the same for every engine's form.
+const _: () = assert!(
+    ENGINES.len().div_ceil(3) % 2 == 1 && ENGINES.len().div_ceil(2) % 2 == 1,
+    "the engine grid needs an odd row count at three and at two columns"
+);
 
 /// The engines of `conn-engine`, in option order.
 const ENGINES: [Engine; 9] = [
