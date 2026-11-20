@@ -1,6 +1,7 @@
 //! Team mode's git layer: one hardened runner for every git call, and reading what a Potluck
 //! server says when it refuses a push.
 
+mod clone;
 mod commit;
 mod lock;
 mod push;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+pub use clone::{CloneError, clone};
 pub use commit::commit_pending;
 pub use lock::{RepoLock, repo_lock};
 pub use push::{PushOutcome, push, remote_tip, squash_unpushed, unpushed};

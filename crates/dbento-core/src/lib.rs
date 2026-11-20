@@ -73,10 +73,10 @@ pub use watch::{WATCH_DEBOUNCE, WatchError, WatchEvent, WorkspaceWatcher};
 mod git;
 #[cfg(feature = "team")]
 pub use git::{
-    CancelFlag, ConflictFile, ConflictKind, Finding, GitError, GitOptions, GitVersion, Pulled,
-    PushOutcome, Refusal, RepoLock, SAVE_MESSAGE, SyncError, commit_pending, git_available,
-    git_available_with, parse_refusal, pull_rebase, push, redact_token, remote_tip, repo_lock,
-    rule_text, squash_unpushed, unpushed,
+    CancelFlag, CloneError, ConflictFile, ConflictKind, Finding, GitError, GitOptions, GitVersion,
+    Pulled, PushOutcome, Refusal, RepoLock, SAVE_MESSAGE, SyncError, clone, commit_pending,
+    git_available, git_available_with, parse_refusal, pull_rebase, push, redact_token, remote_tip,
+    repo_lock, rule_text, squash_unpushed, unpushed,
 };
 #[cfg(feature = "team")]
 mod team;
