@@ -62,7 +62,6 @@ pub(crate) enum Reach {
     /// Only the repository on disk: [`GitOptions::timeout`].
     Local,
     /// Talks to the server: [`GitOptions::network_timeout`].
-    #[expect(dead_code, reason = "fetch, push and clone use it")]
     Network,
 }
 

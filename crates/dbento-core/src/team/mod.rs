@@ -1,6 +1,10 @@
 //! Team mode: a workspace folder bound to one branch of a Potluck server's repository.
 
+mod conflicts;
+
 use std::path::PathBuf;
+
+pub use conflicts::ConflictStore;
 
 /// Which workspace folder syncs with which server, team, workspace and branch, as whom.
 #[derive(Debug, Clone, PartialEq, Eq)]

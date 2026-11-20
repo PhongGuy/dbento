@@ -3,6 +3,7 @@
 
 mod commit;
 mod lock;
+mod rebase;
 mod refusal;
 mod run;
 
@@ -15,6 +16,7 @@ use std::time::Duration;
 
 pub use commit::commit_pending;
 pub use lock::{RepoLock, repo_lock};
+pub use rebase::{ConflictFile, ConflictKind, Pulled, pull_rebase};
 pub use refusal::{Finding, Refusal, parse_refusal, redact_token, rule_text};
 
 /// How a team sync calls git: extra environment, time limits and an optional cancel flag.

@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod commit;
+mod pull;
 mod refusal;
 mod runner;
 mod support;

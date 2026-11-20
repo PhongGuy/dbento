@@ -41,6 +41,7 @@ pub use history::{
 };
 
 pub mod paths;
+pub use paths::StatePaths;
 
 mod rename_secret;
 pub use rename_secret::{
@@ -72,14 +73,14 @@ pub use watch::{WATCH_DEBOUNCE, WatchError, WatchEvent, WorkspaceWatcher};
 mod git;
 #[cfg(feature = "team")]
 pub use git::{
-    CancelFlag, Finding, GitError, GitOptions, GitVersion, Refusal, RepoLock, SAVE_MESSAGE,
-    SyncError, commit_pending, git_available, git_available_with, parse_refusal, redact_token,
-    repo_lock, rule_text,
+    CancelFlag, ConflictFile, ConflictKind, Finding, GitError, GitOptions, GitVersion, Pulled,
+    Refusal, RepoLock, SAVE_MESSAGE, SyncError, commit_pending, git_available, git_available_with,
+    parse_refusal, pull_rebase, redact_token, repo_lock, rule_text,
 };
 #[cfg(feature = "team")]
 mod team;
 #[cfg(feature = "team")]
-pub use team::{Binding, Role};
+pub use team::{Binding, ConflictStore, Role};
 
 mod introspect;
 pub use introspect::{

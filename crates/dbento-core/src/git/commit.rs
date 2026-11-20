@@ -135,7 +135,7 @@ fn account_identity(binding: &Binding, opts: GitOptions) -> GitOptions {
 }
 
 /// A non-zero exit of `args` as an error.
-fn failed<S: AsRef<std::ffi::OsStr>>(args: &[S], stderr: String) -> SyncError {
+pub(super) fn failed<S: AsRef<std::ffi::OsStr>>(args: &[S], stderr: String) -> SyncError {
     GitError::Failed {
         command: run::command_line(args),
         stderr,
@@ -149,7 +149,7 @@ fn listed(args: &[&str], dir: &Path, opts: &GitOptions) -> Result<bool, SyncErro
 }
 
 /// Run a local git call that must succeed and return its stdout.
-fn local<S: AsRef<std::ffi::OsStr>>(
+pub(super) fn local<S: AsRef<std::ffi::OsStr>>(
     args: &[S],
     dir: &Path,
     opts: &GitOptions,
