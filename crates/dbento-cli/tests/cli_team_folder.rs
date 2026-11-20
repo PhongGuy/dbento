@@ -15,14 +15,14 @@ struct Env {
     tok: String,
 }
 
-async fn list(s: &MockServer, bare: &Path) {
+async fn list(s: &MockServer, bare: &Path, role: &str) {
     Mock::given(method("GET"))
         .and(path("/api/v1/workspaces"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([ws_json(
             &format!("file://{}", bare.display()),
             "acme",
             "shared",
-            "write",
+            role,
             "main"
         )])))
         .mount(s)
@@ -30,10 +30,14 @@ async fn list(s: &MockServer, bare: &Path) {
 }
 
 async fn joined() -> Env {
+    joined_as("write").await
+}
+
+async fn joined_as(role: &str) -> Env {
     let root = tempfile::tempdir().unwrap();
     let bare = seed(root.path(), TOML);
     let s = MockServer::start().await;
-    list(&s, &bare).await;
+    list(&s, &bare, role).await;
     let state = root.path().join("state");
     signed_in(&state, &s.uri());
     let (tok, ws) = (fresh_token(), root.path().join("ws"));
@@ -253,4 +257,21 @@ async fn a_conflict_exits_4_then_keep_mine_pushes_my_copy_and_unlink_keeps_the_f
     let (code, _, stderr) = e.run(None, &["status"]).await;
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.contains("not a team workspace"), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_read_member_keeps_following_the_server() {
+    let e = joined_as("read").await;
+    let theirs = TOML.replace("db.example", "theirs.example");
+    e.mate_pushes(&theirs);
+    let (code, stdout, stderr) = e.run(Some(&e.tok), &["sync"]).await;
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("read-only: pulled acme/shared"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(e.ws.join("dbento.toml")).unwrap(),
+        theirs,
+        "the teammate's change arrived"
+    );
+    let (_, status, _) = e.run(Some(&e.tok), &["status"]).await;
+    assert!(status.contains("unpushed:  0"), "{status}");
 }

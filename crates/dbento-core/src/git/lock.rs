@@ -43,7 +43,7 @@ pub fn repo_lock(dir: &Path, opts: &GitOptions) -> Result<RepoLock, SyncError> {
 }
 
 /// The absolute git dir of the repository holding `dir`.
-fn git_dir(dir: &Path, opts: &GitOptions) -> Result<PathBuf, SyncError> {
+pub(super) fn git_dir(dir: &Path, opts: &GitOptions) -> Result<PathBuf, SyncError> {
     let out = run::git_ok(
         &["rev-parse", "--absolute-git-dir"],
         dir,

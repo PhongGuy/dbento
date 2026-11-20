@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use super::lock::git_dir;
 use super::{GitError, GitOptions, SyncError, commit_pending, run};
-use crate::team::Binding;
+use crate::team::{Binding, Role};
 
 /// What a joined workspace keeps out of git: local databases, their side files and keys.
 const JOIN_GITIGNORE: &str = "*.db\n*.sqlite\n*.sqlite3\n*.duckdb\n*-wal\n*-shm\n*-journal\n\
@@ -36,7 +37,7 @@ pub enum CloneError {
 }
 
 /// Clone `binding.branch` of `url` into `binding.dir` (missing or empty); write and commit the
-/// join .gitignore when absent.
+/// join .gitignore when absent (a read member's patterns go to the local exclude file).
 pub fn clone(url: &str, binding: &Binding, opts: &GitOptions) -> Result<(), CloneError> {
     let dest = binding.dir.as_path();
     let name = dest.file_name().ok_or_else(|| {
@@ -81,12 +82,38 @@ pub fn clone(url: &str, binding: &Binding, opts: &GitOptions) -> Result<(), Clon
 }
 
 /// Write and commit the join .gitignore when `binding.dir` has none; also finishes a clone
-/// whose setup failed earlier.
+/// whose setup failed earlier. A read member gets the patterns in the repository's own
+/// exclude file instead, since a local commit it can never push would stop it following.
 pub(crate) fn set_up(binding: &Binding, opts: &GitOptions) -> Result<(), CloneError> {
     let dest = binding.dir.as_path();
-    if dest.join(".gitignore").symlink_metadata().is_err() {
-        fs::write(dest.join(".gitignore"), JOIN_GITIGNORE)?;
-        commit_pending(binding, "Add .gitignore", opts).map_err(CloneError::Setup)?;
+    match binding.role {
+        Role::Read => exclude_locally(dest, opts),
+        Role::Write => {
+            if dest.join(".gitignore").symlink_metadata().is_err() {
+                fs::write(dest.join(".gitignore"), JOIN_GITIGNORE)?;
+                commit_pending(binding, "Add .gitignore", opts).map_err(CloneError::Setup)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Appends the join patterns to `<git dir>/info/exclude` unless they are there already.
+fn exclude_locally(dest: &Path, opts: &GitOptions) -> Result<(), CloneError> {
+    let info = git_dir(dest, opts).map_err(CloneError::Setup)?.join("info");
+    fs::create_dir_all(&info)?;
+    let exclude = info.join("exclude");
+    let mut text = match fs::read_to_string(&exclude) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    if !text.contains(JOIN_GITIGNORE) {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(JOIN_GITIGNORE);
+        fs::write(&exclude, text)?;
     }
     Ok(())
 }

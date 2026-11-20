@@ -1,6 +1,6 @@
 use std::fs;
 
-use dbento_core::{Binding, CloneError, clone, unpushed};
+use dbento_core::{Binding, CloneError, Role, clone, unpushed};
 
 use crate::support::{PUBLIC_URL, Sandbox, binding, read, write};
 
@@ -42,6 +42,33 @@ fn a_clone_into_a_missing_folder_writes_and_commits_the_gitignore() {
     write(&dir, "local.db", "SQLite format 3");
     write(&dir, "id.pem", "key");
     assert_eq!(sb.git(&dir, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_read_member_ignores_locally_and_commits_nothing() {
+    let sb = Sandbox::new();
+    sb.origin();
+    let dir = sb.path().join("joined/ws");
+    let read_only = binding(&dir).with_role(Role::Read);
+    clone(&sb.url(), &read_only, &sb.options()).expect("clone");
+    assert_eq!(read(&dir, ".gitignore"), None, "no .gitignore is written");
+    assert_eq!(
+        unpushed(&read_only, &sb.options()).unwrap(),
+        0,
+        "nothing waits to be pushed"
+    );
+    let exclude = read(&dir, ".git/info/exclude").expect("exclude");
+    assert!(
+        IGNORED.iter().all(|p| exclude.lines().any(|l| l == *p)),
+        "{exclude}"
+    );
+    write(&dir, "local.db", "SQLite format 3");
+    write(&dir, "id.pem", "key");
+    assert_eq!(
+        sb.git(&dir, &["status", "--porcelain"]),
+        "",
+        "local databases and keys stay ignored"
+    );
 }
 
 #[test]
