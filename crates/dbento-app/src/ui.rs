@@ -534,9 +534,8 @@ fn navigate(
     }
 }
 
-/// A [`card_grid`] card's height and the gap between cards, in whole pixels. Three rows come
-/// to an odd 89 px, which keeps the kit's half-pixel snap of a dialog's top the same for every
-/// engine's form, so switching engines never nudges the connection dialog.
+/// A [`card_grid`] card's height and the gap between cards, in whole pixels, so a grid's height
+/// is never fractional. An odd row count gives an odd total, which callers inside a dialog rely on.
 const CARD_HEIGHT: f32 = 27.;
 const CARD_GAP: f32 = 4.;
 

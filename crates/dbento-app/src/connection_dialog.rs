@@ -1829,7 +1829,7 @@ const LABEL_WIDTH: f32 = 96.;
 
 impl Render for ConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let labels = [
+        let labels: [&str; ENGINES.len()] = [
             "Postgres",
             "SQLite",
             "MySQL",
@@ -2138,6 +2138,8 @@ pub fn engine_hint(engine: Engine) -> &'static str {
 }
 
 /// The engine cards per row: three keep "SQL Server" and its icon whole at the dialog's width.
+/// Keep the row count odd: the kit snaps a dialog's top by half a pixel by its height's parity,
+/// and an odd grid keeps that snap the same for every engine's form.
 const ENGINE_COLUMNS: usize = 3;
 
 /// The engines of `conn-engine`, in option order.
