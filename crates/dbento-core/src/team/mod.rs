@@ -3,6 +3,7 @@
 mod account;
 mod api;
 mod conflicts;
+mod team_file;
 
 use std::path::PathBuf;
 
@@ -11,6 +12,7 @@ pub use account::{
 };
 pub use api::{ApiError, PotluckClient, PotluckInfo, RemoteWorkspace, SignIn, public_url_of};
 pub use conflicts::ConflictStore;
+pub use team_file::{AccountRecord, BindingRecord, TeamData, TeamFile, TeamFileError};
 
 use crate::git::run::{self, Reach};
 use crate::git::{

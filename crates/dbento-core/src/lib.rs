@@ -84,9 +84,10 @@ mod team;
 pub use keychain::KeychainTokenStore;
 #[cfg(feature = "team")]
 pub use team::{
-    ApiError, Binding, ConflictStore, MemoryTokenStore, PotluckClient, PotluckInfo,
-    RemoteWorkspace, Role, ServerUrl, ServerUrlError, SignIn, SyncOutcome, TeamAccount, TeamToken,
-    TokenStore, public_url_of, sync_once,
+    AccountRecord, ApiError, Binding, BindingRecord, ConflictStore, MemoryTokenStore,
+    PotluckClient, PotluckInfo, RemoteWorkspace, Role, ServerUrl, ServerUrlError, SignIn,
+    SyncOutcome, TeamAccount, TeamData, TeamFile, TeamFileError, TeamToken, TokenStore,
+    public_url_of, sync_once,
 };
 
 mod introspect;
