@@ -239,6 +239,34 @@ async fn join_takes_over_a_folder_already_cloned_and_refuses_a_bound_one() {
 }
 
 #[tokio::test]
+async fn join_refuses_a_clone_of_another_repository_or_another_branch() {
+    let e = joined().await;
+    let foreign = e.sb.clone_as("foreign");
+    let url = format!("file://{}", e.bare.display());
+    e.sb.git(e.sb.path(), &["clone", "-q", "-b", "main", &url, "aside"]);
+    let aside = e.sb.path().join("aside");
+    e.sb.git(&aside, &["checkout", "-q", "-b", "other"]);
+    for dir in [foreign, aside] {
+        let err = e.join("acme/shared", dir.clone()).await.unwrap_err();
+        assert!(matches!(err, JoinError::NotEmpty(_)), "{err:?}");
+        assert!(
+            read(&dir, ".gitignore").is_none(),
+            "{} was set up anyway",
+            dir.display()
+        );
+    }
+    assert_eq!(
+        TeamFile::new(&e.paths.team)
+            .load()
+            .unwrap()
+            .bindings()
+            .len(),
+        1,
+        "no binding added"
+    );
+}
+
+#[tokio::test]
 async fn sync_pushes_local_work_and_reports_a_teammate_rename() {
     let e = joined().await;
     e.sb.git(&e.mate, &["pull", "-q", "--rebase"]);
