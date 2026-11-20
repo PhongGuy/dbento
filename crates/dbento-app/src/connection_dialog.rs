@@ -23,7 +23,7 @@ use gpui_kit::{
 
 use crate::confirm::{self, ChoiceStyle, with_keys};
 use crate::keymap::{SaveConnection, chip_keys, keys_for};
-use crate::sidebar::{color_name, tag_color};
+use crate::sidebar::{color_name, engine_icon, tag_color};
 use crate::theme;
 use crate::ui::{self, Icons};
 
@@ -1829,20 +1829,27 @@ const LABEL_WIDTH: f32 = 96.;
 
 impl Render for ConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let engine = ui::segmented(
+        let labels = [
+            "Postgres",
+            "SQLite",
+            "MySQL",
+            "DuckDB",
+            "SQL Server",
+            "SurrealDB",
+            "MongoDB",
+            "Redis",
+            "DynamoDB",
+        ];
+        let cards = ENGINES.iter().zip(labels).map(|(&engine, label)| ui::Card {
+            icon: engine_icon(engine),
+            label,
+            hint: engine_hint(engine),
+        });
+        let engine = ui::card_grid(
             "conn-engine",
-            &[
-                "Postgres",
-                "SQLite",
-                "MySQL",
-                "DuckDB",
-                "SQL Server",
-                "SurrealDB",
-                "MongoDB",
-                "Redis",
-                "DynamoDB",
-            ],
-            // An engine the picker does not offer highlights no option.
+            &cards.collect::<Vec<_>>(),
+            ENGINE_COLUMNS,
+            // An engine the picker does not offer highlights no card.
             ENGINES
                 .iter()
                 .position(|e| *e == self.engine)
@@ -1854,10 +1861,9 @@ impl Render for ConnectionForm {
             window,
             cx,
         );
-        // Each choice row sits in a flex row; the engine picker wraps within the field column.
         let mut first = vec![self.text_row("Name", "conn-name", Field::Name, cx)];
         first.extend(self.error_line(Some(ErrorAt::Field(Field::Name)), cx));
-        first.push(Self::row("Engine", h_flex().child(engine), cx));
+        first.push(Self::row("Engine", engine, cx));
         let mut sections: Vec<(&'static str, Vec<AnyElement>)> = vec![("Connection", first)];
         // Rows join the section of the same title, so Name and Engine lead Connection and the
         // common rows end Options, which SQLite's descriptor lacks.
@@ -2116,6 +2122,23 @@ impl Shown {
         }
     }
 }
+
+/// The engine card's mono hint: its default port, `file`, or what it asks for first.
+pub fn engine_hint(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => ":5432",
+        Engine::Sqlite | Engine::Duckdb => "file",
+        Engine::Mysql => ":3306",
+        Engine::Mssql => ":1433",
+        Engine::Surrealdb => ":8000",
+        Engine::Mongodb => ":27017",
+        Engine::Redis => ":6379",
+        Engine::Dynamodb => "region",
+    }
+}
+
+/// The engine cards per row: three keep "SQL Server" and its icon whole at the dialog's width.
+const ENGINE_COLUMNS: usize = 3;
 
 /// The engines of `conn-engine`, in option order.
 const ENGINES: [Engine; 9] = [

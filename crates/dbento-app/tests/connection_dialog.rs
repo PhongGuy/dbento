@@ -2,7 +2,8 @@ use crate::support;
 use dbento_app::explorer::{connection_id, part_id};
 
 use crate::support::{click_id, fill, form, label_of, opened, present};
-use dbento_app::connection_dialog::{Field, TestState};
+use dbento_app::connection_dialog::{Field, TestState, engine_hint};
+use dbento_core::{Engine, FieldKind, connection_form};
 use gpui_kit::px;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
@@ -664,14 +665,42 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
     cx.update_window(o.win, |_, w, cx| {
         w.render_frame(cx);
         let name = w.find("conn-name").bounds();
-        for ix in 0..9usize {
-            let option = w.within("conn-engine").find(ix).bounds();
+        let body = w.find("conn-body").bounds();
+        let cards: Vec<_> = (0..9usize)
+            .map(|ix| w.within("conn-engine").find(ix).bounds())
+            .collect();
+        for (ix, card) in cards.iter().enumerate() {
             assert!(
-                option.right() <= name.right(),
-                "{ix}: {option:?} overflows {name:?}"
+                card.size.width > px(0.) && card.size.height > px(0.),
+                "{ix}: {card:?} is hidden"
             );
-            assert!(option.size.width > px(0.), "{ix}: {option:?} is hidden");
+            assert!(
+                card.left() >= name.left() && card.right() <= name.right(),
+                "{ix}: {card:?} leaves the field column {name:?}"
+            );
+            assert!(
+                card.left() >= body.left() && card.right() <= body.right(),
+                "{ix}: {card:?} leaves the form {body:?}"
+            );
         }
+        // Three cards a row, rows stacked: same top within a row, the next row below.
+        for ix in 0..9usize {
+            let lead = cards[ix - ix % 3];
+            assert_eq!(cards[ix].top(), lead.top(), "{ix} shares its row's top");
+            if ix + 3 < 9 {
+                assert!(
+                    cards[ix + 3].top() >= cards[ix].bottom(),
+                    "{} sits under {ix}",
+                    ix + 3
+                );
+            }
+        }
+        // The grid fills the field column rather than shrinking to its content.
+        assert!(
+            name.right() - cards[2].right() <= px(4.),
+            "{:?} vs {name:?}",
+            cards[2]
+        );
     })
     .unwrap();
     cx.update_window(o.win, |_, w, cx| w.within("conn-engine").click(3usize, cx))
@@ -685,4 +714,39 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
         toml(&o),
         format!("{before}\n[connections.ducks]\nengine = \"duckdb\"\npath = \"data/app.duckdb\"\n")
     );
+}
+
+#[test]
+fn every_engine_card_hint_matches_its_form() {
+    let expected = [
+        (Engine::Postgres, ":5432"),
+        (Engine::Sqlite, "file"),
+        (Engine::Mysql, ":3306"),
+        (Engine::Duckdb, "file"),
+        (Engine::Mssql, ":1433"),
+        (Engine::Surrealdb, ":8000"),
+        (Engine::Mongodb, ":27017"),
+        (Engine::Redis, ":6379"),
+        (Engine::Dynamodb, "region"),
+    ];
+    for (engine, hint) in expected {
+        assert_eq!(engine_hint(engine), hint, "{engine:?}");
+        let port = connection_form(engine)
+            .sections
+            .iter()
+            .flat_map(|s| &s.fields)
+            .find_map(|f| {
+                let FieldKind::Port { default, .. } = f.kind else {
+                    return None;
+                };
+                Some(default)
+            });
+        if let Some(port) = port {
+            assert_eq!(
+                hint,
+                format!(":{port}"),
+                "{engine:?} hint drifts from its form"
+            );
+        }
+    }
 }
