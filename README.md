@@ -94,7 +94,7 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 - `dbento import datagrip`, `dbento import dbeaver` and `dbento import beekeeper` bring over connections and saved queries from DataGrip, DBeaver and Beekeeper Studio, and saved passwords go to the keychain.
 - The app checks for a new release at most once a day, and Settings has a switch to turn that off and a Check now button (also Ctrl+K U, or "Check for updates" in the palette). A banner offers the release or lets you skip it; the download is verified against a signed manifest and installed when you quit. This works for the AppImage, the macOS `.app` and the Windows installer. The `.deb` and anything else under `/usr`, builds from source, and a copy running from the mounted disk image are left to you.
 - `dbento self-update` checks for a newer release and replaces a standalone `dbento` download in place; `--yes` skips the question, and `--check` only reports (it exits 2 when a release is available). The CLI that ships with the app updates with the app.
-- Try it from a checkout without a database server: `make demo` (see [Try the demo](CONTRIBUTING.md#try-the-demo)).
+- Try it from a checkout without a database server: `make demo` (see [Try the demo](#try-the-demo)).
 
 ## How it works
 
@@ -218,7 +218,7 @@ The release also holds files that only the updater downloads. It checks them aga
 
 ## Build from source
 
-You need Rust 1.99 or newer, a C and C++ compiler and libclang, and on Linux the system libraries listed in [CONTRIBUTING.md](CONTRIBUTING.md#requirements). From a checkout, `make` builds and installs `dbento` and `dbento-app` (`make uninstall` removes them again). On Windows, or without `make`:
+You need Rust 1.99 or newer, a C and C++ compiler and libclang, and on Linux the system libraries listed in [CONTRIBUTING.md](CONTRIBUTING.md#requirements). From a checkout, `make` builds and installs `dbento` and `dbento-app`, and on Linux adds a desktop entry and the icon under `~/.local/share` (`make uninstall` removes them again). On Windows, or without `make`:
 
     cargo install --locked --path crates/dbento-cli
     cargo install --locked --path crates/dbento-app
@@ -226,6 +226,10 @@ You need Rust 1.99 or newer, a C and C++ compiler and libclang, and on Linux the
 The install options, the Cargo features and the demo workspace are in [CONTRIBUTING.md](CONTRIBUTING.md#build-from-source).
 
 ## Quick start
+
+### Try the demo
+
+From a checkout, `make demo` opens the app on a small SQLite shop with saved queries to try, with no database server or keychain needed. [CONTRIBUTING.md](CONTRIBUTING.md#try-the-demo) says what it holds.
 
 ### Your own workspace
 

@@ -105,7 +105,7 @@ Every push to `master` and every pull request runs `.github/workflows/ci.yml`:
 - **each-feature:** `make each-feature`.
 - **pilot:** `make pilot-check` against gpui-pilot on software Vulkan, without the session-mode scenarios, which need KDE's KWin and stay in the local gate along with the wheel recordings.
 
-A run dispatched with `windows` set also builds on Windows and runs the updater tests there. `zizmor.yml` audits the workflows on every push and pull request, and `attribution.yml` fails a pull request whose title, body or commits credit an AI agent. On a schedule, `advisories.yml` scans both lockfiles daily and `weekly.yml` runs clippy on beta and a check after `cargo update`.
+A run dispatched with `windows` set also builds on Windows and runs the updater tests there. `zizmor.yml` audits the workflows on every push to `master` and every pull request, and `attribution.yml` fails a pull request whose title, body or commits credit an AI agent. On a schedule, `advisories.yml` scans both lockfiles daily and `weekly.yml` runs clippy on beta and a check after `cargo update`.
 
 ## Filing an issue
 
