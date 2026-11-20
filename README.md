@@ -25,7 +25,7 @@
 | Redis and Valkey | `redis` (or `valkey`) | Redis commands, one per line | `.redis` |
 | Amazon DynamoDB | `dynamodb` (or `dynamo`) | PartiQL | `.partiql` |
 
-DuckDB, MongoDB, SurrealDB, Redis and DynamoDB are default Cargo features (`duckdb`, `mongodb`, `surrealdb`, `redis`, `dynamodb`) of the core, the command line, the MCP server and the app. A build with `--no-default-features` leaves them out, and leaving out DuckDB skips its C++ compile. Other engines are tracked in the [issue tracker](https://github.com/PhongGuy/dbento/issues).
+Other engines are tracked in the [issue tracker](https://github.com/PhongGuy/dbento/issues).
 
 ## Features
 
@@ -94,19 +94,13 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 - `dbento import datagrip`, `dbento import dbeaver` and `dbento import beekeeper` bring over connections and saved queries from DataGrip, DBeaver and Beekeeper Studio, and saved passwords go to the keychain.
 - The app checks for a new release at most once a day, and Settings has a switch to turn that off and a Check now button (also Ctrl+K U, or "Check for updates" in the palette). A banner offers the release or lets you skip it; the download is verified against a signed manifest and installed when you quit. This works for the AppImage, the macOS `.app` and the Windows installer. The `.deb` and anything else under `/usr`, builds from source, and a copy running from the mounted disk image are left to you.
 - `dbento self-update` checks for a newer release and replaces a standalone `dbento` download in place; `--yes` skips the question, and `--check` only reports (it exits 2 when a release is available). The CLI that ships with the app updates with the app.
-- Try it without a database server: `make demo` (see [Try the demo](#try-the-demo)).
+- Try it from a checkout without a database server: `make demo` (see [Try the demo](#try-the-demo)).
 
 ## How it works
 
 ### One core, thin shells
 
-All of the logic lives in `dbento-core`, a library with no UI: the workspace format, the keychain, the database drivers behind one async interface, streamed results, and the safety checks. Three thin shells call only its public API:
-
-| Crate | What it is |
-| --- | --- |
-| `dbento-cli` | The `dbento` command line, which also hosts the MCP server. |
-| `dbento-mcp` | The MCP server itself, built on rmcp. |
-| `dbento-app` | The `dbento-app` desktop app, built on GPUI. |
+All of the logic lives in one core library with no UI: the workspace format, the keychain, the database drivers behind one async interface, streamed results, and the safety checks. The `dbento` command line, the MCP server it hosts (`dbento mcp`) and the `dbento-app` desktop app are thin shells over it, so all three behave the same. The crates are described in [CONTRIBUTING.md](CONTRIBUTING.md#layout).
 
 ### A workspace is a folder
 
@@ -224,35 +218,18 @@ The release also holds files that only the updater downloads. It checks them aga
 
 ## Build from source
 
-You need:
-
-- Rust 1.99 or newer (the workspace's `rust-version`), from [rustup](https://rustup.rs).
-- A C and C++ compiler and libclang, for the bundled `pg_query` parser and DuckDB.
-- On Linux, the system libraries GPUI draws with. On Debian or Ubuntu:
-
-  ```sh
-  sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev libwayland-dev \
-    libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 libegl1 libclang-dev
-  ```
-
-From a checkout, run:
-
-    make
-
-This builds with 4 jobs (`make JOBS=8` for more) and installs `dbento` (the command line) and `dbento-app` (the desktop app) with `cargo install`. On Linux it also adds a desktop entry and the icon under `~/.local/share`. `make PREFIX=/some/dir` installs the binaries under `/some/dir/bin` instead, and `make uninstall` removes everything again. On macOS only the binaries are installed. On Windows, or to install without `make`, run the two installs by hand:
+You need Rust 1.99 or newer, a C and C++ compiler and libclang, and on Linux the system libraries listed in [CONTRIBUTING.md](CONTRIBUTING.md#requirements). From a checkout, `make` builds and installs `dbento` and `dbento-app`, and on Linux adds a desktop entry and the icon under `~/.local/share` (`make uninstall` removes them again). On Windows, or without `make`:
 
     cargo install --locked --path crates/dbento-cli
     cargo install --locked --path crates/dbento-app
 
-To build without installing, `cargo build --release` puts both binaries in `target/release`.
+The install options, the Cargo features and the demo workspace are in [CONTRIBUTING.md](CONTRIBUTING.md#build-from-source).
 
 ## Quick start
 
 ### Try the demo
 
-    make demo
-
-This opens the app on a small shop: customers, products, orders and 200,000 events in SQLite, with saved queries to open with Ctrl+O (Cmd+O on macOS) from the workspace's `queries/` folder (top customers, a scroll through every event, an `UPDATE` without `WHERE`, a slow query to cancel, and a write that the read-only `shop-prod` connection refuses). No database server or keychain is needed. Each run copies `examples/demo` fresh to `~/.cache/dbento-demo/workspace` and builds `shop.sqlite` from its `seed.sql`, and the app keeps its state in `~/.cache/dbento-demo/state`, so nothing you do in the demo reaches the repo or your own app settings.
+From a checkout, `make demo` opens the app on a small SQLite shop with saved queries to try, with no database server or keychain needed. [CONTRIBUTING.md](CONTRIBUTING.md#try-the-demo) says what it holds.
 
 ### Your own workspace
 
@@ -309,43 +286,9 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 
 `--connection <name>` (repeatable) exposes only the connections you name, and `--timeout <secs>` sets the statement timeout for every call (30 by default). Keep the desktop app open on the same workspace to approve or deny the writes the AI asks for.
 
-## Development
+## Contributing
 
-### Make targets
-
-| Target | What it does |
-| --- | --- |
-| `make check` | The merge gate: a RustSec advisory scan with `cargo deny`, `cargo fmt --check`, clippy with warnings as errors, and the full test suite. |
-| `make pilot-check` | Builds and runs the gpui-pilot tests in `tools/dbento-pilot`, which drive the real app, except the two wheel-scroll timing recordings. |
-| `make pilot-timing` | The wheel-scroll timing recordings alone. They wait for a quiet machine and refuse to measure a loaded one; a pass stamps the committed tree it ran on. |
-| `make timing-guard` | Fails when the grid, its scrolling or rendering, the wheel test or the gpui pins changed since `BASE` (default `origin/master`) and the current tree has no `pilot-timing` stamp. |
-| `make script-test` | The bash suites under `scripts/tests`. |
-| `make workflows-lint` | actionlint over `.github/workflows`. |
-| `make icons-check`, `make notices-check`, `make windows-check` | The icon exports, the third-party notices, and a Windows type-check through mingw. |
-| `make xwin-check`, `make xwin-build` | An msvc check and release-style build from Linux through cargo-xwin; `xwin-build` compiles shaders at runtime, so it is not for shipping. |
-| `make package` | The Linux CLI archive, `.deb` and AppImage, verified, in `target/dist/linux`. |
-| `make screenshots` | Regenerates the screenshots in `assets/screenshots` from the demo workspace under gpui-pilot. |
-| `make demo` | Opens the app on the demo workspace. |
-
-`make pilot-check` and `make screenshots` need the `gpui-pilot` server on your `PATH`, or `GPUI_PILOT_BIN` naming it. Install it with:
-
-```sh
-cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.6.0 gpui-pilot
-```
-
-A change to the results grid, its scrolling or rendering merges only once `make timing-guard` passes: run `make pilot-timing` on a quiet machine on the commit you merge. The paths it watches are listed in `scripts/timing-guard.sh`.
-
-### Tests against real databases
-
-Tests against database servers start containers through testcontainers: Postgres, MySQL and MariaDB, SQL Server, MongoDB, Valkey for Redis, SurrealDB, and Moto for DynamoDB. SQL Server containers start only once `DBENTO_MSSQL_ACCEPT_EULA=Y` accepts Microsoft's licence; without it those tests are skipped. With rootless podman, point it at the podman socket:
-
-    export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
-
-`cargo xtask db up` starts a matrix of Postgres versions with the Chinook dataset (`--datasets` adds pagila, airlines or the stress tables), or with `--engine mysql`, `mariadb` or `mssql` those servers, and prints the `export` lines that point the tests at it; `cargo xtask db down` removes the containers. To skip containers, point a variable at a running server: `DBENTO_PG_URL`, `DBENTO_MYSQL_URL`, `DBENTO_MARIADB_URL`, `DBENTO_MSSQL_URL`, `DBENTO_MONGO_URL`, `DBENTO_REDIS_URL`, `DBENTO_SURREAL_URL` or `DBENTO_DYNAMO_URL`.
-
-### Contributing
-
-Issues and pull requests are welcome. Before you open a pull request, run `make check` (and `make pilot-check` for a change to the app), and write commit messages in the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) style, such as `fix(core): ...`. Releasing is described in [RELEASING.md](RELEASING.md).
+Issues and pull requests are welcome. Building from source, the layout, the tests and checks, CI, the conventions for issues and pull requests, and the gpui-pilot QA setup are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
