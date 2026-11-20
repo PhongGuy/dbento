@@ -170,6 +170,25 @@ async fn a_dynamodb_connection_made_in_the_dialog_connects_and_saves() {
     fill(&pilot, "conn-access-key-id", DY_ACCESS_KEY).await;
     option(&pilot, "Environment variable").await;
     fill(&pilot, "conn-env", DY_SECRET_VAR).await;
+    // The engine grid pushes the box under the body's fold, where a click at its centre is
+    // clipped; wheel the body down and tick it only once it lies wholly in view.
+    let tree = pilot.ok("tree", json!({})).await;
+    let body = bounds(&tree, "conn-body");
+    pilot
+        .ok(
+            "scroll",
+            json!({ "target": { "x": body.x + body.w / 2.0, "y": body.y + body.h / 2.0 }, "notches": 20, "settle_ms": 300 }),
+        )
+        .await;
+    let tree = pilot.ok("tree", json!({})).await;
+    let (body, boxed) = (
+        bounds(&tree, "conn-body"),
+        bounds(&tree, "conn-consistent-read"),
+    );
+    assert!(
+        boxed.y >= body.y - 0.5 && boxed.y + boxed.h <= body.y + body.h + 0.5,
+        "consistent read {boxed:?} is not wholly inside the body {body:?}"
+    );
     click(&pilot, "conn-consistent-read", json!({})).await;
     click(&pilot, "conn-test", json!({})).await;
     let tree = until(&pilot, "the test", |t| {
