@@ -1,15 +1,20 @@
 //! Team mode's git layer: one hardened runner for every git call, and reading what a Potluck
 //! server says when it refuses a push.
 
+mod commit;
+mod lock;
 mod refusal;
 mod run;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+pub use commit::commit_pending;
+pub use lock::{RepoLock, repo_lock};
 pub use refusal::{Finding, Refusal, parse_refusal, redact_token, rule_text};
 
 /// How a team sync calls git: extra environment, time limits and an optional cancel flag.
@@ -184,6 +189,48 @@ pub enum GitError {
     #[error("unexpected git output: {0}")]
     Unexpected(String),
     /// Starting or talking to git failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// The commit message of a sync's save.
+pub const SAVE_MESSAGE: &str = "Save changes";
+
+/// Why a step of a team sync did not finish.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SyncError {
+    /// A git call failed.
+    #[error(transparent)]
+    Git(#[from] GitError),
+    /// The folder is not cleanly on the bound branch; nothing was written.
+    #[error("workspace is not on {expected}")]
+    WrongBranch {
+        /// The bound branch.
+        expected: String,
+        /// The branch checked out; `None` when `HEAD` is detached or a rebase, merge or
+        /// cherry-pick is under way.
+        found: Option<String>,
+    },
+    /// Another sync held the repository lock for the whole wait.
+    #[error("another Dbento is syncing this workspace; try again")]
+    Busy {
+        /// The lock file.
+        lock: PathBuf,
+    },
+    /// The local branch is missing commits the server's branch has.
+    #[error("the local branch does not contain origin/{branch}")]
+    Diverged {
+        /// The bound branch.
+        branch: String,
+    },
+    /// The server's branch moved on every push attempt.
+    #[error("the server kept moving; gave up after {pushes} pushes")]
+    Raced {
+        /// How many pushes were tried.
+        pushes: u32,
+    },
+    /// Reading or writing a file failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

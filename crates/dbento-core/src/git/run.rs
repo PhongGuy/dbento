@@ -112,7 +112,7 @@ pub(crate) fn git_ok<S: AsRef<OsStr>>(
 }
 
 /// `git` followed by `args`, for error messages.
-fn command_line<S: AsRef<OsStr>>(args: &[S]) -> String {
+pub(crate) fn command_line<S: AsRef<OsStr>>(args: &[S]) -> String {
     let mut line = String::from("git");
     for arg in args {
         line.push(' ');

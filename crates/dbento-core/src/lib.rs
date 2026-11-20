@@ -72,9 +72,14 @@ pub use watch::{WATCH_DEBOUNCE, WatchError, WatchEvent, WorkspaceWatcher};
 mod git;
 #[cfg(feature = "team")]
 pub use git::{
-    CancelFlag, Finding, GitError, GitOptions, GitVersion, Refusal, git_available,
-    git_available_with, parse_refusal, redact_token, rule_text,
+    CancelFlag, Finding, GitError, GitOptions, GitVersion, Refusal, RepoLock, SAVE_MESSAGE,
+    SyncError, commit_pending, git_available, git_available_with, parse_refusal, redact_token,
+    repo_lock, rule_text,
 };
+#[cfg(feature = "team")]
+mod team;
+#[cfg(feature = "team")]
+pub use team::{Binding, Role};
 
 mod introspect;
 pub use introspect::{

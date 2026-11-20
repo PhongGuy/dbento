@@ -92,3 +92,110 @@ pub fn real_git() -> PathBuf {
         .expect("sh runs");
     PathBuf::from(String::from_utf8(out.stdout).expect("utf-8").trim())
 }
+
+pub const PUBLIC_URL: &str = "http://127.0.0.1:9";
+
+/// The binding of workspace `dir` on `main` for user `ada`.
+pub fn binding(dir: &Path) -> dbento_core::Binding {
+    dbento_core::Binding::new(dir, PUBLIC_URL, "main").account(PUBLIC_URL, "ada")
+}
+
+impl Sandbox {
+    /// Give the sandbox's global git config a user identity.
+    pub fn set_identity(&self, name: &str, email: &str) {
+        let text = format!("[user]\n\tname = {name}\n\temail = {email}\n");
+        fs::write(self.path().join("gitconfig"), text).expect("gitconfig");
+    }
+
+    fn command(&self, cwd: &Path, args: &[&str]) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(cwd).envs(self.env());
+        for who in ["AUTHOR", "COMMITTER"] {
+            cmd.env(format!("GIT_{who}_NAME"), "Teammate");
+            cmd.env(format!("GIT_{who}_EMAIL"), "mate@example.com");
+        }
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_CONFIG_PARAMETERS",
+        ] {
+            cmd.env_remove(name);
+        }
+        cmd
+    }
+
+    /// Run the real git as a teammate in `cwd`, require success, return stdout.
+    pub fn git(&self, cwd: &Path, args: &[&str]) -> String {
+        let out = self.command(cwd, args).output().expect("git runs");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "git {args:?} failed: {err}");
+        String::from_utf8(out.stdout).expect("utf-8 stdout")
+    }
+
+    pub fn rev(&self, repo: &Path, spec: &str) -> String {
+        self.git(repo, &["rev-parse", spec]).trim().to_owned()
+    }
+
+    pub fn url(&self) -> String {
+        format!("file://{}", self.path().join("origin.git").display())
+    }
+
+    /// A bare `origin.git` on `main` holding `dbento.toml` and `queries/a.sql`.
+    pub fn origin(&self) {
+        self.git(
+            self.path(),
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+        );
+        self.git(self.path(), &["init", "-q", "-b", "main", "seed"]);
+        let seed = self.path().join("seed");
+        write(&seed, "dbento.toml", "name = \"seed\"\n");
+        write(&seed, "queries/a.sql", "select 1;\n");
+        self.git(&seed, &["add", "-A"]);
+        self.git(&seed, &["commit", "-q", "-m", "seed"]);
+        self.git(&seed, &["push", "-q", &self.url(), "main"]);
+    }
+
+    /// A plain clone of origin at `<sandbox>/<name>` on `main`.
+    pub fn clone_as(&self, name: &str) -> PathBuf {
+        self.git(
+            self.path(),
+            &["clone", "-q", "-b", "main", &self.url(), name],
+        );
+        self.path().join(name)
+    }
+
+    /// In teammate clone `repo`: write `rel` (delete it on `None`), commit and push.
+    pub fn teammate(&self, repo: &Path, rel: &str, text: Option<&str>) {
+        match text {
+            Some(text) => write(repo, rel, text),
+            None => fs::remove_file(repo.join(rel)).expect("remove"),
+        }
+        self.git(repo, &["add", "-A"]);
+        self.git(repo, &["commit", "-q", "-m", &format!("teammate {rel}")]);
+        self.git(repo, &["push", "-q", "origin", "main"]);
+    }
+
+    /// `rel` on origin's `main`, `None` when absent.
+    pub fn origin_show(&self, rel: &str) -> Option<String> {
+        let spec = format!("main:{rel}");
+        let args = ["--git-dir", "origin.git", "show", spec.as_str()];
+        let out = self.command(self.path(), &args).output().expect("git runs");
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Every object reachable in origin, one per line.
+    pub fn origin_objects(&self) -> String {
+        self.git(
+            self.path(),
+            &["--git-dir", "origin.git", "rev-list", "--objects", "--all"],
+        )
+    }
+
+    #[cfg(unix)]
+    pub fn hook(&self, name: &str, body: &str) {
+        self.script(&self.path().join("origin.git/hooks").join(name), body);
+    }
+}
