@@ -12,6 +12,8 @@ mod run;
 mod secret;
 mod self_update;
 mod table;
+#[cfg(feature = "team")]
+mod team;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -28,6 +30,13 @@ pub(crate) enum Exit {
     Failed = 1,
     Refused = 2,
     Usage = 3,
+    #[allow(dead_code, reason = "the team folder commands report it")]
+    Conflicted = 4,
+    #[cfg_attr(
+        not(feature = "team"),
+        allow(dead_code, reason = "only team commands sign out")
+    )]
+    SignedOut = 5,
 }
 
 #[derive(Parser)]
@@ -85,6 +94,12 @@ enum Command {
     Mcp(mcp::McpArgs),
     /// Check for a newer dbento and install it when this copy is a standalone download.
     SelfUpdate(self_update::SelfUpdateArgs),
+    /// Sync a workspace with a Potluck team server.
+    #[cfg(feature = "team")]
+    Team {
+        #[command(subcommand)]
+        action: team::TeamCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -266,6 +281,8 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
         } => return import::beekeeper(cli.workspace.as_deref(), &args),
         Command::Mcp(args) => return mcp::serve(cli.workspace.as_deref(), &args).await,
         Command::SelfUpdate(args) => return Ok(self_update::run(&args).await),
+        #[cfg(feature = "team")]
+        Command::Team { action } => return Ok(team::run(cli.workspace.as_deref(), action)),
         Command::Secret { action } => {
             let ws = open_workspace(cli.workspace.as_deref())?;
             match action {
@@ -318,9 +335,9 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
     Ok(Exit::Ok)
 }
 
-/// Whether the first token is `secret`, after only `--workspace <dir>` or `--workspace=<dir>`.
-/// Any other flag first means the invocation is not clearly a secret one.
-fn subcommand_is_secret(args: impl Iterator<Item = String>) -> bool {
+/// The first token when it is `secret` or `team`, whose arguments may hold a pasted secret,
+/// after only `--workspace <dir>` or `--workspace=<dir>`. Any other flag first means neither.
+fn secret_bearing_subcommand(args: impl Iterator<Item = String>) -> Option<&'static str> {
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -328,11 +345,12 @@ fn subcommand_is_secret(args: impl Iterator<Item = String>) -> bool {
                 args.next();
             }
             a if a.starts_with("--workspace=") => {}
-            a if a.starts_with('-') => return false,
-            a => return a == "secret",
+            "secret" => return Some("secret"),
+            "team" if cfg!(feature = "team") => return Some("team"),
+            _ => return None,
         }
     }
-    false
+    None
 }
 
 fn main() -> ExitCode {
@@ -341,9 +359,11 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(e) => {
             // A clap message quotes the offending argument, which could be a secret.
-            if e.use_stderr() && subcommand_is_secret(std::env::args().skip(1)) {
+            if e.use_stderr()
+                && let Some(name) = secret_bearing_subcommand(std::env::args().skip(1))
+            {
                 eprintln!(
-                    "error: invalid arguments for `dbento secret`; see `dbento secret --help`"
+                    "error: invalid arguments for `dbento {name}`; see `dbento {name} --help`"
                 );
                 return ExitCode::from(Exit::Usage as u8);
             }

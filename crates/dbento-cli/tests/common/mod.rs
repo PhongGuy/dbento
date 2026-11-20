@@ -1,6 +1,9 @@
 //! Helpers shared by the CLI integration tests.
 #![allow(dead_code)] // not every feature set uses every helper
 
+#[cfg(feature = "team")]
+pub mod team;
+
 use std::path::Path;
 use tempfile::TempDir;
 

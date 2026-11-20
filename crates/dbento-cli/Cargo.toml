@@ -17,7 +17,7 @@ name = "dbento"
 path = "src/main.rs"
 
 [features]
-default = ["duckdb", "mongodb", "surrealdb", "redis", "dynamodb"]
+default = ["duckdb", "mongodb", "surrealdb", "redis", "dynamodb", "team"]
 # Forwarded so a default edge to core cannot switch DuckDB on through feature unification.
 duckdb = ["dbento-core/duckdb", "dbento-mcp/duckdb"]
 # Forwarded so a default edge to core cannot switch MongoDB on through feature unification.
@@ -28,6 +28,8 @@ surrealdb = ["dbento-core/surrealdb", "dbento-mcp/surrealdb"]
 redis = ["dbento-core/redis", "dbento-mcp/redis"]
 # Forwarded so a default edge to core cannot switch DynamoDB on through feature unification.
 dynamodb = ["dbento-core/dynamodb", "dbento-mcp/dynamodb"]
+# `dbento team`: sync a workspace folder with a Potluck team server.
+team = ["dbento-core/team"]
 
 [dependencies]
 dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain", "update"] }
