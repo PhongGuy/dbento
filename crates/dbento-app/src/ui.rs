@@ -483,6 +483,27 @@ pub fn segmented_ids(
     segmented_row(id.into(), options, selected, on_select, window, cx)
 }
 
+/// The option a navigation key moves to in `len` options laid out `columns` per row:
+/// Left/Right step one without wrapping, Up/Down move one row and stay put where no option
+/// sits, Home/End jump to the ends. `None` for any other key.
+pub fn grid_step(key: &str, selected: usize, len: usize, columns: usize) -> Option<usize> {
+    let last = len.saturating_sub(1);
+    let columns = columns.max(1);
+    let to = match key {
+        "left" => selected.saturating_sub(1),
+        "right" => (selected + 1).min(last),
+        "up" => selected.checked_sub(columns).unwrap_or(selected),
+        "down" => Some(selected + columns)
+            .filter(|&below| below < len)
+            .unwrap_or(selected),
+        "home" => 0,
+        "end" => last,
+        _ => return None,
+    };
+    // An empty grid still claims its navigation keys, so they never leak to the parent.
+    Some(if len == 0 { selected } else { to })
+}
+
 fn segmented_row(
     id: ElementId,
     labels: Vec<(ElementId, &'static str)>,
@@ -500,7 +521,7 @@ fn segmented_row(
     let focused = focus.is_focused(window);
     let theme = cx.theme();
     let on_select = Rc::new(on_select);
-    let last = labels.len().saturating_sub(1);
+    let len = labels.len();
     let options = labels.into_iter().enumerate().map(|(ix, (option, label))| {
         let colors = segment_colors(ix == selected, cx);
         let on_select = Rc::clone(&on_select);
@@ -533,12 +554,8 @@ fn segmented_row(
         .test_support()
         .track_focus(&focus)
         .on_key_down(move |event, window, cx| {
-            let to = match event.keystroke.key.as_str() {
-                "left" | "up" => selected.saturating_sub(1),
-                "right" | "down" => (selected + 1).min(last),
-                "home" => 0,
-                "end" => last,
-                _ => return,
+            let Some(to) = grid_step(event.keystroke.key.as_str(), selected, len, 1) else {
+                return;
             };
             cx.stop_propagation();
             if to != selected {
