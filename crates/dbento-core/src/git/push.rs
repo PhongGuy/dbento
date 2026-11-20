@@ -53,8 +53,9 @@ pub fn push(binding: &Binding, opts: &GitOptions) -> Result<PushOutcome, SyncErr
 }
 
 /// With more than one unpushed commit, replace them with one `SAVE_MESSAGE` commit of the same
-/// tree on `origin/<branch>`, so blobs only the dropped commits held are never pushed. Returns
-/// whether `HEAD` moved; commits that cancel out leave the branch at `origin/<branch>`.
+/// tree on `origin/<branch>`, so blobs only the dropped commits held are never pushed. The index
+/// is left alone. Returns whether `HEAD` moved; commits that cancel out leave the branch at
+/// `origin/<branch>`.
 pub fn squash_unpushed(binding: &Binding, opts: &GitOptions) -> Result<bool, SyncError> {
     let dir = binding.dir.as_path();
     ensure_on_branch(binding, opts)?;
@@ -73,26 +74,36 @@ pub fn squash_unpushed(binding: &Binding, opts: &GitOptions) -> Result<bool, Syn
         }
         _ => return Err(failed(&ancestor, out.stderr)),
     }
-    let old = String::from_utf8_lossy(&local(&["rev-parse", "HEAD"], dir, opts)?)
-        .trim()
-        .to_owned();
-    local(&["reset", "-q", "--soft", remote.as_str()], dir, opts)?;
-    // Exit 0 from a quiet cached diff means the unpushed commits changed nothing in sum.
-    let diff = ["diff", "--cached", "--quiet"];
-    let out = run::git(&diff, dir, run::Reach::Local, opts)?;
-    match out.status.code() {
-        Some(0) => return Ok(true),
-        Some(1) => {}
-        _ => return Err(failed(&diff, out.stderr)),
-    }
-    // A refused commit puts the branch back where it was, so nothing is left half squashed.
-    let commit = ["commit", "-q", "-m", SAVE_MESSAGE];
-    let committed = with_identity(binding, opts).and_then(|o| local(&commit, dir, &o));
-    if let Err(e) = committed {
+    // Build the squash from the saved tree rather than the index, so anything staged by hand
+    // stays staged and out of the commit. Saves that cancel out leave the remote tip itself.
+    let old = rev(dir, "HEAD", opts)?;
+    let old_tree = rev(dir, &format!("{old}^{{tree}}"), opts)?;
+    let target = if old_tree == rev(dir, &format!("{remote}^{{tree}}"), opts)? {
+        remote
+    } else {
+        let commit = [
+            "commit-tree",
+            old_tree.as_str(),
+            "-p",
+            remote.as_str(),
+            "-m",
+            SAVE_MESSAGE,
+        ];
+        let made = local(&commit, dir, &with_identity(binding, opts)?)?;
+        String::from_utf8_lossy(&made).trim().to_owned()
+    };
+    // A failed move puts the branch back where it was, so nothing is left half squashed.
+    if let Err(e) = local(&["reset", "-q", "--soft", target.as_str()], dir, opts) {
         local(&["reset", "-q", "--soft", old.as_str()], dir, opts)?;
         return Err(e);
     }
     Ok(true)
+}
+
+/// The full id `spec` names; it must name something.
+fn rev(dir: &std::path::Path, spec: &str, opts: &GitOptions) -> Result<String, SyncError> {
+    let out = local(&["rev-parse", "--verify", "-q", spec], dir, opts)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_owned())
 }
 
 /// How many commits of the bound branch `origin/<branch>` lacks, as the last fetch left it.

@@ -178,3 +178,25 @@ fn push_refuses_a_workspace_off_its_branch() {
     let err = push(&binding(&w), &sb.options()).unwrap_err();
     assert!(matches!(err, SyncError::WrongBranch { .. }), "{err:?}");
 }
+
+#[test]
+fn a_file_staged_by_hand_stays_out_of_the_squash() {
+    let sb = Sandbox::new();
+    let w = workspace(&sb);
+    let b = binding(&w);
+    write(&w, "notes.txt", "local only\n");
+    sb.git(&w, &["add", "--", "notes.txt"]);
+    save(&sb, &w, "queries/1.sql", "select 1;\n");
+    save(&sb, &w, "queries/2.sql", "select 2;\n");
+    let tree = sb.rev(&w, "HEAD^{tree}");
+    assert!(squash_unpushed(&b, &sb.options()).unwrap());
+    assert_eq!(sb.rev(&w, "HEAD^{tree}"), tree);
+    assert_eq!(
+        sb.git(&w, &["ls-tree", "--name-only", "HEAD", "--", "notes.txt"]),
+        ""
+    );
+    assert_eq!(
+        sb.git(&w, &["diff", "--cached", "--name-only"]).trim(),
+        "notes.txt"
+    );
+}
