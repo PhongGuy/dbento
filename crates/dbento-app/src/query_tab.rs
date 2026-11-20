@@ -1401,8 +1401,9 @@ impl QueryTab {
         self.prompting.is_some()
     }
 
-    /// Asks Commit or Roll back once per new apply prompt. Enter commits; Escape, Roll back
-    /// and a dialog closed unanswered all roll back, and only while that prompt still stands.
+    /// Asks Commit or Roll back once per new apply prompt. Focus opens on Roll back and Enter
+    /// answers the focused button; Escape and a dialog closed unanswered also roll back, and
+    /// only while that prompt still stands.
     fn sync_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let current = self.model.read(cx).apply_prompt().map(|p| p.id);
         if self.prompting.is_some() && self.prompting != current {
@@ -1433,7 +1434,7 @@ impl QueryTab {
                     danger: false,
                 },
             ],
-            default: 1,
+            default: 0,
             cancel: 0,
         };
         self.prompting = Some(id);

@@ -73,6 +73,66 @@ fn space_on_the_apply_prompt_still_rolls_back(cx: &mut TestAppContext) {
     assert!(present(cx, o.win, "pending-changes"));
 }
 
+fn staged_prompt(cx: &mut TestAppContext) -> support::Opened {
+    let o = launched(
+        cx,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES (1, 'b');",
+        "",
+    );
+    o.open_relation(cx, "t", RelationKind::Table);
+    o.wait_browse(cx, "SELECT *\nFROM main.t\nORDER BY id ASC");
+    let m = o.model(cx);
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)),
+        "the cell edit stages"
+    );
+    cx.run_until_parked();
+    cx.update_window(o.win, |_, w, cx| w.click("save-edits", cx))
+        .unwrap();
+    wait_real(cx, "the prompt", |cx| {
+        present(cx, o.win, "confirm-sql-editor")
+    });
+    o
+}
+
+fn focused(cx: &mut TestAppContext, o: &support::Opened, id: &'static str) -> bool {
+    cx.update_window(o.win, |_, w, cx| {
+        w.render_frame(cx);
+        w.find(id).focused() == Some(true)
+    })
+    .unwrap()
+}
+
+// Enter answers the focused button, and the prompt opens on Roll back: Enter never writes.
+#[gpui_kit::test]
+fn enter_on_the_apply_prompt_rolls_back(cx: &mut TestAppContext) {
+    let o = staged_prompt(cx);
+    assert!(focused(cx, &o, "apply-rollback"));
+    cx.update_window(o.win, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    wait_real(cx, "the prompt to close", |cx| {
+        !present(cx, o.win, "confirm-dialog")
+    });
+    assert_eq!(o.fx.count("SELECT count(*) FROM t WHERE name = 'z'"), 0);
+    assert!(present(cx, o.win, "pending-changes"));
+}
+
+// Tab moves the ring to Commit and Enter then commits what the ring shows.
+#[gpui_kit::test]
+fn tab_then_enter_commits_with_the_ring_on_commit(cx: &mut TestAppContext) {
+    let o = staged_prompt(cx);
+    cx.update_window(o.win, |_, w, cx| w.press("tab", cx))
+        .unwrap();
+    assert!(focused(cx, &o, "apply-commit"));
+    assert!(!focused(cx, &o, "apply-rollback"));
+    cx.update_window(o.win, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    wait_real(cx, "the commit", |cx| {
+        !present(cx, o.win, "pending-changes")
+    });
+    assert_eq!(o.fx.count("SELECT count(*) FROM t WHERE name = 'z'"), 1);
+}
+
 struct Preview {
     sql: &'static str,
     state: Entity<EditorState>,
