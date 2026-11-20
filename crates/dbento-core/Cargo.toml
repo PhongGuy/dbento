@@ -111,7 +111,7 @@ update = [
 # The workspace folder watcher: debounced notify events turned into a reload signal.
 watch = ["dep:notify-debouncer-full"]
 # Team mode: a workspace synced with a Potluck server through the git CLI.
-team = ["keychain"]
+team = ["keychain", "dep:ureq"]
 
 [dev-dependencies]
 tempfile.workspace = true
