@@ -38,7 +38,7 @@ pub enum ApiError {
     #[error("this server cannot host Dbento workspaces: {0}")]
     Incompatible(String),
     /// The token is missing, expired or revoked (401).
-    #[error("not signed in to the team server")]
+    #[error("the server did not accept the token; run `dbento team login`")]
     Unauthenticated,
     /// The account may not do this (403).
     #[error("the team server refused: {0}")]

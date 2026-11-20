@@ -9,5 +9,6 @@ mod pull;
 mod push;
 mod refusal;
 mod runner;
+mod session;
 mod support;
 mod sync;
