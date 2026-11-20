@@ -14,6 +14,8 @@ mod self_update;
 mod table;
 #[cfg(feature = "team")]
 mod team;
+#[cfg(feature = "team")]
+mod team_folder;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -30,7 +32,10 @@ pub(crate) enum Exit {
     Failed = 1,
     Refused = 2,
     Usage = 3,
-    #[allow(dead_code, reason = "the team folder commands report it")]
+    #[cfg_attr(
+        not(feature = "team"),
+        allow(dead_code, reason = "only team folder commands conflict")
+    )]
     Conflicted = 4,
     #[cfg_attr(
         not(feature = "team"),

@@ -37,6 +37,8 @@ mod cli_self_update;
 mod cli_surreal;
 #[cfg(feature = "team")]
 mod cli_team_account;
+#[cfg(all(feature = "team", unix))]
+mod cli_team_folder;
 mod cli_torture;
 mod cli_workspace;
 mod common;

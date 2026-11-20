@@ -1,10 +1,10 @@
-//! `dbento team`: sign in to a Potluck team server, sign out, and list its workspaces.
-//! The password and token come from a prompt or stdin, never argv, and the token is kept
-//! only in the token store.
+//! `dbento team`: sign in to a Potluck team server, sign out, list its workspaces, and hand
+//! the folder commands to `team_folder`. The password and token come from a prompt or stdin,
+//! never argv, and the token is kept only in the token store.
 
 use std::fmt::Display;
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use dbento_core::paths::StatePaths;
@@ -14,8 +14,8 @@ use dbento_core::{
     team_login, team_logout, team_workspaces,
 };
 
-use crate::Exit;
 use crate::secret::read_secret;
+use crate::{Exit, team_folder};
 
 #[derive(clap::Subcommand)]
 pub(crate) enum TeamCommand {
@@ -52,16 +52,92 @@ pub(crate) enum TeamCommand {
         #[arg(long)]
         user: Option<String>,
     },
+    /// Clone a team workspace into a new or empty folder and bind it for syncing.
+    ///
+    /// To share an existing local workspace, a server admin imports it with
+    /// `potluck admin workspace create --import`.
+    Join {
+        /// The team server's address.
+        server: String,
+        /// The workspace as `team/slug`.
+        name: String,
+        /// The folder to clone into; it must be missing or empty.
+        dir: PathBuf,
+        /// The account, when several are signed in to the server.
+        #[arg(long)]
+        user: Option<String>,
+    },
+    /// Show the folder's team binding, account and sync state, without calling the server.
+    Status,
+    /// Save, pull and push the folder once.
+    Sync,
+    /// Settle one conflicted path, keeping your saved copy or the server's side.
+    Resolve {
+        /// The path relative to the workspace, as `sync` printed it.
+        path: String,
+        /// Put your saved copy back and sync it.
+        #[arg(
+            long,
+            conflicts_with = "take_theirs",
+            required_unless_present = "take_theirs"
+        )]
+        keep_mine: bool,
+        /// Keep the server's side and drop your saved copy.
+        #[arg(long)]
+        take_theirs: bool,
+    },
+    /// Stop syncing the folder; its files and git history stay.
+    Unlink,
 }
 
 /// Runs one team command. Every failure is printed here as `error: <message>`, so this never
 /// hands an error back to `main`.
-pub(crate) fn run(_workspace: Option<&Path>, cmd: TeamCommand) -> Exit {
+pub(crate) fn run(workspace: Option<&Path>, cmd: TeamCommand) -> Exit {
     let Some(paths) = StatePaths::from_env() else {
         return failed("cannot find a state directory; set DBENTO_STATE_DIR");
     };
     let tokens = token_store(&paths);
+    // Folder commands act on `--workspace`, else the working directory, made absolute so a
+    // binding is found by the same key it was recorded under.
+    let folder = || match workspace {
+        Some(dir) => std::path::absolute(dir),
+        None => std::env::current_dir(),
+    };
     match cmd {
+        TeamCommand::Join {
+            server,
+            name,
+            dir,
+            user,
+        } => match std::path::absolute(&dir) {
+            Ok(dir) => team_folder::join(
+                tokens.as_ref(),
+                &paths,
+                &server,
+                &name,
+                &dir,
+                user.as_deref(),
+            ),
+            Err(e) => failed(e),
+        },
+        TeamCommand::Status => match folder() {
+            Ok(dir) => team_folder::status(tokens.as_ref(), &paths, &dir),
+            Err(e) => failed(e),
+        },
+        TeamCommand::Sync => match folder() {
+            Ok(dir) => team_folder::sync(tokens.as_ref(), &paths, &dir),
+            Err(e) => failed(e),
+        },
+        TeamCommand::Resolve {
+            path, keep_mine, ..
+        } => match folder() {
+            Ok(dir) => team_folder::resolve(tokens.as_ref(), &paths, &dir, &path, keep_mine),
+            Err(e) => failed(e),
+        },
+        TeamCommand::Unlink => match folder() {
+            Ok(dir) => team_folder::unlink(&paths, &dir),
+            Err(e) => failed(e),
+        },
         TeamCommand::Login {
             server,
             user,
@@ -181,13 +257,13 @@ fn parse_server(text: &str) -> Result<ServerUrl, Exit> {
     ServerUrl::parse(text).map_err(failed)
 }
 
-fn failed(e: impl Display) -> Exit {
+pub(crate) fn failed(e: impl Display) -> Exit {
     eprintln!("error: {e}");
     Exit::Failed
 }
 
 /// A 401 means the session is gone, which callers tell apart from other failures by exit code.
-fn api_failed(e: &ApiError) -> Exit {
+pub(crate) fn api_failed(e: &ApiError) -> Exit {
     match e {
         ApiError::Unauthenticated => {
             eprintln!("error: {e}");
