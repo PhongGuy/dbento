@@ -88,14 +88,16 @@ pub fn lease_from(taken: &mut BTreeSet<usize>) -> Option<usize> {
     Some(free)
 }
 
-fn leases() -> &'static Mutex<BTreeSet<usize>> {
-    static LEASES: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
-    &LEASES
+/// The regions this process holds, per sanitized endpoint, so endpoints never share a set.
+fn leases() -> &'static Mutex<HashMap<String, BTreeSet<usize>>> {
+    static LEASES: OnceLock<Mutex<HashMap<String, BTreeSet<usize>>>> = OnceLock::new();
+    LEASES.get_or_init(Mutex::default)
 }
 
 /// A region held for one endpoint across every process on the machine, given back when dropped,
 /// even by a handle that failed to seed.
 pub struct RegionLease {
+    server: String,
     index: usize,
     // An exclusive flock on the region's lock file; the kernel drops it when a process dies.
     _lock: File,
@@ -127,7 +129,8 @@ impl RegionLease {
     /// Walks the regions this process does not hold, lowest first, and keeps the first whose
     /// lock file no other process holds.
     fn try_take(dir: &Path, server: &str) -> Option<Self> {
-        let mut taken = leases().lock().unwrap_or_else(|p| p.into_inner());
+        let mut all = leases().lock().unwrap_or_else(|p| p.into_inner());
+        let taken = all.entry(server.to_owned()).or_default();
         let mut skipped = taken.clone();
         while let Some(index) = lease_from(&mut skipped) {
             let path = dir.join(format!("{server}-{}.lock", REGIONS[index]));
@@ -140,7 +143,11 @@ impl RegionLease {
             match file.try_lock() {
                 Ok(()) => {
                     taken.insert(index);
-                    return Some(Self { index, _lock: file });
+                    return Some(Self {
+                        server: server.to_owned(),
+                        index,
+                        _lock: file,
+                    });
                 }
                 Err(TryLockError::WouldBlock) => {}
                 Err(TryLockError::Error(e)) => panic!("cannot lock {}: {e}", path.display()),
@@ -157,10 +164,13 @@ impl RegionLease {
 
 impl Drop for RegionLease {
     fn drop(&mut self) {
-        leases()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.index);
+        let mut all = leases().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(taken) = all.get_mut(&self.server) {
+            taken.remove(&self.index);
+            if taken.is_empty() {
+                all.remove(&self.server);
+            }
+        }
     }
 }
 
