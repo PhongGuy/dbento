@@ -107,7 +107,11 @@ pub fn choice_keys(spec: &Ask, ix: usize) -> Option<&'static str> {
 /// `margin_top`.
 pub fn frame(dialog: Dialog, width: Pixels, edge: Option<Hsla>, cx: &App) -> Dialog {
     let theme = cx.theme();
+    // The kit centres the popup's box in the window and then rounds the offset to the requested
+    // top, so a surface in flow lands half a pixel off whenever its height's parity changes.
+    // Out of flow, that box is empty and the top no longer depends on the content.
     let dialog = dialog
+        .absolute()
         .w(width)
         .p_0()
         .close_button(false)
