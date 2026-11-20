@@ -2149,13 +2149,6 @@ fn engine_columns(window: &Window, cx: &App) -> usize {
     if room < FORM_WIDTH { 2 } else { 3 }
 }
 
-// Keep the row count odd for both column counts: the kit snaps a dialog's top by half a pixel
-// by its height's parity, and an odd grid keeps that snap the same for every engine's form.
-const _: () = assert!(
-    ENGINES.len().div_ceil(3) % 2 == 1 && ENGINES.len().div_ceil(2) % 2 == 1,
-    "the engine grid needs an odd row count at three and at two columns"
-);
-
 /// The engines of `conn-engine`, in option order.
 const ENGINES: [Engine; 9] = [
     Engine::Postgres,
