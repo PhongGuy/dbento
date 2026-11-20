@@ -68,6 +68,11 @@ mod watch;
 #[cfg(feature = "watch")]
 pub use watch::{WATCH_DEBOUNCE, WatchError, WatchEvent, WorkspaceWatcher};
 
+#[cfg(feature = "team")]
+mod git;
+#[cfg(feature = "team")]
+pub use git::{Finding, Refusal, parse_refusal, redact_token, rule_text};
+
 mod introspect;
 pub use introspect::{
     ColumnMeta, IntrospectError, RELATION_CAP, Relation, RelationKind, RelationList, RelationRef,
