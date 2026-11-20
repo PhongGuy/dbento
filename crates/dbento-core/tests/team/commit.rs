@@ -139,3 +139,45 @@ fn a_second_holder_waits_then_reports_busy() {
     drop(first);
     let _again = repo_lock(&w, &opts).expect("free after release");
 }
+
+#[test]
+fn an_empty_queries_folder_does_not_break_a_save() {
+    let sb = Sandbox::new();
+    let w = workspace(&sb);
+    fs::remove_file(w.join("queries/a.sql")).unwrap();
+    assert!(commit(&sb, &w).unwrap());
+    assert!(w.join("queries").is_dir(), "the emptied folder stays");
+    write(&w, "dbento.toml", "name = \"x\"\n");
+    assert!(commit(&sb, &w).unwrap());
+    assert_eq!(sb.git(&w, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_queries_folder_removed_with_git_rm_is_committed() {
+    let sb = Sandbox::new();
+    let w = workspace(&sb);
+    sb.git(&w, &["rm", "-rq", "queries"]);
+    assert!(commit(&sb, &w).unwrap());
+    assert_eq!(
+        sb.git(&w, &["ls-tree", "-r", "--name-only", "HEAD"]).trim(),
+        "dbento.toml"
+    );
+}
+
+#[test]
+fn a_merge_in_progress_is_refused() {
+    let sb = Sandbox::new();
+    let w = workspace(&sb);
+    let head = sb.rev(&w, "HEAD");
+    fs::write(w.join(".git/MERGE_HEAD"), format!("{head}\n")).unwrap();
+    write(&w, "dbento.toml", "name = \"x\"\n");
+    let err = commit(&sb, &w).unwrap_err();
+    assert!(
+        matches!(err, SyncError::WrongBranch { found: None, .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        sb.git(&w, &["status", "--porcelain"]).trim(),
+        "M dbento.toml"
+    );
+}

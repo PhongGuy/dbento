@@ -18,37 +18,54 @@ pub fn commit_pending(
 ) -> Result<bool, SyncError> {
     let dir = binding.dir.as_path();
     ensure_on_branch(binding, opts)?;
-    // A path counts when it is on disk or tracked, so a deleted folder still commits as deletes.
-    let mut paths = Vec::new();
+    // Stage what is on disk or in the index, so a deleted folder still stages as deletes.
+    let mut staged = Vec::new();
     for path in WORKSPACE_PATHS {
         let on_disk = dir.join(path).symlink_metadata().is_ok();
-        if on_disk || !local(&["ls-files", "-z", "--", path], dir, opts)?.is_empty() {
+        if on_disk || listed(&["ls-files", "-z", "--", path], dir, opts)? {
+            staged.push(path);
+        }
+    }
+    if !staged.is_empty() {
+        local(
+            &[&["add", "-A", "--"], staged.as_slice()].concat(),
+            dir,
+            opts,
+        )?;
+    }
+    // Commit only paths the index or HEAD knows: an empty folder matches neither and would
+    // fail the pathspec, while a folder removed by hand with `git rm` is known to HEAD alone.
+    let head = run::git(
+        &["rev-parse", "-q", "--verify", "HEAD"],
+        dir,
+        run::Reach::Local,
+        opts,
+    )?;
+    let mut paths = Vec::new();
+    for path in WORKSPACE_PATHS {
+        let in_head = head.status.success()
+            && listed(
+                &["ls-tree", "-z", "--name-only", "HEAD", "--", path],
+                dir,
+                opts,
+            )?;
+        if in_head || listed(&["ls-files", "-z", "--", path], dir, opts)? {
             paths.push(path);
         }
     }
     if paths.is_empty() {
         return Ok(false);
     }
-    let with = |head: &[&str]| -> Vec<String> {
-        head.iter()
-            .chain(["--"].iter())
-            .chain(paths.iter())
-            .map(|s| (*s).to_owned())
-            .collect()
-    };
-    local(&with(&["add", "-A"]), dir, opts)?;
     // Exit 1 from a quiet cached diff is the only sign that something is staged.
-    let diff = with(&["diff", "--cached", "--quiet"]);
+    let diff = [&["diff", "--cached", "--quiet", "--"], paths.as_slice()].concat();
     let out = run::git(&diff, dir, run::Reach::Local, opts)?;
     match out.status.code() {
         Some(0) => return Ok(false),
         Some(1) => {}
-        _ => {
-            return Err(failed(&diff, out.stderr));
-        }
+        _ => return Err(failed(&diff, out.stderr)),
     }
     // The pathspec limits the commit to these paths, so a file staged by hand stays staged.
-    let commit = with(&["commit", "-q", "-m", message]);
+    let commit = [&["commit", "-q", "-m", message, "--"], paths.as_slice()].concat();
     local(&commit, dir, &with_identity(binding, opts)?)?;
     Ok(true)
 }
@@ -65,9 +82,7 @@ pub(crate) fn ensure_on_branch(binding: &Binding, opts: &GitOptions) -> Result<(
     let head = match out.status.code() {
         Some(0) => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
         Some(1) => return Err(wrong(None)),
-        _ => {
-            return Err(failed(&args, out.stderr));
-        }
+        _ => return Err(failed(&args, out.stderr)),
     };
     if head != format!("refs/heads/{}", binding.branch) {
         let name = head.strip_prefix("refs/heads/").unwrap_or(&head);
@@ -104,9 +119,7 @@ pub(crate) fn with_identity(binding: &Binding, opts: &GitOptions) -> Result<GitO
         match out.status.code() {
             Some(0) => {}
             Some(1) => return Ok(account_identity(binding, opts.clone())),
-            _ => {
-                return Err(failed(&args, out.stderr));
-            }
+            _ => return Err(failed(&args, out.stderr)),
         }
     }
     Ok(opts.clone())
@@ -128,6 +141,11 @@ fn failed<S: AsRef<std::ffi::OsStr>>(args: &[S], stderr: String) -> SyncError {
         stderr,
     }
     .into()
+}
+
+/// Whether a local git call that must succeed printed anything.
+fn listed(args: &[&str], dir: &Path, opts: &GitOptions) -> Result<bool, SyncError> {
+    Ok(!local(args, dir, opts)?.is_empty())
 }
 
 /// Run a local git call that must succeed and return its stdout.
