@@ -2,8 +2,8 @@ use crate::potluck::{answer, blocking, fresh_token, hits, info, me, session, ws}
 use dbento_core::paths::StatePaths;
 use dbento_core::{
     AccountRecord, ApiError, BindingRecord, Credential, LoginError, MemoryTokenStore, RefreshError,
-    ServerUrl, TeamAccount, TeamFile, TeamToken, TokenStore, WorkspacesError, refresh_role,
-    team_login, team_logout, team_workspaces,
+    SecretError, ServerUrl, TeamAccount, TeamFile, TeamToken, TokenStore, WorkspacesError,
+    refresh_role, team_login, team_logout, team_workspaces,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -309,5 +309,112 @@ async fn refresh_role_rewrites_a_changed_role_and_reports_lost_access() {
             RefreshError::Api(ApiError::Unauthenticated)
         ),
         "a refused token is the API's error"
+    );
+}
+
+#[tokio::test]
+async fn pasting_the_old_token_after_the_keychain_lost_it_keeps_it_live() {
+    let s = MockServer::start().await;
+    answer(&s, "GET", "/api/v1/server", info(1, dbento())).await;
+    answer(&s, "GET", "/api/v1/me", me("ada")).await;
+    answer(
+        &s,
+        "DELETE",
+        "/api/v1/tokens/42",
+        ResponseTemplate::new(204),
+    )
+    .await;
+    let e = env(&s.uri());
+    // The file still names token 42 but the store lost it; the user pastes that same token.
+    e.signed_in(None);
+    let tok = fresh_token();
+    e.login("ada", Credential::Token(tok.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        hits(&s, "DELETE", "/api/v1/tokens/42").await,
+        0,
+        "the token just stored was revoked"
+    );
+    assert_eq!(
+        e.tokens.get(&e.ada()).unwrap().unwrap().expose(),
+        tok.expose(),
+        "the pasted token is stored"
+    );
+}
+
+/// A store whose every read unbinds `dir` first, standing in for an unlink that lands
+/// between refresh_role's read of the team file and its update.
+struct UnbindOnRead {
+    inner: MemoryTokenStore,
+    team: std::path::PathBuf,
+    dir: std::path::PathBuf,
+}
+
+impl TokenStore for UnbindOnRead {
+    fn get(&self, account: &TeamAccount) -> Result<Option<TeamToken>, SecretError> {
+        TeamFile::new(&self.team)
+            .update(|d| d.remove_binding(&self.dir))
+            .unwrap();
+        self.inner.get(account)
+    }
+    fn set(&self, account: &TeamAccount, token: &TeamToken) -> Result<(), SecretError> {
+        self.inner.set(account, token)
+    }
+    fn delete(&self, account: &TeamAccount) -> Result<(), SecretError> {
+        self.inner.delete(account)
+    }
+}
+
+#[tokio::test]
+async fn refresh_role_never_brings_back_a_binding_removed_meanwhile() {
+    let s = MockServer::start().await;
+    answer(
+        &s,
+        "GET",
+        "/api/v1/workspaces",
+        ResponseTemplate::new(200).set_body_json(json!([ws(
+            "https://t.example/git/acme/shared.git",
+            "acme",
+            "shared",
+            "read"
+        )])),
+    )
+    .await;
+    let e = env(&s.uri());
+    e.signed_in(None);
+    let dir = e.paths.team.parent().unwrap().join("ws");
+    std::fs::create_dir(&dir).unwrap();
+    let b = BindingRecord::new(
+        e.server.as_str(),
+        "https://t.example",
+        "ada",
+        "acme",
+        "shared",
+        "main",
+        "write",
+    );
+    TeamFile::new(&e.paths.team)
+        .update(|d| d.put_binding(&dir, b))
+        .unwrap()
+        .unwrap();
+    let store = UnbindOnRead {
+        inner: MemoryTokenStore::new(),
+        team: e.paths.team.clone(),
+        dir: dir.clone(),
+    };
+    store.inner.set(&e.ada(), &fresh_token()).unwrap();
+    let (p, d) = (e.paths.clone(), dir.clone());
+    let err = blocking(move || refresh_role(&store, &p, &d))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RefreshError::NotBound), "{err:?}");
+    assert!(
+        TeamFile::new(&e.paths.team)
+            .load()
+            .unwrap()
+            .binding_for(&dir)
+            .is_none(),
+        "the removed binding came back"
     );
 }

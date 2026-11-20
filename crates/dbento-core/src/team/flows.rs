@@ -199,12 +199,10 @@ pub fn team_login(
         give_back();
         return Err(LoginError::File(e));
     }
-    // The new session is kept; retire the one it replaced, using the new token, unless the
-    // user pasted that very token back.
-    let replaced = previous_token.is_none_or(|old| old.expose() != token.expose());
-    if let Some(old_id) = previous.and_then(|p| p.token_id)
-        && replaced
-        && token_id.as_ref() != Some(&old_id)
+    // The new session is kept; retire the one it replaced with the new token. A pasted token's
+    // id is unknown and may be the replaced one, so only a freshly minted token retires it.
+    if let (Some(old_id), Some(new_id)) = (previous.and_then(|p| p.token_id), &token_id)
+        && old_id != *new_id
     {
         let _ = client.revoke(&token, &old_id);
     }
@@ -327,7 +325,6 @@ pub fn refresh_role(
     if remote.role == binding.role {
         return Ok(binding);
     }
-    // Only the role changes; anything else written to the binding meanwhile is kept.
     let role = remote.role;
     let io_failed = |e: std::io::Error| {
         RefreshError::File(TeamFileError::Io {
@@ -335,11 +332,14 @@ pub fn refresh_role(
             message: e.to_string(),
         })
     };
-    file.update(|d| {
-        let mut current = d.binding_for(&folder).map_or(binding, |(_, b)| b);
-        current.role = role;
-        d.put_binding(&folder, current.clone()).map(|()| current)
-    })
-    .map_err(RefreshError::File)?
-    .map_err(io_failed)
+    // Only the role changes, and only if the binding is still there: an unlink meanwhile wins.
+    let key = folder.to_string_lossy().into_owned();
+    let rewritten = file
+        .update(|d| {
+            let mut current = d.bindings().get(&key).cloned()?;
+            current.role = role;
+            Some(d.put_binding(&folder, current.clone()).map(|()| current))
+        })
+        .map_err(RefreshError::File)?;
+    rewritten.ok_or(RefreshError::NotBound)?.map_err(io_failed)
 }
