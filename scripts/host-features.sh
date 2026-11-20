@@ -22,7 +22,7 @@ build_deps() {
   local crate=$1
   shift
   # shellcheck disable=SC2086 # LOCKED is empty or one flag; the selection is several words.
-  "$CARGO" tree $LOCKED "$@" -e normal,build --no-dedupe --charset ascii --target "$HOST" \
+  "$CARGO" tree $LOCKED "$@" -e normal,build --no-dedupe --charset ascii --color never --target "$HOST" \
     --format '{p} [{f}]' </dev/null |
     awk -v c="$crate" '
       { match($0, /[^|`\- ]/); d = (RSTART - 1) / 4; t = substr($0, RSTART) }

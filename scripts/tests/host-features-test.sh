@@ -8,11 +8,14 @@ fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# The stub logs its arguments and prints $WS_TREE for --workspace, $NARROW_TREE otherwise.
+# The stub logs its arguments and prints $WS_TREE for --workspace, $NARROW_TREE otherwise. Like
+# cargo under CARGO_TERM_COLOR=always (CI sets it), it colors the tree unless told `--color never`.
 cat >"$TMP/cargo" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_ARGS"
-if [[ " $* " == *" --workspace "* ]]; then printf '%s' "$WS_TREE"; else printf '%s' "$NARROW_TREE"; fi
+if [[ " $* " == *" --workspace "* ]]; then out=$WS_TREE; else out=$NARROW_TREE; fi
+if [[ " $* " != *" --color never "* ]]; then out=$(sed $'s/|/\e[2m|\e[0m/g' <<<"$out"); fi
+printf '%s' "$out"
 EOF
 chmod +x "$TMP/cargo"
 
@@ -52,7 +55,7 @@ test_matching_trees_pass_for_both_crates_with_build_edges_on_the_host() {
   [[ $out == *"libduckdb-sys build script is shared"* ]] || fail "duckdb not reported: $out"
   [[ $out == *"pg_query build script is shared"* ]] || fail "pg_query not reported: $out"
   line=$(grep -m1 -- '-p dbento-core' "$TMP/args") || fail "no -p dbento-core tree: $(cat "$TMP/args")"
-  [[ $line == *"-e normal,build"*"--no-dedupe"*"--charset ascii"*"--target x86_64-unknown-linux-gnu"* ]] \
+  [[ $line == *"-e normal,build"*"--no-dedupe"*"--charset ascii"*"--color never"*"--target x86_64-unknown-linux-gnu"* ]] \
     || fail "args: $line"
 }
 
