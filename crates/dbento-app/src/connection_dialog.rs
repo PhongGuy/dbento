@@ -16,14 +16,14 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_fl
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Pixels, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
     Window, div, px,
 };
 
 use crate::confirm::{self, ChoiceStyle, with_keys};
 use crate::keymap::{SaveConnection, chip_keys, keys_for};
-use crate::sidebar::{color_name, tag_color};
+use crate::sidebar::{color_name, engine_icon, tag_color};
 use crate::theme;
 use crate::ui::{self, Icons};
 
@@ -1829,20 +1829,27 @@ const LABEL_WIDTH: f32 = 96.;
 
 impl Render for ConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let engine = ui::segmented(
+        let labels: [&str; ENGINES.len()] = [
+            "Postgres",
+            "SQLite",
+            "MySQL",
+            "DuckDB",
+            "SQL Server",
+            "SurrealDB",
+            "MongoDB",
+            "Redis",
+            "DynamoDB",
+        ];
+        let cards = ENGINES.iter().zip(labels).map(|(&engine, label)| ui::Card {
+            icon: engine_icon(engine),
+            label,
+            hint: engine_hint(engine),
+        });
+        let engine = ui::card_grid(
             "conn-engine",
-            &[
-                "Postgres",
-                "SQLite",
-                "MySQL",
-                "DuckDB",
-                "SQL Server",
-                "SurrealDB",
-                "MongoDB",
-                "Redis",
-                "DynamoDB",
-            ],
-            // An engine the picker does not offer highlights no option.
+            &cards.collect::<Vec<_>>(),
+            engine_columns(window, cx),
+            // An engine the picker does not offer highlights no card.
             ENGINES
                 .iter()
                 .position(|e| *e == self.engine)
@@ -1854,10 +1861,9 @@ impl Render for ConnectionForm {
             window,
             cx,
         );
-        // Each choice row sits in a flex row; the engine picker wraps within the field column.
         let mut first = vec![self.text_row("Name", "conn-name", Field::Name, cx)];
         first.extend(self.error_line(Some(ErrorAt::Field(Field::Name)), cx));
-        first.push(Self::row("Engine", h_flex().child(engine), cx));
+        first.push(Self::row("Engine", engine, cx));
         let mut sections: Vec<(&'static str, Vec<AnyElement>)> = vec![("Connection", first)];
         // Rows join the section of the same title, so Name and Engine lead Connection and the
         // common rows end Options, which SQLite's descriptor lacks.
@@ -2116,6 +2122,39 @@ impl Shown {
         }
     }
 }
+
+/// The engine card's mono hint: its default port, `file`, or what it asks for first.
+pub fn engine_hint(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => ":5432",
+        Engine::Sqlite | Engine::Duckdb => "file",
+        Engine::Mysql => ":3306",
+        Engine::Mssql => ":1433",
+        Engine::Surrealdb => ":8000",
+        Engine::Mongodb => ":27017",
+        Engine::Redis => ":6379",
+        Engine::Dynamodb => "region",
+    }
+}
+
+/// The connection dialog's width when the window has room for it.
+pub(crate) const FORM_WIDTH: Pixels = px(560.);
+
+/// The engine cards per row: three keep "SQL Server" and its icon whole at [`FORM_WIDTH`], and
+/// two keep every label whole once a narrow window squeezes the dialog. Rendering and the
+/// arrow keys both take the count from here.
+fn engine_columns(window: &Window, cx: &App) -> usize {
+    // The kit keeps its large spacing clear beside a dialog and narrows it to fit the rest.
+    let room = crate::shell::content_size(window).width - cx.theme().spacing_tokens().lg * 2.;
+    if room < FORM_WIDTH { 2 } else { 3 }
+}
+
+// Keep the row count odd for both column counts: the kit snaps a dialog's top by half a pixel
+// by its height's parity, and an odd grid keeps that snap the same for every engine's form.
+const _: () = assert!(
+    ENGINES.len().div_ceil(3) % 2 == 1 && ENGINES.len().div_ceil(2) % 2 == 1,
+    "the engine grid needs an odd row count at three and at two columns"
+);
 
 /// The engines of `conn-engine`, in option order.
 const ENGINES: [Engine; 9] = [

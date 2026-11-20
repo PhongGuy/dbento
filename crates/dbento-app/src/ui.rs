@@ -11,13 +11,14 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::notification::{Notification, NotificationType};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Sizable as _, Size, ThemeStyled as _, WindowExt as _,
+    ActiveTheme as _, Icon, Sizable as _, Size, ThemeStyled as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AssetSource, Div, ElementId, Entity, FontWeight, Global, Hsla, InteractiveElement,
-    Interactivity, IntoElement as _, ParentElement as _, Pixels, Role, SharedString, Stateful,
-    StatefulInteractiveElement, Styled as _, TestSupportExt as _, Window, div, px,
+    App, AssetSource, Div, ElementId, Entity, FocusHandle, FontWeight, Global, Hsla,
+    InteractiveElement, Interactivity, IntoElement as _, KeyDownEvent, ParentElement as _, Pixels,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled as _, TestSupportExt as _,
+    Window, div, px,
 };
 
 use crate::keymap::{CHORD_OR, chip_keys};
@@ -483,6 +484,174 @@ pub fn segmented_ids(
     segmented_row(id.into(), options, selected, on_select, window, cx)
 }
 
+/// The option a navigation key moves to in `len` options laid out `columns` per row:
+/// Left/Right step one without wrapping, Up/Down move one row and stay put where no option
+/// sits, Home/End jump to the ends. `None` for any other key.
+pub fn grid_step(key: &str, selected: usize, len: usize, columns: usize) -> Option<usize> {
+    let last = len.saturating_sub(1);
+    let columns = columns.max(1);
+    let to = match key {
+        "left" => selected.saturating_sub(1),
+        "right" => (selected + 1).min(last),
+        "up" => selected.checked_sub(columns).unwrap_or(selected),
+        "down" => Some(selected + columns)
+            .filter(|&below| below < len)
+            .unwrap_or(selected),
+        "home" => 0,
+        "end" => last,
+        _ => return None,
+    };
+    // An empty grid still claims its navigation keys, so they never leak to the parent.
+    Some(if len == 0 { selected } else { to })
+}
+
+/// The focus handle of a one-tab-stop picker `id`. It lives in keyed state under that id, so
+/// focus survives re-renders; an explicit handle ignores the element's `tab_stop`, so the
+/// handle itself carries it.
+fn tab_stop(id: &ElementId, window: &mut Window, cx: &mut App) -> FocusHandle {
+    window
+        .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle().tab_stop(true))
+        .read(cx)
+        .clone()
+}
+
+/// A picker's key handler: every navigation key is claimed so it never reaches the parent,
+/// and `on_select` hears only a move that changes the choice.
+fn navigate(
+    selected: usize,
+    len: usize,
+    columns: usize,
+    on_select: Rc<impl Fn(&usize, &mut Window, &mut App) + 'static>,
+) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static {
+    move |event, window, cx| {
+        let Some(to) = grid_step(event.keystroke.key.as_str(), selected, len, columns) else {
+            return;
+        };
+        cx.stop_propagation();
+        if to != selected {
+            on_select(&to, window, cx);
+        }
+    }
+}
+
+/// A [`card_grid`] card's height and the gap between cards, in whole pixels, so a grid's height
+/// is never fractional. An odd row count gives an odd total, which callers inside a dialog rely on.
+const CARD_HEIGHT: f32 = 27.;
+const CARD_GAP: f32 = 4.;
+
+/// One option of a [`card_grid`]: an icon, its label, and a short mono hint at the right edge.
+#[derive(Clone, Copy)]
+pub struct Card {
+    /// Drawn before the label, in `primary` while selected.
+    pub icon: IconName,
+    /// The card's name, also its aria label.
+    pub label: &'static str,
+    /// A muted mono tag after the label; visual only.
+    pub hint: &'static str,
+}
+
+/// Cards `columns` per row; card `ix` has element id `ix`, role Tab, `label` as aria label
+/// and `aria_selected(ix == selected)`; click and keys (via `grid_step`) call `on_select`.
+/// Like [`segmented`] the grid is one tab stop with the kit's focus ring, and it fills its
+/// parent's width with equal columns.
+pub fn card_grid(
+    id: impl Into<ElementId>,
+    cards: &[Card],
+    columns: usize,
+    selected: usize,
+    on_select: impl Fn(&usize, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> ObservedElement<Stateful<Div>> {
+    let id = id.into();
+    let columns = columns.max(1);
+    let focus = tab_stop(&id, window, cx);
+    let focused = focus.is_focused(window);
+    let theme = cx.theme();
+    let (mono, dim) = (theme.mono_font_family.clone(), theme::dim(cx));
+    let on_select = Rc::new(on_select);
+    let card = |ix: usize, card: Card| {
+        let on = ix == selected;
+        let colors = segment_colors(on, cx);
+        let on_select = Rc::clone(&on_select);
+        let (border, icon_color) = if on {
+            (colors.border, theme.primary)
+        } else {
+            (theme.border, theme.muted_foreground)
+        };
+        // One line in whole pixels, so the grid's height never rounds and the dialog holds
+        // still; the label gives way (truncating) before the hint, and neither leaves the card.
+        h_flex()
+            .id(ix)
+            .flex_1()
+            .min_w_0()
+            .h(px(CARD_HEIGHT))
+            .gap(px(4.))
+            .px(px(6.))
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(border)
+            .bg(colors.fill)
+            .text_color(colors.text)
+            .cursor_pointer()
+            .when(!on, |c| c.hover(|s| s.text_color(theme.foreground)))
+            .child(icon(card.icon, px(14.), icon_color).flex_none())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .truncate()
+                    .child(card.label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .font_family(mono.clone())
+                    .text_color(dim)
+                    .child(card.hint),
+            )
+            .role(Role::Tab)
+            .aria_label(card.label)
+            .aria_selected(on)
+            .on_click(move |_, window, cx| on_select(&ix, window, cx))
+            .test_support()
+            .into_any_element()
+    };
+    // A short last row is padded with empty cells so its cards keep the column width.
+    let rows = cards
+        .chunks(columns)
+        .enumerate()
+        .map(|(row, chunk)| {
+            let cells = chunk
+                .iter()
+                .enumerate()
+                .map(|(col, &c)| card(row * columns + col, c));
+            let pad = (chunk.len()..columns).map(|_| div().flex_1().min_w_0().into_any_element());
+            h_flex()
+                .w_full()
+                .gap(px(CARD_GAP))
+                .children(cells.chain(pad))
+        })
+        .collect::<Vec<_>>();
+    v_flex()
+        .id(id)
+        .test_support()
+        .track_focus(&focus)
+        .on_key_down(navigate(
+            selected,
+            cards.len(),
+            columns,
+            Rc::clone(&on_select),
+        ))
+        .w_full()
+        .gap(px(CARD_GAP))
+        .rounded(theme.radius)
+        .children(rows)
+        .when(focused, |grid| grid.focus_ring_style(window, cx))
+}
+
 fn segmented_row(
     id: ElementId,
     labels: Vec<(ElementId, &'static str)>,
@@ -491,16 +660,11 @@ fn segmented_row(
     window: &mut Window,
     cx: &mut App,
 ) -> ObservedElement<Stateful<Div>> {
-    // The handle lives in keyed state under the row's id, so focus survives re-renders; an
-    // explicit handle ignores the element's `tab_stop`, so the handle itself carries it.
-    let focus = window
-        .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle().tab_stop(true))
-        .read(cx)
-        .clone();
+    let focus = tab_stop(&id, window, cx);
     let focused = focus.is_focused(window);
     let theme = cx.theme();
     let on_select = Rc::new(on_select);
-    let last = labels.len().saturating_sub(1);
+    let len = labels.len();
     let options = labels.into_iter().enumerate().map(|(ix, (option, label))| {
         let colors = segment_colors(ix == selected, cx);
         let on_select = Rc::clone(&on_select);
@@ -532,19 +696,7 @@ fn segmented_row(
         .id(id)
         .test_support()
         .track_focus(&focus)
-        .on_key_down(move |event, window, cx| {
-            let to = match event.keystroke.key.as_str() {
-                "left" | "up" => selected.saturating_sub(1),
-                "right" | "down" => (selected + 1).min(last),
-                "home" => 0,
-                "end" => last,
-                _ => return,
-            };
-            cx.stop_propagation();
-            if to != selected {
-                on_key(&to, window, cx);
-            }
-        })
+        .on_key_down(navigate(selected, len, 1, on_key))
         // Options that do not fit the row's column flow onto another line, never past its edge.
         .flex()
         .flex_wrap()

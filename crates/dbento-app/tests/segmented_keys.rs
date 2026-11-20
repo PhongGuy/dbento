@@ -162,3 +162,56 @@ fn home_end_up_and_down_move_a_three_option_row(cx: &mut TestAppContext) {
     press(cx, o.win, "down");
     assert_eq!(chosen(cx, o.win, "conn-tls", 3), 1, "Down steps on");
 }
+
+#[gpui_kit::test]
+fn up_and_down_move_the_engine_cards_by_a_row(cx: &mut TestAppContext) {
+    let o = new_form(cx);
+    cx.update_window(o.win, |_, w, cx| w.within("conn-engine").click(1usize, cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        focused(cx, o.win, "conn-engine"),
+        Some(true),
+        "a click focuses the grid"
+    );
+    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 1);
+    press(cx, o.win, "down");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 9),
+        4,
+        "Down picks SQL Server"
+    );
+    press(cx, o.win, "down");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 7, "Down picks Redis");
+    press(cx, o.win, "down");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 9),
+        7,
+        "Down stays on the last row"
+    );
+    press(cx, o.win, "up");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 9),
+        4,
+        "Up moves a row back"
+    );
+    press(cx, o.win, "right");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 9),
+        5,
+        "Right steps one card"
+    );
+    press(cx, o.win, "up");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 2, "Up picks MySQL");
+    press(cx, o.win, "up");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 9),
+        2,
+        "Up stays on the first row"
+    );
+    assert_eq!(
+        focused(cx, o.win, "conn-engine"),
+        Some(true),
+        "the grid keeps focus"
+    );
+}
