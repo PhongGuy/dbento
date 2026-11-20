@@ -166,6 +166,19 @@ async fn a_cell_is_committed_a_delete_rolled_back_and_a_conflict_marked() {
     .await;
     assert!(find_node(&tree, "row-deleted-1").is_some(), "{tree}");
     assert_eq!(scalar(ws.path(), "SELECT count(*) FROM t").await, "3");
+    // Enter on the reopened prompt answers the focused Roll back; the delete stays staged.
+    click(&pilot, "save-edits").await;
+    until(&pilot, "the prompt again", |t| {
+        find_node(t, "apply-rollback").is_some()
+    })
+    .await;
+    key(&pilot, "enter").await;
+    let tree = until(&pilot, "the roll back on Enter", |t| {
+        find_node(t, "apply-rollback").is_none()
+    })
+    .await;
+    assert!(find_node(&tree, "row-deleted-1").is_some(), "{tree}");
+    assert_eq!(scalar(ws.path(), "SELECT count(*) FROM t").await, "3");
     shot(&pilot).await;
     click(&pilot, "revert-edits").await;
     until(&pilot, "the revert", |t| {
