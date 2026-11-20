@@ -7,7 +7,7 @@ mod lock;
 mod push;
 mod rebase;
 mod refusal;
-mod run;
+pub(crate) mod run;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -18,8 +18,10 @@ use std::time::Duration;
 
 pub use clone::{CloneError, clone};
 pub use commit::commit_pending;
+pub(crate) use commit::ensure_on_branch;
 pub use lock::{RepoLock, repo_lock};
 pub use push::{PushOutcome, push, remote_tip, squash_unpushed, unpushed};
+pub(crate) use rebase::fetch;
 pub use rebase::{ConflictFile, ConflictKind, Pulled, pull_rebase};
 pub use refusal::{Finding, Refusal, parse_refusal, redact_token, rule_text};
 

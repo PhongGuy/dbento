@@ -81,7 +81,7 @@ pub use git::{
 #[cfg(feature = "team")]
 mod team;
 #[cfg(feature = "team")]
-pub use team::{Binding, ConflictStore, Role};
+pub use team::{Binding, ConflictStore, Role, SyncOutcome, sync_once};
 
 mod introspect;
 pub use introspect::{
