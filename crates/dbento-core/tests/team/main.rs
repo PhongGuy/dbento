@@ -4,6 +4,7 @@
 mod api;
 mod clone;
 mod commit;
+mod folder;
 mod potluck;
 mod pull;
 mod push;

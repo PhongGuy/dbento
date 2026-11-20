@@ -14,8 +14,9 @@ pub use account::{
 pub use api::{ApiError, PotluckClient, PotluckInfo, RemoteWorkspace, SignIn, public_url_of};
 pub use conflicts::ConflictStore;
 pub use flows::{
-    Credential, LoginError, LogoutError, LogoutReport, RefreshError, WorkspacesError, refresh_role,
-    team_login, team_logout, team_workspaces,
+    Credential, FolderSync, FolderSyncError, JoinError, LoginError, LogoutError, LogoutReport,
+    RefreshError, Resolution, TeamResolveError, WorkspacesError, refresh_role, team_join,
+    team_login, team_logout, team_resolve, team_sync, team_workspaces,
 };
 pub use team_file::{AccountRecord, BindingRecord, TeamData, TeamFile, TeamFileError};
 

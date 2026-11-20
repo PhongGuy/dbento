@@ -84,11 +84,12 @@ mod team;
 pub use keychain::KeychainTokenStore;
 #[cfg(feature = "team")]
 pub use team::{
-    AccountRecord, ApiError, Binding, BindingRecord, ConflictStore, Credential, LoginError,
-    LogoutError, LogoutReport, MemoryTokenStore, PotluckClient, PotluckInfo, RefreshError,
-    RemoteWorkspace, Role, ServerUrl, ServerUrlError, SignIn, SyncOutcome, TeamAccount, TeamData,
-    TeamFile, TeamFileError, TeamToken, TokenStore, WorkspacesError, public_url_of, refresh_role,
-    sync_once, team_login, team_logout, team_workspaces,
+    AccountRecord, ApiError, Binding, BindingRecord, ConflictStore, Credential, FolderSync,
+    FolderSyncError, JoinError, LoginError, LogoutError, LogoutReport, MemoryTokenStore,
+    PotluckClient, PotluckInfo, RefreshError, RemoteWorkspace, Resolution, Role, ServerUrl,
+    ServerUrlError, SignIn, SyncOutcome, TeamAccount, TeamData, TeamFile, TeamFileError,
+    TeamResolveError, TeamToken, TokenStore, WorkspacesError, public_url_of, refresh_role,
+    sync_once, team_join, team_login, team_logout, team_resolve, team_sync, team_workspaces,
 };
 
 mod introspect;

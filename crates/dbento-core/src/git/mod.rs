@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+pub(crate) use clone::set_up;
 pub use clone::{CloneError, clone};
 pub use commit::commit_pending;
 pub(crate) use commit::ensure_on_branch;

@@ -77,6 +77,13 @@ pub fn clone(url: &str, binding: &Binding, opts: &GitOptions) -> Result<(), Clon
         remove_created(dest, existed);
         return Err(e.into());
     }
+    set_up(binding, opts)
+}
+
+/// Write and commit the join .gitignore when `binding.dir` has none; also finishes a clone
+/// whose setup failed earlier.
+pub(crate) fn set_up(binding: &Binding, opts: &GitOptions) -> Result<(), CloneError> {
+    let dest = binding.dir.as_path();
     if dest.join(".gitignore").symlink_metadata().is_err() {
         fs::write(dest.join(".gitignore"), JOIN_GITIGNORE)?;
         commit_pending(binding, "Add .gitignore", opts).map_err(CloneError::Setup)?;
