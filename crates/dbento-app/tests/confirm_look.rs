@@ -279,3 +279,43 @@ fn a_later_default_keeps_enter_while_the_first_choice_holds_focus(cx: &mut TestA
     press(cx, &o, "enter");
     assert_eq!(rx.try_recv().ok(), Some(1));
 }
+
+// The top edge of a framed dialog depends only on its offset, never on how tall its content
+// is: a one-pixel taller body must not nudge the surface by the kit's half-pixel rounding.
+#[gpui_kit::test]
+fn a_framed_dialogs_top_ignores_its_content_height(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::{ParentElement as _, Styled as _, div};
+    let o = opened(cx, "", "", 0);
+    let mut tops = Vec::new();
+    for (width, height) in [(1440., 1200.), (1441., 901.)] {
+        cx.simulate_window_resize(o.win, gpui_kit::size(px(width), px(height)));
+        for body in [100., 101., 236., 237.] {
+            cx.update_window(o.win, |_, w, cx| {
+                w.open_dialog(cx, move |d, _, cx| {
+                    frame(d, px(560.), None, cx)
+                        .margin_top(px(120.))
+                        .child(div().w_full().h(px(body)))
+                })
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let top = cx
+                .update_window(o.win, |_, w, cx| {
+                    w.render_frame(cx);
+                    w.find("surface").bounds().top()
+                })
+                .unwrap();
+            tops.push((width, height, body, top));
+            cx.update_window(o.win, |_, w, cx| w.close_dialog(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+    }
+    for pair in tops.chunks(4) {
+        assert!(
+            pair.iter().all(|t| t.3 == pair[0].3),
+            "the top moved with the body's height: {pair:?}"
+        );
+    }
+}

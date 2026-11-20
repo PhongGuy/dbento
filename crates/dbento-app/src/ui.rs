@@ -535,7 +535,7 @@ fn navigate(
 }
 
 /// A [`card_grid`] card's height and the gap between cards, in whole pixels, so a grid's height
-/// is never fractional. An odd row count gives an odd total, which callers inside a dialog rely on.
+/// is never fractional.
 const CARD_HEIGHT: f32 = 27.;
 const CARD_GAP: f32 = 4.;
 
