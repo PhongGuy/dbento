@@ -525,6 +525,11 @@ pub fn team_join(
         .find(|w| w.team == team && w.slug == slug)
         .ok_or_else(no_such)?;
     let public_url = public_url_of(&remote.git_url).map_err(JoinError::Api)?;
+    // Git carries the token to this address, so it meets the same plain-http rule as the API.
+    let cleartext = ServerUrl::parse(&public_url).is_ok_and(|url| url.is_insecure_http());
+    if cleartext && !record.insecure_http {
+        return Err(JoinError::Api(ApiError::InsecureHttp));
+    }
     let binding = BindingRecord::new(
         server.as_str(),
         &public_url,

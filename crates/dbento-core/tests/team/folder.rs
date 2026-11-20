@@ -3,9 +3,9 @@ use crate::potluck::{answer, blocking, fresh_token, ws};
 use crate::support::{Sandbox, read, write};
 use dbento_core::paths::StatePaths;
 use dbento_core::{
-    AccountRecord, FolderSync, FolderSyncError, JoinError, MemoryTokenStore, Resolution, ServerUrl,
-    SyncOutcome, TeamAccount, TeamFile, TeamResolveError as ResolveError, TokenStore, team_join,
-    team_resolve, team_sync,
+    AccountRecord, ApiError, FolderSync, FolderSyncError, JoinError, MemoryTokenStore, Resolution,
+    ServerUrl, SyncOutcome, TeamAccount, TeamFile, TeamResolveError as ResolveError, TokenStore,
+    team_join, team_resolve, team_sync,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -255,6 +255,40 @@ async fn join_refuses_a_clone_of_another_repository_or_another_branch() {
             dir.display()
         );
     }
+    assert_eq!(
+        TeamFile::new(&e.paths.team)
+            .load()
+            .unwrap()
+            .bindings()
+            .len(),
+        1,
+        "no binding added"
+    );
+}
+
+#[tokio::test]
+async fn join_refuses_a_cleartext_git_address_to_a_remote_host() {
+    let e = joined().await;
+    e.s.reset().await;
+    answer(
+        &e.s,
+        "GET",
+        "/api/v1/workspaces",
+        ResponseTemplate::new(200).set_body_json(json!([ws(
+            "http://team.example/git/acme/shared.git",
+            "acme",
+            "shared",
+            "write"
+        )])),
+    )
+    .await;
+    let dir = e.sb.path().join("plain");
+    let err = e.join("acme/shared", dir.clone()).await.unwrap_err();
+    assert!(
+        matches!(err, JoinError::Api(ApiError::InsecureHttp)),
+        "{err:?}"
+    );
+    assert!(!dir.exists(), "nothing was cloned");
     assert_eq!(
         TeamFile::new(&e.paths.team)
             .load()
