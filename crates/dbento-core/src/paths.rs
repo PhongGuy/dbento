@@ -23,12 +23,16 @@ pub struct StatePaths {
     pub settings: PathBuf,
     /// The user's key binding overrides, as JSON.
     pub keymap: PathBuf,
+    /// The team mode bindings and accounts, as JSON.
+    pub team: PathBuf,
+    /// The folder holding each team workspace's conflict copies.
+    pub team_conflicts: PathBuf,
 }
 
 impl StatePaths {
-    /// The platform locations: state, settings and keymap under the config dir, history,
-    /// drafts and approvals under the data dir, each in a `dbento` folder. `None` without a
-    /// home directory.
+    /// The platform locations: state, settings, keymap and team under the config dir,
+    /// history, drafts, approvals and team conflicts under the data dir, each in a `dbento`
+    /// folder. `None` without a home directory.
     pub fn platform() -> Option<StatePaths> {
         let config = dirs::config_dir()?.join("dbento");
         let data = dirs::data_dir()?.join("dbento");
@@ -39,6 +43,8 @@ impl StatePaths {
             approvals: data.join("approvals"),
             settings: config.join("settings.json"),
             keymap: config.join("keymap.json"),
+            team: config.join("team.json"),
+            team_conflicts: data.join("team-conflicts"),
         })
     }
 
@@ -51,6 +57,8 @@ impl StatePaths {
             approvals: dir.join("approvals"),
             settings: dir.join("settings.json"),
             keymap: dir.join("keymap.json"),
+            team: dir.join("team.json"),
+            team_conflicts: dir.join("team-conflicts"),
         }
     }
 

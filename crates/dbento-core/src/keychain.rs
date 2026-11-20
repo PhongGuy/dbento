@@ -1,7 +1,10 @@
 //! [`KeychainStore`]: secrets in the platform keychain through `keyring-core`, one entry per
-//! connection under service `dbento`, the account being [`SecretKey`]'s two parts.
+//! connection under service `dbento`, the account being [`SecretKey`]'s two parts. With the
+//! `team` feature, `KeychainTokenStore` keeps team session tokens under the same service.
 
 use crate::secrets::{Secret, SecretError, SecretKey, SecretStore};
+#[cfg(feature = "team")]
+use crate::team::{TeamAccount, TeamToken, TokenStore};
 use dbento_workspace::Slot;
 use keyring_core::{CredentialStore, Entry, Error};
 use std::fmt;
@@ -123,6 +126,67 @@ impl fmt::Debug for KeychainStore {
     }
 }
 
+/// Team session tokens in the platform keychain, one entry per account under service `dbento`.
+#[cfg(feature = "team")]
+#[non_exhaustive]
+pub struct KeychainTokenStore {
+    store: Arc<CredentialStore>,
+}
+
+#[cfg(feature = "team")]
+impl KeychainTokenStore {
+    /// Open the platform keychain. Fails with [`SecretError::Unavailable`] on a platform without
+    /// one or when it cannot be reached.
+    pub fn new() -> Result<KeychainTokenStore, SecretError> {
+        let store = platform_store().map_err(map_error)?;
+        Ok(KeychainTokenStore { store })
+    }
+
+    fn entry(&self, account: &TeamAccount) -> Result<Entry, SecretError> {
+        self.store
+            .build(SERVICE, &token_account(account), None)
+            .map_err(map_error)
+    }
+}
+
+#[cfg(feature = "team")]
+impl TokenStore for KeychainTokenStore {
+    fn get(&self, account: &TeamAccount) -> Result<Option<TeamToken>, SecretError> {
+        match self.entry(account)?.get_password() {
+            Ok(value) => Ok(TeamToken::parse(&value)),
+            Err(Error::NoEntry) => Ok(None),
+            Err(e) => Err(map_error(e)),
+        }
+    }
+
+    fn set(&self, account: &TeamAccount, token: &TeamToken) -> Result<(), SecretError> {
+        self.entry(account)?
+            .set_password(token.expose())
+            .map_err(map_error)
+    }
+
+    fn delete(&self, account: &TeamAccount) -> Result<(), SecretError> {
+        match self.entry(account)?.delete_credential() {
+            Ok(()) | Err(Error::NoEntry) => Ok(()),
+            Err(e) => Err(map_error(e)),
+        }
+    }
+}
+
+#[cfg(feature = "team")]
+impl fmt::Debug for KeychainTokenStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("KeychainTokenStore { .. }")
+    }
+}
+
+/// The keychain account for a team token: `team`, the server and the user as a JSON array, so
+/// it can never collide with a connection's two-part account.
+#[cfg(feature = "team")]
+fn token_account(account: &TeamAccount) -> String {
+    serde_json::json!(["team", account.server.as_str(), account.username]).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +205,15 @@ mod tests {
             account(&SecretKey::key_passphrase("/home/u/w", "a-b")),
             r#"["/home/u/w","a-b","tls_key"]"#
         );
+    }
+
+    #[cfg(feature = "team")]
+    #[test]
+    fn a_team_token_account_is_a_json_array_tagged_team() {
+        let a = crate::TeamAccount::new(
+            crate::ServerUrl::parse("https://t.example/p").unwrap(),
+            "ada",
+        );
+        assert_eq!(token_account(&a), r#"["team","https://t.example/p","ada"]"#);
     }
 }

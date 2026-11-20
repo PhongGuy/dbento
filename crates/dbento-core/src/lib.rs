@@ -41,6 +41,7 @@ pub use history::{
 };
 
 pub mod paths;
+pub use paths::StatePaths;
 
 mod rename_secret;
 pub use rename_secret::{
@@ -67,6 +68,29 @@ pub mod update;
 mod watch;
 #[cfg(feature = "watch")]
 pub use watch::{WATCH_DEBOUNCE, WatchError, WatchEvent, WorkspaceWatcher};
+
+#[cfg(feature = "team")]
+mod git;
+#[cfg(feature = "team")]
+pub use git::{
+    CancelFlag, CloneError, ConflictFile, ConflictKind, Finding, GitError, GitOptions, GitVersion,
+    Pulled, PushOutcome, Refusal, RepoLock, SAVE_MESSAGE, SyncError, clone, commit_pending,
+    git_available, git_available_with, parse_refusal, pull_rebase, push, redact_token, remote_tip,
+    repo_lock, rule_text, squash_unpushed, unpushed,
+};
+#[cfg(feature = "team")]
+mod team;
+#[cfg(feature = "team")]
+pub use keychain::KeychainTokenStore;
+#[cfg(feature = "team")]
+pub use team::{
+    AccountRecord, ApiError, Binding, BindingRecord, ConflictStore, Credential, FolderSync,
+    FolderSyncError, JoinError, LoginError, LogoutError, LogoutReport, MemoryTokenStore,
+    PotluckClient, PotluckInfo, RefreshError, RemoteWorkspace, Resolution, Role, ServerUrl,
+    ServerUrlError, SignIn, SyncOutcome, TeamAccount, TeamData, TeamFile, TeamFileError,
+    TeamResolveError, TeamToken, TokenStore, WorkspacesError, public_url_of, refresh_role,
+    sync_once, team_join, team_login, team_logout, team_resolve, team_sync, team_workspaces,
+};
 
 mod introspect;
 pub use introspect::{

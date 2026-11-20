@@ -110,6 +110,8 @@ update = [
 ]
 # The workspace folder watcher: debounced notify events turned into a reload signal.
 watch = ["dep:notify-debouncer-full"]
+# Team mode: a workspace synced with a Potluck server through the git CLI.
+team = ["keychain", "dep:ureq"]
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -132,3 +134,8 @@ path = "tests/duckdb_stream_memory.rs"
 [[test]]
 name = "mssql_thread"
 path = "tests/mssql_thread.rs"
+
+[[test]]
+name = "team"
+path = "tests/team/main.rs"
+required-features = ["team"]
