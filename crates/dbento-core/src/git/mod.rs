@@ -3,6 +3,7 @@
 
 mod commit;
 mod lock;
+mod push;
 mod rebase;
 mod refusal;
 mod run;
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 pub use commit::commit_pending;
 pub use lock::{RepoLock, repo_lock};
+pub use push::{PushOutcome, push, remote_tip, squash_unpushed, unpushed};
 pub use rebase::{ConflictFile, ConflictKind, Pulled, pull_rebase};
 pub use refusal::{Finding, Refusal, parse_refusal, redact_token, rule_text};
 
