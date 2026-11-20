@@ -10,7 +10,7 @@ PREFIX :=
 LOCKED :=
 
 .DEFAULT_GOAL := install
-.PHONY: install uninstall demo advisories check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test workspace-deps each-feature package clean workflows-lint screenshots
+.PHONY: install uninstall demo advisories check fmt fmt-check lint test pilot-check pilot-timing timing-guard icons-check windows-check xwin-check xwin-build notices-check script-test workspace-deps host-features each-feature package clean workflows-lint screenshots
 
 install:
 	CARGO="$(CARGO)" JOBS="$(JOBS)" DBENTO_PREFIX="$(PREFIX)" scripts/install.sh install
@@ -21,7 +21,7 @@ uninstall:
 demo:
 	CARGO="$(CARGO)" CARGO_BUILD_JOBS="$(JOBS)" scripts/demo.sh
 
-check: advisories fmt-check lint test workspace-deps
+check: advisories fmt-check lint test workspace-deps host-features
 
 # RustSec advisories and yanked crates in both lockfiles, policy in deny.toml. It fetches the
 # advisory database each run, so it needs the network and fails loudly when the fetch fails.
@@ -106,6 +106,11 @@ notices-check:
 # dbento-workspace and dbento-rules must stay free of drivers, tokio and toml_edit on every target.
 workspace-deps:
 	CARGO="$(CARGO)" LOCKED="$(LOCKED)" scripts/workspace-deps.sh
+
+# A narrower cargo selection must resolve the DuckDB and pg_query build scripts like the workspace
+# does, or it compiles DuckDB's C++ a second time in the same target.
+host-features:
+	CARGO="$(CARGO)" LOCKED="$(LOCKED)" scripts/host-features.sh
 
 # Every bash suite under scripts/tests, each in its own bash so one cannot leak state into the next.
 script-test:
