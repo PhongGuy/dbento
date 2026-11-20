@@ -1,9 +1,13 @@
 //! Team mode: a workspace folder bound to one branch of a Potluck server's repository.
 
+mod account;
 mod conflicts;
 
 use std::path::PathBuf;
 
+pub use account::{
+    MemoryTokenStore, ServerUrl, ServerUrlError, TeamAccount, TeamToken, TokenStore,
+};
 pub use conflicts::ConflictStore;
 
 use crate::git::run::{self, Reach};

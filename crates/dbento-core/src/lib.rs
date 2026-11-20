@@ -81,7 +81,12 @@ pub use git::{
 #[cfg(feature = "team")]
 mod team;
 #[cfg(feature = "team")]
-pub use team::{Binding, ConflictStore, Role, SyncOutcome, sync_once};
+pub use keychain::KeychainTokenStore;
+#[cfg(feature = "team")]
+pub use team::{
+    Binding, ConflictStore, MemoryTokenStore, Role, ServerUrl, ServerUrlError, SyncOutcome,
+    TeamAccount, TeamToken, TokenStore, sync_once,
+};
 
 mod introspect;
 pub use introspect::{
