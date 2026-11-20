@@ -332,8 +332,8 @@ pub fn ask_closable(spec: Ask, window: &mut Window, cx: &mut App) -> Asked {
                 }
             };
             // Where the default is the first focus, Enter answers whichever button holds focus,
-            // so the ring is always on what Enter presses. A later default (Commit beside a
-            // focused Roll back) keeps Enter on itself.
+            // so the ring is always on what Enter presses. A later default keeps Enter on
+            // itself while the first choice holds focus.
             let ok = {
                 let (tx, handles, default) = (tx.clone(), Rc::clone(&handles), spec.default);
                 move |_: &_, window: &mut Window, _: &mut App| {
