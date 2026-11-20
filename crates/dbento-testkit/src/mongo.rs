@@ -41,6 +41,8 @@ const URL_FORM: &str = "mongodb://user:password@host:port";
 const MG_ROOT_PASSWORD: &str = "DbentoMongoRoot8";
 const MG_USER_PASSWORD: &str = "DbentoMongoUser8";
 const REPLICA_SET: &str = "rs0";
+// Not 27017: the image's init server can still hold that port after its shutdown has returned.
+const ROOTED_PORT: u16 = 27018;
 
 /// Who a client or URI logs in as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -455,22 +457,29 @@ async fn container() -> MgDb {
         .await
         .expect("the container semaphore is never closed");
     sweep_orphans().await;
+    let port = Cell::new(0);
     let c = start(|| {
-        capped(cache_args())
-            .with_env_var("MONGO_INITDB_ROOT_USERNAME", "root")
-            .with_env_var("MONGO_INITDB_ROOT_PASSWORD", MG_ROOT_PASSWORD)
+        port.set(free_port());
+        rooted(port.get())
     })
     .await;
-    let port = c
-        .get_host_port_ipv4(27017)
-        .await
-        .expect("no mapped MongoDB port");
+    let port = port.get();
     let host = "127.0.0.1";
     wait_ready(&c, host, port).await;
     let mut db = seeded(host, port, "root", MG_ROOT_PASSWORD, "").await;
     db.container = Some(c);
     db._permit = Some(permit);
     db
+}
+
+/// The container `mongo_db` starts: the gate image with a root user, its server on `host_port`.
+fn rooted(host_port: u16) -> ContainerRequest<Mongo> {
+    let mut args = cache_args();
+    args.extend(["--port".to_owned(), ROOTED_PORT.to_string()]);
+    capped(args)
+        .with_env_var("MONGO_INITDB_ROOT_USERNAME", "root")
+        .with_env_var("MONGO_INITDB_ROOT_PASSWORD", MG_ROOT_PASSWORD)
+        .with_mapped_port(host_port, ROOTED_PORT.tcp())
 }
 
 /// The gate image, memory-capped and on tmpfs, running mongod with `args`.
@@ -530,7 +539,7 @@ async fn start(mut request: impl FnMut() -> ContainerRequest<Mongo>) -> Containe
 }
 
 /// Pings as root until the real server answers, past the image's init server, which binds only
-/// inside the container and is then restarted.
+/// inside the container, on another port, and is then stopped.
 async fn wait_ready(container: &ContainerAsync<Mongo>, host: &str, port: u16) {
     let mut options = options(host, port, Some(credential("root", MG_ROOT_PASSWORD)));
     options.server_selection_timeout = Some(Duration::from_secs(2));
@@ -659,6 +668,28 @@ mod tests {
                 "the silent server never answered"
             );
         }
+    }
+
+    // Sourced by the image's entrypoint during init. It freezes the init server once its lock file
+    // is empty, which is when `mongod --shutdown` returns, and lets it exit three seconds later,
+    // as a starved runner did while the real server started.
+    const STALL_INIT: &str = r#"stall_pid=$(cat "$pidfile")
+( while [ -s /data/db/mongod.lock ]; do :; done
+  kill -STOP "$stall_pid"; sleep 3; kill -CONT "$stall_pid" ) &
+"#;
+
+    #[tokio::test]
+    async fn the_real_server_starts_while_the_init_server_is_still_exiting() {
+        let port = Cell::new(0);
+        let c = start(|| {
+            port.set(free_port());
+            rooted(port.get()).with_copy_to(
+                "/docker-entrypoint-initdb.d/stall.sh",
+                STALL_INIT.as_bytes().to_vec(),
+            )
+        })
+        .await;
+        wait_ready(&c, "127.0.0.1", port.get()).await;
     }
 
     #[test]
