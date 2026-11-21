@@ -10,7 +10,7 @@ async fn verify_refuses_the_stock_v1_certificate_with_the_tls_hint() {
     // certificate. The harness container and a declared stock server present the stock one.
     if !dbento_testkit::ms_stock_cert(|k| std::env::var(k).ok()) {
         eprintln!(
-            "skipped: DBENTO_MSSQL_URL names a server whose certificate the harness did not choose"
+            "skipped: DBENTO_MSSQL_URL names a server whose certificate the harness did not choose; set DBENTO_MSSQL_STOCK_CERT=1 if it presents the stock certificate"
         );
         return;
     }

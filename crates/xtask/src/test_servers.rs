@@ -144,7 +144,8 @@ pub fn run_args(engine: Engine, owner: u32) -> Vec<String> {
         "-p",
         &format!("127.0.0.1::{}", engine.port()),
     ]);
-    // Data lives on tmpfs and durability is off: a test server is thrown away after the run.
+    // A test server is thrown away after the run, so durability is off and most engines keep
+    // their data on tmpfs; SQL Server keeps its on disk, as noted at its arm.
     let (options, command): (&[&str], &[&str]) = match engine {
         Engine::Postgres => (
             &[
