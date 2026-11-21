@@ -320,3 +320,14 @@ fn an_unparsable_or_inline_side_is_unmergeable() {
         );
     }
 }
+
+#[test]
+fn a_name_placed_differently_on_two_sides_is_unmergeable() {
+    let base = "dbento = 1\n\"connections.a\" = 1\nname = \"x\"\n";
+    let ours = "dbento = 1\nname = \"x\"\n\n[connections.a]\npath = \"x\"\n";
+    let theirs = "dbento = 1\n\"connections.a\" = 1\nname = \"t\"\n";
+    assert_eq!(
+        merge_workspace_text(base, ours, theirs),
+        Err(TomlMergeConflict::Unmergeable)
+    );
+}

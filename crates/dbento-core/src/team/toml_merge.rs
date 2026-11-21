@@ -197,6 +197,14 @@ pub(crate) fn merge_workspace_text(
     theirs: &str,
 ) -> Result<String, TomlMergeConflict> {
     let (base_units, our_units, their_units) = (units(base)?, units(ours)?, units(theirs)?);
+    // Units match by name alone, so one name in two places (a quoted root key against a table)
+    // would be spliced at the wrong place; such a file is left to the conflict choice.
+    let mut places = BTreeMap::new();
+    for u in base_units.iter().chain(&our_units).chain(&their_units) {
+        if *places.entry(u.name.as_str()).or_insert(&u.place) != &u.place {
+            return Err(Unmergeable);
+        }
+    }
     let (b, o, t) = (
         identities(base, &base_units),
         identities(ours, &our_units),
