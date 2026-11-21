@@ -1,6 +1,6 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 use clap::{Parser, Subcommand};
-use xtask::db;
+use xtask::{db, test_servers};
 
 #[derive(Parser)]
 #[command(about = "Repository automation for dbento")]
@@ -15,6 +15,11 @@ enum Cmd {
     Db {
         #[command(subcommand)]
         action: Action,
+    },
+    /// Start or remove the shared test servers, one per engine, for a whole test run.
+    TestServers {
+        #[command(subcommand)]
+        action: ServerAction,
     },
     /// Build the demo's SQLite database from its seed script, replacing `out`.
     DemoDb {
@@ -94,6 +99,28 @@ enum Action {
     },
 }
 
+#[derive(Subcommand)]
+enum ServerAction {
+    /// Start every server whose URL variable is unset and print `export` lines on stdout.
+    Up {
+        /// The pid the servers are labelled with, normally the calling shell's.
+        #[arg(long)]
+        owner: u32,
+        /// podman or docker; default podman when DOCKER_HOST names podman, else docker.
+        #[arg(long)]
+        runtime: Option<String>,
+    },
+    /// Remove every server labelled with the owner.
+    Down {
+        /// The pid the servers were started with.
+        #[arg(long)]
+        owner: u32,
+        /// podman or docker; default podman when DOCKER_HOST names podman, else docker.
+        #[arg(long)]
+        runtime: Option<String>,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Cmd::Db {
@@ -108,6 +135,20 @@ fn main() -> anyhow::Result<()> {
         Cmd::Db {
             action: Action::Down { runtime },
         } => db::down(&runtime),
+        Cmd::TestServers {
+            action: ServerAction::Up { owner, runtime },
+        } => {
+            // Printed only once every server answers, since the Makefile evaluates stdout.
+            let lines =
+                test_servers::up(&server_runtime(runtime), owner, |k| std::env::var(k).ok())?;
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        Cmd::TestServers {
+            action: ServerAction::Down { owner, runtime },
+        } => test_servers::down(&server_runtime(runtime), owner),
         Cmd::DemoDb { seed, out } => xtask::demo::build_db(&seed, &out),
         Cmd::Bench { args } => exit(xtask::bench::run(&args)),
         Cmd::AppBench { cases } => exit(xtask::app_bench::run(&cases)),
@@ -121,6 +162,13 @@ fn main() -> anyhow::Result<()> {
             target,
         } => xtask::packager_config::run(&out_dir, &output, target.as_deref(), &notices),
     }
+}
+
+/// The runtime given, else the one `DOCKER_HOST` implies.
+fn server_runtime(runtime: Option<String>) -> String {
+    runtime.unwrap_or_else(|| {
+        test_servers::default_runtime(std::env::var("DOCKER_HOST").ok().as_deref()).to_owned()
+    })
 }
 
 /// `db up` for one engine: Postgres loads datasets, the MySQL family takes none, and SQL Server

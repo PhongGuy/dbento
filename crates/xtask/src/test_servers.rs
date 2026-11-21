@@ -4,9 +4,12 @@
 //! This module builds the runtime arguments, readiness probes and `export` lines; the testkit
 //! reads the exported URL variables and uses the shared server instead of a container per test.
 
-use anyhow::Result;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
-use crate::db::parse_port;
+use anyhow::{Context, Result, ensure};
+
+use crate::db::{capture, parse_port, remove_args, remove_started};
 
 /// A database engine the shared servers cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,4 +273,89 @@ pub fn default_runtime(docker_host: Option<&str>) -> &'static str {
         Some(host) if host.contains("podman") => "podman",
         _ => "docker",
     }
+}
+
+/// How long every pending server together gets to answer its first login.
+const READY_DEADLINE: Duration = Duration::from_secs(180);
+
+/// Starts every pending engine, waits until each answers a login, and returns its export lines
+/// in ENGINES order. On any failure removes every container it started and returns the error.
+pub fn up(runtime: &str, owner: u32, env: impl Fn(&str) -> Option<String>) -> Result<Vec<String>> {
+    let mut started = Vec::new();
+    start_all(runtime, owner, &pending(env), &mut started)
+        .map_err(|e| remove_started(runtime, &started, e, remove_args))
+}
+
+/// Starts each engine detached, then probes them all against one deadline so they initialise
+/// side by side. Each name goes into `started` before its attempt, so a half-start is removed.
+fn start_all(
+    runtime: &str,
+    owner: u32,
+    engines: &[Engine],
+    started: &mut Vec<String>,
+) -> Result<Vec<String>> {
+    for &e in engines {
+        let name = container_name(e, owner);
+        eprintln!("starting {name}");
+        // Clear a leftover from an earlier run with this owner; failure means there was none.
+        let _ = quiet(runtime, &remove_args(&[&name]));
+        started.push(name);
+        capture(runtime, &as_strs(&run_args(e, owner)))
+            .with_context(|| format!("starting {}", e.name()))?;
+    }
+    let deadline = Instant::now() + READY_DEADLINE;
+    for &e in engines {
+        let probe = ready_args(e, owner);
+        while !quiet(runtime, &as_strs(&probe)).with_context(|| format!("probing {}", e.name()))? {
+            ensure!(
+                Instant::now() < deadline,
+                "{} did not answer a login within {} s",
+                e.name(),
+                READY_DEADLINE.as_secs()
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    engines
+        .iter()
+        .map(|&e| {
+            export_of(runtime, e, owner)
+                .with_context(|| format!("finding the port of {}", e.name()))
+        })
+        .collect()
+}
+
+/// The export line for a running server, from the host port the runtime mapped.
+fn export_of(runtime: &str, engine: Engine, owner: u32) -> Result<String> {
+    let port = engine.port().to_string();
+    let out = capture(runtime, &["port", &container_name(engine, owner), &port])?;
+    export_line(engine, &out)
+}
+
+/// Force-removes, with volumes, every container labelled dbento.test-servers=<owner>.
+pub fn down(runtime: &str, owner: u32) -> Result<()> {
+    let listing = capture(
+        runtime,
+        &["ps", "-a", "-q", "--filter", &owner_filter(owner)],
+    )?;
+    let ids: Vec<&str> = listing.split_whitespace().collect();
+    if !ids.is_empty() {
+        capture(runtime, &remove_args(&ids))?;
+    }
+    Ok(())
+}
+
+/// Runs the runtime with its output discarded and reports whether it succeeded.
+fn quiet(runtime: &str, args: &[&str]) -> Result<bool> {
+    let status = Command::new(runtime)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("running {runtime}"))?;
+    Ok(status.success())
+}
+
+fn as_strs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
 }

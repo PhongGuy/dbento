@@ -182,7 +182,7 @@ fn verify_vendored() -> Result<Vec<u8>> {
 }
 
 /// Runs the runtime with `args`, returning stdout and failing with stderr on a non-zero exit.
-fn capture(runtime: &str, args: &[&str]) -> Result<String> {
+pub(crate) fn capture(runtime: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(runtime)
         .args(args)
         .output()
@@ -598,7 +598,7 @@ pub fn up_mysql(runtime: &str, engine: MyEngine, versions: &[String]) -> Result<
 type RemoveArgs = for<'a> fn(&[&'a str]) -> Vec<&'a str>;
 
 /// Force-removes `started` with `rm`, attaching the outcome to the error that caused it.
-fn remove_started(
+pub(crate) fn remove_started(
     runtime: &str,
     started: &[String],
     e: anyhow::Error,
