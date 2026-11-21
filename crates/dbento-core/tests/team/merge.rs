@@ -280,3 +280,15 @@ fn another_conflicting_file_keeps_its_conflict_while_dbento_toml_merges() {
     );
     assert_eq!(store(&sb, &mine).copies().unwrap(), ["queries/a.sql"]);
 }
+
+#[test]
+fn a_stopped_rebase_whose_only_conflict_merged_is_reported_as_rebased() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, BASE);
+    sb.teammate(&mate, TOML, Some(&format!("{BASE}{}", entry("b"))));
+    write(&mine, TOML, &format!("{BASE}{}", entry("c")));
+    let pulled = pull_rebase(&binding(&mine), &store(&sb, &mine), &sb.options()).unwrap();
+    assert_eq!(pulled, Pulled::Rebased);
+    let both = format!("{BASE}{}{}", entry("b"), entry("c"));
+    assert_eq!(read(&mine, TOML).as_deref(), Some(both.as_str()));
+}

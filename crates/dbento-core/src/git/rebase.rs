@@ -38,10 +38,11 @@ pub enum Pulled {
     UpToDate,
     /// Nothing was unpushed; the branch now sits at the server's tip.
     FastForwarded,
-    /// The unpushed commits were replayed on the server's tip.
+    /// The unpushed commits were replayed on the server's tip, or their changes were brought
+    /// onto it with dbento.toml merged per entry.
     Rebased,
-    /// The rebase stopped; the local side of these paths is in the store, and the branch is
-    /// the server's tip plus at most one commit of the other local changes.
+    /// These paths changed differently on both sides; their local side is in the store, and
+    /// the branch is the server's tip plus at most one commit of the other local changes.
     Conflicted(Vec<ConflictFile>),
 }
 
@@ -363,7 +364,11 @@ fn fall_back(
         local(&["add", "--", TOML], dir, opts)?;
     }
     commit_if_staged(binding, FALLBACK_MESSAGE, opts)?;
-    Ok(Pulled::Conflicted(files))
+    Ok(if files.is_empty() {
+        Pulled::Rebased
+    } else {
+        Pulled::Conflicted(files)
+    })
 }
 
 /// Commits only on `left` and only on `right`.
