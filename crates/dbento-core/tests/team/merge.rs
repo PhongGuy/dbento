@@ -168,3 +168,115 @@ fn a_local_delete_of_dbento_toml_keeps_the_delete_conflict() {
     );
     assert_eq!(read(&mine, TOML).as_deref(), Some(theirs.as_str()));
 }
+
+#[test]
+fn different_connections_added_on_both_sides_sync_without_a_conflict() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, BASE);
+    sb.teammate(&mate, TOML, Some(&format!("{BASE}{}", entry("b"))));
+    write(&mine, TOML, &format!("{BASE}{}", entry("c")));
+    write(&mine, "queries/mine.sql", "select 3;\n");
+    assert_eq!(sync(&sb, &mine), SyncOutcome::Synced);
+    let both = format!("{BASE}{}{}", entry("b"), entry("c"));
+    assert_eq!(sb.origin_show(TOML).as_deref(), Some(both.as_str()));
+    assert!(valid(&both));
+    assert_eq!(read(&mine, TOML).as_deref(), Some(both.as_str()));
+    assert_eq!(
+        sb.origin_show("queries/mine.sql").as_deref(),
+        Some("select 3;\n")
+    );
+    assert!(store(&sb, &mine).copies().unwrap().is_empty());
+    assert_eq!(sb.git(&mine, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn the_same_connection_edited_both_ways_still_conflicts() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, BASE);
+    let theirs = BASE.replace("a.db", "theirs.db");
+    let ours = BASE.replace("a.db", "mine.db");
+    sb.teammate(&mate, TOML, Some(&theirs));
+    write(&mine, TOML, &ours);
+    toml_conflict(sync(&sb, &mine));
+    assert_eq!(sb.origin_show(TOML).as_deref(), Some(theirs.as_str()));
+    assert_eq!(read(&mine, TOML).as_deref(), Some(theirs.as_str()));
+    let copy = fs::read_to_string(store(&sb, &mine).copy_path(TOML)).unwrap();
+    assert_eq!(copy, ours);
+}
+
+#[test]
+fn a_merge_the_workspace_rejects_falls_back_to_the_conflict() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, BASE);
+    // Parseable TOML, so the merge itself succeeds, but `colour` is not a connection field.
+    let theirs = format!("{BASE}{}colour = \"red\"\n", entry("b"));
+    let ours = format!("{BASE}{}", entry("c"));
+    sb.teammate(&mate, TOML, Some(&theirs));
+    write(&mine, TOML, &ours);
+    toml_conflict(sync(&sb, &mine));
+    assert_eq!(sb.origin_show(TOML).as_deref(), Some(theirs.as_str()));
+    assert_eq!(read(&mine, TOML).as_deref(), Some(theirs.as_str()));
+    let copy = fs::read_to_string(store(&sb, &mine).copy_path(TOML)).unwrap();
+    assert_eq!(copy, ours);
+}
+
+#[test]
+fn a_clean_rebase_whose_merge_the_workspace_rejects_reports_the_conflict() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, BASE);
+    // Mine edits the top and theirs the end, so git's line merge succeeds, yet the merged
+    // file carries theirs' `colour`, which is not a connection field.
+    let theirs = format!("{BASE}{}colour = \"red\"\n", entry("b"));
+    let ours = at_top(BASE, &entry("c"));
+    sb.teammate(&mate, TOML, Some(&theirs));
+    write(&mine, TOML, &ours);
+    toml_conflict(sync(&sb, &mine));
+    assert_eq!(sb.origin_show(TOML).as_deref(), Some(theirs.as_str()));
+    assert_eq!(read(&mine, TOML).as_deref(), Some(theirs.as_str()));
+    let copy = fs::read_to_string(store(&sb, &mine).copy_path(TOML)).unwrap();
+    assert_eq!(copy, ours);
+}
+
+#[test]
+fn a_merge_equal_to_theirs_syncs_without_an_empty_commit() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, &format!("{BASE}{}", entry("b")));
+    let theirs = format!("{BASE}{}", entry("c"));
+    sb.teammate(&mate, TOML, Some(&theirs));
+    let tip = sb.rev(&mate, "HEAD");
+    write(&mine, TOML, BASE);
+    assert_eq!(sync(&sb, &mine), SyncOutcome::Synced);
+    assert_eq!(sb.rev(&mine, "HEAD"), tip);
+    assert_eq!(
+        sb.git(sb.path(), &["--git-dir", "origin.git", "rev-parse", "main"])
+            .trim(),
+        tip
+    );
+    assert_eq!(read(&mine, TOML).as_deref(), Some(theirs.as_str()));
+    assert_eq!(sb.git(&mine, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn another_conflicting_file_keeps_its_conflict_while_dbento_toml_merges() {
+    let sb = Sandbox::new();
+    let (mine, mate) = seeded(&sb, BASE);
+    sb.teammate(&mate, "queries/a.sql", Some("select 'theirs';\n"));
+    sb.teammate(&mate, TOML, Some(&format!("{BASE}{}", entry("b"))));
+    write(&mine, "queries/a.sql", "select 'mine';\n");
+    write(&mine, TOML, &format!("{BASE}{}", entry("c")));
+    let got = sync(&sb, &mine);
+    let SyncOutcome::Conflicted(files) = &got else {
+        panic!("no conflict: {got:?}")
+    };
+    assert_eq!(
+        files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+        ["queries/a.sql"]
+    );
+    let both = format!("{BASE}{}{}", entry("b"), entry("c"));
+    assert_eq!(sb.origin_show(TOML).as_deref(), Some(both.as_str()));
+    assert_eq!(
+        sb.origin_show("queries/a.sql").as_deref(),
+        Some("select 'theirs';\n")
+    );
+    assert_eq!(store(&sb, &mine).copies().unwrap(), ["queries/a.sql"]);
+}

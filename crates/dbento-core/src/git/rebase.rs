@@ -150,7 +150,7 @@ pub fn pull_rebase(
             .trim()
             .to_owned(),
     };
-    fall_back(binding, &mine, &theirs, &base, store, opts)
+    fall_back(binding, &mine, &theirs, &base, plan, store, opts)
 }
 
 /// The merge-base of `mine` and `theirs`, `None` when git names none.
@@ -204,7 +204,7 @@ fn plan_toml(
         Ok(merged) if Workspace::from_text(dir.to_path_buf(), &dir.join(TOML), &merged).is_ok() => {
             TomlPlan::Merged(merged)
         }
-        Ok(_) | Err(_) => TomlPlan::Failed,
+        _ => TomlPlan::Failed,
     })
 }
 
@@ -294,16 +294,25 @@ pub(crate) fn fetch(binding: &Binding, opts: &GitOptions) -> Result<(), SyncErro
 
 /// After an aborted rebase: keep each conflicted path's local side in the store, and only
 /// once all of them are on disk reset to `theirs` and commit every other local change again.
+/// A merged dbento.toml is no conflict: its text is written over theirs and committed too.
 fn fall_back(
     binding: &Binding,
     mine: &str,
     theirs: &str,
     base: &str,
+    plan: TomlPlan,
     store: &ConflictStore,
     opts: &GitOptions,
 ) -> Result<Pulled, SyncError> {
     let dir = binding.dir.as_path();
-    let my_paths = changed(dir, base, mine, opts)?;
+    let merged = match plan {
+        TomlPlan::Merged(text) => Some(text),
+        TomlPlan::Untouched | TomlPlan::Failed => None,
+    };
+    let mut my_paths = changed(dir, base, mine, opts)?;
+    if merged.is_some() {
+        my_paths.remove(TOML);
+    }
     let their_paths = changed(dir, base, theirs, opts)?;
     let mut files = Vec::new();
     for path in my_paths.intersection(&their_paths) {
@@ -348,10 +357,12 @@ fn fall_back(
     if !remove.is_empty() {
         local(&[&["rm", "-q", "--"], &remove[..]].concat(), dir, opts)?;
     }
-    if !restore.is_empty() || !remove.is_empty() {
-        let commit = ["commit", "-q", "-m", FALLBACK_MESSAGE];
-        local(&commit, dir, &with_identity(binding, opts)?)?;
+    // Written last, so no restore can overwrite the merge.
+    if let Some(text) = merged {
+        fs::write(dir.join(TOML), text)?;
+        local(&["add", "--", TOML], dir, opts)?;
     }
+    commit_if_staged(binding, FALLBACK_MESSAGE, opts)?;
     Ok(Pulled::Conflicted(files))
 }
 
