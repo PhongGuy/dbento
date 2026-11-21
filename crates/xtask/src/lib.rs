@@ -17,6 +17,7 @@ pub mod icons;
 pub mod notices;
 pub mod packager_config;
 pub mod stress;
+pub mod test_servers;
 pub mod windows_check;
 
 /// The repository root, two levels above this crate's manifest.

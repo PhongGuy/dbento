@@ -48,6 +48,9 @@ pub use surreal::*;
 /// The environment variable the generated connection reads its password from.
 pub const SECRET_VAR: &str = "DBENTO_TEST_PG_SECRET";
 
+/// The gate image's tag.
+pub const PG_TAG: &str = "17-alpine";
+
 static NEXT_DB: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh database. One holding a container must be dropped inside a tokio runtime; one on
@@ -357,7 +360,7 @@ async fn start(image: impl Fn() -> ContainerRequest<Postgres>, host: &str) -> Pg
             NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
         );
         let request = image()
-            .with_tag("17-alpine")
+            .with_tag(PG_TAG)
             // A tmpfs over the image's declared VOLUME keeps the runtime from creating an
             // anonymous volume, which outlives a run that is killed before drop.
             .with_mount(Mount::tmpfs_mount("/var/lib/postgresql/data"))

@@ -21,4 +21,5 @@ mod packager_config;
 mod packager_metadata;
 mod stress;
 mod test_binaries;
+mod test_servers;
 mod windows_check;

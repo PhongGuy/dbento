@@ -27,6 +27,12 @@ pub const MYSQL_MATRIX: [&str; 2] = ["8.4", "9.7"];
 /// The MariaDB versions the opt-in matrix covers.
 pub const MARIADB_MATRIX: [&str; 3] = ["10.11", "11.4", "12.3"];
 
+/// The gate image's MySQL tag.
+pub const MYSQL_TAG: &str = "8.4";
+
+/// The gate image's MariaDB tag.
+pub const MARIADB_TAG: &str = "11.4";
+
 /// 1,000 rows, n = 0..=999; `nums a, nums b` gives 1e6 rows and three copies 1e9.
 pub const NUMS_SQL: &str = "CREATE TABLE nums (n INT PRIMARY KEY) AS WITH RECURSIVE r(n) AS \
     (SELECT 0 UNION ALL SELECT n + 1 FROM r WHERE n < 999) SELECT n FROM r";
@@ -293,12 +299,12 @@ async fn container(flavor: MyFlavor, tls: Option<&ServerTls>) -> MyDb {
     sweep_orphans().await;
     let (held, port) = match flavor {
         MyFlavor::Mysql => {
-            let c = start::<Mysql>("8.4", flavor, |r| serve_tls(r, tls)).await;
+            let c = start::<Mysql>(MYSQL_TAG, flavor, |r| serve_tls(r, tls)).await;
             let port = c.get_host_port_ipv4(3306).await;
             (Held::Mysql(c), port)
         }
         MyFlavor::Mariadb => {
-            let c = start::<Mariadb>("11.4", flavor, |r| serve_tls(r, tls)).await;
+            let c = start::<Mariadb>(MARIADB_TAG, flavor, |r| serve_tls(r, tls)).await;
             let port = c.get_host_port_ipv4(3306).await;
             (Held::Mariadb(c), port)
         }
