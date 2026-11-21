@@ -4,7 +4,7 @@
 //! one per other top-level item, plus any trailing text. Units are cut from the source spans
 //! `toml_edit` reports, so comments and formatting travel with the entry they sit above.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
 
 use toml_edit::{Document, Item, Key, Table};
@@ -126,12 +126,16 @@ fn units(text: &str) -> Result<Vec<Unit>, TomlMergeConflict> {
     }
 
     // In source order, a unit runs until the next unit's anchor; a name that comes back
-    // after another unit is split across the file, which the splice cannot express.
+    // after another unit, or in another place, is split across the file, which the splice
+    // cannot express.
     anchors.sort_by_key(|a| a.0);
     let mut out: Vec<Unit> = Vec::new();
     let mut seen = HashSet::new();
     for (start, name, place) in anchors {
-        if out.last().is_some_and(|u| u.name == name) {
+        if out
+            .last()
+            .is_some_and(|u| u.name == name && u.place == place)
+        {
             continue;
         }
         if !seen.insert(name.clone()) {
@@ -163,6 +167,119 @@ fn units(text: &str) -> Result<Vec<Unit>, TomlMergeConflict> {
         });
     }
     Ok(out)
+}
+
+/// The text a unit is compared by: line endings as `\n`, trailing whitespace trimmed.
+fn identity(slice: &str) -> String {
+    slice.replace("\r\n", "\n").trim_end().to_owned()
+}
+
+/// Each unit's name mapped to the identity of its slice.
+fn identities<'a>(text: &str, units: &'a [Unit]) -> BTreeMap<&'a str, String> {
+    units
+        .iter()
+        .map(|u| (u.name.as_str(), identity(&text[u.range.clone()])))
+        .collect()
+}
+
+/// Where an addition of mine goes in theirs' text.
+enum Slot {
+    Start,
+    After(usize),
+    End,
+}
+
+/// Merge my and their edits of base's text per unit, building on theirs' text. Fails with
+/// `Units` naming every unit changed differently on both sides, or `Unmergeable`.
+pub(crate) fn merge_workspace_text(
+    base: &str,
+    ours: &str,
+    theirs: &str,
+) -> Result<String, TomlMergeConflict> {
+    let (base_units, our_units, their_units) = (units(base)?, units(ours)?, units(theirs)?);
+    let (b, o, t) = (
+        identities(base, &base_units),
+        identities(ours, &our_units),
+        identities(theirs, &their_units),
+    );
+
+    // A side that left a unit as base had it yields to the other side; when both changed it,
+    // only an identical change merges. My changes are then sorted into what they do to theirs.
+    let names: BTreeSet<&str> = b.keys().chain(o.keys()).chain(t.keys()).copied().collect();
+    let (mut conflicts, mut removed, mut replaced) = (Vec::new(), HashSet::new(), HashSet::new());
+    for name in names {
+        let (mine, base_side, their_side) = (o.get(name), b.get(name), t.get(name));
+        if mine == base_side || mine == their_side {
+            continue;
+        }
+        if their_side != base_side {
+            conflicts.push(name.to_owned());
+        } else if mine.is_none() {
+            removed.insert(name);
+        } else if their_side.is_some() {
+            replaced.insert(name);
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(TomlMergeConflict::Units(conflicts));
+    }
+
+    // An addition of mine follows theirs' last unit in the same place; a root key with none to
+    // follow goes first, anything else last.
+    let crlf = theirs.contains("\r\n");
+    let mut added: Vec<(Slot, &str)> = Vec::new();
+    let is_new = |u: &&Unit| !b.contains_key(u.name.as_str()) && !t.contains_key(u.name.as_str());
+    for u in our_units.iter().filter(is_new) {
+        let same = their_units
+            .iter()
+            .rposition(|x| x.place == u.place && u.place != Place::End);
+        let slot = match (same, &u.place) {
+            (Some(i), _) => Slot::After(i),
+            (None, Place::Root) => Slot::Start,
+            (None, _) => Slot::End,
+        };
+        added.push((slot, &ours[u.range.clone()]));
+    }
+
+    let mut out = String::with_capacity(theirs.len() + ours.len());
+    let first = their_units.first().map_or(theirs.len(), |u| u.range.start);
+    out.push_str(&theirs[..first]);
+    let push_added = |out: &mut String, pick: &dyn Fn(&Slot) -> bool| {
+        for (_, slice) in added.iter().filter(|(s, _)| pick(s)) {
+            push_mine(out, slice, crlf);
+        }
+    };
+    push_added(&mut out, &|s| matches!(s, Slot::Start));
+    for (i, u) in their_units.iter().enumerate() {
+        let name = u.name.as_str();
+        if replaced.contains(name) {
+            if let Some(mine) = our_units.iter().find(|m| m.name == name) {
+                push_mine(&mut out, &ours[mine.range.clone()], crlf);
+            }
+        } else if !removed.contains(name) {
+            out.push_str(&theirs[u.range.clone()]);
+        }
+        push_added(&mut out, &|s| matches!(s, Slot::After(j) if *j == i));
+    }
+    push_added(&mut out, &|s| matches!(s, Slot::End));
+    Ok(out)
+}
+
+// A slice of mine takes theirs' line endings and always ends in one, and never runs onto
+// a last line of theirs that had no line ending.
+fn push_mine(out: &mut String, slice: &str, crlf: bool) {
+    let eol = if crlf { "\r\n" } else { "\n" };
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push_str(eol);
+    }
+    let mut text = slice.replace("\r\n", "\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    if crlf {
+        text = text.replace('\n', "\r\n");
+    }
+    out.push_str(&text);
 }
 
 #[cfg(test)]
