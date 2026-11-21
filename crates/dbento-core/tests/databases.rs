@@ -86,11 +86,28 @@ async fn mysql_lists_its_schemas_as_databases_with_the_servers_own_last() {
                 .iter()
                 .map(|x| x.name().to_owned())
                 .collect();
-            assert_eq!(names, schemas, "{label}: a database is a schema");
-            assert!(
-                names.iter().any(|n| n == fx.db.database()),
-                "{label}: {names:?}"
+            // Other tests create and drop databases between the two calls, so only the ones
+            // this test controls are compared.
+            let own = fx.db.database();
+            let controlled = [
+                own,
+                "information_schema",
+                "mysql",
+                "performance_schema",
+                "sys",
+            ];
+            let keep = |l: &[String]| -> Vec<String> {
+                l.iter()
+                    .filter(|n| controlled.contains(&n.as_str()))
+                    .cloned()
+                    .collect()
+            };
+            assert_eq!(
+                keep(&names),
+                keep(&schemas),
+                "{label}: a database is a schema"
             );
+            assert_eq!(keep(&names), controlled, "{label}: {names:?}");
             let n = names.len();
             assert_eq!(
                 &names[n - 4..],
