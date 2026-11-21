@@ -38,8 +38,22 @@ fmt-check:
 lint:
 	$(CARGO) clippy $(LOCKED) --all-targets --all-features -- -Dwarnings
 
+# The URL variables the shared servers set; the testkit pass unsets them to use its own containers.
+TEST_URLS := DBENTO_PG_URL DBENTO_MYSQL_URL DBENTO_MARIADB_URL DBENTO_MONGO_URL DBENTO_REDIS_URL DBENTO_DYNAMO_URL
+
+# The workspace runs on one shared server per engine, owned by this recipe's shell and removed on
+# any exit; the testkit then runs alone on per-test containers so their start paths stay tested.
 test:
-	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(LOCKED) --workspace
+	@owner=$$$$; \
+	down() { $(CARGO) xtask test-servers down --owner "$$owner"; }; \
+	trap down EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	exports=$$($(CARGO) xtask test-servers up --owner "$$owner") || exit; \
+	eval "$$exports"; \
+	env -u WAYLAND_DISPLAY -u DISPLAY $(CARGO) test $(LOCKED) --workspace; status=$$?; \
+	down || { [ "$$status" -ne 0 ] || status=1; }; \
+	env -u WAYLAND_DISPLAY -u DISPLAY $(addprefix -u ,$(TEST_URLS)) $(CARGO) test $(LOCKED) -p dbento-testkit --all-features; kit=$$?; \
+	[ "$$status" -ne 0 ] || status=$$kit; \
+	exit "$$status"
 
 # Each engine feature alone (the powerset rebuilds DuckDB per combination), warnings fatal so
 # code one feature needs stays gated on it; clippy then covers the tests at no features.
