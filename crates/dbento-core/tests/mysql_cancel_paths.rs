@@ -45,6 +45,8 @@ async fn a_cancel_during_a_settle_drain_stops_the_drained_statement() {
     for (label, fx) in my_fixtures("").await {
         fx.db.admin().await.query_drop(NUMS_SQL).await.unwrap();
         let mut s = fx.session(SessionOptions::default()).await;
+        // Taken while the session is idle: the id names the connection the drain runs on.
+        let id = my_thread_id(&mut s).await;
         {
             let mut script = s.script("SELECT a.n FROM nums a, nums b, nums c");
             let pending = script.next().await.unwrap().unwrap();
@@ -52,15 +54,14 @@ async fn a_cancel_during_a_settle_drain_stops_the_drained_statement() {
             assert!(stream.next_batch().await.unwrap().is_some(), "{label}");
         }
         s.cancel_handle().cancel();
-        let started = Instant::now();
         let settled = s.settle().await;
         assert!(
             matches!(settled, Err(ExecuteError::Cancelled)),
             "{label}: {settled:?}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "{label}: waited for the cap"
+            fx.quiet_within(&id, Duration::from_secs(10)).await,
+            "{label}: the drained statement still runs on the server"
         );
         let after = run(&mut s, "SELECT 7", Limits::default())
             .await
