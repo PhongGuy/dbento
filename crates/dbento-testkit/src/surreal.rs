@@ -88,6 +88,8 @@ pub struct SrDb {
     server: Endpoint,
     namespace: String,
     database: String,
+    // Server-level namespaces handed out by `scratch_namespace`, removed with this one.
+    scratch: std::sync::Mutex<Vec<String>>,
     // Declared before the permit, so the container is gone before another may start.
     container: Option<ContainerAsync<GenericImage>>,
     _permit: Option<OwnedSemaphorePermit>,
@@ -113,6 +115,16 @@ impl SrDb {
     /// This test's database.
     pub fn database(&self) -> &str {
         &self.database
+    }
+    /// `<this namespace>_<suffix>`, a server-level namespace name only this test uses; the drop
+    /// removes it along with the test's own namespace. Defining it is the caller's job.
+    pub fn scratch_namespace(&self, suffix: &str) -> String {
+        let name = format!("{}_{suffix}", self.namespace);
+        self.scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(name.clone());
+        name
     }
 
     /// `[connections.<name>]` for `tls = "off"` on this namespace; `login` is `(user, level)`,
@@ -170,7 +182,16 @@ impl Drop for SrDb {
             return;
         }
         let server = self.server.clone();
-        let sql = format!("REMOVE NAMESPACE IF EXISTS `{}`", self.namespace);
+        // Scratch names first, then the test's own, all in one request.
+        let scratch = self
+            .scratch
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sql = scratch
+            .iter()
+            .chain(std::iter::once(&self.namespace))
+            .map(|ns| format!("REMOVE NAMESPACE IF EXISTS `{ns}`;"))
+            .collect::<String>();
         let done = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -233,44 +254,114 @@ async fn http_sql(
 /// A fresh namespace on the server [`sr_source`] picks, holding an empty database `app` and the
 /// nine logins of [`SR_LOGINS`].
 pub async fn surreal_db() -> SrDb {
-    let mut db = match sr_source(|k| std::env::var(k).ok()) {
+    // A shared server's root logins are server-wide, so one process defines them once and the
+    // per-test seeds never write the same keys side by side.
+    static ROOT_LOGINS: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    match sr_source(|k| std::env::var(k).ok()) {
         SrSource::Url(url) => {
             let (host, port, user, password) = sr_url(&url).unwrap_or_else(|e| panic!("{e}"));
-            fresh(
-                Endpoint {
-                    host,
-                    port,
-                    user,
-                    password,
-                },
-                None,
-                None,
-            )
+            let endpoint = Endpoint {
+                host,
+                port,
+                user,
+                password,
+            };
+            ROOT_LOGINS
+                .get_or_try_init(|| ensure_root_logins(&endpoint))
+                .await
+                .unwrap_or_else(|e| panic!("cannot define the root logins: {e}"));
+            seeded(fresh(endpoint, None, None), false).await
         }
         SrSource::Container => {
             let all = [("SURREAL_CAPS_ALLOW_ALL".to_owned(), "true".to_owned())];
-            server(SURREAL_TAG, &all, |r| r).await
+            seeded(server(SURREAL_TAG, &all, |r| r).await, true).await
         }
-    };
+    }
+}
+
+/// The three root-level logins of [`SR_LOGINS`], each `DEFINE USER OVERWRITE ... ON ROOT`, with
+/// `password`.
+pub fn sr_root_logins_sql(password: &str) -> String {
+    logins_sql(password, |level| level == "root")
+}
+
+// `DEFINE USER OVERWRITE` for each login of SR_LOGINS whose level `keep` accepts.
+fn logins_sql(password: &str, keep: impl Fn(&str) -> bool) -> String {
+    SR_LOGINS
+        .iter()
+        .filter(|(_, level, _)| keep(level))
+        .map(|(user, level, role)| {
+            let on = level.to_uppercase();
+            format!("DEFINE USER OVERWRITE {user} ON {on} PASSWORD '{password}' ROLES {role};")
+        })
+        .collect()
+}
+
+/// The per-test seed: namespace, database, the six namespace and database logins, and when
+/// `root` the root logins too.
+fn seed_sql(namespace: &str, database: &str, password: &str, root: bool) -> String {
+    // Every statement overwrites, so a seed retried after a reset that the server had already
+    // applied lands the same fixture instead of failing on "already exists".
+    let mut sql = format!(
+        "DEFINE NAMESPACE OVERWRITE `{namespace}`; USE NS `{namespace}`; DEFINE DATABASE OVERWRITE `{database}`; USE DB `{database}`;"
+    );
+    if root {
+        sql.push_str(&sr_root_logins_sql(password));
+    }
+    sql.push_str(&logins_sql(password, |level| level != "root"));
+    sql
+}
+
+/// Ok once ro, re and rv each log in with the server's password; defines them when missing, and
+/// after a write conflict re-probes (bounded) instead of writing again.
+async fn ensure_root_logins(server: &Endpoint) -> Result<(), String> {
+    if root_logins_work(server).await {
+        return Ok(());
+    }
+    let define = sr_root_logins_sql(&server.password);
+    match http_sql(server, "main", "main", &define).await {
+        Ok(_) => Ok(()),
+        // Another caller is defining the same keys; each statement commits on its own, so wait
+        // for all three of its logins to land rather than racing it again.
+        Err(e) if e.contains("Transaction conflict") => {
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if root_logins_work(server).await {
+                    return Ok(());
+                }
+            }
+            Err(format!(
+                "the root logins never appeared after a write conflict: {e}"
+            ))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+// Whether ro, re and rv each log in with the server's password; a wrong one answers 401.
+async fn root_logins_work(server: &Endpoint) -> bool {
+    for user in ["ro", "re", "rv"] {
+        let login = Endpoint {
+            user: user.to_owned(),
+            ..server.clone()
+        };
+        if http_sql(&login, "main", "main", "RETURN 1").await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Names `db`'s namespace `dbento_t_<pid>_<n>`, database `app`, and runs [`seed_sql`] on it,
+/// retried on transient errors. Panics on failure.
+async fn seeded(mut db: SrDb, root: bool) -> SrDb {
     db.namespace = format!(
         "dbento_t_{}_{}",
         std::process::id(),
         NEXT_DB.fetch_add(1, Ordering::Relaxed)
     );
     db.database = "app".to_owned();
-    // Every statement overwrites, so a seed retried after a reset that the server had already
-    // applied lands the same fixture instead of failing on "already exists".
-    let mut sql = format!(
-        "DEFINE NAMESPACE OVERWRITE `{0}`; USE NS `{0}`; DEFINE DATABASE OVERWRITE `{1}`; USE DB `{1}`;",
-        db.namespace, db.database
-    );
-    for (user, level, role) in SR_LOGINS {
-        let on = level.to_uppercase();
-        sql.push_str(&format!(
-            "DEFINE USER OVERWRITE {user} ON {on} PASSWORD '{}' ROLES {role};",
-            db.password()
-        ));
-    }
+    let sql = seed_sql(&db.namespace, &db.database, db.password(), root);
     retry("seed", RETRY_BACKOFF, |_| {
         http_sql(&db.server, "main", "main", &sql)
     })
@@ -322,6 +413,7 @@ fn fresh(
         server,
         namespace: "main".to_owned(),
         database: "main".to_owned(),
+        scratch: std::sync::Mutex::default(),
         container,
         _permit: permit,
     }
@@ -521,5 +613,94 @@ mod tests {
         db.admin("CREATE a:1; CREATE a:2").await;
         assert_eq!(db.count("a").await, 2);
         assert_eq!(db.scalar("RETURN 7").await, 7);
+    }
+
+    fn allow_all() -> [(String, String); 1] {
+        [("SURREAL_CAPS_ALLOW_ALL".to_owned(), "true".to_owned())]
+    }
+
+    #[test]
+    fn the_root_logins_are_the_three_root_level_logins_of_sr_logins() {
+        assert_eq!(
+            sr_root_logins_sql("pw"),
+            "DEFINE USER OVERWRITE ro ON ROOT PASSWORD 'pw' ROLES OWNER;\
+             DEFINE USER OVERWRITE re ON ROOT PASSWORD 'pw' ROLES EDITOR;\
+             DEFINE USER OVERWRITE rv ON ROOT PASSWORD 'pw' ROLES VIEWER;"
+        );
+    }
+
+    #[test]
+    fn a_url_seed_leaves_the_root_logins_alone_and_a_container_seed_defines_all_nine() {
+        let url = seed_sql("dbento_t_1_2", "app", "pw", false);
+        let own = seed_sql("dbento_t_1_2", "app", "pw", true);
+        assert!(
+            url.starts_with("DEFINE NAMESPACE OVERWRITE `dbento_t_1_2`;"),
+            "{url}"
+        );
+        assert!(!url.contains(" ON ROOT "), "{url}");
+        assert_eq!(url.matches(" ON NAMESPACE ").count(), 3, "{url}");
+        assert_eq!(url.matches(" ON DATABASE ").count(), 3, "{url}");
+        assert_eq!(own.matches("DEFINE USER OVERWRITE").count(), 9, "{own}");
+        assert!(own.contains(&sr_root_logins_sql("pw")), "{own}");
+    }
+
+    // Concurrent first definitions conflict in the key-value store; every caller must still
+    // come back Ok, by finding another caller's logins rather than writing again.
+    #[tokio::test]
+    async fn racing_callers_all_find_the_root_logins_on_a_fresh_server() {
+        let srv = server(SURREAL_TAG, &allow_all(), |r| r).await;
+        let racers = (0..32).map(|_| ensure_root_logins(&srv.server));
+        let results = futures_util::future::join_all(racers).await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        let root = srv.admin("INFO FOR ROOT").await.pop().unwrap_or_default();
+        for user in ["ro", "re", "rv"] {
+            assert!(root["users"].get(user).is_some(), "{user}: {root}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_root_login_with_another_password_is_redefined() {
+        let srv = server(SURREAL_TAG, &allow_all(), |r| r).await;
+        srv.admin("DEFINE USER ro ON ROOT PASSWORD 'other' ROLES OWNER")
+            .await;
+        ensure_root_logins(&srv.server).await.unwrap();
+        let ro = Endpoint {
+            user: "ro".to_owned(),
+            ..srv.server.clone()
+        };
+        assert!(http_sql(&ro, "main", "main", "RETURN 1").await.is_ok());
+    }
+
+    // Tests on one shared server seed side by side; with the root logins out of the seed no two
+    // seeds write the same key.
+    #[tokio::test]
+    async fn thirty_two_url_seeds_on_one_server_all_land() {
+        let srv = server(SURREAL_TAG, &allow_all(), |r| r).await;
+        ensure_root_logins(&srv.server).await.unwrap();
+        let seeds = (0..32).map(|_| seeded(fresh(srv.server.clone(), None, None), false));
+        let dbs = futures_util::future::join_all(seeds).await;
+        for db in &dbs {
+            assert_eq!(db.scalar("RETURN 7").await, 7);
+        }
+        let mut names: Vec<&str> = dbs.iter().map(SrDb::namespace).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 32);
+    }
+
+    // A namespace a test makes beside its own goes with it, so a shared server keeps no leftovers.
+    #[tokio::test]
+    async fn a_scratch_namespace_is_removed_with_its_test_namespace() {
+        let srv = server(SURREAL_TAG, &allow_all(), |r| r).await;
+        ensure_root_logins(&srv.server).await.unwrap();
+        let db = seeded(fresh(srv.server.clone(), None, None), false).await;
+        let scratch = db.scratch_namespace("elsewhere");
+        assert_eq!(scratch, format!("{}_elsewhere", db.namespace()));
+        db.admin(&format!("DEFINE NAMESPACE {scratch}")).await;
+        let own = db.namespace().to_owned();
+        drop(db);
+        let root = srv.admin("INFO FOR ROOT").await.pop().unwrap_or_default();
+        assert!(root["namespaces"].get(&scratch).is_none(), "{root}");
+        assert!(root["namespaces"].get(&own).is_none(), "{root}");
     }
 }

@@ -2,10 +2,12 @@
 //! and removal.
 use std::process::Command;
 
-use dbento_testkit::{MARIADB_TAG, MONGO_TAG, MOTO_TAG, MYSQL_TAG, PG_TAG, VALKEY_TAG};
+use dbento_testkit::{
+    MARIADB_TAG, MONGO_TAG, MOTO_TAG, MYSQL_TAG, PG_TAG, SURREAL_TAG, VALKEY_TAG,
+};
 use xtask::test_servers::{
-    ENGINES, Engine, container_name, default_runtime, export_line, owner_filter, pending,
-    ready_args, run_args,
+    ENGINES, Engine, SURREAL_ROOT_LOGINS, container_name, default_runtime, export_line,
+    owner_filter, pending, ready_args, run_args, surreal_logins_sql, surreal_sql_args,
 };
 use xtask::test_servers::{down, up};
 
@@ -127,6 +129,27 @@ fn each_server_is_labelled_for_its_owner_and_tuned_as_measured() {
         run_args(Engine::Dynamo, 4242),
         with("dynamo", 5000, &["docker.io/motoserver/moto:5.2.5"])
     );
+    assert_eq!(
+        run_args(Engine::Surreal, 4242),
+        with(
+            "surreal",
+            8000,
+            &[
+                "-e",
+                "SURREAL_USER=root",
+                "-e",
+                "SURREAL_PASS=dbento",
+                "-e",
+                "SURREAL_PATH=memory",
+                "-e",
+                "SURREAL_CAPS_ALLOW_ALL=true",
+                "--memory",
+                "8g",
+                "docker.io/surrealdb/surrealdb:v3.3.5",
+                "start",
+            ]
+        )
+    );
 }
 
 #[test]
@@ -140,7 +163,8 @@ fn the_images_are_the_ones_the_testkit_starts() {
             MARIADB_TAG,
             MONGO_TAG,
             VALKEY_TAG,
-            MOTO_TAG
+            MOTO_TAG,
+            SURREAL_TAG
         ]
     );
 }
@@ -186,6 +210,17 @@ fn readiness_is_a_login_over_tcp_on_the_servers_own_port() {
             "db.adminCommand({ping: 1})",
         ]
     );
+    assert_eq!(
+        ready_args(Engine::Surreal, 4242),
+        [
+            "exec",
+            "dbento-test-surreal-4242",
+            "/surreal",
+            "is-ready",
+            "--endpoint",
+            "http://127.0.0.1:8000",
+        ]
+    );
     for e in ENGINES {
         let args = ready_args(e, 4242);
         assert_eq!(args[0], "exec");
@@ -209,6 +244,7 @@ fn each_export_line_is_a_url_the_testkit_parses() {
             "export DBENTO_MONGO_URL=mongodb://root:dbento@127.0.0.1:41234",
             "export DBENTO_REDIS_URL=redis://127.0.0.1:41234/0",
             "export DBENTO_DYNAMO_URL=http://127.0.0.1:41234",
+            "export DBENTO_SURREAL_URL=surreal://root:dbento@127.0.0.1:41234",
         ]
     );
     let url = |e: Engine| {
@@ -228,6 +264,15 @@ fn each_export_line_is_a_url_the_testkit_parses() {
         dbento_testkit::rd_url(&url(Engine::Redis)).unwrap(),
         ("127.0.0.1".to_owned(), 41234, None, None, 0)
     );
+    assert_eq!(
+        dbento_testkit::sr_url(&url(Engine::Surreal)).unwrap(),
+        (
+            "127.0.0.1".to_owned(),
+            41234,
+            "root".to_owned(),
+            "dbento".to_owned()
+        )
+    );
     assert!(export_line(Engine::Postgres, "").is_err());
 }
 
@@ -246,7 +291,8 @@ fn only_engines_whose_variable_is_unset_or_empty_are_started() {
             Engine::Mariadb,
             Engine::Mongo,
             Engine::Redis,
-            Engine::Dynamo
+            Engine::Dynamo,
+            Engine::Surreal
         ]
     );
     let vars: Vec<&str> = ENGINES.iter().map(|e| e.url_var()).collect();
@@ -259,6 +305,7 @@ fn only_engines_whose_variable_is_unset_or_empty_are_started() {
             "DBENTO_MONGO_URL",
             "DBENTO_REDIS_URL",
             "DBENTO_DYNAMO_URL",
+            "DBENTO_SURREAL_URL",
         ]
     );
 }
@@ -284,13 +331,14 @@ fn names_and_the_removal_filter_carry_the_owner() {
 }
 
 /// Every server's container name for owner 4242, in start order.
-const ALL: [&str; 6] = [
+const ALL: [&str; 7] = [
     "dbento-test-postgres-4242",
     "dbento-test-mysql-4242",
     "dbento-test-mariadb-4242",
     "dbento-test-mongo-4242",
     "dbento-test-redis-4242",
     "dbento-test-dynamo-4242",
+    "dbento-test-surreal-4242",
 ];
 
 /// A fake runtime that logs each call to `calls.log` and answers like podman: `run` prints an id,
@@ -366,7 +414,7 @@ fn an_engine_whose_variable_is_set_is_left_alone() {
     let (rt, log) = fake_runtime(dir.path(), "");
     let env = |k: &str| (k == "DBENTO_PG_URL").then(|| "postgres://elsewhere/postgres".to_owned());
     let lines = up(&rt, 4242, env).unwrap();
-    assert_eq!(lines.len(), 5, "{lines:?}");
+    assert_eq!(lines.len(), 6, "{lines:?}");
     assert!(
         lines
             .iter()
@@ -399,13 +447,83 @@ fn a_failed_start_removes_every_server_started_so_far() {
 
 #[cfg(unix)]
 #[test]
-fn a_failure_after_every_start_removes_all_six() {
+fn a_failure_after_every_start_removes_all_seven() {
     let dir = tempfile::tempdir().unwrap();
     let (rt, log) = fake_runtime(
         dir.path(),
-        "port\\ dbento-test-dynamo-4242*) echo boom >&2; exit 1 ;;",
+        "port\\ dbento-test-surreal-4242*) echo boom >&2; exit 1 ;;",
     );
     assert!(up(&rt, 4242, |_| None).is_err());
+    let want = format!("rm -f -v {}", ALL.join(" "));
+    assert_eq!(calls(&log).last(), Some(&want));
+}
+
+#[test]
+fn the_surreal_logins_are_the_ones_the_testkit_seeds_against() {
+    assert_eq!(
+        surreal_logins_sql(),
+        dbento_testkit::sr_root_logins_sql("dbento")
+    );
+    let users: Vec<&str> = SURREAL_ROOT_LOGINS.iter().map(|(u, _)| *u).collect();
+    let kit: Vec<&str> = dbento_testkit::SR_LOGINS
+        .iter()
+        .filter(|(_, level, _)| *level == "root")
+        .map(|(u, _, _)| *u)
+        .collect();
+    assert_eq!(users, kit);
+    assert_eq!(
+        surreal_sql_args(4242, "ro"),
+        [
+            "exec",
+            "-i",
+            "dbento-test-surreal-4242",
+            "/surreal",
+            "sql",
+            "--endpoint",
+            "http://127.0.0.1:8000",
+            "-u",
+            "ro",
+            "-p",
+            "dbento",
+            "--hide-welcome",
+            "--json",
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn up_defines_the_surreal_root_logins_after_readiness_then_logs_in_as_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, log) = fake_runtime(dir.path(), "");
+    up(&rt, 4242, |_| None).unwrap();
+    let calls = calls(&log);
+    let at = |user: &str| {
+        let want = surreal_sql_args(4242, user).join(" ");
+        calls
+            .iter()
+            .position(|c| *c == want)
+            .unwrap_or_else(|| panic!("no sql as {user}: {calls:?}"))
+    };
+    let ready = calls
+        .iter()
+        .position(|c| c.starts_with("exec dbento-test-surreal-4242 /surreal is-ready"))
+        .expect("Surreal never probed");
+    assert!(ready < at("root"), "{calls:?}");
+    assert!(
+        at("root") < at("ro") && at("ro") < at("re") && at("re") < at("rv"),
+        "{calls:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_surreal_login_that_fails_removes_every_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, log) = fake_runtime(dir.path(), "exec\\ -i*-u\\ rv\\ *) exit 1 ;;");
+    let err = up(&rt, 4242, |_| None).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("rv"), "{msg}");
     let want = format!("rm -f -v {}", ALL.join(" "));
     assert_eq!(calls(&log).last(), Some(&want));
 }
@@ -496,7 +614,7 @@ fn a_cli_start_failure_exits_non_zero_and_prints_no_exports() {
 /// testkit, from the host. Without it the child test does nothing.
 const SERVERS_CHILD: &str = "DBENTO_TEST_SERVERS_CHILD";
 
-/// The port of a test URL in any of the six forms.
+/// The port of a test URL in any of the seven forms.
 fn port_of(url: &str) -> u16 {
     let rest = url.split_once("://").expect("a scheme").1;
     let server = rest.rsplit_once('@').map_or(rest, |(_, s)| s);
@@ -579,10 +697,13 @@ async fn shared_servers_child() {
     let dy = dbento_testkit::dynamo_db().await;
     assert_eq!(dy.endpoint(), var("DBENTO_DYNAMO_URL"));
     assert_eq!(dy.count("orders").await, dbento_testkit::ORDERS);
+    let sr = dbento_testkit::surreal_db().await;
+    assert_eq!(sr.port(), port_of(&var("DBENTO_SURREAL_URL")));
+    assert_eq!(sr.scalar("RETURN 7").await, 7);
 }
 
 #[test]
-fn up_starts_six_labelled_servers_the_testkit_reaches_and_down_removes_them() {
+fn up_starts_every_labelled_server_the_testkit_reaches_and_down_removes_them() {
     let runtime = default_runtime(std::env::var("DOCKER_HOST").ok().as_deref());
     let owner = std::process::id();
     let owned = Owned { runtime, owner };
@@ -591,6 +712,19 @@ fn up_starts_six_labelled_servers_the_testkit_reaches_and_down_removes_them() {
     let mut want: Vec<String> = ENGINES.iter().map(|&e| container_name(e, owner)).collect();
     want.sort();
     assert_eq!(labelled_names(runtime, owner), want);
+    // The logins exist before any test runs, defined by `up` and not by the testkit.
+    for (user, _) in SURREAL_ROOT_LOGINS {
+        let mut child = Command::new(runtime)
+            .args(surreal_sql_args(owner, user))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"RETURN 1;").unwrap();
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success(), "{user} cannot log in");
+    }
 
     let exports = lines.iter().map(|l| {
         let (k, v) = l

@@ -39,7 +39,7 @@ lint:
 	$(CARGO) clippy $(LOCKED) --all-targets --all-features -- -Dwarnings
 
 # The URL variables the shared servers set; the testkit pass unsets them to use its own containers.
-TEST_URLS := DBENTO_PG_URL DBENTO_MYSQL_URL DBENTO_MARIADB_URL DBENTO_MONGO_URL DBENTO_REDIS_URL DBENTO_DYNAMO_URL
+TEST_URLS := DBENTO_PG_URL DBENTO_MYSQL_URL DBENTO_MARIADB_URL DBENTO_MONGO_URL DBENTO_REDIS_URL DBENTO_DYNAMO_URL DBENTO_SURREAL_URL
 
 # The workspace runs on one shared server per engine, owned by this recipe's shell and removed on
 # any exit; the testkit then runs alone on per-test containers so their start paths stay tested.
