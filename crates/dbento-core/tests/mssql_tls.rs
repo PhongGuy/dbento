@@ -6,9 +6,9 @@ use dbento_core::{ConnectError, Limits, Secret, SessionOptions, connect};
 #[tokio::test]
 async fn verify_refuses_the_stock_v1_certificate_with_the_tls_hint() {
     dbento_testkit::skip_without_mssql!();
-    // The one allowed skip: a DBENTO_MSSQL_URL server is not ours, so its certificate may not be
-    // the stock one. The harness container always presents the stock certificate.
-    if std::env::var("DBENTO_MSSQL_URL").is_ok_and(|u| !u.is_empty()) {
+    // The one allowed skip: a DBENTO_MSSQL_URL server not declared stock may present another
+    // certificate. The harness container and a declared stock server present the stock one.
+    if !dbento_testkit::ms_stock_cert(|k| std::env::var(k).ok()) {
         eprintln!(
             "skipped: DBENTO_MSSQL_URL names a server whose certificate the harness did not choose"
         );

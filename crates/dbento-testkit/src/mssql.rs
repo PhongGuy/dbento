@@ -33,6 +33,7 @@ pub const MS_SA_PASSWORD: &str = "DbentoPass2022";
 const URL_VAR: &str = "DBENTO_MSSQL_URL";
 const EULA_VAR: &str = "DBENTO_MSSQL_ACCEPT_EULA";
 const URL_FORM: &str = "mssql://user:password@host:port";
+const STOCK_CERT_VAR: &str = "DBENTO_MSSQL_STOCK_CERT";
 
 /// Where the SQL Server tests get their server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,14 @@ pub fn ms_source(env: impl Fn(&str) -> Option<String>) -> Result<MsSource, Strin
          ({URL_FORM}), or set {EULA_VAR}=Y to accept Microsoft's SQL Server licence and run \
          the {MSSQL_TAG} container"
     ))
+}
+
+/// Whether the server the tests reach presents SQL Server's stock certificate: the harness
+/// container always does, and a `DBENTO_MSSQL_URL` server only when `DBENTO_MSSQL_STOCK_CERT`
+/// is exactly "1".
+pub fn ms_stock_cert(env: impl Fn(&str) -> Option<String>) -> bool {
+    let url_server = matches!(ms_source(&env), Ok(MsSource::Url(_)));
+    !url_server || env(STOCK_CERT_VAR).as_deref() == Some("1")
 }
 
 /// Whether a server-backed test skips: only in a CI run with the licence variable unset. Every
@@ -395,13 +404,18 @@ async fn start(
     })
 }
 
-/// Creates `dbento_t_<pid>_<n>` from a `master` login.
-async fn fresh_database(host: &str, port: u16, user: &str, password: &str) -> MsDb {
-    let name = format!(
+/// A database name no other test in this process has used: `dbento_t_<pid>_<n>`.
+fn database_name() -> String {
+    format!(
         "dbento_t_{}_{}",
         std::process::id(),
         NEXT_DB.fetch_add(1, Ordering::Relaxed)
-    );
+    )
+}
+
+/// Creates a [`database_name`] database from a `master` login.
+async fn fresh_database(host: &str, port: u16, user: &str, password: &str) -> MsDb {
+    let name = database_name();
     let mut admin = connect(config(host, port, user, password, "master")).await;
     admin
         .simple_query(format!(
@@ -433,6 +447,37 @@ mod tests {
                 .iter()
                 .find(|(n, _)| *n == k)
                 .map(|(_, v)| (*v).to_owned())
+        }
+    }
+
+    #[test]
+    fn each_database_name_is_new_and_a_plain_identifier() {
+        let prefix = format!("dbento_t_{}_", std::process::id());
+        let (a, b) = (database_name(), database_name());
+        assert_ne!(a, b);
+        for name in [&a, &b] {
+            assert!(name.starts_with(&prefix), "{name}");
+            assert!(name.len() <= 128, "{name}");
+            assert!(
+                name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "{name}"
+            );
+            assert!(name[prefix.len()..].parse::<u64>().is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn only_the_harness_container_or_a_declared_stock_server_has_the_stock_certificate() {
+        assert!(ms_stock_cert(env(&[])));
+        assert!(ms_stock_cert(env(&[("DBENTO_MSSQL_URL", "")])));
+        let url = ("DBENTO_MSSQL_URL", "mssql://sa:pw@127.0.0.1:1433");
+        assert!(!ms_stock_cert(env(&[url])));
+        assert!(ms_stock_cert(env(&[url, ("DBENTO_MSSQL_STOCK_CERT", "1")])));
+        for other in ["", "0", "true", "yes", " 1"] {
+            assert!(
+                !ms_stock_cert(env(&[url, ("DBENTO_MSSQL_STOCK_CERT", other)])),
+                "{other:?}"
+            );
         }
     }
 
