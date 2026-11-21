@@ -4,6 +4,11 @@ mod account;
 mod api;
 mod conflicts;
 mod flows;
+#[expect(
+    dead_code,
+    reason = "the reader thread and the sync driver are its callers"
+)]
+mod notice;
 mod team_file;
 mod toml_merge;
 
