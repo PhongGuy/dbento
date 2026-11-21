@@ -670,11 +670,14 @@ mod tests {
         }
     }
 
-    // Sourced by the image's entrypoint during init. It freezes the init server once its lock file
-    // is empty, which is when `mongod --shutdown` returns, and lets it exit three seconds later,
-    // as a starved runner did while the real server started.
+    // Sourced by the image's entrypoint during init. It freezes the init server for three seconds
+    // after it has released its lock file but while it may still hold its port, as a starved
+    // runner did while the real server started. No lock fd to watch aborts the init outright.
     const STALL_INIT: &str = r#"stall_pid=$(cat "$pidfile")
-( while [ -s /data/db/mongod.lock ]; do :; done
+lock_fd=
+for f in /proc/$stall_pid/fd/*; do case "$(readlink "$f")" in */mongod.lock) lock_fd=$f;; esac; done
+[ -n "$lock_fd" ] || { echo "stall: no mongod.lock fd for pid $stall_pid" >&2; exit 1; }
+( while [ -s /data/db/mongod.lock ] || [ -e "$lock_fd" ]; do :; done
   kill -STOP "$stall_pid"; sleep 3; kill -CONT "$stall_pid" ) &
 "#;
 
