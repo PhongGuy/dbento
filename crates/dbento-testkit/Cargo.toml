@@ -42,7 +42,7 @@ foldhash = "0.2.0"
 indexmap = "2.14.2"
 memchr = "2.8.3"
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
-rustix = "1.1.5"
+rustix = "1.1.6"
 serde_core = { version = "1.0.229", features = ["alloc"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 
