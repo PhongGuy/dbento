@@ -672,6 +672,21 @@ pub const MSSQL_PASSWORD: &str = "DbentoPass2022";
 const MSSQL_NAME: &str = "dbento-mssql-2022";
 const MSSQL_EULA_VAR: &str = "DBENTO_MSSQL_ACCEPT_EULA";
 
+/// The command run inside a SQL Server container to prove it answers an sa login.
+pub const MSSQL_READY_PROBE: [&str; 11] = [
+    "/opt/mssql-tools18/bin/sqlcmd",
+    "-C",
+    "-S",
+    "localhost",
+    "-U",
+    "sa",
+    "-P",
+    MSSQL_PASSWORD,
+    "-b",
+    "-Q",
+    "SELECT 1",
+];
+
 /// Ok only when DBENTO_MSSQL_ACCEPT_EULA is exactly "Y"; the error names the variable and says
 /// setting it accepts the Microsoft SQL Server Developer edition licence.
 pub fn mssql_eula(env: impl Fn(&str) -> Option<String>) -> Result<()> {
@@ -757,21 +772,8 @@ fn start_mssql(runtime: &str) -> Result<Vec<String>> {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let ready = Command::new(runtime)
-            .args([
-                "exec",
-                MSSQL_NAME,
-                "/opt/mssql-tools18/bin/sqlcmd",
-                "-C",
-                "-S",
-                "localhost",
-                "-U",
-                "sa",
-                "-P",
-                MSSQL_PASSWORD,
-                "-b",
-                "-Q",
-                "SELECT 1",
-            ])
+            .args(["exec", MSSQL_NAME])
+            .args(MSSQL_READY_PROBE)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?

@@ -96,7 +96,7 @@ Tests against database servers start containers through testcontainers: Postgres
 
 `cargo xtask db up` starts a matrix of Postgres versions with the Chinook dataset (`--datasets` adds `pagila`, `airlines`, `airlines-medium`, `airlines-big` or the `stress` tables), or with `--engine mysql`, `mariadb` or `mssql` those servers, and prints the `export` lines that point the tests at it; `cargo xtask db down` removes the containers. To skip containers, point a variable at a running server: `DBENTO_PG_URL`, `DBENTO_MYSQL_URL`, `DBENTO_MARIADB_URL`, `DBENTO_MSSQL_URL`, `DBENTO_MONGO_URL`, `DBENTO_REDIS_URL`, `DBENTO_SURREAL_URL` or `DBENTO_DYNAMO_URL`.
 
-The SQL Server container starts only once `DBENTO_MSSQL_ACCEPT_EULA=Y` accepts Microsoft's licence. Without that variable and without `DBENTO_MSSQL_URL`, the SQL Server tests fail and say why, unless `CI` is set: then they are skipped. To run the suite locally without accepting the licence, run it with `CI=1`.
+The SQL Server container starts only once `DBENTO_MSSQL_ACCEPT_EULA=Y` accepts Microsoft's licence. Without that variable and without `DBENTO_MSSQL_URL`, the SQL Server tests fail and say why, unless `CI` is set: then they are skipped. To run the suite locally without accepting the licence, run it with `CI=1`. SQL Server joins the shared servers that `make test` starts for the run only when `DBENTO_MSSQL_ACCEPT_EULA=Y` is set: CI sets it, and a contributor who accepts the licence may set it too.
 
 ## CI
 

@@ -18,13 +18,17 @@ case "$*" in
     [[ -n ${STUB_UP_STATUS:-} ]] && exit "$STUB_UP_STATUS"
     echo "export DBENTO_PG_URL=postgres://stub/postgres"
     echo "export DBENTO_MYSQL_URL=mysql://stub/"
-    echo "export DBENTO_SURREAL_URL=surreal://root:dbento@stub:1" ;;
+    echo "export DBENTO_SURREAL_URL=surreal://root:dbento@stub:1"
+    echo "export DBENTO_MSSQL_URL=mssql://sa:stub@stub:1"
+    echo "export DBENTO_MSSQL_STOCK_CERT=1" ;;
   "xtask test-servers down "*) exit "${STUB_DOWN_STATUS:-0}" ;;
   "test --workspace")
     [[ -n ${STUB_TERM:-} ]] && kill -TERM "$PPID"
     exit "${STUB_WS_STATUS:-0}" ;;
   "test -p dbento-testkit --all-features")
     [[ -n ${DBENTO_SURREAL_URL:-} ]] && { echo "testkit saw a Surreal URL" >&2; exit 98; }
+    [[ -n ${DBENTO_MSSQL_URL:-} || -n ${DBENTO_MSSQL_STOCK_CERT:-} ]] \
+      && { echo "testkit saw the shared SQL Server" >&2; exit 97; }
     exit "${STUB_KIT_STATUS:-0}" ;;
   *) echo "unexpected cargo $*" >&2; exit 99 ;;
 esac
@@ -34,7 +38,8 @@ chmod +x "$TMP/cargo"
 # Runs `make test` on the stub with the given NAME=VALUE settings; prints make's output.
 run() {
   : >"$TMP/log"
-  env -u DBENTO_PG_URL -u DBENTO_MYSQL_URL -u DBENTO_SURREAL_URL STUB_LOG="$TMP/log" "$@" \
+  env -u DBENTO_PG_URL -u DBENTO_MYSQL_URL -u DBENTO_SURREAL_URL \
+    -u DBENTO_MSSQL_URL -u DBENTO_MSSQL_STOCK_CERT STUB_LOG="$TMP/log" "$@" \
     make -s -C "$ROOT" test CARGO="$TMP/cargo" LOCKED= 2>&1
 }
 
@@ -64,6 +69,13 @@ test_the_testkit_pass_never_sees_the_surreal_url() {
   local out
   out=$(run) || fail "passing run failed: $out"
   [[ $out != *"testkit saw a Surreal URL"* ]] || fail "testkit pass kept DBENTO_SURREAL_URL: $out"
+}
+
+test_the_testkit_pass_never_sees_the_shared_sql_server() {
+  local out
+  out=$(run) || fail "passing run failed: $out"
+  [[ $out != *"testkit saw the shared SQL Server"* ]] \
+    || fail "testkit pass kept DBENTO_MSSQL_URL or DBENTO_MSSQL_STOCK_CERT: $out"
 }
 
 test_the_exit_status_is_the_first_failing_pass() {

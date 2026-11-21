@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 
-use crate::db::{capture, parse_port, remove_args, remove_started};
+use crate::db::{
+    MSSQL_IMAGE, MSSQL_PASSWORD, MSSQL_READY_PROBE, capture, ms_export_lines, mssql_eula,
+    parse_port, remove_args, remove_started,
+};
 
 /// A database engine the shared servers cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,9 +25,10 @@ pub enum Engine {
     Redis,
     Dynamo,
     Surreal,
+    Mssql,
 }
 
-/// Every engine, in start order.
+/// The engines always started, in start order; SQL Server is added only by [`pending`].
 pub const ENGINES: [Engine; 7] = [
     Engine::Postgres,
     Engine::Mysql,
@@ -46,6 +50,7 @@ impl Engine {
             Engine::Redis => "redis",
             Engine::Dynamo => "dynamo",
             Engine::Surreal => "surreal",
+            Engine::Mssql => "mssql",
         }
     }
 
@@ -59,6 +64,7 @@ impl Engine {
             Engine::Redis => "DBENTO_REDIS_URL",
             Engine::Dynamo => "DBENTO_DYNAMO_URL",
             Engine::Surreal => "DBENTO_SURREAL_URL",
+            Engine::Mssql => "DBENTO_MSSQL_URL",
         }
     }
 
@@ -72,6 +78,9 @@ impl Engine {
             Engine::Redis => "9.0.7-alpine",
             Engine::Dynamo => "5.2.5",
             Engine::Surreal => "v3.3.5",
+            Engine::Mssql => MSSQL_IMAGE
+                .rsplit_once(':')
+                .map_or(MSSQL_IMAGE, |(_, tag)| tag),
         }
     }
 
@@ -84,6 +93,7 @@ impl Engine {
             Engine::Redis => 6379,
             Engine::Dynamo => 5000,
             Engine::Surreal => 8000,
+            Engine::Mssql => 1433,
         }
     }
 
@@ -97,6 +107,7 @@ impl Engine {
             Engine::Redis => "docker.io/valkey/valkey",
             Engine::Dynamo => "docker.io/motoserver/moto",
             Engine::Surreal => "docker.io/surrealdb/surrealdb",
+            Engine::Mssql => return MSSQL_IMAGE.to_owned(),
         };
         format!("{repo}:{}", self.tag())
     }
@@ -133,7 +144,8 @@ pub fn run_args(engine: Engine, owner: u32) -> Vec<String> {
         "-p",
         &format!("127.0.0.1::{}", engine.port()),
     ]);
-    // Data lives on tmpfs and durability is off: a test server is thrown away after the run.
+    // A test server is thrown away after the run, so durability is off and most engines keep
+    // their data on tmpfs; SQL Server keeps its on disk, as noted at its arm.
     let (options, command): (&[&str], &[&str]) = match engine {
         Engine::Postgres => (
             &[
@@ -213,6 +225,24 @@ pub fn run_args(engine: Engine, owner: u32) -> Vec<String> {
             ],
             &["start"],
         ),
+        // The password option is built at run time, so it cannot share the static slices. Data
+        // stays on disk: a 4G tmpfs would compete with the other servers for memory.
+        Engine::Mssql => {
+            args.extend(strings(&[
+                "--memory",
+                "3g",
+                "-e",
+                "ACCEPT_EULA=Y",
+                "-e",
+                "MSSQL_PID=Developer",
+                "-e",
+                "MSSQL_MEMORY_LIMIT_MB=2048",
+                "-e",
+                &format!("MSSQL_SA_PASSWORD={MSSQL_PASSWORD}"),
+                MSSQL_IMAGE,
+            ]));
+            return args;
+        }
     };
     args.extend(strings(options));
     args.push(engine.image());
@@ -279,6 +309,7 @@ pub fn ready_args(engine: Engine, owner: u32) -> Vec<String> {
             "--endpoint",
             "http://127.0.0.1:8000",
         ],
+        Engine::Mssql => MSSQL_READY_PROBE.to_vec(),
     };
     let mut args = strings(&["exec", &name]);
     args.extend(strings(&probe));
@@ -295,6 +326,11 @@ pub fn export_line(engine: Engine, port_output: &str) -> Result<String> {
         Engine::Redis => format!("redis://127.0.0.1:{port}/0"),
         Engine::Dynamo => format!("http://127.0.0.1:{port}"),
         Engine::Surreal => format!("surreal://root:dbento@127.0.0.1:{port}"),
+        Engine::Mssql => {
+            return ms_export_lines(port_output)?
+                .pop()
+                .context("no SQL Server export line");
+        }
     };
     Ok(format!("export {}={url}", engine.url_var()))
 }
@@ -334,11 +370,15 @@ pub fn surreal_sql_args(owner: u32, user: &str) -> Vec<String> {
 }
 
 /// The engines still to start: those whose URL variable is unset or empty, as the testkit
-/// treats an empty variable as "start a container".
+/// treats an empty variable as "start a container". SQL Server joins last, and only when its
+/// licence variable is exactly `Y`, since starting it accepts that licence.
 pub fn pending(env: impl Fn(&str) -> Option<String>) -> Vec<Engine> {
+    let unset = |e: &Engine| env(e.url_var()).is_none_or(|v| v.is_empty());
+    let licensed = mssql_eula(&env).is_ok();
     ENGINES
         .into_iter()
-        .filter(|e| env(e.url_var()).is_none_or(|v| v.is_empty()))
+        .chain(licensed.then_some(Engine::Mssql))
+        .filter(unset)
         .collect()
 }
 
@@ -355,7 +395,8 @@ pub fn default_runtime(docker_host: Option<&str>) -> &'static str {
 const READY_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Starts every pending engine, waits until each answers a login, and returns its export lines
-/// in ENGINES order. On any failure removes every container it started and returns the error.
+/// in `pending` order, SQL Server's followed by the stock-certificate flag. On any failure
+/// removes every container it started and returns the error.
 pub fn up(runtime: &str, owner: u32, env: impl Fn(&str) -> Option<String>) -> Result<Vec<String>> {
     let mut started = Vec::new();
     start_all(runtime, owner, &pending(env), &mut started)
@@ -395,13 +436,19 @@ fn start_all(
     if engines.contains(&Engine::Surreal) {
         define_surreal_logins(runtime, owner)?;
     }
-    engines
-        .iter()
-        .map(|&e| {
+    // The shared SQL Server keeps the image's self-signed certificate, which the TLS tests
+    // need to be told about.
+    let mut lines = Vec::new();
+    for &e in engines {
+        lines.push(
             export_of(runtime, e, owner)
-                .with_context(|| format!("finding the port of {}", e.name()))
-        })
-        .collect()
+                .with_context(|| format!("finding the port of {}", e.name()))?,
+        );
+        if e == Engine::Mssql {
+            lines.push("export DBENTO_MSSQL_STOCK_CERT=1".to_owned());
+        }
+    }
+    Ok(lines)
 }
 
 /// Defines the Surreal root logins as root, then signs in as each. The CLI exits 0 when a
