@@ -104,6 +104,13 @@ pkcs8 = { version = "0.11.0", features = ["encryption", "pem", "std"] }
 [profile.dev.package.libduckdb-sys]
 opt-level = 3
 
+# Optimised MySQL protocol parsing, so a cancelled stream's drain is not bound by debug codegen.
+[profile.dev.package.mysql_async]
+opt-level = 3
+
+[profile.dev.package.mysql_common]
+opt-level = 3
+
 # The session app under gpui-pilot: dev, but optimised so frame timings mean something.
 [profile.timing]
 inherits = "dev"
