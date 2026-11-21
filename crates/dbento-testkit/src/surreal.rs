@@ -88,6 +88,8 @@ pub struct SrDb {
     server: Endpoint,
     namespace: String,
     database: String,
+    // Server-level namespaces handed out by `scratch_namespace`, removed with this one.
+    scratch: std::sync::Mutex<Vec<String>>,
     // Declared before the permit, so the container is gone before another may start.
     container: Option<ContainerAsync<GenericImage>>,
     _permit: Option<OwnedSemaphorePermit>,
@@ -113,6 +115,16 @@ impl SrDb {
     /// This test's database.
     pub fn database(&self) -> &str {
         &self.database
+    }
+    /// `<this namespace>_<suffix>`, a server-level namespace name only this test uses; the drop
+    /// removes it along with the test's own namespace. Defining it is the caller's job.
+    pub fn scratch_namespace(&self, suffix: &str) -> String {
+        let name = format!("{}_{suffix}", self.namespace);
+        self.scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(name.clone());
+        name
     }
 
     /// `[connections.<name>]` for `tls = "off"` on this namespace; `login` is `(user, level)`,
@@ -170,7 +182,16 @@ impl Drop for SrDb {
             return;
         }
         let server = self.server.clone();
-        let sql = format!("REMOVE NAMESPACE IF EXISTS `{}`", self.namespace);
+        // Scratch names first, then the test's own, all in one request.
+        let scratch = self
+            .scratch
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sql = scratch
+            .iter()
+            .chain(std::iter::once(&self.namespace))
+            .map(|ns| format!("REMOVE NAMESPACE IF EXISTS `{ns}`;"))
+            .collect::<String>();
         let done = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -392,6 +413,7 @@ fn fresh(
         server,
         namespace: "main".to_owned(),
         database: "main".to_owned(),
+        scratch: std::sync::Mutex::default(),
         container,
         _permit: permit,
     }
@@ -664,5 +686,21 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), 32);
+    }
+
+    // A namespace a test makes beside its own goes with it, so a shared server keeps no leftovers.
+    #[tokio::test]
+    async fn a_scratch_namespace_is_removed_with_its_test_namespace() {
+        let srv = server(SURREAL_TAG, &allow_all(), |r| r).await;
+        ensure_root_logins(&srv.server).await.unwrap();
+        let db = seeded(fresh(srv.server.clone(), None, None), false).await;
+        let scratch = db.scratch_namespace("elsewhere");
+        assert_eq!(scratch, format!("{}_elsewhere", db.namespace()));
+        db.admin(&format!("DEFINE NAMESPACE {scratch}")).await;
+        let own = db.namespace().to_owned();
+        drop(db);
+        let root = srv.admin("INFO FOR ROOT").await.pop().unwrap_or_default();
+        assert!(root["namespaces"].get(&scratch).is_none(), "{root}");
+        assert!(root["namespaces"].get(&own).is_none(), "{root}");
     }
 }
