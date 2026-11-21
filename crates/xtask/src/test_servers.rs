@@ -4,6 +4,7 @@
 //! This module builds the runtime arguments, readiness probes and `export` lines; the testkit
 //! reads the exported URL variables and uses the shared server instead of a container per test.
 
+use std::io::{ErrorKind, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -20,16 +21,18 @@ pub enum Engine {
     Mongo,
     Redis,
     Dynamo,
+    Surreal,
 }
 
 /// Every engine, in start order.
-pub const ENGINES: [Engine; 6] = [
+pub const ENGINES: [Engine; 7] = [
     Engine::Postgres,
     Engine::Mysql,
     Engine::Mariadb,
     Engine::Mongo,
     Engine::Redis,
     Engine::Dynamo,
+    Engine::Surreal,
 ];
 
 impl Engine {
@@ -42,6 +45,7 @@ impl Engine {
             Engine::Mongo => "mongo",
             Engine::Redis => "redis",
             Engine::Dynamo => "dynamo",
+            Engine::Surreal => "surreal",
         }
     }
 
@@ -54,6 +58,7 @@ impl Engine {
             Engine::Mongo => "DBENTO_MONGO_URL",
             Engine::Redis => "DBENTO_REDIS_URL",
             Engine::Dynamo => "DBENTO_DYNAMO_URL",
+            Engine::Surreal => "DBENTO_SURREAL_URL",
         }
     }
 
@@ -66,6 +71,7 @@ impl Engine {
             Engine::Mongo => "8.0",
             Engine::Redis => "9.0.7-alpine",
             Engine::Dynamo => "5.2.5",
+            Engine::Surreal => "v3.3.5",
         }
     }
 
@@ -77,6 +83,7 @@ impl Engine {
             Engine::Mongo => 27018,
             Engine::Redis => 6379,
             Engine::Dynamo => 5000,
+            Engine::Surreal => 8000,
         }
     }
 
@@ -89,6 +96,7 @@ impl Engine {
             Engine::Mongo => "docker.io/library/mongo",
             Engine::Redis => "docker.io/valkey/valkey",
             Engine::Dynamo => "docker.io/motoserver/moto",
+            Engine::Surreal => "docker.io/surrealdb/surrealdb",
         };
         format!("{repo}:{}", self.tag())
     }
@@ -188,6 +196,23 @@ pub fn run_args(engine: Engine, owner: u32) -> Vec<String> {
         ),
         Engine::Redis => (&[], &["valkey-server", "--save", "", "--appendonly", "no"]),
         Engine::Dynamo => (&[], &[]),
+        // The in-memory engine keeps what the heavy seeds allocate, which outgrows a 2 GiB cap
+        // within one suite run and kills the shared server.
+        Engine::Surreal => (
+            &[
+                "-e",
+                "SURREAL_USER=root",
+                "-e",
+                "SURREAL_PASS=dbento",
+                "-e",
+                "SURREAL_PATH=memory",
+                "-e",
+                "SURREAL_CAPS_ALLOW_ALL=true",
+                "--memory",
+                "8g",
+            ],
+            &["start"],
+        ),
     };
     args.extend(strings(options));
     args.push(engine.image());
@@ -248,6 +273,12 @@ pub fn ready_args(engine: Engine, owner: u32) -> Vec<String> {
             "-c",
             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/moto-api/')",
         ],
+        Engine::Surreal => vec![
+            "/surreal",
+            "is-ready",
+            "--endpoint",
+            "http://127.0.0.1:8000",
+        ],
     };
     let mut args = strings(&["exec", &name]);
     args.extend(strings(&probe));
@@ -263,8 +294,43 @@ pub fn export_line(engine: Engine, port_output: &str) -> Result<String> {
         Engine::Mongo => format!("mongodb://root:dbento@127.0.0.1:{port}"),
         Engine::Redis => format!("redis://127.0.0.1:{port}/0"),
         Engine::Dynamo => format!("http://127.0.0.1:{port}"),
+        Engine::Surreal => format!("surreal://root:dbento@127.0.0.1:{port}"),
     };
     Ok(format!("export {}={url}", engine.url_var()))
+}
+
+/// The root-level logins the Surreal tests sign in as, with their roles; the testkit's
+/// per-test seed no longer defines them on a shared server.
+pub const SURREAL_ROOT_LOGINS: [(&str, &str); 3] =
+    [("ro", "OWNER"), ("re", "EDITOR"), ("rv", "VIEWER")];
+
+/// `DEFINE USER OVERWRITE ... ON ROOT` for each of [`SURREAL_ROOT_LOGINS`], password `dbento`.
+pub fn surreal_logins_sql() -> String {
+    SURREAL_ROOT_LOGINS
+        .iter()
+        .map(|(user, role)| {
+            format!("DEFINE USER OVERWRITE {user} ON ROOT PASSWORD 'dbento' ROLES {role};")
+        })
+        .collect()
+}
+
+/// The `exec` arguments after the runtime for the Surreal CLI as `user`, reading SQL on stdin.
+pub fn surreal_sql_args(owner: u32, user: &str) -> Vec<String> {
+    strings(&[
+        "exec",
+        "-i",
+        &container_name(Engine::Surreal, owner),
+        "/surreal",
+        "sql",
+        "--endpoint",
+        "http://127.0.0.1:8000",
+        "-u",
+        user,
+        "-p",
+        "dbento",
+        "--hide-welcome",
+        "--json",
+    ])
 }
 
 /// The engines still to start: those whose URL variable is unset or empty, as the testkit
@@ -326,6 +392,9 @@ fn start_all(
             std::thread::sleep(Duration::from_millis(500));
         }
     }
+    if engines.contains(&Engine::Surreal) {
+        define_surreal_logins(runtime, owner)?;
+    }
     engines
         .iter()
         .map(|&e| {
@@ -333,6 +402,26 @@ fn start_all(
                 .with_context(|| format!("finding the port of {}", e.name()))
         })
         .collect()
+}
+
+/// Defines the Surreal root logins as root, then signs in as each. The CLI exits 0 when a
+/// statement fails but 1 when a login does, so the sign-ins are what proves the define landed.
+fn define_surreal_logins(runtime: &str, owner: u32) -> Result<()> {
+    let logins = surreal_logins_sql();
+    let attempts = std::iter::once(("root", logins.as_str())).chain(
+        SURREAL_ROOT_LOGINS
+            .iter()
+            .map(|(user, _)| (*user, "RETURN 1;")),
+    );
+    for (user, sql) in attempts {
+        let args = surreal_sql_args(owner, user);
+        ensure!(
+            feed(runtime, &as_strs(&args), sql)
+                .with_context(|| format!("running SurrealDB SQL as {user}"))?,
+            "SurrealDB refused the login {user}"
+        );
+    }
+    Ok(())
 }
 
 /// The export line for a running server, from the host port the runtime mapped.
@@ -364,6 +453,32 @@ fn quiet(runtime: &str, args: &[&str]) -> Result<bool> {
         .status()
         .with_context(|| format!("running {runtime}"))?;
     Ok(status.success())
+}
+
+/// Runs the runtime with `input` on its stdin and its output discarded, and reports whether it
+/// succeeded. Stdin is always piped: an inherited terminal would leave a REPL waiting.
+fn feed(runtime: &str, args: &[&str], input: &str) -> Result<bool> {
+    let mut child = Command::new(runtime)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("running {runtime}"))?;
+    // A child that exits without reading closes the pipe early; its exit status decides.
+    let written = child
+        .stdin
+        .take()
+        .map_or(Ok(()), |mut stdin| stdin.write_all(input.as_bytes()));
+    let status = child
+        .wait()
+        .with_context(|| format!("waiting for {runtime}"))?;
+    match written {
+        Err(e) if e.kind() != ErrorKind::BrokenPipe => {
+            Err(e).with_context(|| format!("writing to {runtime}"))
+        }
+        Ok(()) | Err(_) => Ok(status.success()),
+    }
 }
 
 fn as_strs(args: &[String]) -> Vec<&str> {
