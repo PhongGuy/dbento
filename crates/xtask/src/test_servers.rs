@@ -300,7 +300,7 @@ pub fn export_line(engine: Engine, port_output: &str) -> Result<String> {
 }
 
 /// The root-level logins the Surreal tests sign in as, with their roles; the testkit's
-/// per-test seed no longer defines them on a shared server.
+/// per-test seed defines them only in container mode, so a shared server needs them here.
 pub const SURREAL_ROOT_LOGINS: [(&str, &str); 3] =
     [("ro", "OWNER"), ("re", "EDITOR"), ("rv", "VIEWER")];
 
