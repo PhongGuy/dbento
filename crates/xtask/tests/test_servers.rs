@@ -488,3 +488,132 @@ fn a_cli_start_failure_exits_non_zero_and_prints_no_exports() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Set in the child of the live test; the child logs in to every shared server through the
+/// testkit, from the host. Without it the child test does nothing.
+const SERVERS_CHILD: &str = "DBENTO_TEST_SERVERS_CHILD";
+
+/// The port of a test URL in any of the six forms.
+fn port_of(url: &str) -> u16 {
+    let rest = url.split_once("://").expect("a scheme").1;
+    let server = rest.rsplit_once('@').map_or(rest, |(_, s)| s);
+    let address = server.split('/').next().unwrap_or_default();
+    address
+        .rsplit_once(':')
+        .expect("a port")
+        .1
+        .parse()
+        .expect("a numeric port")
+}
+
+/// Names of containers carrying all three of the owner's labels, sorted.
+fn labelled_names(runtime: &str, owner: u32) -> Vec<String> {
+    let out = Command::new(runtime)
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label=dbento.test-servers={owner}"),
+            "--filter",
+            &format!("label=dbento.pid={owner}"),
+            "--filter",
+            "label=dbento.role=test",
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut names: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    names.sort();
+    names
+}
+
+/// Removes the test's servers however it ends, so a failed assertion leaves nothing running.
+struct Owned {
+    runtime: &'static str,
+    owner: u32,
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        let _ = down(self.runtime, self.owner);
+    }
+}
+
+#[tokio::test]
+async fn shared_servers_child() {
+    if std::env::var_os(SERVERS_CHILD).is_none() {
+        return;
+    }
+    let var = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set"));
+    let pg = dbento_testkit::pg_db().await;
+    assert_eq!(pg.container_id(), None);
+    assert_eq!(pg.port(), port_of(&var("DBENTO_PG_URL")));
+    assert_eq!(pg.scalar("SELECT 'ok'").await.as_deref(), Some("ok"));
+    let my = dbento_testkit::mysql_db().await;
+    assert_eq!(my.port(), port_of(&var("DBENTO_MYSQL_URL")));
+    assert_eq!(my.scalar("SELECT 'ok'").await.as_deref(), Some("ok"));
+    let maria = dbento_testkit::mariadb_db().await;
+    assert_eq!(maria.port(), port_of(&var("DBENTO_MARIADB_URL")));
+    assert_eq!(maria.scalar("SELECT 'ok'").await.as_deref(), Some("ok"));
+    let mg = dbento_testkit::mongo_db().await;
+    assert_eq!(mg.port(), port_of(&var("DBENTO_MONGO_URL")));
+    assert_eq!(mg.count("many").await, 10_000);
+    let rd = dbento_testkit::redis_db().await;
+    assert_eq!(rd.port(), port_of(&var("DBENTO_REDIS_URL")));
+    assert_eq!(
+        rd.int(&["DBSIZE"]).await,
+        i64::try_from(dbento_testkit::SEED_KEYS).unwrap()
+    );
+    let dy = dbento_testkit::dynamo_db().await;
+    assert_eq!(dy.endpoint(), var("DBENTO_DYNAMO_URL"));
+    assert_eq!(dy.count("orders").await, dbento_testkit::ORDERS);
+}
+
+#[test]
+fn up_starts_six_labelled_servers_the_testkit_reaches_and_down_removes_them() {
+    let runtime = default_runtime(std::env::var("DOCKER_HOST").ok().as_deref());
+    let owner = std::process::id();
+    let owned = Owned { runtime, owner };
+    // The caller's URL variables are ignored, so a run on shared servers still tests a full start.
+    let lines = up(runtime, owner, |_| None).unwrap();
+    let mut want: Vec<String> = ENGINES.iter().map(|&e| container_name(e, owner)).collect();
+    want.sort();
+    assert_eq!(labelled_names(runtime, owner), want);
+
+    let exports = lines.iter().map(|l| {
+        let (k, v) = l
+            .strip_prefix("export ")
+            .and_then(|kv| kv.split_once('='))
+            .unwrap_or_else(|| panic!("not an export line: {l}"));
+        (k.to_owned(), v.to_owned())
+    });
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "test_servers::shared_servers_child",
+            "--exact",
+            "--nocapture",
+        ])
+        .envs(exports)
+        .env(SERVERS_CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    down(runtime, owner).unwrap();
+    assert_eq!(labelled_names(runtime, owner), Vec::<String>::new());
+    drop(owned);
+}
