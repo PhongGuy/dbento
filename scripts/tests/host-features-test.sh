@@ -94,6 +94,26 @@ test_make_check_runs_the_host_feature_check() {
   [[ $got == *"scripts/host-features.sh"* ]] || fail "make check: $got"
 }
 
+test_a_tree_longer_than_the_pipe_after_the_subtree_is_read_to_the_end() {
+  local long out
+  long=$SAME$'\n'$(for i in $(seq 1 2500); do echo "|-- filler$i v1.0.0 [default]"; done)
+  out=$(run "$long" "$long") || fail "long tree refused: $out"
+}
+
+test_the_testkit_pass_selection_is_checked() {
+  local out
+  out=$(run "$SAME" "$SAME") || fail "matching trees refused: $out"
+  grep -q -- '-p dbento-testkit --all-features -e normal,build' "$TMP/args" \
+    || fail "testkit selection not checked: $(cat "$TMP/args")"
+}
+
+test_a_testkit_drift_names_the_testkit_manifest() {
+  local out
+  if out=$(run "$(tree default,std,preserve_order default)" "$SAME"); then fail "diff passed"; fi
+  [[ $out == *"under '-p dbento-testkit --all-features'"*"crates/dbento-testkit/Cargo.toml"* ]] \
+    || fail "testkit manifest not named: $out"
+}
+
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do "$t"; done
 if ((FAILS > 0)); then echo "$FAILS failure(s)" >&2; exit 1; fi
 echo "host-features tests passed"

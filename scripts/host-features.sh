@@ -14,10 +14,12 @@ SELECTIONS=(
   "-p dbento-core --no-default-features"
   "-p dbento-core --no-default-features --features duckdb"
   "-p dbento-cli"
+  "-p dbento-testkit --all-features"
 )
 
 # Prints "name version [features]" for every crate under the first <crate> node's
-# [build-dependencies] section, sorted; nothing when <crate> is not in the tree.
+# [build-dependencies] section, sorted; nothing when <crate> is not in the tree. awk reads to the
+# end, since leaving early would kill cargo with SIGPIPE and pipefail would fail the check.
 build_deps() {
   local crate=$1
   shift
@@ -27,8 +29,9 @@ build_deps() {
     awk -v c="$crate" '
       { match($0, /[^|`\- ]/); d = (RSTART - 1) / 4; t = substr($0, RSTART) }
       !found { if (index(t, c " v") == 1) { found = 1; base = d }; next }
+      done { next }
       t ~ /^\[/ { if (d == base) inbuild = (t == "[build-dependencies]"); next }
-      d <= base { exit }
+      d <= base { done = 1; next }
       inbuild { sub(/ \(proc-macro\)$/, "", t); print t }
     ' | sort -u
 }
@@ -48,7 +51,10 @@ for crate in "${CRATES[@]}"; do
     if [[ $got != "$want" ]]; then
       echo "host-features: $crate build dependencies differ under '$selection' (< it, > workspace):" >&2
       diff <(echo "$got") <(echo "$want") >&2 || true
-      echo "host-features: add the missing features to [build-dependencies] in crates/dbento-core/Cargo.toml" >&2
+      # The pins live in the selected crate's manifest; dbento-cli inherits dbento-core's.
+      manifest=crates/dbento-core/Cargo.toml
+      [[ $selection == "-p dbento-testkit"* ]] && manifest=crates/dbento-testkit/Cargo.toml
+      echo "host-features: add the missing features to [build-dependencies] in $manifest" >&2
       status=1
     fi
   done
