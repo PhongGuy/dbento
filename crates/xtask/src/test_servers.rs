@@ -174,7 +174,17 @@ pub fn run_args(engine: Engine, owner: u32) -> Vec<String> {
                 "-e",
                 "GLIBC_TUNABLES=glibc.pthread.rseq=1",
             ],
-            &["--wiredTigerCacheSizeGB", "0.5", "--port", "27018"],
+            // Mongo logs every connection and login by default; at test-suite rates that
+            // exhausts journald's rate limit, which every rootless container shares.
+            &[
+                "--wiredTigerCacheSizeGB",
+                "0.5",
+                "--port",
+                "27018",
+                "--quiet",
+                "--setParameter",
+                "enableDetailedConnectionHealthMetricLogLines=false",
+            ],
         ),
         Engine::Redis => (&[], &["valkey-server", "--save", "", "--appendonly", "no"]),
         Engine::Dynamo => (&[], &[]),

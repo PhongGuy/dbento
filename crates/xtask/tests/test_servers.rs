@@ -102,6 +102,9 @@ fn each_server_is_labelled_for_its_owner_and_tuned_as_measured() {
                 "0.5",
                 "--port",
                 "27018",
+                "--quiet",
+                "--setParameter",
+                "enableDetailedConnectionHealthMetricLogLines=false",
             ]
         )
     );
