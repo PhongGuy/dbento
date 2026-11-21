@@ -10,10 +10,25 @@ use std::path::Path;
 
 use super::commit::{commit_pending, ensure_on_branch, failed, local, with_identity};
 use super::{GitError, GitOptions, SAVE_MESSAGE, SyncError, run};
-use crate::team::{Binding, ConflictStore};
+use crate::team::{Binding, ConflictStore, merge_workspace_text};
+use crate::workspace::Workspace;
 
 /// The message of the commit that re-applies the local changes after a conflict.
 const FALLBACK_MESSAGE: &str = "Keep local changes";
+/// The message of the commit that settles dbento.toml after a clean rebase.
+const MERGE_MESSAGE: &str = "Merge dbento.toml";
+/// The workspace file merged per entry instead of by line.
+const TOML: &str = "dbento.toml";
+
+/// What a pull does with dbento.toml once the rebase is over, decided before it starts.
+enum TomlPlan {
+    /// Not changed on both sides, changed identically, or deleted on one: git's result stands.
+    Untouched,
+    /// The merged text, already accepted by `Workspace::from_text`.
+    Merged(String),
+    /// The merge or its validation failed: theirs wins and mine goes to the store.
+    Failed,
+}
 
 /// What [`pull_rebase`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,10 +38,11 @@ pub enum Pulled {
     UpToDate,
     /// Nothing was unpushed; the branch now sits at the server's tip.
     FastForwarded,
-    /// The unpushed commits were replayed on the server's tip.
+    /// The unpushed commits were replayed on the server's tip, or their changes were brought
+    /// onto it with dbento.toml merged per entry.
     Rebased,
-    /// The rebase stopped; the local side of these paths is in the store, and the branch is
-    /// the server's tip plus at most one commit of the other local changes.
+    /// These paths changed differently on both sides; their local side is in the store, and
+    /// the branch is the server's tip plus at most one commit of the other local changes.
     Conflicted(Vec<ConflictFile>),
 }
 
@@ -86,6 +102,13 @@ pub fn pull_rebase(
     // Pin both tips by id, so the fallback compares exactly what the rebase saw.
     let mine = rev(dir, &local_ref, opts)?.ok_or_else(|| unexpected("no local branch"))?;
     let theirs = rev(dir, &remote_ref, opts)?.ok_or_else(|| unexpected("no remote branch"))?;
+    // Decide dbento.toml from objects alone, so a rebase git refuses still changes nothing. A
+    // missing merge-base leaves the file to git and the fallback, as without the merge.
+    let base = merge_base(dir, &mine, &theirs, opts)?;
+    let plan = match &base {
+        Some(base) => plan_toml(dir, base, &mine, &theirs, opts)?,
+        None => TomlPlan::Untouched,
+    };
     let args = [
         "rebase",
         "--no-autostash",
@@ -100,7 +123,7 @@ pub fn pull_rebase(
         &with_identity(binding, opts)?,
     )?;
     if out.status.success() {
-        return Ok(Pulled::Rebased);
+        return settle_rebased(binding, &mine, &theirs, plan, store, opts);
     }
     // Only a rebase that left its state folder stopped on a conflict; one refused before it
     // began, such as over a dirty tree, changed nothing and is reported as git said.
@@ -122,7 +145,144 @@ pub fn pull_rebase(
         return Err(failed(&args, out.stderr));
     }
     local(&["rebase", "--abort"], dir, opts)?;
-    fall_back(binding, &mine, &theirs, store, opts)
+    let base = match base {
+        Some(base) => base,
+        None => String::from_utf8_lossy(&local(&["merge-base", &mine, &theirs], dir, opts)?)
+            .trim()
+            .to_owned(),
+    };
+    fall_back(binding, &mine, &theirs, &base, plan, store, opts)
+}
+
+/// The merge-base of `mine` and `theirs`, `None` when git names none.
+fn merge_base(
+    dir: &Path,
+    mine: &str,
+    theirs: &str,
+    opts: &GitOptions,
+) -> Result<Option<String>, SyncError> {
+    let out = run::git(&["merge-base", mine, theirs], dir, run::Reach::Local, opts)?;
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    Ok((out.status.success() && !id.is_empty()).then_some(id))
+}
+
+/// Decide dbento.toml before the rebase: merge it per entry when both sides changed it
+/// differently, and keep the result only when it opens as a workspace.
+fn plan_toml(
+    dir: &Path,
+    base: &str,
+    mine: &str,
+    theirs: &str,
+    opts: &GitOptions,
+) -> Result<TomlPlan, SyncError> {
+    let base_id = blob(dir, base, TOML, opts)?;
+    let (Some(mine_id), Some(their_id)) =
+        (blob(dir, mine, TOML, opts)?, blob(dir, theirs, TOML, opts)?)
+    else {
+        return Ok(TomlPlan::Untouched);
+    };
+    let unchanged = |id: &String| base_id.as_ref() == Some(id);
+    if unchanged(&mine_id) || unchanged(&their_id) || mine_id == their_id {
+        return Ok(TomlPlan::Untouched);
+    }
+    // A blob that cannot be read as UTF-8 text cannot be merged, only chosen between.
+    let text = |id: Option<&str>| -> Option<String> {
+        let Some(id) = id else {
+            return Some(String::new());
+        };
+        let out = run::git(&["cat-file", "blob", id], dir, run::Reach::Local, opts).ok()?;
+        out.status.success().then_some(())?;
+        String::from_utf8(out.stdout).ok()
+    };
+    let (Some(b), Some(m), Some(t)) = (
+        text(base_id.as_deref()),
+        text(Some(&mine_id)),
+        text(Some(&their_id)),
+    ) else {
+        return Ok(TomlPlan::Failed);
+    };
+    Ok(match merge_workspace_text(&b, &m, &t) {
+        Ok(merged) if Workspace::from_text(dir.to_path_buf(), &dir.join(TOML), &merged).is_ok() => {
+            TomlPlan::Merged(merged)
+        }
+        _ => TomlPlan::Failed,
+    })
+}
+
+/// After a successful rebase: write the merged text, or restore theirs and keep mine in
+/// `store`, then commit when the index differs from `HEAD`.
+fn settle_rebased(
+    binding: &Binding,
+    mine: &str,
+    theirs: &str,
+    plan: TomlPlan,
+    store: &ConflictStore,
+    opts: &GitOptions,
+) -> Result<Pulled, SyncError> {
+    let dir = binding.dir.as_path();
+    let mut files = Vec::new();
+    match plan {
+        TomlPlan::Untouched => return Ok(Pulled::Rebased),
+        TomlPlan::Merged(text) => {
+            fs::write(dir.join(TOML), text)?;
+            local(&["add", "--", TOML], dir, opts)?;
+        }
+        TomlPlan::Failed => {
+            let id =
+                blob(dir, mine, TOML, opts)?.ok_or_else(|| unexpected("no local dbento.toml"))?;
+            keep_local(dir, &id, store, TOML, opts)?;
+            local(&["checkout", theirs, "--", TOML], dir, opts)?;
+            files.push(ConflictFile {
+                path: TOML.to_owned(),
+                kind: ConflictKind::BothChanged,
+            });
+        }
+    }
+    commit_if_staged(binding, MERGE_MESSAGE, opts)?;
+    Ok(if files.is_empty() {
+        Pulled::Rebased
+    } else {
+        Pulled::Conflicted(files)
+    })
+}
+
+/// Commit the index as `message` when it differs from `HEAD`; returns whether it did.
+fn commit_if_staged(
+    binding: &Binding,
+    message: &str,
+    opts: &GitOptions,
+) -> Result<bool, SyncError> {
+    let dir = binding.dir.as_path();
+    // Exit 1 from a quiet cached diff is the only sign that something is staged.
+    let diff = ["diff", "--cached", "--quiet"];
+    let out = run::git(&diff, dir, run::Reach::Local, opts)?;
+    match out.status.code() {
+        Some(0) => return Ok(false),
+        Some(1) => {}
+        _ => return Err(failed(&diff, out.stderr)),
+    }
+    local(
+        &["commit", "-q", "-m", message],
+        dir,
+        &with_identity(binding, opts)?,
+    )?;
+    Ok(true)
+}
+
+/// Keep blob `id` as the local side of `path` in `store`. The newest conflict on a path wins,
+/// so the copy replaces an older delete's mark.
+fn keep_local(
+    dir: &Path,
+    id: &str,
+    store: &ConflictStore,
+    path: &str,
+    opts: &GitOptions,
+) -> Result<(), SyncError> {
+    keep_copy(dir, id, &store.copy_path(path), opts)?;
+    match fs::remove_file(store.mark_path(path)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
 }
 
 /// Fetch the bound branch from `origin` into its remote-tracking ref.
@@ -135,19 +295,26 @@ pub(crate) fn fetch(binding: &Binding, opts: &GitOptions) -> Result<(), SyncErro
 
 /// After an aborted rebase: keep each conflicted path's local side in the store, and only
 /// once all of them are on disk reset to `theirs` and commit every other local change again.
+/// A merged dbento.toml is no conflict: its text is written over theirs and committed too.
 fn fall_back(
     binding: &Binding,
     mine: &str,
     theirs: &str,
+    base: &str,
+    plan: TomlPlan,
     store: &ConflictStore,
     opts: &GitOptions,
 ) -> Result<Pulled, SyncError> {
     let dir = binding.dir.as_path();
-    let base = String::from_utf8_lossy(&local(&["merge-base", mine, theirs], dir, opts)?)
-        .trim()
-        .to_owned();
-    let my_paths = changed(dir, &base, mine, opts)?;
-    let their_paths = changed(dir, &base, theirs, opts)?;
+    let merged = match plan {
+        TomlPlan::Merged(text) => Some(text),
+        TomlPlan::Untouched | TomlPlan::Failed => None,
+    };
+    let mut my_paths = changed(dir, base, mine, opts)?;
+    if merged.is_some() {
+        my_paths.remove(TOML);
+    }
+    let their_paths = changed(dir, base, theirs, opts)?;
     let mut files = Vec::new();
     for path in my_paths.intersection(&their_paths) {
         let (l, r) = (blob(dir, mine, path, opts)?, blob(dir, theirs, path, opts)?);
@@ -158,14 +325,7 @@ fn fall_back(
             _ => ConflictKind::BothChanged,
         };
         match &l {
-            // The newest conflict on a path wins, so a copy replaces an older delete's mark.
-            Some(id) => {
-                keep_copy(dir, id, &store.copy_path(path), opts)?;
-                match fs::remove_file(store.mark_path(path)) {
-                    Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
-                    _ => {}
-                }
-            }
+            Some(id) => keep_local(dir, id, store, path, opts)?,
             None => mark_deleted(&store.mark_path(path))?,
         }
         files.push(ConflictFile {
@@ -198,11 +358,17 @@ fn fall_back(
     if !remove.is_empty() {
         local(&[&["rm", "-q", "--"], &remove[..]].concat(), dir, opts)?;
     }
-    if !restore.is_empty() || !remove.is_empty() {
-        let commit = ["commit", "-q", "-m", FALLBACK_MESSAGE];
-        local(&commit, dir, &with_identity(binding, opts)?)?;
+    // Written last, so no restore can overwrite the merge.
+    if let Some(text) = merged {
+        fs::write(dir.join(TOML), text)?;
+        local(&["add", "--", TOML], dir, opts)?;
     }
-    Ok(Pulled::Conflicted(files))
+    commit_if_staged(binding, FALLBACK_MESSAGE, opts)?;
+    Ok(if files.is_empty() {
+        Pulled::Rebased
+    } else {
+        Pulled::Conflicted(files)
+    })
 }
 
 /// Commits only on `left` and only on `right`.

@@ -5,6 +5,7 @@ mod api;
 mod conflicts;
 mod flows;
 mod team_file;
+mod toml_merge;
 
 use std::path::PathBuf;
 
@@ -19,6 +20,7 @@ pub use flows::{
     team_login, team_logout, team_resolve, team_sync, team_workspaces,
 };
 pub use team_file::{AccountRecord, BindingRecord, TeamData, TeamFile, TeamFileError};
+pub(crate) use toml_merge::merge_workspace_text;
 
 use crate::git::run::{self, Reach};
 use crate::git::{
