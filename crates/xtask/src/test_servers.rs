@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, ensure};
 
 use crate::db::{
-    MSSQL_IMAGE, MSSQL_PASSWORD, MSSQL_READY_PROBE, capture, ms_export_lines, parse_port,
-    remove_args, remove_started,
+    MSSQL_IMAGE, MSSQL_PASSWORD, MSSQL_READY_PROBE, capture, ms_export_lines, mssql_eula,
+    parse_port, remove_args, remove_started,
 };
 
 /// A database engine the shared servers cover.
@@ -28,7 +28,7 @@ pub enum Engine {
     Mssql,
 }
 
-/// Every engine, in start order.
+/// The engines always started, in start order; SQL Server is added only by [`pending`].
 pub const ENGINES: [Engine; 7] = [
     Engine::Postgres,
     Engine::Mysql,
@@ -369,11 +369,15 @@ pub fn surreal_sql_args(owner: u32, user: &str) -> Vec<String> {
 }
 
 /// The engines still to start: those whose URL variable is unset or empty, as the testkit
-/// treats an empty variable as "start a container".
+/// treats an empty variable as "start a container". SQL Server joins last, and only when its
+/// licence variable is exactly `Y`, since starting it accepts that licence.
 pub fn pending(env: impl Fn(&str) -> Option<String>) -> Vec<Engine> {
+    let unset = |e: &Engine| env(e.url_var()).is_none_or(|v| v.is_empty());
+    let licensed = mssql_eula(&env).is_ok();
     ENGINES
         .into_iter()
-        .filter(|e| env(e.url_var()).is_none_or(|v| v.is_empty()))
+        .chain(licensed.then_some(Engine::Mssql))
+        .filter(unset)
         .collect()
 }
 
@@ -390,7 +394,8 @@ pub fn default_runtime(docker_host: Option<&str>) -> &'static str {
 const READY_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Starts every pending engine, waits until each answers a login, and returns its export lines
-/// in ENGINES order. On any failure removes every container it started and returns the error.
+/// in `pending` order, SQL Server's followed by the stock-certificate flag. On any failure
+/// removes every container it started and returns the error.
 pub fn up(runtime: &str, owner: u32, env: impl Fn(&str) -> Option<String>) -> Result<Vec<String>> {
     let mut started = Vec::new();
     start_all(runtime, owner, &pending(env), &mut started)
@@ -430,13 +435,19 @@ fn start_all(
     if engines.contains(&Engine::Surreal) {
         define_surreal_logins(runtime, owner)?;
     }
-    engines
-        .iter()
-        .map(|&e| {
+    // The shared SQL Server keeps the image's self-signed certificate, which the TLS tests
+    // need to be told about.
+    let mut lines = Vec::new();
+    for &e in engines {
+        lines.push(
             export_of(runtime, e, owner)
-                .with_context(|| format!("finding the port of {}", e.name()))
-        })
-        .collect()
+                .with_context(|| format!("finding the port of {}", e.name()))?,
+        );
+        if e == Engine::Mssql {
+            lines.push("export DBENTO_MSSQL_STOCK_CERT=1".to_owned());
+        }
+    }
+    Ok(lines)
 }
 
 /// Defines the Surreal root logins as root, then signs in as each. The CLI exits 0 when a

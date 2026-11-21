@@ -401,6 +401,35 @@ fn only_engines_whose_variable_is_unset_or_empty_are_started() {
     );
 }
 
+/// Only the licence variable, as CI's gate job sets it.
+fn eula_only(k: &str) -> Option<String> {
+    (k == "DBENTO_MSSQL_ACCEPT_EULA").then(|| "Y".to_owned())
+}
+
+#[test]
+fn sql_server_joins_only_with_the_exact_licence_variable_and_no_url() {
+    assert!(!ENGINES.contains(&Engine::Mssql));
+    let mut with_ms = ENGINES.to_vec();
+    with_ms.push(Engine::Mssql);
+    assert_eq!(pending(eula_only), with_ms);
+    for refused in ["", "y", "yes", "N"] {
+        let env = |k: &str| (k == "DBENTO_MSSQL_ACCEPT_EULA").then(|| refused.to_owned());
+        assert_eq!(pending(env), ENGINES, "{refused:?}");
+    }
+    let elsewhere = |k: &str| match k {
+        "DBENTO_MSSQL_ACCEPT_EULA" => Some("Y".to_owned()),
+        "DBENTO_MSSQL_URL" => Some("mssql://sa:pw@elsewhere:1433".to_owned()),
+        _ => None,
+    };
+    assert_eq!(pending(elsewhere), ENGINES);
+    let empty_url = |k: &str| match k {
+        "DBENTO_MSSQL_ACCEPT_EULA" => Some("Y".to_owned()),
+        "DBENTO_MSSQL_URL" => Some(String::new()),
+        _ => None,
+    };
+    assert_eq!(pending(empty_url), with_ms);
+}
+
 #[test]
 fn the_runtime_follows_docker_host_like_the_testkit() {
     assert_eq!(
@@ -549,6 +578,64 @@ fn a_failure_after_every_start_removes_all_seven() {
     assert_eq!(calls(&log).last(), Some(&want));
 }
 
+#[cfg(unix)]
+#[test]
+fn up_with_the_licence_variable_starts_sql_server_with_the_rest_and_exports_its_certificate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, log) = fake_runtime(dir.path(), "");
+    let lines = up(&rt, 4242, eula_only).unwrap();
+    let mut want: Vec<String> = ENGINES
+        .iter()
+        .map(|&e| export_line(e, "127.0.0.1:5555").unwrap())
+        .collect();
+    want.push("export DBENTO_MSSQL_URL=mssql://sa:DbentoPass2022@127.0.0.1:5555".to_owned());
+    want.push("export DBENTO_MSSQL_STOCK_CERT=1".to_owned());
+    assert_eq!(lines, want);
+    let calls = calls(&log);
+    let run = calls
+        .iter()
+        .position(|c| c.starts_with("run -d --name dbento-test-mssql-4242 "))
+        .unwrap_or_else(|| panic!("SQL Server never ran: {calls:?}"));
+    let first_exec = calls.iter().position(|c| c.starts_with("exec ")).unwrap();
+    assert!(run < first_exec, "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("exec dbento-test-mssql-4242 /opt/mssql-tools18/bin/sqlcmd")),
+        "{calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c == "port dbento-test-mssql-4242 1433"),
+        "{calls:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn without_the_licence_variable_sql_server_is_never_touched() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, log) = fake_runtime(dir.path(), "");
+    let lines = up(&rt, 4242, |_| None).unwrap();
+    assert!(lines.iter().all(|l| !l.contains("MSSQL")), "{lines:?}");
+    let calls = calls(&log);
+    assert!(calls.iter().all(|c| !c.contains("mssql")), "{calls:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failure_on_the_sql_server_removes_all_eight() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, log) = fake_runtime(
+        dir.path(),
+        "port\\ dbento-test-mssql-4242*) echo boom >&2; exit 1 ;;",
+    );
+    assert!(up(&rt, 4242, eula_only).is_err());
+    let want = format!("rm -f -v {} dbento-test-mssql-4242", ALL.join(" "));
+    assert_eq!(calls(&log).last(), Some(&want));
+}
+
 #[test]
 fn the_surreal_logins_are_the_ones_the_testkit_seeds_against() {
     assert_eq!(
@@ -668,6 +755,7 @@ fn the_cli_removes_by_owner_and_starts_nothing_already_set() {
     for e in ENGINES {
         cmd.env(e.url_var(), "set-elsewhere");
     }
+    cmd.env("DBENTO_MSSQL_URL", "set-elsewhere");
     let out = cmd.output().unwrap();
     assert!(
         out.status.success(),
@@ -691,6 +779,7 @@ fn a_cli_start_failure_exits_non_zero_and_prints_no_exports() {
     for e in ENGINES {
         cmd.env_remove(e.url_var());
     }
+    cmd.env_remove("DBENTO_MSSQL_ACCEPT_EULA");
     let out = cmd.output().unwrap();
     assert!(!out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), "");
