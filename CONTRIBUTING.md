@@ -86,6 +86,8 @@ CARGO_BUILD_JOBS=4 CARGO_PROFILE_DEV_DEBUG=0 \
   systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 make check
 ```
 
+DuckDB's bundled C++ takes about eight minutes in every fresh target dir. With [sccache](https://github.com/mozilla/sccache) on `PATH` (for example in `~/.cargo/bin` after `cargo install --locked sccache`), I run `eval "$(scripts/sccache-env.sh)"` before cargo or make to cache it: the DuckDB step then takes about half a minute, and other worktrees share the cache. Keep it on or off for a given target dir, since switching reruns the C++ build. A `CC_<target>` or `CXX_<target>` variable overrides `CC` and `CXX` in the cc crate and bypasses the cache. Without sccache the script prints nothing.
+
 ### Tests against real databases
 
 Tests against database servers start containers through testcontainers: Postgres, MySQL and MariaDB, SQL Server, MongoDB, Valkey for Redis, SurrealDB, and Moto for DynamoDB. With rootless podman, point it at the podman socket:
