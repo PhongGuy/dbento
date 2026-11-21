@@ -8,7 +8,7 @@ fail() { echo "FAIL: $*" >&2; FAILS=$((FAILS + 1)); }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# The stub logs each call with the Postgres URL it saw and its parent pid, prints two export lines
+# The stub logs each call with the Postgres URL it saw and its parent pid, prints export lines
 # for `up`, and exits with the status the test asks of each step.
 cat >"$TMP/cargo" <<'EOF'
 #!/usr/bin/env bash
@@ -17,12 +17,15 @@ case "$*" in
   "xtask test-servers up "*)
     [[ -n ${STUB_UP_STATUS:-} ]] && exit "$STUB_UP_STATUS"
     echo "export DBENTO_PG_URL=postgres://stub/postgres"
-    echo "export DBENTO_MYSQL_URL=mysql://stub/" ;;
+    echo "export DBENTO_MYSQL_URL=mysql://stub/"
+    echo "export DBENTO_SURREAL_URL=surreal://root:dbento@stub:1" ;;
   "xtask test-servers down "*) exit "${STUB_DOWN_STATUS:-0}" ;;
   "test --workspace")
     [[ -n ${STUB_TERM:-} ]] && kill -TERM "$PPID"
     exit "${STUB_WS_STATUS:-0}" ;;
-  "test -p dbento-testkit --all-features") exit "${STUB_KIT_STATUS:-0}" ;;
+  "test -p dbento-testkit --all-features")
+    [[ -n ${DBENTO_SURREAL_URL:-} ]] && { echo "testkit saw a Surreal URL" >&2; exit 98; }
+    exit "${STUB_KIT_STATUS:-0}" ;;
   *) echo "unexpected cargo $*" >&2; exit 99 ;;
 esac
 EOF
@@ -31,7 +34,7 @@ chmod +x "$TMP/cargo"
 # Runs `make test` on the stub with the given NAME=VALUE settings; prints make's output.
 run() {
   : >"$TMP/log"
-  env -u DBENTO_PG_URL -u DBENTO_MYSQL_URL STUB_LOG="$TMP/log" "$@" \
+  env -u DBENTO_PG_URL -u DBENTO_MYSQL_URL -u DBENTO_SURREAL_URL STUB_LOG="$TMP/log" "$@" \
     make -s -C "$ROOT" test CARGO="$TMP/cargo" LOCKED= 2>&1
 }
 
@@ -55,6 +58,12 @@ EOF
   [[ $line3 =~ --owner\ ([0-9]+).*ppid=([0-9]+)$ ]] || fail "no owner or ppid: $line3"
   [[ ${BASH_REMATCH[1]} == "${BASH_REMATCH[2]}" ]] || fail "owner is not the recipe shell: $line3"
   [[ $(grep -oE -- '--owner [0-9]+' "$TMP/log" | sort -u | wc -l) -eq 1 ]] || fail "owners differ: $(cat "$TMP/log")"
+}
+
+test_the_testkit_pass_never_sees_the_surreal_url() {
+  local out
+  out=$(run) || fail "passing run failed: $out"
+  [[ $out != *"testkit saw a Surreal URL"* ]] || fail "testkit pass kept DBENTO_SURREAL_URL: $out"
 }
 
 test_the_exit_status_is_the_first_failing_pass() {
