@@ -867,8 +867,18 @@ pub async fn sr_proxied(
     (session, SrPipe { tasks, frozen })
 }
 
-/// The namespaces and this namespace's databases, as a root connection of the testkit sees them.
-pub async fn sr_targets(db: &dbento_testkit::SrDb) -> (serde_json::Value, serde_json::Value) {
+/// Which of `namespaces` exist on the server, and this namespace's databases, as a root
+/// connection of the testkit sees them. Other tests' namespaces come and go on a shared server,
+/// so only the named ones are judged.
+pub async fn sr_targets(
+    db: &dbento_testkit::SrDb,
+    namespaces: &[&str],
+) -> (Vec<String>, serde_json::Value) {
     let info = db.admin("INFO FOR ROOT; INFO FOR NS").await;
-    (info[0]["namespaces"].clone(), info[1]["databases"].clone())
+    let present = namespaces
+        .iter()
+        .filter(|n| info[0]["namespaces"].get(**n).is_some())
+        .map(|n| (*n).to_owned())
+        .collect();
+    (present, info[1]["databases"].clone())
 }

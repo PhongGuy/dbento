@@ -136,7 +136,12 @@ async fn several_roles_take_the_strongest_in_any_case() {
 #[tokio::test]
 async fn a_missing_target_fails_connect_and_creates_nothing() {
     let db = surreal_db().await;
-    let before = support::sr_targets(&db).await;
+    let before = support::sr_targets(&db, &["nosuchns"]).await;
+    assert_eq!(
+        before.0,
+        Vec::<String>::new(),
+        "nosuchns exists before the test"
+    );
     for login in [Some(("ro", "root")), Some(("ne", "namespace"))] {
         let dir = tempfile::tempdir().unwrap();
         let toml = db.connection_toml("sr", login, "").replace(
@@ -171,5 +176,5 @@ async fn a_missing_target_fails_connect_and_creates_nothing() {
     let message =
         open_message(dbento_core::connect(&ws, conn, secret, SessionOptions::default()).await);
     assert!(message.contains("nosuchns"), "{message}");
-    assert_eq!(support::sr_targets(&db).await, before);
+    assert_eq!(support::sr_targets(&db, &["nosuchns"]).await, before);
 }

@@ -10,8 +10,11 @@ const RO: Option<(&str, &str)> = Some(("ro", "root"));
 #[tokio::test]
 async fn a_use_unit_yields_one_empty_result_and_moves_the_session() {
     let db = surreal_db().await;
-    db.admin("DEFINE DATABASE other; DEFINE NAMESPACE elsewhere")
-        .await;
+    let elsewhere = db.scratch_namespace("elsewhere");
+    db.admin(&format!(
+        "DEFINE DATABASE other; DEFINE NAMESPACE {elsewhere}"
+    ))
+    .await;
     let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
     let ran = run(
         &mut s,
@@ -32,23 +35,31 @@ async fn a_use_unit_yields_one_empty_result_and_moves_the_session() {
 #[tokio::test]
 async fn use_ns_alone_keeps_the_database_name_and_checks_only_the_namespace() {
     let db = surreal_db().await;
-    db.admin("DEFINE NAMESPACE elsewhere; USE NS elsewhere; DEFINE DATABASE fresh")
-        .await;
+    let elsewhere = db.scratch_namespace("elsewhere");
+    db.admin(&format!(
+        "DEFINE NAMESPACE {elsewhere}; USE NS {elsewhere}; DEFINE DATABASE fresh"
+    ))
+    .await;
     let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
     let ran = run(
         &mut s,
-        "USE NS elsewhere; USE DB fresh; RETURN [session::ns(), session::db()]",
+        &format!("USE NS {elsewhere}; USE DB fresh; RETURN [session::ns(), session::db()]"),
         Limits::default(),
     )
     .await;
     let rows = &ran[2].as_ref().unwrap().rows;
-    assert_eq!(rows, &[vec![text("elsewhere")], vec![text("fresh")]]);
+    assert_eq!(rows, &[vec![text(&elsewhere)], vec![text("fresh")]]);
 }
 
 #[tokio::test]
 async fn a_missing_target_stops_the_script_and_creates_nothing() {
     let db = surreal_db().await;
-    let before = support::sr_targets(&db).await;
+    let before = support::sr_targets(&db, &["nosuchns"]).await;
+    assert_eq!(
+        before.0,
+        Vec::<String>::new(),
+        "nosuchns exists before the test"
+    );
     let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
     for (text_of_use, name) in [
         ("USE DB nosuchdb; CREATE leak:1;", "nosuchdb"),
@@ -63,7 +74,7 @@ async fn a_missing_target_stops_the_script_and_creates_nothing() {
         assert!(message.contains(name), "{message}");
     }
     assert_eq!(db.count("leak").await, 0);
-    assert_eq!(support::sr_targets(&db).await, before);
+    assert_eq!(support::sr_targets(&db, &["nosuchns"]).await, before);
 }
 
 #[tokio::test]
@@ -127,8 +138,11 @@ async fn prepare_never_refuses() {
 #[tokio::test]
 async fn a_use_marks_the_session_but_a_plain_statement_or_catalog_call_does_not() {
     let db = surreal_db().await;
-    db.admin("DEFINE DATABASE other; DEFINE NAMESPACE elsewhere; USE NS elsewhere; DEFINE DATABASE fresh")
-        .await;
+    let elsewhere = db.scratch_namespace("elsewhere");
+    db.admin(&format!(
+        "DEFINE DATABASE other; DEFINE NAMESPACE {elsewhere}; USE NS {elsewhere}; DEFINE DATABASE fresh"
+    ))
+    .await;
     let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
     assert!(!s.settings_changed());
     run(&mut s, "RETURN 1", Limits::default())
@@ -137,18 +151,25 @@ async fn a_use_marks_the_session_but_a_plain_statement_or_catalog_call_does_not(
         .unwrap();
     s.relations("other").await.unwrap();
     assert!(!s.settings_changed());
-    run(&mut s, "USE NS elsewhere DB fresh", Limits::default())
-        .await
-        .remove(0)
-        .unwrap();
+    run(
+        &mut s,
+        &format!("USE NS {elsewhere} DB fresh"),
+        Limits::default(),
+    )
+    .await
+    .remove(0)
+    .unwrap();
     assert!(s.settings_changed());
 }
 
 #[tokio::test]
 async fn a_use_names_the_namespace_and_database_the_session_is_in() {
     let db = surreal_db().await;
-    db.admin("DEFINE NAMESPACE elsewhere; USE NS elsewhere; DEFINE DATABASE fresh")
-        .await;
+    let elsewhere = db.scratch_namespace("elsewhere");
+    db.admin(&format!(
+        "DEFINE NAMESPACE {elsewhere}; USE NS {elsewhere}; DEFINE DATABASE fresh"
+    ))
+    .await;
     let mut s = sr_session(&db, RO, "", SessionOptions::default()).await;
     assert_eq!(s.current_database().await, None, "a fresh session");
     let ran = run(
@@ -161,13 +182,17 @@ async fn a_use_names_the_namespace_and_database_the_session_is_in() {
         .into_iter()
         .map(|r| r.unwrap().rows[0][0].clone())
         .collect();
-    run(&mut s, "USE NS elsewhere DB fresh", Limits::default())
-        .await
-        .remove(0)
-        .unwrap();
+    run(
+        &mut s,
+        &format!("USE NS {elsewhere} DB fresh"),
+        Limits::default(),
+    )
+    .await
+    .remove(0)
+    .unwrap();
     assert_eq!(
-        s.current_database().await.as_deref(),
-        Some("elsewhere/fresh")
+        s.current_database().await,
+        Some(format!("{elsewhere}/fresh"))
     );
     let [support::Cell::Text(ns), support::Cell::Text(dbn)] = &own[..] else {
         panic!("{own:?}")
