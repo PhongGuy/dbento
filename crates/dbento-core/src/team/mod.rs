@@ -5,6 +5,7 @@ mod api;
 mod conflicts;
 mod flows;
 mod team_file;
+mod toml_merge;
 
 use std::path::PathBuf;
 
