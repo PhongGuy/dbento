@@ -15,6 +15,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{
     ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, engine, remove_labelled, retry_start, sweep_orphans,
+    wait_ready,
 };
 
 /// The environment variable the generated connection reads its password from.
@@ -492,18 +493,26 @@ fn capped() -> ContainerRequest<Valkey> {
         .with_host_config_modifier(|h| h.memory = Some(512 << 20))
 }
 
+/// The labelled, capped request one start attempt (named by `attempt`) sends.
+fn valkey_request(attempt: &str) -> ContainerRequest<Valkey> {
+    capped()
+        .with_label("dbento.role", "test")
+        .with_label("dbento.pid", std::process::id().to_string())
+        .with_label(ATTEMPT_LABEL, attempt)
+        // No log wait: journald's rate limit, shared by every container of the user, can drop
+        // the ready line, so readiness is a PING in `start` instead.
+        .with_ready_conditions(Vec::new())
+}
+
 /// Starts the gate image labelled, retried when its host port turns out to be taken.
 async fn start() -> ContainerAsync<Valkey> {
-    retry_start(|_| {
+    let container = retry_start(|_| {
         let attempt = format!(
             "{}-{}",
             std::process::id(),
             NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
         );
-        let request = capped()
-            .with_label("dbento.role", "test")
-            .with_label("dbento.pid", std::process::id().to_string())
-            .with_label(ATTEMPT_LABEL, attempt.clone());
+        let request = valkey_request(&attempt);
         async move {
             match request.start().await {
                 Ok(container) => Ok(container),
@@ -521,7 +530,23 @@ async fn start() -> ContainerAsync<Valkey> {
              Rootless podman: set DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock\n\
              Or skip containers and point {URL_VAR} at a running server."
         )
+    });
+    let port = container
+        .get_host_port_ipv4(VALKEY_PORT)
+        .await
+        .expect("no mapped Valkey port");
+    wait_ready(&container, "Valkey", || async move {
+        let mut conn = login("127.0.0.1", port, None, None, 0)
+            .await
+            .map_err(|e| e.to_string())?;
+        ::redis::cmd("PING")
+            .query_async::<String>(&mut conn)
+            .await
+            .map(drop)
+            .map_err(|e| e.to_string())
     })
+    .await;
+    container
 }
 
 /// Creates the users and seeds the index; user names carry `suffix`.
@@ -557,6 +582,15 @@ async fn seeded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_valkey_start_waits_on_no_log_line() {
+        let conditions = valkey_request("valkey").ready_conditions();
+        assert!(
+            conditions.is_empty(),
+            "a Valkey start must not wait on a log line journald can drop: {conditions:?}"
+        );
+    }
 
     fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |k| {

@@ -15,7 +15,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{
     ATTEMPT_LABEL, CERT_USER, ClientCert, NEXT_ATTEMPT, NEXT_DB, ServerTls, client_cert,
-    remove_labelled, retry_start, server_tls, sweep_orphans,
+    remove_labelled, retry_start, server_tls, sweep_orphans, wait_ready,
 };
 
 /// The environment variable the generated connection reads its password from.
@@ -331,20 +331,13 @@ async fn start<I>(
 where
     I: Image + Default + Send + Sync + 'static,
 {
-    retry_start(|_| {
+    let container = retry_start(|_| {
         let attempt = format!(
             "{}-{}",
             std::process::id(),
             NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
         );
-        let request = I::default()
-            .with_tag(tag)
-            // A tmpfs over the image's VOLUME keeps an anonymous volume from outliving a kill.
-            .with_mount(Mount::tmpfs_mount("/var/lib/mysql"))
-            .with_label("dbento.role", "test")
-            .with_label("dbento.pid", std::process::id().to_string())
-            .with_label(ATTEMPT_LABEL, attempt.clone());
-        let request = with(request);
+        let request = with(my_request(tag, &attempt));
         async move {
             match request.start().await {
                 Ok(container) => Ok(container),
@@ -356,7 +349,45 @@ where
         }
     })
     .await
-    .unwrap_or_else(|e| panic!("{}", start_hint(flavor, &e)))
+    .unwrap_or_else(|e| panic!("{}", start_hint(flavor, &e)));
+    let port = container
+        .get_host_port_ipv4(3306)
+        .await
+        .expect("no mapped MySQL port");
+    let what = match flavor {
+        MyFlavor::Mysql => "MySQL",
+        MyFlavor::Mariadb => "MariaDB",
+    };
+    // Both entrypoints run their init server with networking off, so a login over the mapped
+    // port reaches only the final server.
+    wait_ready(&container, what, || async move {
+        let mut conn = Conn::new(server_opts("127.0.0.1", port, "root", ""))
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.query_drop("SELECT 1")
+            .await
+            .map_err(|e| e.to_string())?;
+        conn.disconnect().await.map_err(|e| e.to_string())
+    })
+    .await;
+    container
+}
+
+/// The labelled module request at `tag` one start attempt (named by `attempt`) sends.
+fn my_request<I>(tag: &str, attempt: &str) -> ContainerRequest<I>
+where
+    I: Image + Default,
+{
+    I::default()
+        .with_tag(tag)
+        // A tmpfs over the image's VOLUME keeps an anonymous volume from outliving a kill.
+        .with_mount(Mount::tmpfs_mount("/var/lib/mysql"))
+        .with_label("dbento.role", "test")
+        .with_label("dbento.pid", std::process::id().to_string())
+        .with_label(ATTEMPT_LABEL, attempt)
+        // No log wait: journald's rate limit, shared by every container of the user, can drop
+        // the ready line, so readiness is a login in `start` instead.
+        .with_ready_conditions(Vec::new())
 }
 
 /// The panic text when a container cannot start.
@@ -497,6 +528,24 @@ async fn fresh_database(host: &str, port: u16, user: &str, password: &str) -> My
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mysql_start_waits_on_no_log_line() {
+        let tls = server_tls();
+        let mysql = |tls| serve_tls(my_request::<Mysql>(MYSQL_TAG, "mysql"), tls);
+        let mariadb = |tls| serve_tls(my_request::<Mariadb>(MARIADB_TAG, "mariadb"), tls);
+        for (name, conditions) in [
+            ("MySQL", mysql(None).ready_conditions()),
+            ("MySQL TLS", mysql(Some(&tls)).ready_conditions()),
+            ("MariaDB", mariadb(None).ready_conditions()),
+            ("MariaDB TLS", mariadb(Some(&tls)).ready_conditions()),
+        ] {
+            assert!(
+                conditions.is_empty(),
+                "a {name} start must not wait on a log line journald can drop: {conditions:?}"
+            );
+        }
+    }
 
     #[test]
     fn matrix_urls_read_each_versions_variable_in_order() {
