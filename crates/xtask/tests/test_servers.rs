@@ -3,8 +3,9 @@
 use std::process::Command;
 
 use dbento_testkit::{
-    MARIADB_TAG, MONGO_TAG, MOTO_TAG, MYSQL_TAG, PG_TAG, SURREAL_TAG, VALKEY_TAG,
+    MARIADB_TAG, MONGO_TAG, MOTO_TAG, MSSQL_TAG, MYSQL_TAG, PG_TAG, SURREAL_TAG, VALKEY_TAG,
 };
+use xtask::db::{MSSQL_IMAGE, MSSQL_PASSWORD, ms_export_lines, ms_run_args};
 use xtask::test_servers::{
     ENGINES, Engine, SURREAL_ROOT_LOGINS, container_name, default_runtime, export_line,
     owner_filter, pending, ready_args, run_args, surreal_logins_sql, surreal_sql_args,
@@ -167,6 +168,96 @@ fn the_images_are_the_ones_the_testkit_starts() {
             SURREAL_TAG
         ]
     );
+    // SQL Server is started only on request, so it sits outside ENGINES but must match too.
+    assert_eq!(Engine::Mssql.tag(), MSSQL_TAG);
+}
+
+#[test]
+fn the_shared_sql_server_is_db_ups_server_without_its_tmpfs() {
+    assert_eq!(
+        run_args(Engine::Mssql, 4242),
+        with(
+            "mssql",
+            1433,
+            &[
+                "--memory",
+                "3g",
+                "-e",
+                "ACCEPT_EULA=Y",
+                "-e",
+                "MSSQL_PID=Developer",
+                "-e",
+                "MSSQL_MEMORY_LIMIT_MB=2048",
+                "-e",
+                "MSSQL_SA_PASSWORD=DbentoPass2022",
+                "mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04",
+            ]
+        )
+    );
+    let shared = run_args(Engine::Mssql, 4242);
+    let matrix = ms_run_args();
+    let password = format!("MSSQL_SA_PASSWORD={MSSQL_PASSWORD}");
+    for setting in [
+        "3g",
+        "ACCEPT_EULA=Y",
+        "MSSQL_PID=Developer",
+        "MSSQL_MEMORY_LIMIT_MB=2048",
+        password.as_str(),
+        MSSQL_IMAGE,
+    ] {
+        assert!(
+            matrix.iter().any(|a| a == setting) && shared.iter().any(|a| a == setting),
+            "{setting}"
+        );
+    }
+    assert!(!shared.iter().any(|a| a == "--tmpfs"), "{shared:?}");
+    assert_eq!(
+        container_name(Engine::Mssql, 4242),
+        "dbento-test-mssql-4242"
+    );
+    assert_eq!(Engine::Mssql.url_var(), "DBENTO_MSSQL_URL");
+}
+
+#[test]
+fn sql_server_readiness_is_db_ups_sqlcmd_login_and_its_url_is_db_ups_url() {
+    assert_eq!(
+        ready_args(Engine::Mssql, 4242),
+        [
+            "exec",
+            "dbento-test-mssql-4242",
+            "/opt/mssql-tools18/bin/sqlcmd",
+            "-C",
+            "-S",
+            "localhost",
+            "-U",
+            "sa",
+            "-P",
+            "DbentoPass2022",
+            "-b",
+            "-Q",
+            "SELECT 1",
+        ]
+    );
+    let line = export_line(Engine::Mssql, "127.0.0.1:41433\n").unwrap();
+    assert_eq!(
+        line,
+        "export DBENTO_MSSQL_URL=mssql://sa:DbentoPass2022@127.0.0.1:41433"
+    );
+    assert_eq!(
+        vec![line.clone()],
+        ms_export_lines("127.0.0.1:41433\n").unwrap()
+    );
+    let url = line.split_once('=').unwrap().1;
+    assert_eq!(
+        dbento_testkit::ms_url(url).unwrap(),
+        (
+            "127.0.0.1".to_owned(),
+            41433,
+            "sa".to_owned(),
+            dbento_testkit::MS_SA_PASSWORD.to_owned()
+        )
+    );
+    assert!(export_line(Engine::Mssql, "").is_err());
 }
 
 #[test]

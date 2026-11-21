@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 
-use crate::db::{capture, parse_port, remove_args, remove_started};
+use crate::db::{
+    MSSQL_IMAGE, MSSQL_PASSWORD, MSSQL_READY_PROBE, capture, ms_export_lines, parse_port,
+    remove_args, remove_started,
+};
 
 /// A database engine the shared servers cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +25,7 @@ pub enum Engine {
     Redis,
     Dynamo,
     Surreal,
+    Mssql,
 }
 
 /// Every engine, in start order.
@@ -46,6 +50,7 @@ impl Engine {
             Engine::Redis => "redis",
             Engine::Dynamo => "dynamo",
             Engine::Surreal => "surreal",
+            Engine::Mssql => "mssql",
         }
     }
 
@@ -59,6 +64,7 @@ impl Engine {
             Engine::Redis => "DBENTO_REDIS_URL",
             Engine::Dynamo => "DBENTO_DYNAMO_URL",
             Engine::Surreal => "DBENTO_SURREAL_URL",
+            Engine::Mssql => "DBENTO_MSSQL_URL",
         }
     }
 
@@ -72,6 +78,9 @@ impl Engine {
             Engine::Redis => "9.0.7-alpine",
             Engine::Dynamo => "5.2.5",
             Engine::Surreal => "v3.3.5",
+            Engine::Mssql => MSSQL_IMAGE
+                .rsplit_once(':')
+                .map_or(MSSQL_IMAGE, |(_, tag)| tag),
         }
     }
 
@@ -84,6 +93,7 @@ impl Engine {
             Engine::Redis => 6379,
             Engine::Dynamo => 5000,
             Engine::Surreal => 8000,
+            Engine::Mssql => 1433,
         }
     }
 
@@ -97,6 +107,7 @@ impl Engine {
             Engine::Redis => "docker.io/valkey/valkey",
             Engine::Dynamo => "docker.io/motoserver/moto",
             Engine::Surreal => "docker.io/surrealdb/surrealdb",
+            Engine::Mssql => return MSSQL_IMAGE.to_owned(),
         };
         format!("{repo}:{}", self.tag())
     }
@@ -213,6 +224,24 @@ pub fn run_args(engine: Engine, owner: u32) -> Vec<String> {
             ],
             &["start"],
         ),
+        // The password option is built at run time, so it cannot share the static slices. Data
+        // stays on disk: a 4G tmpfs would compete with the other servers for memory.
+        Engine::Mssql => {
+            args.extend(strings(&[
+                "--memory",
+                "3g",
+                "-e",
+                "ACCEPT_EULA=Y",
+                "-e",
+                "MSSQL_PID=Developer",
+                "-e",
+                "MSSQL_MEMORY_LIMIT_MB=2048",
+                "-e",
+                &format!("MSSQL_SA_PASSWORD={MSSQL_PASSWORD}"),
+                MSSQL_IMAGE,
+            ]));
+            return args;
+        }
     };
     args.extend(strings(options));
     args.push(engine.image());
@@ -279,6 +308,7 @@ pub fn ready_args(engine: Engine, owner: u32) -> Vec<String> {
             "--endpoint",
             "http://127.0.0.1:8000",
         ],
+        Engine::Mssql => MSSQL_READY_PROBE.to_vec(),
     };
     let mut args = strings(&["exec", &name]);
     args.extend(strings(&probe));
@@ -295,6 +325,11 @@ pub fn export_line(engine: Engine, port_output: &str) -> Result<String> {
         Engine::Redis => format!("redis://127.0.0.1:{port}/0"),
         Engine::Dynamo => format!("http://127.0.0.1:{port}"),
         Engine::Surreal => format!("surreal://root:dbento@127.0.0.1:{port}"),
+        Engine::Mssql => {
+            return ms_export_lines(port_output)?
+                .pop()
+                .context("no SQL Server export line");
+        }
     };
     Ok(format!("export {}={url}", engine.url_var()))
 }
