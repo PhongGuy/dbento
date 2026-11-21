@@ -71,7 +71,8 @@ async fn a_region_held_by_another_process_is_skipped_until_it_exits() {
 #[tokio::test]
 async fn a_handle_is_seeded_in_its_own_region() {
     let (a, b) = tokio::join!(dynamo_db(), dynamo_db());
-    assert_ne!(a.region(), b.region());
+    // Containers give each handle its own endpoint; a shared URL gives each its own region.
+    assert_ne!((a.endpoint(), a.region()), (b.endpoint(), b.region()));
     let listed = a.client().list_tables().send().await.unwrap();
     assert_eq!(listed.table_names(), ["h", "orders", "types"]);
     assert_eq!(
@@ -89,4 +90,22 @@ async fn a_handle_is_seeded_in_its_own_region() {
             && toml.ends_with("read_only = true\n"),
         "{toml}"
     );
+}
+
+#[tokio::test]
+async fn a_lease_on_one_endpoint_neither_blocks_nor_frees_a_region_on_another() {
+    // Endpoints no other test uses, so only this test's leases touch them.
+    let pid = std::process::id();
+    let one = format!("http://lease-one-{pid}");
+    let other = format!("http://lease-other-{pid}");
+    let first = RegionLease::take(&one).await;
+    let elsewhere = RegionLease::take(&other).await;
+    assert_eq!(
+        (first.region(), elsewhere.region()),
+        (REGIONS[0], REGIONS[0])
+    );
+    drop(elsewhere);
+    // The lowest region is still held on its own endpoint.
+    assert_eq!(RegionLease::take(&one).await.region(), REGIONS[1]);
+    drop(first);
 }

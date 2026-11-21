@@ -61,18 +61,32 @@ async fn a_cancel_right_after_execute_is_not_lost() {
     let handle = s.cancel_handle();
     let mut script = s.script(SPIN);
     let pending = script.next().await.unwrap().unwrap();
-    // join! polls execute first, and execute sends its request before its first await, so
-    // the cancel lands after the statement was asked for and before it starts running.
+    // join! polls execute first, and execute takes the statement's generation before its first
+    // await, so the cancel aims at this statement. The worker thread may already have sent the
+    // columns by then, so the cancel shows on execute or, failing that, on the stream.
     let (result, ()) = bounded(async {
         tokio::join!(pending.execute(Limits::default()), async {
             handle.cancel()
         })
     })
     .await;
+    let end = match result {
+        Ok(mut stream) => {
+            bounded(async {
+                loop {
+                    match stream.next_batch().await {
+                        Ok(Some(_)) => continue,
+                        other => break other.map(drop),
+                    }
+                }
+            })
+            .await
+        }
+        Err(e) => Err(e),
+    };
     assert!(
-        matches!(result, Err(ExecuteError::Cancelled)),
-        "{:?}",
-        result.err()
+        matches!(end, Err(ExecuteError::Cancelled)),
+        "the cancel was lost: {end:?}"
     );
     drop(script);
     select_one_works(&mut s).await;

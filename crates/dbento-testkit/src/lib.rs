@@ -48,6 +48,9 @@ pub use surreal::*;
 /// The environment variable the generated connection reads its password from.
 pub const SECRET_VAR: &str = "DBENTO_TEST_PG_SECRET";
 
+/// The gate image's tag.
+pub const PG_TAG: &str = "17-alpine";
+
 static NEXT_DB: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh database. One holding a container must be dropped inside a tokio runtime; one on
@@ -356,14 +359,7 @@ async fn start(image: impl Fn() -> ContainerRequest<Postgres>, host: &str) -> Pg
             std::process::id(),
             NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
         );
-        let request = image()
-            .with_tag("17-alpine")
-            // A tmpfs over the image's declared VOLUME keeps the runtime from creating an
-            // anonymous volume, which outlives a run that is killed before drop.
-            .with_mount(Mount::tmpfs_mount("/var/lib/postgresql/data"))
-            .with_label("dbento.role", "test")
-            .with_label("dbento.pid", std::process::id().to_string())
-            .with_label(ATTEMPT_LABEL, attempt.clone());
+        let request = pg_request(image(), &attempt);
         async move {
             match request.start().await {
                 Ok(container) => Ok(container),
@@ -380,9 +376,44 @@ async fn start(image: impl Fn() -> ContainerRequest<Postgres>, host: &str) -> Pg
         .get_host_port_ipv4(5432)
         .await
         .expect("no mapped Postgres port");
+    // The image's init server listens on no TCP socket, so a login over the mapped port
+    // reaches only the final server.
+    wait_ready(&container, "Postgres", || async move {
+        let (client, connection) = Config::new()
+            .host(host)
+            .port(port)
+            .user("postgres")
+            .password("postgres")
+            .dbname("postgres")
+            .connect(NoTls)
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::spawn(connection);
+        client
+            .simple_query("SELECT 1")
+            .await
+            .map(drop)
+            .map_err(|e| e.to_string())
+    })
+    .await;
     let mut db = fresh_database(host, port, "postgres", "postgres").await;
     db._container = Some(container);
     db
+}
+
+/// The labelled `postgres:17-alpine` request one start attempt (named by `attempt`) sends.
+fn pg_request(image: ContainerRequest<Postgres>, attempt: &str) -> ContainerRequest<Postgres> {
+    image
+        .with_tag(PG_TAG)
+        // A tmpfs over the image's declared VOLUME keeps the runtime from creating an
+        // anonymous volume, which outlives a run that is killed before drop.
+        .with_mount(Mount::tmpfs_mount("/var/lib/postgresql/data"))
+        .with_label("dbento.role", "test")
+        .with_label("dbento.pid", std::process::id().to_string())
+        .with_label(ATTEMPT_LABEL, attempt)
+        // No log wait: journald's rate limit, shared by every container of the user, can drop
+        // the ready line, so readiness is a login in `start` instead.
+        .with_ready_conditions(Vec::new())
 }
 
 /// How many times a container start or a fixture seed is tried when it fails transiently.
@@ -863,6 +894,22 @@ mod tests {
     use super::*;
 
     const TAKEN: &str = "Docker responded with status code 500: rootlessport listen tcp :34037: bind: address already in use";
+
+    #[test]
+    fn a_postgres_start_waits_on_no_log_line() {
+        let tls =
+            || Postgres::default().with_copy_to("/docker-entrypoint-initdb.d/tls.sh", Vec::new());
+        for request in [
+            pg_request(Postgres::default().into(), "plain"),
+            pg_request(tls(), "tls"),
+        ] {
+            assert!(
+                request.ready_conditions().is_empty(),
+                "a Postgres start must not wait on a log line journald can drop: {:?}",
+                request.ready_conditions()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn a_taken_host_port_is_retried_with_a_fresh_attempt() {
