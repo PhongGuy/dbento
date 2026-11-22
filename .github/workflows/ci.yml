@@ -113,8 +113,8 @@ jobs:
 
   pilot:
     runs-on: ubuntu-26.04
-    # Locally on four jobs: about 34 minutes of cold builds, then 6 of scenarios.
-    timeout-minutes: 90
+    # A cold-cache run on a hosted runner builds DuckDB twice and needs a little over 90 minutes.
+    timeout-minutes: 120
     env:
       # Session mode needs KDE's KWin, bwrap and AT-SPI in a private desktop, which a hosted
       # runner lacks; those scenarios, like the wheel recordings, stay in the local gate.

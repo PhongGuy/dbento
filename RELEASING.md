@@ -140,4 +140,4 @@ Each job is billed in whole minutes; Windows bills 2x and macOS 10x. No release 
 - ASSUMED: a full release is about 560: Linux about 60, Windows 30 x 2, macOS 2 x 22 x 10.
 - ASSUMED: the default `linux,windows,macos-arm64` rehearsal is about 340.
 
-Every job's `timeout-minutes` caps what a hung run can cost: `guard` 5, `build` 90, `checksums` 45, `attest` 15, `draft` 30, and the CI `gate` 60. Release jobs restore no cache, so every build compiles from scratch.
+Every job's `timeout-minutes` caps what a hung run can cost: `guard` 5, `build` 90, `checksums` 45, `attest` 15, `draft` 30, and the CI `gate` and `pilot` 120 each. Release jobs restore no cache, so every build compiles from scratch.
