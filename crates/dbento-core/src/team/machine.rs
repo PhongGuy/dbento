@@ -90,10 +90,6 @@ pub(crate) enum Input {
     )]
     /// The account's role changed.
     Role(Role),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "conflict and role handling send it")
-    )]
     /// Conflicts were resolved; these are left.
     Settled(Vec<ConflictFile>),
     /// The running cycle or poll ended.
@@ -107,17 +103,9 @@ pub(crate) enum Ended {
     ReadOnly,
     Conflicted(Vec<ConflictFile>),
     Refused(Refusal),
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "error mapping ends cycles with it")
-    )]
     Busy,
     Offline,
     SignedOut,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "error mapping ends cycles with it")
-    )]
     GitMissing,
     Failed(String),
     /// A poll found the server's branch where it was.

@@ -2,11 +2,11 @@
 #![allow(dead_code)] // the fixture also serves Tasks 7 and 8
 use crate::potluck::{fresh_token, user, ws};
 use crate::stub::{Reply, Stub};
-use crate::support::{Sandbox, write};
+use crate::support::{Sandbox, read, real_git, write};
 use dbento_core::paths::StatePaths;
 use dbento_core::{
-    AccountRecord, Binding, BindingRecord, MemoryTokenStore, ServerUrl, SyncConfig, SyncState,
-    SyncStatus, TeamAccount, TeamFile, TeamSync, TokenStore, public_url_of,
+    AccountRecord, Binding, BindingRecord, ConflictStore, MemoryTokenStore, ServerUrl, SyncConfig,
+    SyncState, SyncStatus, TeamAccount, TeamFile, TeamSync, TokenStore, public_url_of, repo_lock,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -221,5 +221,161 @@ fn flush_skips_a_long_debounce_and_drop_flushes_what_is_pending() {
         l.origin_show("queries/c.sql").as_deref(),
         Some("select 3;\n"),
         "dropping flushed"
+    );
+}
+
+impl Live {
+    fn conflicted(&self, sync: &TeamSync) {
+        let from = self.seen.mark();
+        self.sb
+            .teammate(&self.mate, "dbento.toml", Some("name = \"theirs\"\n"));
+        write(&self.ws, "dbento.toml", "name = \"mine\"\n");
+        sync.flush();
+        let got = self
+            .seen
+            .wait(from, |s| matches!(s.state, SyncState::Conflicted(_)));
+        let SyncState::Conflicted(files) = got.state else {
+            unreachable!()
+        };
+        assert_eq!(
+            files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["dbento.toml"],
+            "one conflict"
+        );
+        assert_eq!(
+            read(&self.ws, "dbento.toml").as_deref(),
+            Some("name = \"theirs\"\n"),
+            "theirs is on disk"
+        );
+    }
+}
+
+#[test]
+fn drop_gives_up_after_its_bound_when_git_hangs() {
+    let l = live("write");
+    let body = "case \" $* \" in *\" fetch \"*) exec sleep 20;; esac\nexec \"$REAL_GIT\" \"$@\"";
+    let git =
+        l.sb.options()
+            .env("PATH", l.sb.fake_git("slow-bin", body))
+            .env("REAL_GIT", real_git());
+    let sync = l.start(l.config().git(git).drop_bound(Duration::from_millis(300)));
+    l.seen.wait(0, |s| s.state == SyncState::Pulling);
+    let started = Instant::now();
+    drop(sync);
+    let took = started.elapsed();
+    assert!(
+        took >= Duration::from_millis(300) && took < Duration::from_millis(1500),
+        "{took:?}"
+    );
+}
+
+#[test]
+fn a_held_repo_lock_reports_busy_until_a_retry_and_no_git_is_git_missing() {
+    let l = live("write");
+    let held = repo_lock(&l.ws, &l.sb.options()).unwrap();
+    let sync = l.start(
+        l.config()
+            .git(l.sb.options().lock_wait(Duration::from_millis(200))),
+    );
+    l.seen.wait(0, |s| s.state == SyncState::Busy);
+    drop(held);
+    let from = l.seen.mark();
+    sync.retry();
+    l.seen.wait(from, |s| s.state == SyncState::Synced);
+    drop(sync);
+    let empty = l.sb.path().join("no-git");
+    std::fs::create_dir(&empty).unwrap();
+    let from = l.seen.mark();
+    let _sync = l.start(l.config().git(l.sb.options().env("PATH", &empty)));
+    l.seen.wait(from, |s| s.state == SyncState::GitMissing);
+}
+#[test]
+fn keep_mine_puts_my_side_back_and_pushes_it() {
+    let l = live("write");
+    let sync = l.start(l.config());
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    l.conflicted(&sync);
+    sync.keep_mine("dbento.toml");
+    assert!(eventually(
+        || l.origin_show("dbento.toml").as_deref() == Some("name = \"mine\"\n")
+    ));
+}
+
+#[test]
+fn take_theirs_drops_my_copy_and_settles() {
+    let l = live("write");
+    let sync = l.start(l.config());
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    l.conflicted(&sync);
+    let from = l.seen.mark();
+    sync.take_theirs("dbento.toml");
+    l.seen.wait(from, |s| s.state == SyncState::Synced);
+    assert!(
+        ConflictStore::for_workspace(&l.paths, &l.ws)
+            .unwrap()
+            .copies()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        l.origin_show("dbento.toml").as_deref(),
+        Some("name = \"theirs\"\n")
+    );
+}
+
+#[test]
+fn a_conflict_outlives_a_restart() {
+    let l = live("write");
+    let sync = l.start(l.config());
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    l.conflicted(&sync);
+    drop(sync);
+    let from = l.seen.mark();
+    let _again = l.start(l.config());
+    l.seen.wait(
+        from,
+        |s| matches!(&s.state, SyncState::Conflicted(f) if f.len() == 1),
+    );
+}
+
+#[test]
+fn a_refusal_holds_until_the_next_change_and_the_fix_drops_the_secret() {
+    let l = live("write");
+    let hook = l.bare.join("hooks/pre-receive");
+    l.sb.script(&hook, "cat >/dev/null\necho 'potluck-reject secret_value refs/heads/main dbento.toml password' >&2\nexit 1");
+    let sync = l.start(l.config());
+    let from = l.seen.mark();
+    write(&l.ws, "dbento.toml", "password = \"hunter2\"\n");
+    sync.flush();
+    let got = l
+        .seen
+        .wait(from, |s| matches!(s.state, SyncState::Refused(_)));
+    let SyncState::Refused(r) = got.state else {
+        unreachable!()
+    };
+    assert_eq!(r.findings[0].rule, "password");
+    let secret = l.sb.rev(&l.ws, "HEAD:dbento.toml");
+    std::fs::remove_file(&hook).unwrap();
+    let from = l.seen.mark();
+    write(&l.ws, "dbento.toml", "name = \"fixed\"\n");
+    sync.changed();
+    l.seen.wait(from, |s| s.state == SyncState::Synced);
+    assert_eq!(
+        l.origin_show("dbento.toml").as_deref(),
+        Some("name = \"fixed\"\n")
+    );
+    let objects = l.sb.git(
+        l.sb.path(),
+        &[
+            "--git-dir",
+            l.bare.to_str().unwrap(),
+            "rev-list",
+            "--objects",
+            "--all",
+        ],
+    );
+    assert!(
+        !objects.contains(&secret),
+        "the refused blob reached the server"
     );
 }

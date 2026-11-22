@@ -1,18 +1,20 @@
 //! The sync driver: one thread per bound folder that carries out what the state machine
 //! decides (cycles and polls) and reports each change of status to its viewer.
 
+use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::account::{ServerUrl, TeamAccount, TimedTokenStore, TokenStore};
-use super::flows::stamp_synced;
+use super::conflicts::ConflictStore;
+use super::flows::{Resolution, TeamResolveError, settle_path, stamp_synced};
 use super::machine::{Action, Cycle, Ended, Input, Machine, SyncState, SyncStatus, Timing};
 use super::team_file::TeamFile;
 use super::{Binding, Role, SyncOutcome, git_text, sync_steps};
 use crate::git::{
-    CancelFlag, GitOptions, SAVE_MESSAGE, SyncError, commit_pending, ensure_on_branch, remote_tip,
-    repo_lock, unpushed,
+    CancelFlag, ConflictFile, ConflictKind, GitError, GitOptions, SAVE_MESSAGE, SyncError,
+    commit_pending, ensure_on_branch, git_available_with, remote_tip, repo_lock, unpushed,
 };
 use crate::paths::StatePaths;
 
@@ -114,6 +116,8 @@ enum Msg {
     Changed,
     Flush,
     Retry,
+    KeepMine(String),
+    TakeTheirs(String),
     Stop,
 }
 
@@ -177,6 +181,7 @@ impl TeamSync {
             paths: paths.clone(),
             file,
             git: config.git.cancel(cancel.clone()),
+            kinds: HashMap::new(),
             report: Report {
                 on_status: Box::new(on_status),
                 last: None,
@@ -215,6 +220,16 @@ impl TeamSync {
     /// Retry whatever holds the sync, such as a sign-out or missing git.
     pub fn retry(&self) {
         let _ = self.tx.send(Msg::Retry);
+    }
+
+    /// Settle conflicted path `rel` by putting the local side back, then sync it.
+    pub fn keep_mine(&self, rel: &str) {
+        let _ = self.tx.send(Msg::KeepMine(rel.to_owned()));
+    }
+
+    /// Settle conflicted path `rel` by keeping the server's side and dropping the local one.
+    pub fn take_theirs(&self, rel: &str) {
+        let _ = self.tx.send(Msg::TakeTheirs(rel.to_owned()));
     }
 }
 
@@ -262,6 +277,8 @@ struct Driver {
     paths: StatePaths,
     file: TeamFile,
     git: GitOptions,
+    /// Each path's kind at the last conflict this thread saw.
+    kinds: HashMap<String, ConflictKind>,
     report: Report,
 }
 
@@ -304,7 +321,11 @@ impl Driver {
             };
             match got {
                 Msg::Stop => return self.stop(),
-                msg @ (Msg::Changed | Msg::Flush | Msg::Retry) => self.take(msg),
+                msg @ (Msg::Changed
+                | Msg::Flush
+                | Msg::Retry
+                | Msg::KeepMine(_)
+                | Msg::TakeTheirs(_)) => self.take(msg),
             }
         }
     }
@@ -322,10 +343,53 @@ impl Driver {
             Msg::Changed => Input::Changed,
             Msg::Flush => Input::Flush,
             Msg::Retry => Input::Retry,
+            Msg::KeepMine(rel) => return self.settle(&rel, Resolution::KeepMine),
+            Msg::TakeTheirs(rel) => return self.settle(&rel, Resolution::TakeTheirs),
             Msg::Stop => return,
         };
         self.machine.on(input, Instant::now());
         self.report.show(self.machine.state().clone());
+    }
+
+    /// Settles one conflicted path under the repo lock. A held lock reports busy and writes
+    /// nothing; keeping mine then syncs the restored side at once.
+    fn settle(&mut self, rel: &str, choice: Resolution) {
+        let now = Instant::now();
+        match settle_path(&self.paths, &self.binding.dir, rel, choice, &self.git) {
+            Ok(()) | Err(TeamResolveError::NoSavedCopy(_)) => {
+                self.machine.on(Input::Settled(self.outstanding()), now);
+                if let Resolution::KeepMine = choice {
+                    self.machine.on(Input::Flush, now);
+                }
+            }
+            Err(TeamResolveError::Busy) => self.machine.on(Input::Ended(Ended::Busy), now),
+            Err(e) => self
+                .machine
+                .on(Input::Ended(Ended::Failed(e.to_string())), now),
+        }
+        self.report.show(self.machine.state().clone());
+    }
+
+    /// The conflicts still waiting in the store, so they outlive the thread. A path that is
+    /// both copied and marked was last a local delete, so its mark wins.
+    fn outstanding(&self) -> Vec<ConflictFile> {
+        let Ok(store) = ConflictStore::for_workspace(&self.paths, &self.binding.dir) else {
+            return Vec::new();
+        };
+        // Sorted by path, with marks written last so they replace a copy.
+        let mut left = BTreeMap::new();
+        for p in store.copies().unwrap_or_default() {
+            left.insert(p, ConflictKind::BothChanged);
+        }
+        for p in store.deleted().unwrap_or_default() {
+            left.insert(p, ConflictKind::DeletedLocally);
+        }
+        left.into_iter()
+            .map(|(path, fallback)| {
+                let kind = self.kinds.get(&path).copied().unwrap_or(fallback);
+                ConflictFile { path, kind }
+            })
+            .collect()
     }
 
     /// Carries out one cycle, then recounts the unpushed commits and reports how it ended.
@@ -342,18 +406,35 @@ impl Driver {
         if let Ok(n) = unpushed(&self.binding, &self.git) {
             self.report.unpushed = n;
         }
+        // Conflicts left from an earlier cycle or run still need a choice.
+        let left = if matches!(
+            ended,
+            Ended::Synced | Ended::ReadOnly | Ended::Conflicted(_)
+        ) {
+            self.outstanding()
+        } else {
+            Vec::new()
+        };
+        let ended = if left.is_empty() {
+            ended
+        } else {
+            Ended::Conflicted(left)
+        };
         self.machine.on(Input::Ended(ended), Instant::now());
         self.report.show(self.machine.state().clone());
     }
 
     /// How the cycle ended, and the git outcome when one ran to the end.
     fn carry_out(&mut self, cycle: Cycle) -> (Ended, Option<SyncOutcome>) {
+        if let Err(GitError::Missing) = git_available_with(&self.git) {
+            return (Ended::GitMissing, None);
+        }
         let binding = match cycle {
             Cycle::CommitOnly => {
                 self.report.show(SyncState::Committing);
                 return match self.commit_only() {
                     Ok(()) => (Ended::SignedOut, None),
-                    Err(e) => (Ended::Failed(e.to_string()), None),
+                    Err(e) => (ended_by(e), None),
                 };
             }
             Cycle::PullOnly => self.binding.clone().with_role(Role::Read),
@@ -373,12 +454,17 @@ impl Driver {
                 let ended = match &outcome {
                     SyncOutcome::Synced => Ended::Synced,
                     SyncOutcome::ReadOnly | SyncOutcome::ReadOnlyBlocked(_) => Ended::ReadOnly,
-                    SyncOutcome::Conflicted(files) => Ended::Conflicted(files.clone()),
+                    SyncOutcome::Conflicted(files) => {
+                        for f in files {
+                            self.kinds.insert(f.path.clone(), f.kind);
+                        }
+                        Ended::Conflicted(files.clone())
+                    }
                     SyncOutcome::Refused(refusal) => Ended::Refused(refusal.clone()),
                 };
                 (ended, Some(outcome))
             }
-            Err(e) => (Ended::Failed(e.to_string()), None),
+            Err(e) => (ended_by(e), None),
         }
     }
 
@@ -441,5 +527,19 @@ impl Driver {
             ),
             Err(_) => Ended::Offline,
         }
+    }
+}
+
+/// How a cycle that failed with `e` ends: a held lock or a racing server is worth a retry, and
+/// a git that is gone waits for one.
+fn ended_by(e: SyncError) -> Ended {
+    match e {
+        SyncError::Git(GitError::Missing) => Ended::GitMissing,
+        SyncError::Busy { .. } | SyncError::Raced { .. } => Ended::Busy,
+        other @ (SyncError::Git(_)
+        | SyncError::WrongBranch { .. }
+        | SyncError::Diverged { .. }
+        | SyncError::BranchGone { .. }
+        | SyncError::Io(_)) => Ended::Failed(other.to_string()),
     }
 }
