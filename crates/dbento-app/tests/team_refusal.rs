@@ -4,7 +4,8 @@ use dbento_app::explorer::part_id;
 use dbento_app::team::TeamView;
 use dbento_app::team_view::refusal_title;
 use dbento_core::{SyncState, parse_refusal};
-use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{AppContext as _, TestAppContext};
 
 use crate::support::team::{show, team_fx, team_started, wait_view};
 use crate::support::{click_id, label_of, present};
@@ -61,6 +62,18 @@ fn a_real_refusal_lists_each_finding_and_the_count_left(cx: &mut TestAppContext)
         Some("and 3 more")
     );
     assert!(!present(cx, s.win, part_id("team-refusal-row", "3")));
+    // The committed value never reaches the panel: findings name the rule, not the text.
+    let said: Vec<String> = cx
+        .update_window(s.win, |_, w, _| {
+            w.within("team-refusal")
+                .elements()
+                .iter()
+                .filter_map(|e| e.label().map(str::to_owned))
+                .collect()
+        })
+        .unwrap();
+    assert!(!said.is_empty(), "the panel names nothing");
+    assert!(said.iter().all(|t| !t.contains("hunter2")), "{said:?}");
     assert_eq!(
         label_of(cx, s.win, "team-status").as_deref(),
         Some("Push refused")

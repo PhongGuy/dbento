@@ -5,9 +5,8 @@ use dbento_core::{Refusal, SyncState};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, ElementId, Entity, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TestSupportExt as _, div, px,
+    AnyElement, App, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Role,
+    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, px,
 };
 
 use crate::explorer::part_id;
@@ -119,7 +118,7 @@ pub fn refusal_panel(session: &Entity<TeamSession>, cx: &App) -> Option<AnyEleme
         .rows()
         .into_iter()
         .enumerate()
-        .map(|(ix, row)| label_keyed(part_id("team-refusal-row", &ix.to_string()), row, fg));
+        .map(|(ix, row)| label(part_id("team-refusal-row", &ix.to_string()), row, fg));
     let session = session.clone();
     let retry = ui::secondary(Button::new("team-refusal-retry"))
         .small()
@@ -153,18 +152,4 @@ pub fn refusal_panel(session: &Entity<TeamSession>, cx: &App) -> Option<AnyEleme
         )
         .child(retry);
     Some(panel.into_any_element())
-}
-
-// The banner label under a keyed id, since rows are numbered rather than named.
-fn label_keyed(id: ElementId, says: String, color: Hsla) -> AnyElement {
-    let says = SharedString::from(says);
-    div()
-        .id(id)
-        .min_w_0()
-        .text_color(color)
-        .role(Role::Label)
-        .aria_label(says.clone())
-        .test_support()
-        .child(says)
-        .into_any_element()
 }

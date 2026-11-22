@@ -5,9 +5,9 @@ use dbento_core::update::release_notes_url;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Entity, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Role,
-    SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div,
-    px,
+    AnyElement, App, ElementId, Entity, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TestSupportExt as _, Window, div, px,
 };
 
 use crate::shell::Shell;
@@ -102,7 +102,7 @@ pub fn banner(shell: &Entity<Shell>, _window: &mut Window, cx: &mut App) -> Opti
 }
 
 /// A banner text with its own id, read out by its text.
-pub(crate) fn label(id: &'static str, says: String, color: Hsla) -> AnyElement {
+pub(crate) fn label(id: impl Into<ElementId>, says: String, color: Hsla) -> AnyElement {
     let says = SharedString::from(says);
     // The text may shrink below its one-line width, so a narrow row wraps it.
     div()
