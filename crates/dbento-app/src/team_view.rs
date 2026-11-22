@@ -190,16 +190,12 @@ pub fn conflict_banners(
         .iter()
         .map(|file| {
             let path = file.path.clone();
-            // Reload keeps the server's file already on disk, so the saved copy is dropped and
-            // open tabs reread it; Keep mine puts the copy back and pushes it.
+            // Reload keeps the server's file already on disk and drops the saved copy; Keep
+            // mine puts the copy back and pushes it. Either way the settle rereads open tabs.
             let reload = {
-                let (shell, session, path) = (shell.clone(), session.clone(), path.clone());
-                button(part_id("team-conflict-reload", &path), "Reload").on_click(
-                    move |_, window, cx| {
-                        session.read(cx).take_theirs(&path);
-                        shell.update(cx, |s, cx| s.workspace_files_changed(window, cx));
-                    },
-                )
+                let (session, path) = (session.clone(), path.clone());
+                button(part_id("team-conflict-reload", &path), "Reload")
+                    .on_click(move |_, _, cx| session.read(cx).take_theirs(&path))
             };
             let keep = {
                 let (session, path) = (session.clone(), path.clone());

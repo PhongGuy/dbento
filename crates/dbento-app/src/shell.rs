@@ -2784,10 +2784,11 @@ impl Shell {
                 self.start_watch(&real, window, cx);
                 self.team = team::session_for(&real, cx).map(|session| {
                     let redraw = cx.observe(&session, |_, _, cx| cx.notify());
-                    // Settling a conflict writes the winning side, which open tabs reread.
+                    // Settling a conflict writes the winning side; the sync made that change, so
+                    // only the tabs reread it.
                     let settled =
                         cx.subscribe_in(&session, window, |this, _, _: &TeamEvent, window, cx| {
-                            this.workspace_files_changed(window, cx);
+                            this.reread_workspace_files(window, cx);
                         });
                     (session, [redraw, settled])
                 });
@@ -2976,6 +2977,14 @@ impl Shell {
         }
         if let Some((team, _)) = &self.team {
             team.read(cx).changed();
+        }
+        self.reread_workspace_files(window, cx);
+    }
+
+    // The reread alone, for changes the sync made itself and so must not be told about.
+    fn reread_workspace_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.workspace.is_none() {
+            return;
         }
         if self.reload_running {
             self.reload_again = true;
@@ -3203,7 +3212,7 @@ impl Shell {
         let team = team.downgrade();
         cx.spawn_in(window, async move |this, cx| {
             let answer = reply.recv().await;
-            let _ = this.update_in(cx, |shell, window, cx| {
+            let _ = this.update_in(cx, |_, _, cx| {
                 let Some(team) = team.upgrade() else {
                     return;
                 };
@@ -3212,10 +3221,7 @@ impl Shell {
                     Some(SyncState::Conflicted(files)) if files.iter().any(|f| f.path == path)
                 );
                 match answer {
-                    Ok(1) if still => {
-                        team.read(cx).take_theirs(&path);
-                        shell.workspace_files_changed(window, cx);
-                    }
+                    Ok(1) if still => team.read(cx).take_theirs(&path),
                     Ok(2) if still => team.read(cx).keep_mine(&path),
                     _ => {}
                 }

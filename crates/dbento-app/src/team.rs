@@ -112,7 +112,7 @@ impl From<SyncStatus> for TeamView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TeamEvent {
-    /// A conflicted file was settled, so the side that won is now on disk.
+    /// A file left the conflict list, so what is on disk may have changed under open tabs.
     Settled,
 }
 

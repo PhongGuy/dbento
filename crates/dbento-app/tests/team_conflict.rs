@@ -1,15 +1,18 @@
 //! The conflict banner: the server's side is on disk, mine is saved; Reload, Keep mine and
 //! Compare each settle the file.
 use dbento_app::explorer::part_id;
+use dbento_app::team::TeamView;
 use dbento_app::team_view::conflict_text;
 use dbento_app::workspace_reload::{disk_diff, labelled_diff};
-use dbento_core::{ConflictKind, SyncState};
+use dbento_core::{ConflictKind, SyncState, parse_refusal};
 use gpui_kit::{AppContext as _, TestAppContext};
 
-use crate::support::team::{TeamFx, TeamStarted, team_fx, team_started, wait_view};
+use crate::support::team::{TeamFx, TeamStarted, show, team_fx, team_started, view_of, wait_view};
 use crate::support::{click_id, label_of, present, wait_real};
 
 const A: &str = "queries/a.sql";
+const REFUSAL: &str =
+    "remote: potluck-reject secret_value refs/heads/main queries/a.sql password\n";
 
 fn conflicted(cx: &mut TestAppContext) -> (TeamFx, TeamStarted) {
     let fx = team_fx("write");
@@ -163,4 +166,24 @@ fn keep_mine_rereads_an_open_tab_of_the_file(cx: &mut TestAppContext) {
             .read_with(cx, |sh, cx| sh.tab().unwrap().read(cx).sql(cx))
             == "select 2;\n"
     });
+}
+
+#[gpui_kit::test]
+fn leaving_the_conflict_list_rereads_without_waking_the_sync(cx: &mut TestAppContext) {
+    // A refusal shown over the conflict empties the list; the reread it causes must not
+    // reach the driver, or its next cycle would report over the held state.
+    let (_fx, s) = conflicted(cx);
+    let refused = TeamView {
+        state: SyncState::Refused(parse_refusal(REFUSAL).unwrap()),
+        unpushed: 1,
+        last_synced: None,
+        note: None,
+    };
+    show(cx, &s, refused.clone());
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while std::time::Instant::now() < until {
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(view_of(cx, &s), Some(refused), "the sync was woken");
 }
