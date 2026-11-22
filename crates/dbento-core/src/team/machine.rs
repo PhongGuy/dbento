@@ -72,22 +72,14 @@ pub(crate) enum Input {
     Retry,
     /// The server's branch moved.
     RemoteMoved,
-    #[cfg_attr(not(test), expect(dead_code, reason = "the notice reader sends it"))]
     /// The notice stream opened.
     StreamUp,
-    #[cfg_attr(not(test), expect(dead_code, reason = "the notice reader sends it"))]
     /// The notice stream showed it is still open.
     StreamAlive,
-    #[expect(dead_code, reason = "the notice reader sends it")]
     /// The notice stream closed.
     StreamDown,
-    #[cfg_attr(not(test), expect(dead_code, reason = "the notice reader sends it"))]
     /// The notice stream was refused the token.
     SignedOut,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "conflict and role handling send it")
-    )]
     /// The account's role changed.
     Role(Role),
     /// Conflicts were resolved; these are left.

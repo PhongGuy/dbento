@@ -4,12 +4,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::account::{ServerUrl, TeamAccount, TimedTokenStore, TokenStore};
+use super::account::{ServerUrl, TeamAccount, TeamToken, TimedTokenStore, TokenStore};
+use super::api::PotluckClient;
 use super::conflicts::ConflictStore;
-use super::flows::{Resolution, TeamResolveError, settle_path, stamp_synced};
+use super::flows::{
+    GitFailure, Resolution, TeamResolveError, diagnose, refresh_role, settle_path, stamp_synced,
+};
 use super::machine::{Action, Cycle, Ended, Input, Machine, SyncState, SyncStatus, Timing};
+use super::notice::{Notice, ReaderConfig, spawn_reader};
 use super::team_file::TeamFile;
 use super::{Binding, Role, SyncOutcome, git_text, sync_steps};
 use crate::git::{
@@ -118,6 +123,8 @@ enum Msg {
     Retry,
     KeepMine(String),
     TakeTheirs(String),
+    /// From the reader thread.
+    Notice(Notice),
     Stop,
 }
 
@@ -161,22 +168,34 @@ impl TeamSync {
         let server = ServerUrl::parse(&binding.server).map_err(|e| TeamError::BadServer(e.0))?;
         let account = TeamAccount::new(server, binding.username.as_str());
         let file = TeamFile::new(&paths.team);
-        let last_synced = file
-            .load()
-            .ok()
+        let data = file.load().ok();
+        let last_synced = data
+            .as_ref()
             .and_then(|d| d.binding_for(&binding.dir))
             .and_then(|(_, rec)| rec.last_synced)
             .map(|secs| UNIX_EPOCH + Duration::from_secs(secs));
+        let insecure_http = data
+            .as_ref()
+            .and_then(|d| d.account(&account.server, Some(&account.username)))
+            .is_some_and(|rec| rec.insecure_http);
         let cancel = CancelFlag::new();
         let timing = Timing {
             debounce: config.debounce,
             poll_every: config.poll_every,
             silence: config.silence,
         };
+        let (tx, rx) = mpsc::channel();
         let driver = Driver {
             machine: Machine::new(binding.role, timing, Instant::now()),
             binding,
             account,
+            insecure_http,
+            reader_config: ReaderConfig {
+                backoff_min: config.backoff_min,
+                backoff_max: config.backoff_max,
+            },
+            reader: None,
+            notices: tx.clone(),
             tokens: TimedTokenStore::new(tokens, config.token_timeout),
             paths: paths.clone(),
             file,
@@ -190,7 +209,6 @@ impl TeamSync {
                 note: None,
             },
         };
-        let (tx, rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel::<()>();
         std::thread::Builder::new()
             .name("dbento-team-sync".to_owned())
@@ -268,11 +286,22 @@ impl Report {
     }
 }
 
+/// The running reader: dropping `stop` ends it at its next wait. It is never joined.
+struct Reader {
+    _stop: Sender<()>,
+    handle: JoinHandle<()>,
+}
+
 /// The thread's side: the machine and everything a cycle or poll needs.
 struct Driver {
     machine: Machine,
     binding: Binding,
     account: TeamAccount,
+    insecure_http: bool,
+    reader_config: ReaderConfig,
+    reader: Option<Reader>,
+    /// What a new reader sends its notices through.
+    notices: Sender<Msg>,
     tokens: TimedTokenStore,
     paths: StatePaths,
     file: TeamFile,
@@ -287,6 +316,7 @@ impl Driver {
     /// so a stop is seen between steps and never waits behind a debounce.
     fn run(mut self, rx: &Receiver<Msg>) {
         self.report.show(self.machine.state().clone());
+        self.spawn_reader();
         loop {
             loop {
                 match rx.try_recv() {
@@ -325,7 +355,8 @@ impl Driver {
                 | Msg::Flush
                 | Msg::Retry
                 | Msg::KeepMine(_)
-                | Msg::TakeTheirs(_)) => self.take(msg),
+                | Msg::TakeTheirs(_)
+                | Msg::Notice(_)) => self.take(msg),
             }
         }
     }
@@ -342,13 +373,124 @@ impl Driver {
         let input = match msg {
             Msg::Changed => Input::Changed,
             Msg::Flush => Input::Flush,
-            Msg::Retry => Input::Retry,
+            Msg::Retry => {
+                if *self.machine.state() == SyncState::SignedOut {
+                    self.spawn_reader();
+                }
+                Input::Retry
+            }
             Msg::KeepMine(rel) => return self.settle(&rel, Resolution::KeepMine),
             Msg::TakeTheirs(rel) => return self.settle(&rel, Resolution::TakeTheirs),
+            Msg::Notice(notice) => return self.notice(notice),
             Msg::Stop => return,
         };
         self.machine.on(input, Instant::now());
         self.report.show(self.machine.state().clone());
+    }
+
+    /// Starts a notice reader, unless one is still running or there is no token. A reader stuck
+    /// on a silent socket cannot be stopped, so none is started beside it; polls cover the gap.
+    fn spawn_reader(&mut self) {
+        if self
+            .reader
+            .as_ref()
+            .is_some_and(|r| !r.handle.is_finished())
+        {
+            return;
+        }
+        self.reader = None;
+        let Ok(Some(token)) = self.tokens.get(&self.account) else {
+            return;
+        };
+        let Ok(client) = PotluckClient::new(&self.account.server, self.insecure_http) else {
+            return;
+        };
+        let (stop, stop_rx) = mpsc::channel();
+        let out = self.notices.clone();
+        let spawned = spawn_reader(
+            client,
+            token,
+            &self.binding.team,
+            &self.binding.workspace,
+            self.reader_config,
+            stop_rx,
+            move |n| out.send(Msg::Notice(n)).is_ok(),
+        );
+        if let Ok(handle) = spawned {
+            self.reader = Some(Reader {
+                _stop: stop,
+                handle,
+            });
+        }
+    }
+
+    /// Feeds one notice to the machine. An opened stream rechecks the role, and a ref notice
+    /// counts only for the bound branch at a tip other than the one last fetched.
+    fn notice(&mut self, notice: Notice) {
+        let now = Instant::now();
+        match notice {
+            Notice::Connected => {
+                self.machine.on(Input::StreamUp, now);
+                if let Ok(rec) = refresh_role(&self.tokens, &self.paths, &self.binding.dir) {
+                    let role = rec.to_binding(&self.binding.dir).role;
+                    if role != self.binding.role {
+                        self.binding.role = role;
+                        self.machine.on(Input::Role(role), now);
+                    }
+                }
+            }
+            Notice::Alive => self.machine.on(Input::StreamAlive, now),
+            Notice::Ref { git_ref, sha } => {
+                self.machine.on(Input::StreamAlive, now);
+                let ours = git_ref == format!("refs/heads/{}", self.binding.branch);
+                if ours && self.tracked_tip().as_deref() != Some(sha.as_str()) {
+                    self.machine.on(Input::RemoteMoved, now);
+                }
+            }
+            Notice::Down => self.machine.on(Input::StreamDown, now),
+            Notice::SignedOut => self.machine.on(Input::SignedOut, now),
+        }
+        self.report.show(self.machine.state().clone());
+    }
+
+    /// Where the bound branch was at the last fetch.
+    fn tracked_tip(&self) -> Option<String> {
+        let tracked = format!("refs/remotes/origin/{}", self.binding.branch);
+        git_text(
+            &["rev-parse", "-q", "--verify", tracked.as_str()],
+            &self.binding,
+            &self.git,
+        )
+        .ok()
+        .map(|s| s.trim().to_owned())
+    }
+
+    /// Asks the server why git failed: a rejected token signs out, a lost write role demotes
+    /// the folder with its commits kept, and lost access or anything unexplained fails.
+    fn diagnosed(&mut self, e: SyncError, token: &TeamToken) -> Ended {
+        let SyncError::Git(git) = e else {
+            return ended_by(e);
+        };
+        if let GitError::Missing = git {
+            return Ended::GitMissing;
+        }
+        let failure = PotluckClient::new(&self.account.server, self.insecure_http)
+            .map_or(GitFailure::Other, |client| {
+                diagnose(&self.tokens, &self.paths, &self.binding.dir, &client, token)
+            });
+        match failure {
+            GitFailure::SignedOut => Ended::SignedOut,
+            GitFailure::Demoted(_) => {
+                self.binding.role = Role::Read;
+                self.machine.on(Input::Role(Role::Read), Instant::now());
+                Ended::ReadOnly
+            }
+            GitFailure::NoAccess => Ended::Failed(
+                "you no longer have access to this workspace on the server".to_owned(),
+            ),
+            GitFailure::Offline => Ended::Offline,
+            GitFailure::Other => Ended::Failed(SyncError::Git(git).to_string()),
+        }
     }
 
     /// Settles one conflicted path under the repo lock. A held lock reports busy and writes
@@ -356,12 +498,15 @@ impl Driver {
     fn settle(&mut self, rel: &str, choice: Resolution) {
         let now = Instant::now();
         match settle_path(&self.paths, &self.binding.dir, rel, choice, &self.git) {
-            Ok(()) | Err(TeamResolveError::NoSavedCopy(_)) => {
-                self.machine.on(Input::Settled(self.outstanding()), now);
-                if let Resolution::KeepMine = choice {
-                    self.machine.on(Input::Flush, now);
+            Ok(()) | Err(TeamResolveError::NoSavedCopy(_)) => match self.outstanding() {
+                Ok(left) => {
+                    self.machine.on(Input::Settled(left), now);
+                    if let Resolution::KeepMine = choice {
+                        self.machine.on(Input::Flush, now);
+                    }
                 }
-            }
+                Err(why) => self.machine.on(Input::Ended(Ended::Failed(why)), now),
+            },
             Err(TeamResolveError::Busy) => self.machine.on(Input::Ended(Ended::Busy), now),
             Err(e) => self
                 .machine
@@ -371,25 +516,27 @@ impl Driver {
     }
 
     /// The conflicts still waiting in the store, so they outlive the thread. A path that is
-    /// both copied and marked was last a local delete, so its mark wins.
-    fn outstanding(&self) -> Vec<ConflictFile> {
-        let Ok(store) = ConflictStore::for_workspace(&self.paths, &self.binding.dir) else {
-            return Vec::new();
-        };
+    /// both copied and marked was last a local delete, so its mark wins. A store that cannot be
+    /// read is an error, never "no conflicts".
+    fn outstanding(&self) -> Result<Vec<ConflictFile>, String> {
+        let unreadable = |e: std::io::Error| format!("cannot read the conflict copies: {e}");
+        let store =
+            ConflictStore::for_workspace(&self.paths, &self.binding.dir).map_err(unreadable)?;
         // Sorted by path, with marks written last so they replace a copy.
         let mut left = BTreeMap::new();
-        for p in store.copies().unwrap_or_default() {
+        for p in store.copies().map_err(unreadable)? {
             left.insert(p, ConflictKind::BothChanged);
         }
-        for p in store.deleted().unwrap_or_default() {
+        for p in store.deleted().map_err(unreadable)? {
             left.insert(p, ConflictKind::DeletedLocally);
         }
-        left.into_iter()
+        Ok(left
+            .into_iter()
             .map(|(path, fallback)| {
                 let kind = self.kinds.get(&path).copied().unwrap_or(fallback);
                 ConflictFile { path, kind }
             })
-            .collect()
+            .collect())
     }
 
     /// Carries out one cycle, then recounts the unpushed commits and reports how it ended.
@@ -407,18 +554,17 @@ impl Driver {
             self.report.unpushed = n;
         }
         // Conflicts left from an earlier cycle or run still need a choice.
-        let left = if matches!(
+        let ended = if matches!(
             ended,
             Ended::Synced | Ended::ReadOnly | Ended::Conflicted(_)
         ) {
-            self.outstanding()
+            match self.outstanding() {
+                Ok(left) if left.is_empty() => ended,
+                Ok(left) => Ended::Conflicted(left),
+                Err(why) => Ended::Failed(why),
+            }
         } else {
-            Vec::new()
-        };
-        let ended = if left.is_empty() {
             ended
-        } else {
-            Ended::Conflicted(left)
         };
         self.machine.on(Input::Ended(ended), Instant::now());
         self.report.show(self.machine.state().clone());
@@ -464,7 +610,7 @@ impl Driver {
                 };
                 (ended, Some(outcome))
             }
-            Err(e) => (ended_by(e), None),
+            Err(e) => (self.diagnosed(e, &token), None),
         }
     }
 
@@ -506,15 +652,7 @@ impl Driver {
             .team_env(&self.binding.public_url, token.expose());
         match remote_tip(&self.binding, &opts) {
             Ok(Some(tip)) => {
-                let tracked = format!("refs/remotes/origin/{}", self.binding.branch);
-                let known = git_text(
-                    &["rev-parse", "-q", "--verify", tracked.as_str()],
-                    &self.binding,
-                    &opts,
-                )
-                .ok()
-                .map(|s| s.trim().to_owned());
-                if known.as_deref() != Some(tip.as_str()) {
+                if self.tracked_tip().as_deref() != Some(tip.as_str()) {
                     self.machine.on(Input::RemoteMoved, Instant::now());
                 }
                 Ended::PollSame
@@ -525,7 +663,7 @@ impl Driver {
                 }
                 .to_string(),
             ),
-            Err(_) => Ended::Offline,
+            Err(e) => self.diagnosed(e, &token),
         }
     }
 }

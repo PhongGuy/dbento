@@ -379,3 +379,198 @@ fn a_refusal_holds_until_the_next_change_and_the_fix_drops_the_secret() {
         "the refused blob reached the server"
     );
 }
+
+impl Seen {
+    pub fn count(&self, from: usize, pred: impl Fn(&SyncStatus) -> bool) -> usize {
+        self.0.lock().unwrap()[from..]
+            .iter()
+            .filter(|s| pred(s))
+            .count()
+    }
+}
+
+impl Live {
+    /// Pushes go to the stub's smart-HTTP address, which answers `reply`; fetches stay on file://.
+    pub fn push_to_stub(&self, reply: Reply) {
+        self.stub
+            .reply("GET", "/git/acme/shared.git/info/refs", reply);
+        self.sb.git(
+            &self.ws,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                &format!("{}/git/acme/shared.git", self.stub.uri()),
+            ],
+        );
+    }
+}
+
+fn ref_frame(branch: &str, sha: &str) -> String {
+    format!("event: ref\ndata: {{\"ref\":\"refs/heads/{branch}\",\"sha\":\"{sha}\"}}\n\n")
+}
+
+#[test]
+fn a_ref_notice_pulls_the_teammates_change_and_another_branch_does_not() {
+    let l = live("write");
+    let _sync = l.start(
+        l.config()
+            .poll_every(Duration::from_secs(600))
+            .silence(Duration::from_secs(600)),
+    );
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    assert!(
+        eventually(|| l.stub.hits("GET", EVENTS) >= 1),
+        "the reader connected"
+    );
+    assert!(
+        l.stub
+            .head("GET", EVENTS)
+            .unwrap()
+            .contains("authorization: bearer plk_"),
+        "the reader sent the token"
+    );
+    let from = l.seen.mark();
+    l.stub.send(&ref_frame("dev", &"1".repeat(40)));
+    l.sb.teammate(&l.mate, "dbento.toml", Some("name = \"theirs\"\n"));
+    l.stub.send(&ref_frame("main", &l.sb.rev(&l.bare, "main")));
+    assert!(
+        eventually(|| read(&l.ws, "dbento.toml").as_deref() == Some("name = \"theirs\"\n")),
+        "the main notice pulled"
+    );
+    // Frames arrive in order, so the main pull ran after the dev frame was handled.
+    assert_eq!(
+        l.seen.count(from, |s| s.state == SyncState::Pulling),
+        1,
+        "only the main notice pulled"
+    );
+}
+
+#[test]
+fn a_closed_stream_reconnects_and_a_401_on_reconnect_signs_out_for_good() {
+    let l = live("write");
+    let _sync = l.start(l.config());
+    assert!(
+        eventually(|| l.stub.hits("GET", EVENTS) >= 1),
+        "the reader connected"
+    );
+    l.stub.close_streams();
+    assert!(
+        eventually(|| l.stub.hits("GET", EVENTS) >= 2),
+        "reconnected after a close"
+    );
+    let from = l.seen.mark();
+    l.stub.reply("GET", EVENTS, Reply::Status(401));
+    l.stub.close_streams();
+    l.seen.wait(from, |s| s.state == SyncState::SignedOut);
+    let hits = l.stub.hits("GET", EVENTS);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(l.stub.hits("GET", EVENTS), hits, "the reader ended");
+}
+
+#[test]
+fn a_silent_stream_falls_back_to_polling() {
+    let l = live("write");
+    let _sync = l.start(
+        l.config()
+            .poll_every(Duration::from_millis(150))
+            .silence(Duration::from_millis(300)),
+    );
+    assert!(
+        eventually(|| l.stub.hits("GET", EVENTS) >= 1),
+        "the reader connected"
+    );
+    l.sb.teammate(&l.mate, "dbento.toml", Some("name = \"theirs\"\n"));
+    assert!(
+        eventually(|| read(&l.ws, "dbento.toml").as_deref() == Some("name = \"theirs\"\n")),
+        "a poll pulled"
+    );
+    assert_eq!(
+        l.stub.hits("GET", EVENTS),
+        1,
+        "the silent stream stayed open"
+    );
+}
+
+#[test]
+fn a_git_401_confirmed_by_me_signs_out_and_saves_stay_local_until_retry() {
+    let l = live("write");
+    let sync = l.start(l.config());
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    l.push_to_stub(Reply::Status(401));
+    l.stub.reply("GET", "/api/v1/me", Reply::Status(401));
+    let from = l.seen.mark();
+    write(&l.ws, "queries/b.sql", "select 2;\n");
+    sync.flush();
+    l.seen.wait(from, |s| s.state == SyncState::SignedOut);
+    let from = l.seen.mark();
+    write(&l.ws, "queries/c.sql", "select 3;\n");
+    sync.flush();
+    l.seen
+        .wait(from, |s| s.state == SyncState::SignedOut && s.unpushed == 2);
+    assert_eq!(
+        l.sb.git(&l.ws, &["status", "--porcelain"]),
+        "",
+        "the save was committed locally"
+    );
+    assert_eq!(
+        l.origin_show("queries/c.sql"),
+        None,
+        "nothing pushed while signed out"
+    );
+    l.stub
+        .reply("GET", "/api/v1/me", Reply::Json(200, me_json()));
+    l.sb.git(&l.ws, &["remote", "set-url", "--push", "origin", &l.url]);
+    let from = l.seen.mark();
+    sync.retry();
+    l.seen.wait(from, |s| s.state == SyncState::Synced);
+    assert_eq!(
+        l.origin_show("queries/c.sql").as_deref(),
+        Some("select 3;\n"),
+        "the retry pushed the saves"
+    );
+}
+
+#[test]
+fn a_push_403_after_a_demotion_lands_read_only_with_the_save_kept() {
+    let l = live("write");
+    let sync = l.start(l.config());
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    l.push_to_stub(Reply::Status(403));
+    l.stub.reply(
+        "GET",
+        "/api/v1/workspaces",
+        Reply::Json(200, l.listed("read")),
+    );
+    let from = l.seen.mark();
+    write(&l.ws, "queries/b.sql", "select 2;\n");
+    sync.flush();
+    assert_eq!(
+        l.seen
+            .wait(from, |s| s.state == SyncState::ReadOnly)
+            .unpushed,
+        1,
+        "the save is kept as a local commit"
+    );
+    assert_eq!(
+        l.origin_show("queries/b.sql"),
+        None,
+        "nothing reached the server"
+    );
+}
+
+#[test]
+fn an_unreadable_conflict_store_fails_instead_of_showing_synced() {
+    let l = live("write");
+    let sync = l.start(l.config());
+    l.seen.wait(0, |s| s.state == SyncState::Synced);
+    // A file where the store's folder belongs makes every listing fail.
+    let _ = std::fs::remove_dir_all(&l.paths.team_conflicts);
+    std::fs::write(&l.paths.team_conflicts, "").unwrap();
+    let from = l.seen.mark();
+    write(&l.ws, "queries/b.sql", "select 2;\n");
+    sync.flush();
+    l.seen
+        .wait(from, |s| matches!(s.state, SyncState::Failed(_)));
+}

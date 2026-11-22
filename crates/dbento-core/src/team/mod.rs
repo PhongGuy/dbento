@@ -6,10 +6,6 @@ mod conflicts;
 mod driver;
 mod flows;
 mod machine;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the sync driver is the reader thread's caller")
-)]
 mod notice;
 mod team_file;
 mod toml_merge;

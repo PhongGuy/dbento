@@ -246,7 +246,6 @@ impl PotluckClient {
 
     /// `GET /api/v1/workspaces/{team}/{workspace}/events`: the workspace's notice stream, held
     /// open with no size limit, so its reader must bound each line itself.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the sync driver is its caller"))]
     pub(crate) fn open_events(
         &self,
         token: &TeamToken,
