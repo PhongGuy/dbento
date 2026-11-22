@@ -240,3 +240,10 @@ fn settings_resolve_the_region_credentials_and_endpoint_origin() {
         ("us-east-1", "AKIDENV", None)
     );
 }
+
+#[test]
+fn a_deeply_nested_blob_endpoint_has_no_origin_and_does_not_crash() {
+    // A shared workspace can carry any endpoint text; a nested blob: chain once overflowed the stack.
+    let endpoint = format!("{}http://h/", "blob:".repeat(10_000));
+    assert_eq!(endpoint_origin(&endpoint), None);
+}
