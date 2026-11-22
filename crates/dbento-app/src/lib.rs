@@ -69,6 +69,7 @@ pub mod statements;
 pub mod status_bar;
 pub mod tab_model;
 pub mod team;
+pub mod team_dialog;
 pub mod team_view;
 pub mod theme;
 pub mod tokio_bridge;

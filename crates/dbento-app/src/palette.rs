@@ -230,6 +230,8 @@ pub enum PaletteCommand {
     OpenWorkspace,
     /// Closes the workspace back to the welcome view.
     CloseWorkspace,
+    /// Signs in to a team server and clones one of its workspaces.
+    JoinTeamWorkspace,
     /// Shows or hides history.
     ToggleHistory,
     /// Shows or hides the row inspector.
@@ -246,7 +248,7 @@ pub enum PaletteCommand {
 
 impl PaletteCommand {
     /// Every command, in the order the Commands group lists them.
-    pub const ALL: [PaletteCommand; 20] = [
+    pub const ALL: [PaletteCommand; 21] = [
         Self::NewTab,
         Self::CloseTab,
         Self::SaveQuery,
@@ -261,6 +263,7 @@ impl PaletteCommand {
         Self::ReloadWorkspace,
         Self::OpenWorkspace,
         Self::CloseWorkspace,
+        Self::JoinTeamWorkspace,
         Self::ToggleHistory,
         Self::ToggleRowInspector,
         Self::CycleAppearance,
@@ -286,6 +289,7 @@ impl PaletteCommand {
             Self::ReloadWorkspace => "Reload dbento.toml",
             Self::OpenWorkspace => "Open workspace\u{2026}",
             Self::CloseWorkspace => "Close workspace",
+            Self::JoinTeamWorkspace => "Join team workspace\u{2026}",
             Self::ToggleHistory => "Toggle history",
             Self::ToggleRowInspector => "Toggle row inspector",
             Self::CycleAppearance => "Toggle appearance",
@@ -295,7 +299,7 @@ impl PaletteCommand {
         }
     }
 
-    /// The keymap action it stands for; None for `KeyboardShortcuts`.
+    /// The keymap action it stands for; None for `KeyboardShortcuts` and `JoinTeamWorkspace`.
     pub fn action(self) -> Option<Box<dyn Action>> {
         Some(match self {
             Self::NewTab => Box::new(keymap::NewTab),
@@ -317,7 +321,7 @@ impl PaletteCommand {
             Self::CycleAppearance => Box::new(CycleAppearance),
             Self::OpenSettings => Box::new(keymap::OpenSettings),
             Self::CheckForUpdates => Box::new(keymap::CheckForUpdates),
-            Self::KeyboardShortcuts => return None,
+            Self::KeyboardShortcuts | Self::JoinTeamWorkspace => return None,
         })
     }
 

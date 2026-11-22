@@ -88,6 +88,7 @@ use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
 use crate::team::{self, TeamEvent, TeamSession};
+use crate::team_dialog::{TeamDialog, TeamDialogEvent, TeamDialogMode, TeamField};
 use crate::team_view;
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
@@ -439,6 +440,8 @@ pub struct Shell {
     connection_form: Option<(Entity<ConnectionForm>, Subscription)>,
     // The open Settings dialog's view and its Close subscription.
     settings_view: Option<(Entity<SettingsView>, Subscription)>,
+    // The open team sign-in and join dialog and its event subscription.
+    team_dialog: Option<(Entity<TeamDialog>, Subscription)>,
     // The workspace the open form was built on; Save refuses once another is installed.
     form_base: Option<Arc<Workspace>>,
     // The running Test connection; dropping it abandons the attempt.
@@ -633,6 +636,7 @@ impl Shell {
             _inspector_events: inspector_events,
             connection_form: None,
             settings_view: None,
+            team_dialog: None,
             form_base: None,
             connection_test: None,
             approvals_waiting: Vec::new(),
@@ -996,6 +1000,11 @@ impl Shell {
     /// The open workspace, if any.
     pub fn workspace(&self) -> Option<&Arc<Workspace>> {
         self.workspace.as_ref()
+    }
+
+    /// The open team dialog, if any.
+    pub fn team_dialog(&self) -> Option<&Entity<TeamDialog>> {
+        self.team_dialog.as_ref().map(|(d, _)| d)
     }
 
     /// The open Settings dialog's view, if any.
@@ -1985,6 +1994,7 @@ impl Shell {
             C::ToggleRowInspector => self.toggle_inspector(cx),
             C::CycleAppearance => self.cycle_appearance(cx),
             C::OpenSettings => self.open_settings(window, cx),
+            C::JoinTeamWorkspace => self.open_team_dialog(TeamDialogMode::Join, window, cx),
             C::CheckForUpdates => updates::check_now(cx),
             // Like the `query-save` button: focus the editor so the action reaches the tab's
             // own handlers, whatever the dialog refocused on close.
@@ -4059,6 +4069,92 @@ impl Shell {
             // Focus inside the view so Escape reaches the dialog and the picker's own handler.
             focus.focus(window, cx);
         });
+    }
+
+    /// Opens the team dialog in `mode`; does nothing without installed team hooks or while
+    /// any other dialog is open. A join switches to the joined folder; a sign-in retries the
+    /// open workspace's held sync.
+    pub fn open_team_dialog(
+        &mut self,
+        mode: TeamDialogMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(hooks) = team::hooks(cx) else {
+            return;
+        };
+        if self.closing || self.team_dialog.is_some() || window.has_active_dialog(cx) {
+            return;
+        }
+        let view = cx.new(|cx| TeamDialog::new(mode, hooks, window, cx));
+        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
+            TeamDialogEvent::Close => this.close_team_dialog(window, cx),
+            TeamDialogEvent::SignedIn => {
+                this.close_team_dialog(window, cx);
+                if let Some(team) = this.team() {
+                    team.read(cx).retry();
+                }
+            }
+            TeamDialogEvent::Joined(folder) => {
+                let folder = folder.clone();
+                this.close_team_dialog(window, cx);
+                this.switch_workspace(folder, window, cx);
+            }
+        });
+        self.team_dialog = Some((view.clone(), events));
+        let shell = cx.weak_entity();
+        window.defer(cx, move |window, cx| {
+            // Another dialog may have opened since the call; it keeps the window.
+            if window.has_active_dialog(cx) {
+                let _ = shell.update(cx, |s, cx| s.drop_team_dialog(window, cx));
+                return;
+            }
+            let first = view.read(cx).input(TeamField::Server).focus_handle(cx);
+            window.open_dialog(cx, move |dialog, window, cx| {
+                let shell = shell.clone();
+                let muted = cx.theme().muted_foreground;
+                confirm::frame(dialog, px(520.), None, cx)
+                    .margin_top((content_size(window).height / 10.).max(px(64.)))
+                    .overlay_closable(false)
+                    .on_close(move |_, window, cx| {
+                        let _ = shell.update(cx, |s, cx| s.drop_team_dialog(window, cx));
+                    })
+                    .content({
+                        let view = view.clone();
+                        move |content, _, cx| {
+                            content.min_h_0().child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(confirm::title_row(
+                                        Some((Icons::FolderSync, muted)),
+                                        "Team workspace",
+                                        cx,
+                                    ))
+                                    .child(view.clone()),
+                            )
+                        }
+                    })
+            });
+            first.focus(window, cx);
+        });
+    }
+
+    fn close_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drop_team_dialog(window, cx) {
+            window.close_dialog(cx);
+        }
+    }
+
+    // Lets go of the dialog and its typed password and stops waiting on its call; true when
+    // one was open.
+    fn drop_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some((dialog, _)) = self.team_dialog.take() else {
+            return false;
+        };
+        let typed = dialog.read(cx).input(TeamField::Password).clone();
+        typed.update(cx, |s, cx| s.set_value("", window, cx));
+        true
     }
 
     // Reloads at once, then moves the form onto the new file so Save diffs against what is
