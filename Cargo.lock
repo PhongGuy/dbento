@@ -2637,6 +2637,7 @@ dependencies = [
  "rustix 1.1.6",
  "serde_core",
  "serde_json",
+ "tempfile",
  "testcontainers-modules",
  "tiberius",
  "tokio",

@@ -13,4 +13,5 @@ mod mongo_harness;
 mod mssql_harness;
 mod mysql_sweep;
 mod mysql_wire;
+mod potluck_stub;
 mod redis_harness;
