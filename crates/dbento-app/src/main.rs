@@ -7,6 +7,7 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::launch::{self, Launch, LaunchError};
@@ -14,7 +15,7 @@ use dbento_app::team::{self, TeamHooks};
 use dbento_core::paths::{STATE_DIR_VAR, StatePaths};
 use dbento_core::{
     KeychainStore, KeychainTokenStore, MemoryStore, MemoryTokenStore, SecretStore, TimedStore,
-    TokenStore,
+    TimedTokenStore, TokenStore,
 };
 use gpui_kit::AppContext;
 
@@ -79,9 +80,10 @@ fn main() {
                         (Arc::new(MemoryStore::new()), true)
                     }
                 };
-                // Team sign-ins fall back to memory the same way: they last until quit.
+                // Team tokens get the same timeout, since sign-in, join and sign-out read them
+                // outside the sync, and the same memory fallback lasting until quit.
                 let tokens: Arc<dyn TokenStore> = match tokens {
-                    Ok(k) => Arc::new(k),
+                    Ok(k) => Arc::new(TimedTokenStore::new(Arc::new(k), Duration::from_secs(10))),
                     Err(e) => {
                         eprintln!(
                             "dbento: keychain unavailable ({e}); team sign-ins last until quit"
