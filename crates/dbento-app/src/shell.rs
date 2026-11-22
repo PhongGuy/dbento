@@ -88,6 +88,7 @@ use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
 use crate::team::{self, TeamSession};
+use crate::team_view;
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 use crate::update_banner;
@@ -5117,7 +5118,14 @@ impl Shell {
             _ => None,
         };
         let idle = idle.as_ref().map(|(n, l)| (n.as_str(), l));
-        status_bar(tab.map(|t| (t, t.model().read(cx))), idle, self.closing, cx)
+        let team = self.team().map(|t| team_view::chip(t, cx));
+        status_bar(
+            tab.map(|t| (t, t.model().read(cx))),
+            idle,
+            self.closing,
+            team,
+            cx,
+        )
     }
 
     // The no-tab column: four start actions, each calling the same method as its key binding.
@@ -5578,6 +5586,7 @@ impl Render for Shell {
             .text_color(cx.theme().foreground)
             .child(self.title_bar(window, cx))
             .children(self.workspace_banner(cx))
+            .children(self.team().and_then(|t| team_view::refusal_panel(t, cx)))
             .children(update_banner::banner(&cx.entity(), window, cx))
             .child(
                 div().flex_1().min_h_0().flex().children(rail).child(
