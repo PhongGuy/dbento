@@ -9,12 +9,12 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    AccountRecord, ApiError, BindingRecord, ConflictStore, PotluckClient, RemoteWorkspace,
+    AccountRecord, ApiError, BindingRecord, ConflictStore, PotluckClient, RemoteWorkspace, Role,
     ServerUrl, SyncOutcome, TeamAccount, TeamFile, TeamFileError, TeamToken, TokenStore,
     public_url_of, sync_once,
 };
 use crate::git::run::{self, Reach};
-use crate::git::{CloneError, GitOptions, SyncError, clone, ensure_on_branch, set_up};
+use crate::git::{CloneError, GitOptions, SyncError, clone, ensure_on_branch, repo_lock, set_up};
 use crate::paths::StatePaths;
 use crate::secrets::SecretError;
 use crate::{SecretRename, Workspace, secret_renames};
@@ -467,6 +467,9 @@ pub enum TeamResolveError {
     /// Reading or writing the files failed.
     #[error("{0}")]
     Io(String),
+    /// Another sync held the repository lock for the whole wait; nothing was written.
+    #[error("another Dbento is syncing this workspace; try again")]
+    Busy,
     /// Keeping mine wrote the file back, but the sync after it failed.
     #[error(transparent)]
     Sync(FolderSyncError),
@@ -619,19 +622,32 @@ pub fn team_sync(
     };
 
     let before = Workspace::open(&folder).ok();
-    let outcome = match sync_once(&binding.to_binding(&folder), token.expose(), paths, base) {
-        Ok(outcome) => outcome,
-        Err(SyncError::Git(e)) => {
-            // Git cannot tell a rejected token from other failures; the API can.
-            let rejected = PotluckClient::new(&server, record.insecure_http)
-                .and_then(|client| client.me(&token));
-            return Err(match rejected {
-                Err(ApiError::Unauthenticated) => signed_out(),
-                Ok(_) | Err(_) => FolderSyncError::Sync(SyncError::Git(e)),
-            });
-        }
-        Err(e) => return Err(FolderSyncError::Sync(e)),
-    };
+    let (binding, outcome) =
+        match sync_once(&binding.to_binding(&folder), token.expose(), paths, base) {
+            Ok(outcome) => (binding, outcome),
+            Err(SyncError::Git(e)) => {
+                // Git cannot tell a rejected token or a lost write role from other failures; the
+                // API can. A demotion reruns the cycle once as a reader, so the save stays local.
+                let failure = PotluckClient::new(&server, record.insecure_http)
+                    .map_or(GitFailure::Other, |client| {
+                        diagnose(tokens, paths, &folder, &client, &token)
+                    });
+                match failure {
+                    GitFailure::SignedOut => return Err(signed_out()),
+                    GitFailure::NoAccess => return Err(FolderSyncError::NoAccess),
+                    GitFailure::Demoted(rec) => {
+                        match sync_once(&rec.to_binding(&folder), token.expose(), paths, base) {
+                            Ok(outcome) => (rec, outcome),
+                            Err(e) => return Err(FolderSyncError::Sync(e)),
+                        }
+                    }
+                    GitFailure::Offline | GitFailure::Other => {
+                        return Err(FolderSyncError::Sync(SyncError::Git(e)));
+                    }
+                }
+            }
+            Err(e) => return Err(FolderSyncError::Sync(e)),
+        };
     let after = Workspace::open(&folder).ok();
     let renames = match (&before, &after) {
         (Some(old), Some(new)) => secret_renames(old, new),
@@ -652,8 +668,43 @@ pub fn team_sync(
     })
 }
 
+/// What the server says about a git failure.
+pub(crate) enum GitFailure {
+    /// The server no longer accepts the token.
+    SignedOut,
+    /// The account may no longer push; the binding as now recorded.
+    Demoted(BindingRecord),
+    /// The workspace is gone from the account's list.
+    NoAccess,
+    /// The server cannot be reached.
+    Offline,
+    /// Nothing the server says explains it.
+    Other,
+}
+
+/// Asks the server why git failed for bound `folder`: `me` tells a rejected token or an
+/// unreachable server apart, then a role refresh tells a lost write role or lost access.
+pub(crate) fn diagnose(
+    tokens: &dyn TokenStore,
+    paths: &StatePaths,
+    folder: &Path,
+    client: &PotluckClient,
+    token: &TeamToken,
+) -> GitFailure {
+    match client.me(token) {
+        Err(ApiError::Unauthenticated) => return GitFailure::SignedOut,
+        Err(ApiError::Offline(_)) => return GitFailure::Offline,
+        Ok(_) | Err(_) => {}
+    }
+    match refresh_role(tokens, paths, folder) {
+        Ok(rec) if rec.to_binding(folder).role == Role::Read => GitFailure::Demoted(rec),
+        Err(RefreshError::NoAccess) => GitFailure::NoAccess,
+        Ok(_) | Err(_) => GitFailure::Other,
+    }
+}
+
 /// Records now as the folder's last sync, unless it was unbound meanwhile.
-fn stamp_synced(
+pub(crate) fn stamp_synced(
     file: &TeamFile,
     folder: &Path,
     mut binding: BindingRecord,
@@ -692,6 +743,29 @@ pub fn team_resolve(
     choice: Resolution,
     base: &GitOptions,
 ) -> Result<Option<FolderSync>, TeamResolveError> {
+    let data = TeamFile::new(&paths.team)
+        .load()
+        .map_err(|e| TeamResolveError::Io(e.to_string()))?;
+    let (folder, _) = data.binding_for(dir).ok_or(TeamResolveError::NotBound)?;
+    settle_path(paths, &folder, rel, choice, base)?;
+    // The lock is free again here, so the sync can take it for itself.
+    match choice {
+        Resolution::KeepMine => team_sync(tokens, paths, &folder, base)
+            .map(Some)
+            .map_err(TeamResolveError::Sync),
+        Resolution::TakeTheirs => Ok(None),
+    }
+}
+
+/// Settles `rel` of bound `folder` while holding the repo lock: keep mine writes the saved bytes
+/// back (or deletes for a mark); both drop the saved copy. The lock is released on return.
+pub(crate) fn settle_path(
+    paths: &StatePaths,
+    folder: &Path,
+    rel: &str,
+    choice: Resolution,
+    opts: &GitOptions,
+) -> Result<(), TeamResolveError> {
     let inside = !rel.is_empty()
         && Path::new(rel)
             .components()
@@ -700,11 +774,15 @@ pub fn team_resolve(
         return Err(TeamResolveError::BadPath(rel.to_owned()));
     }
     let io = |e: io::Error| TeamResolveError::Io(e.to_string());
-    let data = TeamFile::new(&paths.team)
-        .load()
-        .map_err(|e| TeamResolveError::Io(e.to_string()))?;
-    let (folder, _) = data.binding_for(dir).ok_or(TeamResolveError::NotBound)?;
-    let store = ConflictStore::for_workspace(paths, &folder).map_err(io)?;
+    // Another sync may be rewriting this very file, so nothing is touched without the lock.
+    let _lock = repo_lock(folder, opts).map_err(|e| {
+        if let SyncError::Busy { .. } = e {
+            TeamResolveError::Busy
+        } else {
+            TeamResolveError::Io(e.to_string())
+        }
+    })?;
+    let store = ConflictStore::for_workspace(paths, folder).map_err(io)?;
     let (copy, mark) = (store.copy_path(rel), store.mark_path(rel));
     // A path both copied and marked deleted was last a local delete, so the mark wins.
     let (has_copy, has_mark) = (copy.is_file(), mark.is_file());
@@ -725,13 +803,7 @@ pub fn team_resolve(
             fs::copy(&copy, &target).map_err(io)?;
         }
     }
-    forget(&store, rel).map_err(io)?;
-    match choice {
-        Resolution::KeepMine => team_sync(tokens, paths, &folder, base)
-            .map(Some)
-            .map_err(TeamResolveError::Sync),
-        Resolution::TakeTheirs => Ok(None),
-    }
+    forget(&store, rel).map_err(io)
 }
 
 /// Drops `rel`'s saved copy and delete mark, then the folders they leave empty.

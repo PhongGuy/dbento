@@ -1,16 +1,19 @@
 #![cfg(unix)]
-use crate::potluck::{answer, blocking, fresh_token, ws};
+use crate::potluck::{answer, blocking, fresh_token, me, ws};
 use crate::support::{Sandbox, read, write};
 use dbento_core::paths::StatePaths;
 use dbento_core::{
-    AccountRecord, ApiError, FolderSync, FolderSyncError, JoinError, MemoryTokenStore, Resolution,
-    ServerUrl, SyncOutcome, TeamAccount, TeamFile, TeamResolveError as ResolveError, TokenStore,
-    team_join, team_resolve, team_sync,
+    AccountRecord, ApiError, ConflictStore, FolderSync, FolderSyncError, JoinError,
+    MemoryTokenStore, Resolution, ServerUrl, SyncOutcome, TeamAccount, TeamFile,
+    TeamResolveError as ResolveError, TokenStore, repo_lock, team_join, team_resolve, team_sync,
+    unpushed,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use wiremock::{MockServer, ResponseTemplate};
+use std::time::Duration;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const TOML: &str = "dbento = 1\n[connections.prod]\nengine = \"postgres\"\nhost = \"db.example\"\ndatabase = \"app\"\nuser = \"app\"\n";
 
@@ -464,4 +467,110 @@ async fn take_theirs_drops_the_saved_copy_once_and_bad_paths_are_refused() {
             "{bad}"
         );
     }
+}
+
+#[tokio::test]
+async fn keep_mine_waits_for_the_repo_lock_and_writes_nothing_while_busy() {
+    let e = joined().await;
+    let (_, theirs) = e.conflicted().await;
+    let held = repo_lock(&e.ws, &e.sb.options()).unwrap();
+    let (t, p, w, o) = (
+        Arc::clone(&e.tokens),
+        e.paths.clone(),
+        e.ws.clone(),
+        e.sb.options().lock_wait(Duration::from_millis(200)),
+    );
+    let got =
+        blocking(move || team_resolve(t.as_ref(), &p, &w, "dbento.toml", Resolution::KeepMine, &o))
+            .await;
+    assert!(matches!(got, Err(ResolveError::Busy)), "{got:?}");
+    assert_eq!(
+        read(&e.ws, "dbento.toml").unwrap(),
+        theirs,
+        "nothing written under another sync's lock"
+    );
+    let store = ConflictStore::for_workspace(&e.paths, &e.ws).unwrap();
+    assert!(
+        store.copy_path("dbento.toml").is_file(),
+        "the saved copy stays"
+    );
+    drop(held);
+    let done = e
+        .resolve("dbento.toml", Resolution::KeepMine)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(done.outcome, SyncOutcome::Synced),
+        "{:?}",
+        done.outcome
+    );
+}
+
+#[tokio::test]
+async fn a_push_answered_403_refreshes_the_role_and_holds_the_save_read_only() {
+    let e = joined().await;
+    e.s.reset().await;
+    let listed = |role: &str| {
+        ResponseTemplate::new(200).set_body_json(json!([ws(
+            &format!("file://{}", e.bare.display()),
+            "acme",
+            "shared",
+            role
+        )]))
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/v1/workspaces"))
+        .respond_with(listed("write"))
+        .up_to_n_times(1)
+        .mount(&e.s)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/workspaces"))
+        .respond_with(listed("read"))
+        .mount(&e.s)
+        .await;
+    answer(&e.s, "GET", "/api/v1/me", me("ada")).await;
+    answer(
+        &e.s,
+        "GET",
+        "/git/acme/shared.git/info/refs",
+        ResponseTemplate::new(403),
+    )
+    .await;
+    e.sb.git(
+        &e.ws,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            &format!("{}/git/acme/shared.git", e.s.uri()),
+        ],
+    );
+    write(&e.ws, "queries/b.sql", "select 2;\n");
+    let done = e.sync().await.unwrap();
+    assert_eq!(
+        done.outcome,
+        SyncOutcome::ReadOnly,
+        "nothing new on the server, so nothing blocks"
+    );
+    assert_eq!(done.binding.role, "read", "the demotion is recorded");
+    assert_eq!(
+        unpushed(&done.binding.to_binding(&done.dir), &e.sb.options()).unwrap(),
+        1,
+        "the save stays local"
+    );
+    let tree = e.sb.git(
+        e.sb.path(),
+        &[
+            "--git-dir",
+            e.bare.to_str().unwrap(),
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "main",
+        ],
+    );
+    assert!(!tree.contains("queries/b.sql"), "{tree}");
 }

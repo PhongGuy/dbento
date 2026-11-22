@@ -21,7 +21,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub use account::{
-    MemoryTokenStore, ServerUrl, ServerUrlError, TeamAccount, TeamToken, TokenStore,
+    MemoryTokenStore, ServerUrl, ServerUrlError, TeamAccount, TeamToken, TimedTokenStore,
+    TokenStore,
 };
 pub use api::{ApiError, PotluckClient, PotluckInfo, RemoteWorkspace, SignIn, public_url_of};
 pub use conflicts::ConflictStore;

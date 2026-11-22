@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use url::{Host, Url};
 
-use crate::secrets::SecretError;
+use crate::secrets::{SecretError, timed_call};
 
 /// A team server's base address: http or https, lowercase scheme and host, no trailing slash.
 #[non_exhaustive]
@@ -69,6 +71,7 @@ impl fmt::Display for ServerUrl {
 }
 
 /// Why a server address was refused, worded for the user.
+#[non_exhaustive]
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
 pub struct ServerUrlError(pub String);
@@ -165,6 +168,57 @@ impl TokenStore for MemoryTokenStore {
     }
 }
 
+/// Bounds each call of `inner` to `limit`. The first timeout marks the store stuck, and later
+/// calls fail at once without a thread.
+pub struct TimedTokenStore {
+    inner: Arc<dyn TokenStore>,
+    limit: Duration,
+    stuck: Arc<AtomicBool>,
+}
+
+impl TimedTokenStore {
+    /// Wraps `inner`, giving each call `limit` to answer.
+    pub fn new(inner: Arc<dyn TokenStore>, limit: Duration) -> TimedTokenStore {
+        TimedTokenStore {
+            inner,
+            limit,
+            stuck: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl fmt::Debug for TimedTokenStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimedTokenStore")
+            .field("limit", &self.limit)
+            .field("stuck", &self.stuck)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TokenStore for TimedTokenStore {
+    fn get(&self, account: &TeamAccount) -> Result<Option<TeamToken>, SecretError> {
+        let account = account.clone();
+        timed_call(&self.inner, self.limit, &self.stuck, move |s| {
+            s.get(&account)
+        })
+    }
+
+    fn set(&self, account: &TeamAccount, token: &TeamToken) -> Result<(), SecretError> {
+        let (account, token) = (account.clone(), token.clone());
+        timed_call(&self.inner, self.limit, &self.stuck, move |s| {
+            s.set(&account, &token)
+        })
+    }
+
+    fn delete(&self, account: &TeamAccount) -> Result<(), SecretError> {
+        let account = account.clone();
+        timed_call(&self.inner, self.limit, &self.stuck, move |s| {
+            s.delete(&account)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +300,62 @@ mod tests {
         store.delete(&ada).unwrap();
         store.delete(&ada).unwrap();
         assert!(store.get(&ada).unwrap().is_none(), "deleted");
+    }
+
+    struct Stuck;
+    impl TokenStore for Stuck {
+        fn get(&self, _: &TeamAccount) -> Result<Option<TeamToken>, SecretError> {
+            loop {
+                std::thread::park();
+            }
+        }
+        fn set(&self, _: &TeamAccount, _: &TeamToken) -> Result<(), SecretError> {
+            loop {
+                std::thread::park();
+            }
+        }
+        fn delete(&self, _: &TeamAccount) -> Result<(), SecretError> {
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    #[test]
+    fn a_store_that_never_answers_fails_within_the_limit_then_at_once() {
+        use std::time::{Duration, Instant};
+        let store = TimedTokenStore::new(std::sync::Arc::new(Stuck), Duration::from_millis(200));
+        let ada = TeamAccount::new(ServerUrl::parse("https://t.example").unwrap(), "ada");
+        let started = Instant::now();
+        assert!(matches!(
+            store.get(&ada),
+            Err(SecretError::Unavailable { .. })
+        ));
+        assert!(started.elapsed() < Duration::from_secs(5), "bounded");
+        let again = Instant::now();
+        assert!(matches!(
+            store.delete(&ada),
+            Err(SecretError::Unavailable { .. })
+        ));
+        assert!(
+            again.elapsed() < Duration::from_millis(100),
+            "a stuck store fails at once"
+        );
+    }
+
+    #[test]
+    fn a_timed_store_passes_answers_through() {
+        let store = TimedTokenStore::new(
+            std::sync::Arc::new(MemoryTokenStore::new()),
+            std::time::Duration::from_secs(5),
+        );
+        let ada = TeamAccount::new(ServerUrl::parse("https://t.example").unwrap(), "ada");
+        store.set(&ada, &token('C')).unwrap();
+        assert_eq!(
+            store.get(&ada).unwrap().unwrap().expose(),
+            token('C').expose()
+        );
+        store.delete(&ada).unwrap();
+        assert!(store.get(&ada).unwrap().is_none());
     }
 }
