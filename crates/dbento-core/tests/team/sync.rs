@@ -145,6 +145,25 @@ fn a_reader_whose_edit_collides_is_held_instead_of_stuck() {
 }
 
 #[test]
+fn a_reader_whose_file_stands_where_the_server_adds_a_folder_is_held() {
+    let sb = Sandbox::new();
+    sb.origin();
+    let (mate, w) = (sb.clone_as("mate"), sb.clone_as("w"));
+    sb.teammate(&mate, "x/y", Some("theirs\n"));
+    write(&w, "x", "mine\n");
+    let reader = binding(&w).with_role(Role::Read);
+    assert_eq!(
+        sync_once(&reader, TOKEN, &state(&sb), &sb.options()).unwrap(),
+        SyncOutcome::ReadOnlyBlocked(ReadBlock::Edits(vec!["x".into()]))
+    );
+    assert_eq!(
+        read(&w, "x").as_deref(),
+        Some("mine\n"),
+        "the local file stays"
+    );
+}
+
+#[test]
 fn a_reader_with_an_unpushed_commit_is_held_and_says_so() {
     let sb = Sandbox::new();
     sb.origin();

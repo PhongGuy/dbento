@@ -232,7 +232,10 @@ fn follow(binding: &Binding, opts: &GitOptions) -> Result<SyncOutcome, SyncError
         binding,
         opts,
     )?;
-    let blocked: Vec<String> = dirty.intersection(&incoming).cloned().collect();
+    let blocked: Vec<String> = dirty
+        .into_iter()
+        .filter(|mine| incoming.iter().any(|theirs| clashes(mine, theirs)))
+        .collect();
     if !blocked.is_empty() {
         return Ok(SyncOutcome::ReadOnlyBlocked(ReadBlock::Edits(blocked)));
     }
@@ -243,6 +246,17 @@ fn follow(binding: &Binding, opts: &GitOptions) -> Result<SyncOutcome, SyncError
         opts,
     )?;
     Ok(SyncOutcome::ReadOnly)
+}
+
+/// Whether two paths stand on the same spot: equal, or one is a directory holding the other,
+/// as a local file `x` does against an incoming `x/y`.
+fn clashes(a: &str, b: &str) -> bool {
+    let under = |inner: &str, outer: &str| {
+        inner
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    a == b || under(a, b) || under(b, a)
 }
 
 /// The stdout of a local git call in the folder, lossily decoded.

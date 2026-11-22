@@ -146,7 +146,7 @@ fn print_sync(paths: &StatePaths, done: &FolderSync) -> Exit {
             Exit::Ok
         }
         SyncOutcome::ReadOnly => {
-            println!("read-only: pulled {name}; local changes stay unpushed");
+            println!("read-only: {name} is up to date with the server; nothing pushed");
             Exit::Ok
         }
         SyncOutcome::ReadOnlyBlocked(block) => {

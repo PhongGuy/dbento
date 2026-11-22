@@ -266,7 +266,10 @@ async fn a_read_member_keeps_following_the_server() {
     e.mate_pushes(&theirs);
     let (code, stdout, stderr) = e.run(Some(&e.tok), &["sync"]).await;
     assert_eq!(code, 0, "{stderr}");
-    assert!(stdout.contains("read-only: pulled acme/shared"), "{stdout}");
+    assert!(
+        stdout.contains("read-only: acme/shared is up to date with the server"),
+        "{stdout}"
+    );
     assert_eq!(
         std::fs::read_to_string(e.ws.join("dbento.toml")).unwrap(),
         theirs,
