@@ -2,6 +2,7 @@
 //! size, that follows no redirect and uses no proxy, so the bearer token only reaches the
 //! server the user typed.
 
+use std::io::Read;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -117,33 +118,47 @@ pub struct RemoteWorkspace {
 pub struct PotluckClient {
     server: ServerUrl,
     agent: Agent,
+    events: Agent,
 }
 
 impl PotluckClient {
-    /// A client for `server`: no redirects, no proxy, 10 s to connect and 30 s per call.
+    /// A client for `server`: no redirects, no proxy, 10 s to connect and 30 s per call, except
+    /// the event stream, which is held open and only bounded until its answer starts.
     /// Plain http to a remote host is refused unless `allow_insecure_http`.
     pub fn new(server: &ServerUrl, allow_insecure_http: bool) -> Result<PotluckClient, ApiError> {
         if server.is_insecure_http() && !allow_insecure_http {
             return Err(ApiError::InsecureHttp);
         }
-        let config = Agent::config_builder()
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .proxy(None)
-            .user_agent(concat!("dbento/", env!("CARGO_PKG_VERSION")))
+        let base = || {
+            Agent::config_builder()
+                .http_status_as_error(false)
+                .max_redirects(0)
+                .proxy(None)
+                .user_agent(concat!("dbento/", env!("CARGO_PKG_VERSION")))
+                .accept_encoding("identity")
+                .tls_config(
+                    TlsConfig::builder()
+                        .root_certs(RootCerts::PlatformVerifier)
+                        .build(),
+                )
+                .timeout_connect(Some(Duration::from_secs(10)))
+        };
+        let calls = base()
             .accept("application/json")
-            .accept_encoding("identity")
-            .tls_config(
-                TlsConfig::builder()
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .build(),
-            )
-            .timeout_connect(Some(Duration::from_secs(10)))
             .timeout_global(Some(Duration::from_secs(30)))
+            .build();
+        // ureq's body timeout covers the whole body, so the stream bounds every step but the body.
+        let events = base()
+            .accept("text/event-stream")
+            .timeout_global(None)
+            .timeout_resolve(Some(Duration::from_secs(10)))
+            .timeout_send_request(Some(Duration::from_secs(10)))
+            .timeout_recv_response(Some(Duration::from_secs(30)))
             .build();
         Ok(PotluckClient {
             server: server.clone(),
-            agent: Agent::new_with_config(config),
+            agent: Agent::new_with_config(calls),
+            events: Agent::new_with_config(events),
         })
     }
 
@@ -229,6 +244,29 @@ impl PotluckClient {
         answer(response).map(drop)
     }
 
+    /// `GET /api/v1/workspaces/{team}/{workspace}/events`: the workspace's notice stream, held
+    /// open with no size limit, so its reader must bound each line itself.
+    pub(crate) fn open_events(
+        &self,
+        token: &TeamToken,
+        team: &str,
+        workspace: &str,
+    ) -> Result<Box<dyn Read + Send>, ApiError> {
+        let response = self
+            .events
+            .get(
+                self.url(&["workspaces", team, workspace, "events"])?
+                    .as_str(),
+            )
+            .header("authorization", bearer(token)?)
+            .call()
+            .map_err(transport)?;
+        if response.status().is_success() {
+            return Ok(Box::new(response.into_body().into_reader()));
+        }
+        Err(status_error(response))
+    }
+
     /// `{server}/api/v1/<segments>`, each segment percent-encoded, keeping any path prefix the
     /// server address carries.
     fn url(&self, segments: &[&str]) -> Result<Url, ApiError> {
@@ -259,18 +297,21 @@ fn bearer(token: &TeamToken) -> Result<HeaderValue, ApiError> {
     Ok(value)
 }
 
-/// The 2xx body, or the error the status and its envelope stand for. A redirect is never
-/// followed, so a 3xx is an answer this client cannot use.
+/// The 2xx body, or the error the status stands for.
 fn answer(response: Result<Response<Body>, ureq::Error>) -> Result<Vec<u8>, ApiError> {
     let response = response.map_err(transport)?;
-    let status = response.status();
-    if status.is_success() {
+    if response.status().is_success() {
         return read_capped(response);
     }
+    Err(status_error(response))
+}
+
+/// The error a non-2xx status and its envelope stand for. A redirect is never followed, so a
+/// 3xx is an answer this client cannot use.
+fn status_error(response: Response<Body>) -> ApiError {
+    let status = response.status();
     if status.is_redirection() {
-        return Err(ApiError::Protocol(format!(
-            "the server answered {status} instead of the API"
-        )));
+        return ApiError::Protocol(format!("the server answered {status} instead of the API"));
     }
     let retry_after_secs = response
         .headers()
@@ -286,13 +327,13 @@ fn answer(response: Result<Response<Body>, ureq::Error>) -> Result<Vec<u8>, ApiE
         redact_token(&envelope.code),
         redact_token(&envelope.message),
     );
-    Err(match status {
+    match status {
         StatusCode::UNAUTHORIZED => ApiError::Unauthenticated,
         StatusCode::FORBIDDEN => ApiError::Forbidden(message),
         StatusCode::NOT_FOUND => ApiError::NotFound(message),
         StatusCode::TOO_MANY_REQUESTS => ApiError::RateLimited { retry_after_secs },
         _ => ApiError::Server { code, message },
-    })
+    }
 }
 
 /// A send or body error means the server could not be reached, a time limit included.

@@ -131,38 +131,45 @@ impl<S: SecretStore + 'static> TimedStore<S> {
         }
     }
 
-    // Runs `call` on its own thread so a blocked keychain cannot block the caller.
     fn timed<T: Send + 'static>(
         &self,
         call: impl FnOnce(&S) -> Result<T, SecretError> + Send + 'static,
     ) -> Result<T, SecretError> {
-        if self.stuck.load(Ordering::Relaxed) {
-            return Err(self.timeout_error());
-        }
-        let (tx, rx) = mpsc::channel();
-        let inner = Arc::clone(&self.inner);
-        std::thread::spawn(move || {
-            let _ = tx.send(call(&inner));
-        });
-        match rx.recv_timeout(self.timeout) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.stuck.store(true, Ordering::Relaxed);
-                Err(self.timeout_error())
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(SecretError::Failed {
-                message: "the keychain worker stopped".to_owned(),
-            }),
-        }
+        timed_call(&self.inner, self.timeout, &self.stuck, call)
     }
+}
 
-    fn timeout_error(&self) -> SecretError {
-        SecretError::Unavailable {
-            message: format!(
-                "the keychain did not answer within {}",
-                crate::workspace::format_duration(self.timeout)
-            ),
+/// Runs `call` on its own thread so a blocked keychain cannot block the caller. The first
+/// timeout sets `stuck`, after which calls fail at once without spawning a thread.
+pub(crate) fn timed_call<S: ?Sized + Send + Sync + 'static, T: Send + 'static>(
+    inner: &Arc<S>,
+    timeout: Duration,
+    stuck: &AtomicBool,
+    call: impl FnOnce(&S) -> Result<T, SecretError> + Send + 'static,
+) -> Result<T, SecretError> {
+    let timed_out = || SecretError::Unavailable {
+        message: format!(
+            "the keychain did not answer within {}",
+            crate::workspace::format_duration(timeout)
+        ),
+    };
+    if stuck.load(Ordering::Relaxed) {
+        return Err(timed_out());
+    }
+    let (tx, rx) = mpsc::channel();
+    let inner = Arc::clone(inner);
+    std::thread::spawn(move || {
+        let _ = tx.send(call(&inner));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            stuck.store(true, Ordering::Relaxed);
+            Err(timed_out())
         }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(SecretError::Failed {
+            message: "the keychain worker stopped".to_owned(),
+        }),
     }
 }
 

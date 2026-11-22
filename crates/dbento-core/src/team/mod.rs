@@ -3,22 +3,29 @@
 mod account;
 mod api;
 mod conflicts;
+mod driver;
 mod flows;
+mod machine;
+mod notice;
 mod team_file;
 mod toml_merge;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub use account::{
-    MemoryTokenStore, ServerUrl, ServerUrlError, TeamAccount, TeamToken, TokenStore,
+    MemoryTokenStore, ServerUrl, ServerUrlError, TeamAccount, TeamToken, TimedTokenStore,
+    TokenStore,
 };
 pub use api::{ApiError, PotluckClient, PotluckInfo, RemoteWorkspace, SignIn, public_url_of};
 pub use conflicts::ConflictStore;
+pub use driver::{SyncConfig, TeamError, TeamSync};
 pub use flows::{
     Credential, FolderSync, FolderSyncError, JoinError, LoginError, LogoutError, LogoutReport,
     RefreshError, Resolution, TeamResolveError, WorkspacesError, refresh_role, team_join,
     team_login, team_logout, team_resolve, team_sync, team_workspaces,
 };
+pub use machine::{SyncState, SyncStatus};
 pub use team_file::{AccountRecord, BindingRecord, TeamData, TeamFile, TeamFileError};
 pub(crate) use toml_merge::merge_workspace_text;
 
@@ -123,6 +130,30 @@ pub enum SyncOutcome {
     Refused(Refusal),
     /// A read-only member followed the server and pushed nothing.
     ReadOnly,
+    /// A read-only member did not follow the server, so local work is not overwritten.
+    ReadOnlyBlocked(ReadBlock),
+}
+
+/// Why a read-only member's folder did not follow the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReadBlock {
+    /// Local edits on paths the server changed, sorted.
+    Edits(Vec<String>),
+    /// Commits made before the demotion.
+    Commits(u32),
+}
+
+impl std::fmt::Display for ReadBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadBlock::Edits(paths) => {
+                write!(f, "local edits block updates ({})", paths.join(", "))
+            }
+            ReadBlock::Commits(1) => f.write_str("1 local commit blocks updates"),
+            ReadBlock::Commits(n) => write!(f, "{n} local commits block updates"),
+        }
+    }
 }
 
 /// One locked cycle on `binding.dir`: commit pending changes, pull with rebase, squash the
@@ -134,25 +165,31 @@ pub fn sync_once(
     paths: &StatePaths,
     base: &GitOptions,
 ) -> Result<SyncOutcome, SyncError> {
+    sync_steps(binding, token, paths, base, &mut |_| {})
+}
+
+/// [`sync_once`], telling `step` when it starts pulling and when it starts pushing.
+pub(crate) fn sync_steps(
+    binding: &Binding,
+    token: &str,
+    paths: &StatePaths,
+    base: &GitOptions,
+    step: &mut dyn FnMut(SyncState),
+) -> Result<SyncOutcome, SyncError> {
     let opts = base.clone().team_env(&binding.public_url, token);
     let _lock = repo_lock(&binding.dir, &opts)?;
     ensure_on_branch(binding, &opts)?;
     match binding.role {
         Role::Write => {}
         Role::Read => {
-            // A reader only follows the server; commits from before a demotion stay put.
-            fetch(binding, &opts)?;
-            if unpushed(binding, &opts)? == 0 {
-                let target = format!("refs/remotes/origin/{}", binding.branch);
-                let args = ["merge", "-q", "--ff-only", target.as_str()];
-                run::git_ok(&args, &binding.dir, Reach::Local, &opts)?;
-            }
-            return Ok(SyncOutcome::ReadOnly);
+            step(SyncState::Pulling);
+            return follow(binding, &opts);
         }
     }
     let store = ConflictStore::for_workspace(paths, &binding.dir)?;
     let mut conflicts = Vec::new();
     for _ in 0..MAX_PUSHES {
+        step(SyncState::Pulling);
         match pull_rebase(binding, &store, &opts)? {
             Pulled::Conflicted(files) => conflicts.extend(files),
             Pulled::UpToDate | Pulled::FastForwarded | Pulled::Rebased => {}
@@ -162,6 +199,7 @@ pub fn sync_once(
         if unpushed(binding, &opts)? == 0 {
             return Ok(settled(conflicts));
         }
+        step(SyncState::Pushing);
         match push(binding, &opts)? {
             PushOutcome::Pushed => return Ok(settled(conflicts)),
             PushOutcome::NonFastForward => {}
@@ -169,6 +207,87 @@ pub fn sync_once(
         }
     }
     Err(SyncError::Raced { pushes: MAX_PUSHES })
+}
+
+/// A reader's cycle: never commit or push, only fast-forward to the server, and hold back
+/// whenever that would bury commits from before a demotion or overwrite a local edit.
+fn follow(binding: &Binding, opts: &GitOptions) -> Result<SyncOutcome, SyncError> {
+    fetch(binding, opts)?;
+    let target = format!("refs/remotes/origin/{}", binding.branch);
+    let behind = format!("HEAD..{target}");
+    let count = git_text(&["rev-list", "--count", behind.as_str()], binding, opts)?;
+    if count.trim() == "0" {
+        return Ok(SyncOutcome::ReadOnly);
+    }
+    let commits = unpushed(binding, opts)?;
+    if commits > 0 {
+        return Ok(SyncOutcome::ReadOnlyBlocked(ReadBlock::Commits(commits)));
+    }
+    // Tracked changes and untracked files both stand in the way of a path the server changed.
+    let mut dirty = paths_of(
+        &["diff", "--no-renames", "--name-only", "-z", "HEAD"],
+        binding,
+        opts,
+    )?;
+    let untracked = ["ls-files", "--others", "--exclude-standard", "-z"];
+    dirty.extend(paths_of(&untracked, binding, opts)?);
+    let incoming = paths_of(
+        &[
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "HEAD",
+            target.as_str(),
+        ],
+        binding,
+        opts,
+    )?;
+    let blocked: Vec<String> = dirty
+        .into_iter()
+        .filter(|mine| incoming.iter().any(|theirs| clashes(mine, theirs)))
+        .collect();
+    if !blocked.is_empty() {
+        return Ok(SyncOutcome::ReadOnlyBlocked(ReadBlock::Edits(blocked)));
+    }
+    run::git_ok(
+        &["merge", "-q", "--ff-only", target.as_str()],
+        &binding.dir,
+        Reach::Local,
+        opts,
+    )?;
+    Ok(SyncOutcome::ReadOnly)
+}
+
+/// Whether two paths stand on the same spot: equal, or one is a directory holding the other,
+/// as a local file `x` does against an incoming `x/y`.
+fn clashes(a: &str, b: &str) -> bool {
+    let under = |inner: &str, outer: &str| {
+        inner
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    a == b || under(a, b) || under(b, a)
+}
+
+/// The stdout of a local git call in the folder, lossily decoded.
+fn git_text(args: &[&str], binding: &Binding, opts: &GitOptions) -> Result<String, SyncError> {
+    let out = run::git_ok(args, &binding.dir, Reach::Local, opts)?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The NUL-separated paths a local git call prints, sorted.
+fn paths_of(
+    args: &[&str],
+    binding: &Binding,
+    opts: &GitOptions,
+) -> Result<BTreeSet<String>, SyncError> {
+    let text = git_text(args, binding, opts)?;
+    Ok(text
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// `Synced` when no path conflicted, else every conflict the cycle met.

@@ -1,6 +1,9 @@
 use crate::common::team::*;
 use serde_json::json;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -266,7 +269,10 @@ async fn a_read_member_keeps_following_the_server() {
     e.mate_pushes(&theirs);
     let (code, stdout, stderr) = e.run(Some(&e.tok), &["sync"]).await;
     assert_eq!(code, 0, "{stderr}");
-    assert!(stdout.contains("read-only: pulled acme/shared"), "{stdout}");
+    assert!(
+        stdout.contains("read-only: acme/shared is up to date with the server"),
+        "{stdout}"
+    );
     assert_eq!(
         std::fs::read_to_string(e.ws.join("dbento.toml")).unwrap(),
         theirs,
@@ -274,4 +280,144 @@ async fn a_read_member_keeps_following_the_server() {
     );
     let (_, status, _) = e.run(Some(&e.tok), &["status"]).await;
     assert!(status.contains("unpushed:  0"), "{status}");
+}
+
+#[tokio::test]
+async fn a_read_member_with_a_colliding_edit_is_told_why_nothing_was_pulled() {
+    let e = joined_as("read").await;
+    e.mate_pushes(&TOML.replace("db.example", "theirs.example"));
+    let mine = TOML.replace("db.example", "mine.example");
+    std::fs::write(e.ws.join("dbento.toml"), &mine).unwrap();
+    let (code, stdout, stderr) = e.run(Some(&e.tok), &["sync"]).await;
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(
+            "read-only: acme/shared not updated; local edits block updates (dbento.toml)"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("pulled"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(e.ws.join("dbento.toml")).unwrap(),
+        mine
+    );
+}
+
+fn origin_has(bare: &Path, rel: &str, text: &str) -> bool {
+    Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .arg("--git-dir")
+        .arg(bare)
+        .args(["show", &format!("main:{rel}")])
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout == text.as_bytes())
+}
+
+#[tokio::test]
+async fn watch_pushes_a_saved_file_and_exits_0_on_ctrl_c() {
+    let e = joined().await;
+    let (state, ws, bare, tok) = (e.state.clone(), e.ws.clone(), e.bare.clone(), e.tok.clone());
+    let mine = TOML.replace("db.example", "watched.example");
+    // Off the runtime, so the wiremock server keeps answering the child.
+    let (code, out) = tokio::task::spawn_blocking(move || {
+        let mut child = Command::new(assert_cmd::cargo::cargo_bin("dbento"))
+            .env("DBENTO_STATE_DIR", &state)
+            .env("DBENTO_TEST_TOKEN_STORE", "memory")
+            .env("DBENTO_TEST_TEAM_TOKEN", &tok)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("DBENTO_TEST_ASSUME_TTY")
+            .args([
+                "team",
+                "--workspace",
+                ws.to_str().unwrap(),
+                "sync",
+                "--watch",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (tx, lines) = std::sync::mpsc::channel();
+        let stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+        let mut out = Vec::new();
+        loop {
+            let line = lines
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap_or_else(|_| panic!("no first sync: {out:?}"));
+            let hit = line.contains("synced acme/shared");
+            out.push(line);
+            if hit {
+                break;
+            }
+        }
+        std::fs::write(ws.join("dbento.toml"), &mine).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !origin_has(&bare, "dbento.toml", &mine) {
+            assert!(
+                Instant::now() < deadline,
+                "the save never reached the server: {out:?}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // The push is a new end state of its own, so it prints a second synced line.
+        loop {
+            let line = lines
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("no line for the push: {out:?}"));
+            let hit = line.contains("synced acme/shared");
+            out.push(line);
+            if hit {
+                break;
+            }
+        }
+        assert!(
+            Command::new("kill")
+                .args(["-INT", &child.id().to_string()])
+                .status()
+                .unwrap()
+                .success(),
+            "kill -INT failed"
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("--watch did not stop: {out:?}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        (status.code(), out)
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, Some(0), "{out:?}");
+}
+
+#[tokio::test]
+async fn watch_exits_5_when_signed_out_and_1_when_unbound() {
+    let e = joined().await;
+    let (code, _, stderr) = e.run(None, &["sync", "--watch"]).await;
+    assert_eq!(code, 5, "{stderr}");
+    assert!(stderr.contains("signed out"), "{stderr}");
+    let elsewhere = e.root.path().to_str().unwrap().to_owned();
+    let (code, _, stderr) = team(
+        &e.state,
+        Some(&e.tok),
+        &["--workspace", &elsewhere, "sync", "--watch"],
+        "",
+    )
+    .await;
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("not a team workspace"), "{stderr}");
 }
