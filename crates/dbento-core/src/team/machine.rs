@@ -72,16 +72,28 @@ pub(crate) enum Input {
     Retry,
     /// The server's branch moved.
     RemoteMoved,
+    #[cfg_attr(not(test), expect(dead_code, reason = "the notice reader sends it"))]
     /// The notice stream opened.
     StreamUp,
+    #[cfg_attr(not(test), expect(dead_code, reason = "the notice reader sends it"))]
     /// The notice stream showed it is still open.
     StreamAlive,
+    #[expect(dead_code, reason = "the notice reader sends it")]
     /// The notice stream closed.
     StreamDown,
+    #[cfg_attr(not(test), expect(dead_code, reason = "the notice reader sends it"))]
     /// The notice stream was refused the token.
     SignedOut,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "conflict and role handling send it")
+    )]
     /// The account's role changed.
     Role(Role),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "conflict and role handling send it")
+    )]
     /// Conflicts were resolved; these are left.
     Settled(Vec<ConflictFile>),
     /// The running cycle or poll ended.
@@ -95,9 +107,17 @@ pub(crate) enum Ended {
     ReadOnly,
     Conflicted(Vec<ConflictFile>),
     Refused(Refusal),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "error mapping ends cycles with it")
+    )]
     Busy,
     Offline,
     SignedOut,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "error mapping ends cycles with it")
+    )]
     GitMissing,
     Failed(String),
     /// A poll found the server's branch where it was.

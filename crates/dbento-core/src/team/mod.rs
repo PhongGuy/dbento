@@ -3,11 +3,8 @@
 mod account;
 mod api;
 mod conflicts;
+mod driver;
 mod flows;
-#[expect(
-    dead_code,
-    reason = "the sync driver is the machine's caller and the only sender of StreamDown"
-)]
 mod machine;
 #[cfg_attr(
     not(test),
@@ -26,6 +23,7 @@ pub use account::{
 };
 pub use api::{ApiError, PotluckClient, PotluckInfo, RemoteWorkspace, SignIn, public_url_of};
 pub use conflicts::ConflictStore;
+pub use driver::{SyncConfig, TeamError, TeamSync};
 pub use flows::{
     Credential, FolderSync, FolderSyncError, JoinError, LoginError, LogoutError, LogoutReport,
     RefreshError, Resolution, TeamResolveError, WorkspacesError, refresh_role, team_join,
@@ -171,16 +169,31 @@ pub fn sync_once(
     paths: &StatePaths,
     base: &GitOptions,
 ) -> Result<SyncOutcome, SyncError> {
+    sync_steps(binding, token, paths, base, &mut |_| {})
+}
+
+/// [`sync_once`], telling `step` when it starts pulling and when it starts pushing.
+pub(crate) fn sync_steps(
+    binding: &Binding,
+    token: &str,
+    paths: &StatePaths,
+    base: &GitOptions,
+    step: &mut dyn FnMut(SyncState),
+) -> Result<SyncOutcome, SyncError> {
     let opts = base.clone().team_env(&binding.public_url, token);
     let _lock = repo_lock(&binding.dir, &opts)?;
     ensure_on_branch(binding, &opts)?;
     match binding.role {
         Role::Write => {}
-        Role::Read => return follow(binding, &opts),
+        Role::Read => {
+            step(SyncState::Pulling);
+            return follow(binding, &opts);
+        }
     }
     let store = ConflictStore::for_workspace(paths, &binding.dir)?;
     let mut conflicts = Vec::new();
     for _ in 0..MAX_PUSHES {
+        step(SyncState::Pulling);
         match pull_rebase(binding, &store, &opts)? {
             Pulled::Conflicted(files) => conflicts.extend(files),
             Pulled::UpToDate | Pulled::FastForwarded | Pulled::Rebased => {}
@@ -190,6 +203,7 @@ pub fn sync_once(
         if unpushed(binding, &opts)? == 0 {
             return Ok(settled(conflicts));
         }
+        step(SyncState::Pushing);
         match push(binding, &opts)? {
             PushOutcome::Pushed => return Ok(settled(conflicts)),
             PushOutcome::NonFastForward => {}
