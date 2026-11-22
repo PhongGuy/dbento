@@ -357,6 +357,9 @@ impl Machine {
         if was == Running::Cycle && !keeps_dirty {
             self.dirty = self.dirtied_while_running;
         }
+        // A signed-out commit that fails or meets a lock is still signed out.
+        let still_signed_out =
+            self.hold == Hold::SignedOut && matches!(ended, Ended::Busy | Ended::Failed(_));
         let (state, hold) = match ended {
             Ended::PollSame => {
                 if matches!(self.state, SyncState::Busy | SyncState::Offline) {
@@ -373,6 +376,15 @@ impl Machine {
             Ended::Refused(refusal) => (SyncState::Refused(refusal), Hold::Refused),
             Ended::GitMissing => (SyncState::GitMissing, Hold::GitMissing),
             Ended::Failed(why) => (SyncState::Failed(why), Hold::Failed),
+        };
+        // A change made while the cycle ran would have released a refused or failed hold.
+        let released = was == Running::Cycle && self.dirtied_while_running;
+        let hold = if still_signed_out {
+            Hold::SignedOut
+        } else if released && matches!(hold, Hold::Refused | Hold::Failed) {
+            Hold::None
+        } else {
+            hold
         };
         // A hold drops what was scheduled before it; only a releasing trigger re-arms a cycle.
         if matches!(hold, Hold::Refused | Hold::GitMissing | Hold::Failed) {
@@ -553,5 +565,60 @@ mod tests {
         m.on(Input::Ended(Ended::Conflicted(conflict())), t0 + s(4));
         m.on(Input::Settled(Vec::new()), t0 + s(5));
         assert_eq!(m.state(), &SyncState::Synced);
+    }
+
+    #[test]
+    fn a_change_made_while_a_cycle_runs_survives_a_refused_or_failed_end() {
+        let refusal = parse_refusal(
+            "remote: potluck-reject secret_value refs/heads/main dbento.toml password",
+        )
+        .unwrap();
+        for end in [Ended::Refused(refusal), Ended::Failed("off main".into())] {
+            let t0 = Instant::now();
+            let mut m = Machine::new(Role::Write, timing(), t0);
+            assert_eq!(
+                m.next(t0),
+                Action::Run(Cycle::Sync),
+                "a first cycle runs at start"
+            );
+            m.on(Input::Changed, t0 + s(1));
+            m.on(Input::Ended(end.clone()), t0 + s(2));
+            assert_eq!(
+                m.next(t0 + s(2)),
+                Action::Wait(Some(t0 + s(5))),
+                "{end:?} keeps the debounce"
+            );
+            assert_eq!(
+                m.next(t0 + s(5)),
+                Action::Run(Cycle::Sync),
+                "{end:?} reruns the change"
+            );
+        }
+    }
+
+    #[test]
+    fn a_busy_or_failed_local_commit_stays_signed_out() {
+        for end in [Ended::Busy, Ended::Failed("disk full".into())] {
+            let (mut m, t0) = after_start(Role::Write, Ended::SignedOut);
+            m.on(Input::Changed, t0);
+            assert_eq!(
+                m.next(t0 + s(4)),
+                Action::Run(Cycle::CommitOnly),
+                "signed out commits locally"
+            );
+            m.on(Input::Ended(end.clone()), t0 + s(4));
+            m.on(Input::RemoteMoved, t0 + s(5));
+            assert_eq!(
+                m.next(t0 + s(5)),
+                Action::Wait(None),
+                "{end:?} keeps the sign-out hold"
+            );
+            m.on(Input::Changed, t0 + s(5));
+            assert_eq!(
+                m.next(t0 + s(9)),
+                Action::Run(Cycle::CommitOnly),
+                "{end:?} still only commits"
+            );
+        }
     }
 }
