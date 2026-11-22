@@ -147,10 +147,12 @@ impl PotluckClient {
             .accept("application/json")
             .timeout_global(Some(Duration::from_secs(30)))
             .build();
-        // ureq's body timeout covers the whole body, so the stream only bounds its answer head.
+        // ureq's body timeout covers the whole body, so the stream bounds every step but the body.
         let events = base()
             .accept("text/event-stream")
             .timeout_global(None)
+            .timeout_resolve(Some(Duration::from_secs(10)))
+            .timeout_send_request(Some(Duration::from_secs(10)))
             .timeout_recv_response(Some(Duration::from_secs(30)))
             .build();
         Ok(PotluckClient {
