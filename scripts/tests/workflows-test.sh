@@ -96,7 +96,7 @@ test_ci_installs_the_cross_and_notices_tools() {
 }
 
 test_ci_gate_timeout_and_pins() {
-  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 pilot=90 windows=90 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
+  [[ $(job_timeouts "$CI") == "each-feature=60 gate=120 macos-clippy=60 pilot=120 windows=90 " ]] || fail "ci timeouts: $(job_timeouts "$CI")"
   pinned_uses_only "$CI"
 }
 
