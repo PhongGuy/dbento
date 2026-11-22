@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::process::Command;
 
+pub mod team;
+
 /// The server binary: `GPUI_PILOT_BIN`, else `gpui-pilot` on `PATH`.
 pub fn server_bin() -> PathBuf {
     if let Some(bin) = std::env::var_os("GPUI_PILOT_BIN") {

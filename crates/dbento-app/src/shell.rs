@@ -12,11 +12,12 @@ use std::time::Duration;
 
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
-    EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, OpenError, RelationKind,
-    RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
-    SessionOptions, Sort, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError,
-    connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var,
-    secret_renames, seen_text, seen_workspace, tls_key_is_encrypted,
+    EditError, EditPlan, Engine, FolderPath, GrantState, LogoutError, ObjectRef, OpenError,
+    RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey,
+    SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem,
+    WorkspaceWatcher, WriteError, connect, move_secret, plan_edit, resolve_key_passphrase,
+    resolve_secret, secret_env_var, secret_renames, seen_text, seen_workspace, team_logout,
+    tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -87,12 +88,16 @@ use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
+use crate::team::{self, TeamEvent, TeamSession, TeamView};
+use crate::team_dialog::{TeamDialog, TeamDialogEvent, TeamDialogMode, TeamField};
+use crate::team_view;
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 use crate::update_banner;
 use crate::updates::{self, UpdatesEvent};
 use crate::workspace_reload::{
     self, DiskBanner, DiskRead, TabDisk, TabVerdict, TomlVerdict, disk_diff, judge_tab, judge_toml,
+    labelled_diff,
 };
 
 /// The database a Postgres Test opens when the form names none: every server has it.
@@ -392,8 +397,11 @@ pub struct Shell {
     // A window close is waiting on the sessions; the next close request goes through.
     closing: bool,
     // Sessions of closed tabs, each drained off the main thread until it ends; a window close
-    // waits for the unfinished ones too.
-    closings: Vec<(Arc<AtomicBool>, Task<()>)>,
+    // waits for the unfinished ones too, taking their tasks but leaving the flags counted.
+    closings: Vec<(Arc<AtomicBool>, Option<Task<()>>)>,
+    // The open workspace's team sync, when the folder is bound and team mode is installed,
+    // and the observation that redraws the window when its status changes.
+    team: Option<(Entity<TeamSession>, [Subscription; 2])>,
     // A discard question (window close, tab close, switch, disconnect) is on screen, so no
     // second one stacks on it; `close_confirmed` records Close on the window close question.
     asking: Option<Question>,
@@ -433,6 +441,8 @@ pub struct Shell {
     connection_form: Option<(Entity<ConnectionForm>, Subscription)>,
     // The open Settings dialog's view and its Close subscription.
     settings_view: Option<(Entity<SettingsView>, Subscription)>,
+    // The open team sign-in and join dialog and its event subscription.
+    team_dialog: Option<(Entity<TeamDialog>, Subscription)>,
     // The workspace the open form was built on; Save refuses once another is installed.
     form_base: Option<Arc<Workspace>>,
     // The running Test connection; dropping it abandons the attempt.
@@ -604,6 +614,7 @@ impl Shell {
             appearance,
             closing: false,
             closings: Vec::new(),
+            team: None,
             asking: None,
             questions: 0,
             close_confirmed: false,
@@ -626,6 +637,7 @@ impl Shell {
             _inspector_events: inspector_events,
             connection_form: None,
             settings_view: None,
+            team_dialog: None,
             form_base: None,
             connection_test: None,
             approvals_waiting: Vec::new(),
@@ -689,6 +701,8 @@ impl Shell {
         }
         self.save_layout(window, cx);
         self.flush_saved();
+        // The window waits for the sync's last push like it waits for the sessions.
+        self.stop_team(cx);
         let catalogs = self
             .sidebar
             .as_ref()
@@ -707,7 +721,11 @@ impl Shell {
                 model.update(cx, |m, cx| m.close(cx))
             })
             .collect();
-        let earlier: Vec<Task<()>> = self.closings.drain(..).map(|(_, task)| task).collect();
+        let earlier: Vec<Task<()>> = self
+            .closings
+            .iter_mut()
+            .filter_map(|(_, task)| task.take())
+            .collect();
         let sessions = async move {
             let catalogs = join_all(catalogs.into_iter().map(CatalogClosing::wait));
             let tabs = join_all(tabs.into_iter().map(Closing::wait));
@@ -983,6 +1001,11 @@ impl Shell {
     /// The open workspace, if any.
     pub fn workspace(&self) -> Option<&Arc<Workspace>> {
         self.workspace.as_ref()
+    }
+
+    /// The open team dialog, if any.
+    pub fn team_dialog(&self) -> Option<&Entity<TeamDialog>> {
+        self.team_dialog.as_ref().map(|(d, _)| d)
     }
 
     /// The open Settings dialog's view, if any.
@@ -1972,6 +1995,8 @@ impl Shell {
             C::ToggleRowInspector => self.toggle_inspector(cx),
             C::CycleAppearance => self.cycle_appearance(cx),
             C::OpenSettings => self.open_settings(window, cx),
+            C::JoinTeamWorkspace => self.open_team_dialog(TeamDialogMode::Join, window, cx),
+            C::TeamSignOut => self.team_sign_out(window, cx),
             C::CheckForUpdates => updates::check_now(cx),
             // Like the `query-save` button: focus the editor so the action reaches the tab's
             // own handlers, whatever the dialog refocused on close.
@@ -2515,7 +2540,70 @@ impl Shell {
             closing.await;
             flag.store(true, Ordering::SeqCst);
         });
-        self.closings.push((done, task));
+        self.closings.push((done, Some(task)));
+    }
+
+    // Stops the team sync off the UI thread, keeping its flush for a window close to wait on.
+    fn stop_team(&mut self, cx: &mut Context<Self>) {
+        if let Some((team, _)) = self.team.take()
+            && let Some(stopping) = team.update(cx, |t, _| t.stop())
+        {
+            self.keep_closing(stopping, cx);
+        }
+    }
+
+    /// The open workspace's team session, if it has one.
+    pub fn team(&self) -> Option<&Entity<TeamSession>> {
+        self.team.as_ref().map(|(team, _)| team)
+    }
+
+    /// Signs the open team workspace's account out: `team_logout` on the background executor,
+    /// then `TeamSession::retry`, so the chip lands on Signed out. Nothing without a session.
+    pub fn team_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(team), Some(hooks)) = (self.team().cloned(), team::hooks(cx)) else {
+            return;
+        };
+        let record = team.read(cx).record().clone();
+        // Revoking talks to the server and the token store may block, so neither runs here.
+        let job = cx.background_spawn(async move {
+            let server = ServerUrl::parse(&record.server).map_err(|e| e.to_string())?;
+            match team_logout(
+                hooks.tokens().as_ref(),
+                hooks.paths(),
+                &server,
+                Some(&record.username),
+            ) {
+                Ok(report) => Ok(!report.revoked),
+                // An account already gone is as signed out as one just removed.
+                Err(LogoutError::NotSignedIn { .. }) => Ok(false),
+                Err(e) => Err(e.to_string()),
+            }
+        });
+        // A workspace closed meanwhile has no session left to tell.
+        let team = team.downgrade();
+        cx.spawn_in(window, async move |_, cx| {
+            let outcome = job.await;
+            let _ = team.update(cx, |t, cx| match outcome {
+                // The next cycle finds no token and reports Signed out.
+                Ok(live) => {
+                    t.set_revoke_note(live.then_some(team_view::NOT_REVOKED), cx);
+                    t.retry();
+                }
+                Err(why) => {
+                    let view = t.view().cloned();
+                    t.show(
+                        TeamView {
+                            state: SyncState::Failed(why),
+                            unpushed: view.as_ref().map_or(0, |v| v.unpushed),
+                            last_synced: view.and_then(|v| v.last_synced),
+                            note: None,
+                        },
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     /// How many times the app state file has been written since start.
@@ -2523,7 +2611,7 @@ impl Shell {
         self.state_file.writes()
     }
 
-    /// How many closed tabs' and catalogs' sessions are still closing.
+    /// How many closed tabs' and catalogs' sessions, and stopped team syncs, are still closing.
     pub fn pending_closings(&self) -> usize {
         self.closings
             .iter()
@@ -2615,6 +2703,7 @@ impl Shell {
         self.watch_generation = self.watch_generation.wrapping_add(1);
         self.watch_problem = None;
         self.toml_problem = None;
+        self.stop_team(cx);
     }
 
     fn clear_workspace(&mut self) {
@@ -2754,6 +2843,16 @@ impl Shell {
                 self.workspace = Some(ws);
                 self.watch_generation = self.watch_generation.wrapping_add(1);
                 self.start_watch(&real, window, cx);
+                self.team = team::session_for(&real, cx).map(|session| {
+                    let redraw = cx.observe(&session, |_, _, cx| cx.notify());
+                    // Settling a conflict writes the winning side; the sync made that change, so
+                    // only the tabs reread it.
+                    let settled =
+                        cx.subscribe_in(&session, window, |this, _, _: &TeamEvent, window, cx| {
+                            this.reread_workspace_files(window, cx);
+                        });
+                    (session, [redraw, settled])
+                });
                 self.error = None;
                 // Forgetting the folder next time is a small loss, so it never blocks opening.
                 self.update_saved(
@@ -2937,6 +3036,17 @@ impl Shell {
         if self.closing || self.workspace.is_none() {
             return;
         }
+        if let Some((team, _)) = &self.team {
+            team.read(cx).changed();
+        }
+        self.reread_workspace_files(window, cx);
+    }
+
+    // The reread alone, for changes the sync made itself and so must not be told about.
+    fn reread_workspace_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.workspace.is_none() {
+            return;
+        }
         if self.reload_running {
             self.reload_again = true;
             return;
@@ -3114,6 +3224,66 @@ impl Shell {
                 match answer {
                     Ok(1) if same => shell.take_disk_text(&tab, window, cx),
                     Ok(2) if same => tab.update(cx, |t, cx| t.keep_mine(cx)),
+                    _ => {}
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Shows conflicted `path` as the server's file on disk (-) against my saved copy (+);
+    /// "Use theirs" and "Keep mine" act as the banner's Reload and Keep mine while the file is
+    /// still conflicted when the answer comes.
+    pub fn ask_team_compare(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(team) = self.team().cloned() else {
+            return;
+        };
+        let session = team.read(cx);
+        let theirs = std::fs::read_to_string(session.dir().join(&path)).unwrap_or_default();
+        let mine = session.saved_copy(&path).unwrap_or_default();
+        let reply = ask(
+            Ask {
+                title: format!("Conflict in {path}").into(),
+                detail: Some("Lines on the server (-) and yours (+).".into()),
+                sql: Some(labelled_diff("server", &theirs, "mine", &mine).into()),
+                language: "text",
+                choices: vec![
+                    Choice {
+                        id: "team-compare-cancel",
+                        label: "Cancel".into(),
+                        danger: false,
+                    },
+                    Choice {
+                        id: "team-compare-theirs",
+                        label: "Use theirs".into(),
+                        danger: false,
+                    },
+                    Choice {
+                        id: "team-compare-keep",
+                        label: "Keep mine".into(),
+                        danger: false,
+                    },
+                ],
+                default: 0,
+                cancel: 0,
+            },
+            window,
+            cx,
+        );
+        let team = team.downgrade();
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = reply.recv().await;
+            let _ = this.update_in(cx, |_, _, cx| {
+                let Some(team) = team.upgrade() else {
+                    return;
+                };
+                let still = matches!(
+                    team.read(cx).view().map(|v| &v.state),
+                    Some(SyncState::Conflicted(files)) if files.iter().any(|f| f.path == path)
+                );
+                match answer {
+                    Ok(1) if still => team.read(cx).take_theirs(&path),
+                    Ok(2) if still => team.read(cx).keep_mine(&path),
                     _ => {}
                 }
             });
@@ -3950,6 +4120,104 @@ impl Shell {
             // Focus inside the view so Escape reaches the dialog and the picker's own handler.
             focus.focus(window, cx);
         });
+    }
+
+    /// Opens the team dialog in `mode`; does nothing without installed team hooks or while
+    /// any other dialog is open. A join switches to the joined folder; a sign-in retries the
+    /// open workspace's held sync.
+    pub fn open_team_dialog(
+        &mut self,
+        mode: TeamDialogMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(hooks) = team::hooks(cx) else {
+            return;
+        };
+        if self.closing || self.team_dialog.is_some() || window.has_active_dialog(cx) {
+            return;
+        }
+        let view = cx.new(|cx| TeamDialog::new(mode, hooks, window, cx));
+        let events = cx.subscribe_in(
+            &view,
+            window,
+            |this, dialog, event, window, cx| match event {
+                // A call in flight keeps the dialog, so its result is always seen.
+                TeamDialogEvent::Close if dialog.read(cx).signing_in() => {}
+                TeamDialogEvent::Close => this.close_team_dialog(window, cx),
+                TeamDialogEvent::SignedIn => {
+                    this.close_team_dialog(window, cx);
+                    if let Some(team) = this.team() {
+                        team.update(cx, |t, cx| {
+                            t.set_revoke_note(None, cx);
+                            t.retry();
+                        });
+                    }
+                }
+                TeamDialogEvent::Joined(folder) => {
+                    let folder = folder.clone();
+                    this.close_team_dialog(window, cx);
+                    this.switch_workspace(folder, window, cx);
+                }
+            },
+        );
+        self.team_dialog = Some((view.clone(), events));
+        let shell = cx.weak_entity();
+        window.defer(cx, move |window, cx| {
+            // Another dialog may have opened since the call; it keeps the window.
+            if window.has_active_dialog(cx) {
+                let _ = shell.update(cx, |s, cx| s.drop_team_dialog(window, cx));
+                return;
+            }
+            let first = view.read(cx).input(TeamField::Server).focus_handle(cx);
+            window.open_dialog(cx, move |dialog, window, cx| {
+                let shell = shell.clone();
+                let muted = cx.theme().muted_foreground;
+                // Escape waits while a call is in flight, like Cancel.
+                let busy = view.read(cx).signing_in();
+                confirm::frame(dialog, px(520.), None, cx)
+                    .margin_top((content_size(window).height / 10.).max(px(64.)))
+                    .overlay_closable(false)
+                    .keyboard(!busy)
+                    .on_close(move |_, window, cx| {
+                        let _ = shell.update(cx, |s, cx| s.drop_team_dialog(window, cx));
+                    })
+                    .content({
+                        let view = view.clone();
+                        move |content, _, cx| {
+                            content.min_h_0().child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(confirm::title_row(
+                                        Some((Icons::FolderSync, muted)),
+                                        "Team workspace",
+                                        cx,
+                                    ))
+                                    .child(view.clone()),
+                            )
+                        }
+                    })
+            });
+            first.focus(window, cx);
+        });
+    }
+
+    fn close_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drop_team_dialog(window, cx) {
+            window.close_dialog(cx);
+        }
+    }
+
+    // Lets go of the dialog and its typed password and stops waiting on its call; true when
+    // one was open.
+    fn drop_team_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some((dialog, _)) = self.team_dialog.take() else {
+            return false;
+        };
+        let typed = dialog.read(cx).input(TeamField::Password).clone();
+        typed.update(cx, |s, cx| s.set_value("", window, cx));
+        true
     }
 
     // Reloads at once, then moves the form onto the new file so Save diffs against what is
@@ -5084,7 +5352,14 @@ impl Shell {
             _ => None,
         };
         let idle = idle.as_ref().map(|(n, l)| (n.as_str(), l));
-        status_bar(tab.map(|t| (t, t.model().read(cx))), idle, self.closing, cx)
+        let team = self.team().map(|t| team_view::chip(&cx.entity(), t, cx));
+        status_bar(
+            tab.map(|t| (t, t.model().read(cx))),
+            idle,
+            self.closing,
+            team,
+            cx,
+        )
     }
 
     // The no-tab column: four start actions, each calling the same method as its key binding.
@@ -5545,6 +5820,12 @@ impl Render for Shell {
             .text_color(cx.theme().foreground)
             .child(self.title_bar(window, cx))
             .children(self.workspace_banner(cx))
+            .children(self.team().and_then(|t| team_view::refusal_panel(t, cx)))
+            .children(
+                self.team()
+                    .map(|t| team_view::conflict_banners(&cx.entity(), t, cx))
+                    .unwrap_or_default(),
+            )
             .children(update_banner::banner(&cx.entity(), window, cx))
             .child(
                 div().flex_1().min_h_0().flex().children(rail).child(

@@ -30,6 +30,7 @@ mod dynamo;
 mod mongo;
 mod mssql;
 mod mysql;
+pub mod potluck;
 #[cfg(feature = "redis")]
 mod redis;
 mod surreal;

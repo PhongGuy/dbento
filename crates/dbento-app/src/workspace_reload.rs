@@ -132,10 +132,15 @@ pub fn judge_tab(
 
 /// A unified line diff of the disk text against the tab's, headed "--- disk" / "+++ this tab".
 pub fn disk_diff(disk: &str, mine: &str) -> String {
-    TextDiff::from_lines(disk, mine)
+    labelled_diff("disk", disk, "this tab", mine)
+}
+
+/// A unified line diff of `old` against `new`, headed "--- `old_name`" / "+++ `new_name`".
+pub fn labelled_diff(old_name: &str, old: &str, new_name: &str, new: &str) -> String {
+    TextDiff::from_lines(old, new)
         .unified_diff()
         .context_radius(3)
-        .header("disk", "this tab")
+        .header(old_name, new_name)
         .to_string()
 }
 

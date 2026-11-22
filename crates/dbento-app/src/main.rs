@@ -7,11 +7,16 @@
 #![warn(clippy::wildcard_enum_match_arm)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::launch::{self, Launch, LaunchError};
-use dbento_core::paths::STATE_DIR_VAR;
-use dbento_core::{KeychainStore, MemoryStore, SecretStore, TimedStore};
+use dbento_app::team::{self, TeamHooks};
+use dbento_core::paths::{STATE_DIR_VAR, StatePaths};
+use dbento_core::{
+    KeychainStore, KeychainTokenStore, MemoryStore, MemoryTokenStore, SecretStore, TimedStore,
+    TimedTokenStore, TokenStore,
+};
 use gpui_kit::AppContext;
 
 fn main() {
@@ -56,20 +61,34 @@ fn main() {
             })
             .detach();
             // DBENTO_STATE_DIR keeps a run's state apart, as `make demo` does.
-            let Some(paths) = AppPaths::for_state_dir(std::env::var_os(STATE_DIR_VAR)) else {
+            let Some(state_paths) = StatePaths::for_state_dir(std::env::var_os(STATE_DIR_VAR))
+            else {
                 eprintln!("dbento: no home directory for app state");
                 return cx.quit();
             };
+            let paths = AppPaths::from(state_paths.clone());
             // Connecting to the keychain can block, so it runs off the main thread; without
             // one, secrets live in memory for this run.
-            let keychain = cx.background_spawn(async { KeychainStore::new() });
+            let keychain =
+                cx.background_spawn(async { (KeychainStore::new(), KeychainTokenStore::new()) });
             cx.spawn(async move |cx| {
-                let (store, secrets_in_memory): (Arc<dyn SecretStore>, bool) = match keychain.await
-                {
+                let (secrets, tokens) = keychain.await;
+                let (store, secrets_in_memory): (Arc<dyn SecretStore>, bool) = match secrets {
                     Ok(k) => (Arc::new(TimedStore::new(k)), false),
                     Err(e) => {
                         eprintln!("dbento: keychain unavailable ({e}); secrets last until quit");
                         (Arc::new(MemoryStore::new()), true)
+                    }
+                };
+                // Team tokens get the same timeout, since sign-in, join and sign-out read them
+                // outside the sync, and the same memory fallback lasting until quit.
+                let tokens: Arc<dyn TokenStore> = match tokens {
+                    Ok(k) => Arc::new(TimedTokenStore::new(Arc::new(k), Duration::from_secs(10))),
+                    Err(e) => {
+                        eprintln!(
+                            "dbento: keychain unavailable ({e}); team sign-ins last until quit"
+                        );
+                        Arc::new(MemoryTokenStore::new())
                     }
                 };
                 let services = Services {
@@ -85,6 +104,7 @@ fn main() {
                         dbento_app::updates::UpdateHooks::real(),
                         cx,
                     );
+                    team::install(TeamHooks::new(tokens, state_paths), cx);
                     match start(services, dir, cx) {
                         Ok(_) => cx.activate(true),
                         Err(e) => {

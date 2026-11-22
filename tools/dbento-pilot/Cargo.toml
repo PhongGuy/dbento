@@ -11,7 +11,7 @@ publish = false
 
 [dependencies]
 dbento-app = { path = "../../crates/dbento-app" }
-dbento-core = { path = "../../crates/dbento-core" }
+dbento-core = { path = "../../crates/dbento-core", features = ["team"] }
 gpui-kit = "=0.10.0"
 gpui-pilot-host = { git = "https://github.com/PhongGuy/gpui-pilot", tag = "v0.6.0" }
 anyhow = "1"

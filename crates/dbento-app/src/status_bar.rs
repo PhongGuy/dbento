@@ -7,7 +7,7 @@ use dbento_core::{Engine, QueryLanguage};
 use gpui_kit::base::ObservedElement;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Stateful,
+    AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Stateful,
     StatefulInteractiveElement, Styled, TestSupportExt, div, px,
 };
 
@@ -160,10 +160,12 @@ pub fn run_elapsed(results: &[StatementResult]) -> Option<Duration> {
 /// Without a tab it reads `idle`, the explorer's selected connection, as "name · state" (else
 /// "No connection") and "Ready". The tab's display config gives the colour and its session
 /// config the name and target. `closing` says the window is waiting for the sessions to close.
+/// `team`, the team sync's chip in a bound folder, leads the right side.
 pub fn status_bar(
     tab: Option<(&QueryTab, &TabModel)>,
     idle: Option<(&str, &LinkState)>,
     closing: bool,
+    team: Option<AnyElement>,
     cx: &App,
 ) -> impl IntoElement + use<> {
     let dim = theme::dim(cx);
@@ -185,7 +187,12 @@ pub fn status_bar(
     // The left side shrinks, statement first and connection only once that is gone;
     // the figures and the right side never do.
     let mut left = div().flex().items_center().gap_1p5().flex_1().min_w_0();
-    let mut right = div().flex().flex_none().items_center().gap_1p5();
+    let mut right = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1p5()
+        .children(team);
     let Some((tab, model)) = tab else {
         let text = idle.map_or("No connection".to_owned(), |(name, link)| {
             format!("{name} \u{B7} {}", link.word())
