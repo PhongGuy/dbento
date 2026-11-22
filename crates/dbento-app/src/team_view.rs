@@ -12,6 +12,7 @@ use gpui_kit::{
 use crate::explorer::part_id;
 use crate::shell::Shell;
 use crate::team::{TeamSession, TeamView};
+use crate::team_dialog::TeamDialogMode;
 use crate::update_banner::label;
 use crate::{theme, ui};
 
@@ -70,18 +71,31 @@ pub fn retry_offered(state: &SyncState) -> bool {
 }
 
 /// `team-status` (ui::chip, named by its label, tooltip from chip_detail) and, when
-/// retry_offered, a `team-status-retry` button that calls `TeamSession::retry`.
-pub fn chip(session: &Entity<TeamSession>, cx: &App) -> AnyElement {
+/// retry_offered, a `team-status-retry` button that calls `TeamSession::retry`. While signed
+/// out, clicking the chip opens the sign-in dialog for the binding's account.
+pub fn chip(shell: &Entity<Shell>, session: &Entity<TeamSession>, cx: &App) -> AnyElement {
     let view = session.read(cx).view();
     let says = chip_label(view);
     let detail = view.and_then(chip_detail);
     let retry = view.is_some_and(|v| retry_offered(&v.state));
+    let signed_out = view.is_some_and(|v| v.state == SyncState::SignedOut);
     let mut chip = ui::chip_base(cx)
         .id("team-status")
         .aria_label(says.clone())
         .child(says);
     if let Some(detail) = detail {
         chip = chip.tooltip(move |window, cx| theme::tooltip(detail.clone(), window, cx));
+    }
+    if signed_out {
+        let record = session.read(cx).record();
+        let mode = TeamDialogMode::SignIn {
+            server: record.server.clone(),
+            username: record.username.clone(),
+        };
+        let shell = shell.clone();
+        chip = chip.cursor_pointer().on_click(move |_, window, cx| {
+            shell.update(cx, |s, cx| s.open_team_dialog(mode.clone(), window, cx));
+        });
     }
     let retry = retry.then(|| {
         let session = session.clone();

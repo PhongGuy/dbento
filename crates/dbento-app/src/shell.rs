@@ -12,11 +12,12 @@ use std::time::Duration;
 
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
-    EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, OpenError, RelationKind,
-    RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
-    SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher,
-    WriteError, connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret,
-    secret_env_var, secret_renames, seen_text, seen_workspace, tls_key_is_encrypted,
+    EditError, EditPlan, Engine, FolderPath, GrantState, LogoutError, ObjectRef, OpenError,
+    RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey,
+    SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem,
+    WorkspaceWatcher, WriteError, connect, move_secret, plan_edit, resolve_key_passphrase,
+    resolve_secret, secret_env_var, secret_renames, seen_text, seen_workspace, team_logout,
+    tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -87,7 +88,7 @@ use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
-use crate::team::{self, TeamEvent, TeamSession};
+use crate::team::{self, TeamEvent, TeamSession, TeamView};
 use crate::team_dialog::{TeamDialog, TeamDialogEvent, TeamDialogMode, TeamField};
 use crate::team_view;
 use crate::theme::{self, Appearance, CycleAppearance};
@@ -1995,6 +1996,7 @@ impl Shell {
             C::CycleAppearance => self.cycle_appearance(cx),
             C::OpenSettings => self.open_settings(window, cx),
             C::JoinTeamWorkspace => self.open_team_dialog(TeamDialogMode::Join, window, cx),
+            C::TeamSignOut => self.team_sign_out(window, cx),
             C::CheckForUpdates => updates::check_now(cx),
             // Like the `query-save` button: focus the editor so the action reaches the tab's
             // own handlers, whatever the dialog refocused on close.
@@ -2553,6 +2555,51 @@ impl Shell {
     /// The open workspace's team session, if it has one.
     pub fn team(&self) -> Option<&Entity<TeamSession>> {
         self.team.as_ref().map(|(team, _)| team)
+    }
+
+    /// Signs the open team workspace's account out: `team_logout` on the background executor,
+    /// then `TeamSession::retry`, so the chip lands on Signed out. Nothing without a session.
+    pub fn team_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(team), Some(hooks)) = (self.team().cloned(), team::hooks(cx)) else {
+            return;
+        };
+        let record = team.read(cx).record().clone();
+        // Revoking talks to the server and the token store may block, so neither runs here.
+        let job = cx.background_spawn(async move {
+            let server = ServerUrl::parse(&record.server).map_err(|e| e.to_string())?;
+            match team_logout(
+                hooks.tokens().as_ref(),
+                hooks.paths(),
+                &server,
+                Some(&record.username),
+            ) {
+                // An account already gone is as signed out as one just removed.
+                Ok(_) | Err(LogoutError::NotSignedIn { .. }) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
+        });
+        // A workspace closed meanwhile has no session left to tell.
+        let team = team.downgrade();
+        cx.spawn_in(window, async move |_, cx| {
+            let outcome = job.await;
+            let _ = team.update(cx, |t, cx| match outcome {
+                // The next cycle finds no token and reports Signed out.
+                Ok(()) => t.retry(),
+                Err(why) => {
+                    let view = t.view().cloned();
+                    t.show(
+                        TeamView {
+                            state: SyncState::Failed(why),
+                            unpushed: view.as_ref().map_or(0, |v| v.unpushed),
+                            last_synced: view.and_then(|v| v.last_synced),
+                            note: None,
+                        },
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     /// How many times the app state file has been written since start.
@@ -5298,7 +5345,7 @@ impl Shell {
             _ => None,
         };
         let idle = idle.as_ref().map(|(n, l)| (n.as_str(), l));
-        let team = self.team().map(|t| team_view::chip(t, cx));
+        let team = self.team().map(|t| team_view::chip(&cx.entity(), t, cx));
         status_bar(
             tab.map(|t| (t, t.model().read(cx))),
             idle,

@@ -228,6 +228,7 @@ mod team_dialog;
 mod team_hooks;
 mod team_refusal;
 mod team_session;
+mod team_sign_out;
 mod theme;
 mod title_controls;
 mod tree_affordances;
