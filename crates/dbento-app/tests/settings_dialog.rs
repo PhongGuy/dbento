@@ -244,6 +244,11 @@ fn the_step_buttons_change_a_size_within_its_range(cx: &mut TestAppContext) {
         step(cx, "settings-ui-font-size", "increment");
     }
     assert_eq!(get(cx, &d).ui_font.size, 16, "UI stops at 16");
+    assert_eq!(
+        size_text(cx, &d, FontTarget::Ui),
+        "16",
+        "the field stops at 16 too"
+    );
     step(cx, "settings-editor-font-size", "decrement");
     assert_eq!(get(cx, &d).editor_font.size, 11);
 }
@@ -262,6 +267,28 @@ fn up_and_down_step_a_focused_size(cx: &mut TestAppContext) {
             size_text(cx, &d, FontTarget::Grid)
         ),
         (11, "11".to_owned())
+    );
+}
+
+#[gpui_kit::test]
+fn up_and_down_stop_at_the_ends_of_the_range(cx: &mut TestAppContext) {
+    let d = dialog(cx);
+    focus_size(cx, &d, FontTarget::Ui);
+    for _ in 0..6 {
+        press(cx, &d, "up");
+    }
+    assert_eq!(
+        (size_text(cx, &d, FontTarget::Ui), get(cx, &d).ui_font.size),
+        ("16".to_owned(), 16),
+        "Up stops at 16"
+    );
+    for _ in 0..6 {
+        press(cx, &d, "down");
+    }
+    assert_eq!(
+        (size_text(cx, &d, FontTarget::Ui), get(cx, &d).ui_font.size),
+        ("12".to_owned(), 12),
+        "Down stops at 12"
     );
 }
 

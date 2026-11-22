@@ -6,10 +6,9 @@
 use std::ops::RangeInclusive;
 
 use gpui_kit::base::actions::{Cancel, Confirm};
-use gpui_kit::base::{StepAction, step_value};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent};
+use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -166,8 +165,14 @@ impl SettingsView {
         let installed = cx.text_system().all_font_names();
         let current = store.read(cx).get().clone();
         let sizes = FontTarget::ALL.map(|t| {
-            let size = t.choice(&current).size;
-            cx.new(|cx| InputState::new(window, cx).default_value(size.to_string()))
+            // The kit's number field steps by 1 and stops at the target's ends on its own.
+            let (size, range) = (t.choice(&current).size, t.sizes());
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(size.to_string())
+                    .min(f64::from(*range.start()))
+                    .max(f64::from(*range.end()))
+            })
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let mut subscriptions: Vec<Subscription> = FontTarget::ALL
@@ -178,16 +183,6 @@ impl SettingsView {
                 })
             })
             .collect();
-        // The kit's number field leaves stepping to us, so each step keeps the target's range.
-        subscriptions.extend(FontTarget::ALL.iter().map(|&t| {
-            cx.subscribe_in(
-                &sizes[t.index()],
-                window,
-                move |this, _, e: &NumberInputEvent, window, cx| match e {
-                    NumberInputEvent::Step(action) => this.step(t, *action, window, cx),
-                },
-            )
-        }));
         subscriptions.push(cx.subscribe(&search, |_, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
                 cx.notify();
@@ -245,25 +240,6 @@ impl SettingsView {
             InputEvent::PressEnter { .. } | InputEvent::Blur => self.show_stored(t, window, cx),
             _ => {}
         }
-    }
-
-    // A step from the kit's number field, which has already focused it: move the shown
-    // value one size within range and apply it as a typed change would.
-    fn step(
-        &mut self,
-        t: FontTarget,
-        action: StepAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (range, input) = (t.sizes(), self.sizes[t.index()].clone());
-        let shown = input.read(cx).value();
-        let (min, max) = (f64::from(*range.start()), f64::from(*range.end()));
-        let Some(next) = step_value(&shown, action, 1., Some(min), Some(max)) else {
-            return;
-        };
-        input.update(cx, |s, cx| s.set_value(next, window, cx));
-        self.size_event(t, &InputEvent::Change, window, cx);
     }
 
     fn typed_size(&self, t: FontTarget, cx: &App) -> Option<u8> {

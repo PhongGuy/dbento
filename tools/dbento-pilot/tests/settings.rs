@@ -204,8 +204,19 @@ async fn a_stepped_and_clicked_size_field_is_the_one_focused_node() {
             json!({ "target": { "role": "SpinButton", "name": "Grid font size" } }),
         )
         .await;
-    pilot.ok("wait", json!({ "ms": 200 })).await;
-    let tree = pilot.ok("tree", json!({})).await;
+    // Wait for focus to reach the field, then require it to be the only focused node.
+    let outer = field["path"].as_array().expect("a path").clone();
+    let inside = |n: &Value| {
+        n["path"]
+            .as_array()
+            .is_some_and(|p| p.len() > outer.len() && p.starts_with(&outer))
+    };
+    let tree = until(&pilot, "focus inside the size field", |t| {
+        t["nodes"]
+            .as_array()
+            .is_some_and(|n| n.iter().any(|n| n["focused"] == json!(true) && inside(n)))
+    })
+    .await;
     let focused: Vec<&Value> = tree["nodes"]
         .as_array()
         .expect("tree nodes")
@@ -213,12 +224,6 @@ async fn a_stepped_and_clicked_size_field_is_the_one_focused_node() {
         .filter(|n| n["focused"] == json!(true))
         .collect();
     assert_eq!(focused.len(), 1, "one focused node: {focused:?}");
-    let outer = field["path"].as_array().expect("a path");
-    let inner = focused[0]["path"].as_array().expect("a path");
-    assert!(
-        inner.len() > outer.len() && inner.starts_with(outer),
-        "focus sits outside the size field: {inner:?} vs {outer:?}"
-    );
     // The click on the right end stepped 12 to 13, as the saved file shows.
     let file = ws.path().join(".state/settings.json");
     let deadline = Instant::now() + Duration::from_secs(10);
