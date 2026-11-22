@@ -5,7 +5,7 @@
 use std::fmt::Display;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use dbento_core::paths::StatePaths;
 use dbento_core::{
@@ -70,7 +70,11 @@ pub(crate) enum TeamCommand {
     /// Show the folder's team binding, account and sync state, without calling the server.
     Status,
     /// Save, pull and push the folder once.
-    Sync,
+    Sync {
+        /// Keep syncing on every save and server change until Ctrl-C.
+        #[arg(long)]
+        watch: bool,
+    },
     /// Settle one conflicted path, keeping your saved copy or the server's side.
     Resolve {
         /// The path relative to the workspace, as `sync` printed it.
@@ -124,7 +128,8 @@ pub(crate) fn run(workspace: Option<&Path>, cmd: TeamCommand) -> Exit {
             Ok(dir) => team_folder::status(tokens.as_ref(), &paths, &dir),
             Err(e) => failed(e),
         },
-        TeamCommand::Sync => match folder() {
+        TeamCommand::Sync { watch } => match folder() {
+            Ok(dir) if watch => team_folder::watch(tokens, &paths, &dir),
             Ok(dir) => team_folder::sync(tokens.as_ref(), &paths, &dir),
             Err(e) => failed(e),
         },
@@ -328,7 +333,7 @@ impl TokenStore for LazyTokenKeychain {
 
 /// Where session tokens live: the keychain, or in debug builds with
 /// `DBENTO_TEST_TOKEN_STORE=memory` a memory store, so tests never reach the real keychain.
-pub(crate) fn token_store(paths: &StatePaths) -> Box<dyn TokenStore> {
+pub(crate) fn token_store(paths: &StatePaths) -> Arc<dyn TokenStore> {
     if cfg!(debug_assertions)
         && std::env::var_os("DBENTO_TEST_TOKEN_STORE").is_some_and(|v| v == "memory")
     {
@@ -346,7 +351,7 @@ pub(crate) fn token_store(paths: &StatePaths) -> Box<dyn TokenStore> {
                 let _ = store.set(&account, &seed);
             }
         }
-        return Box::new(store);
+        return Arc::new(store);
     }
-    Box::new(LazyTokenKeychain::default())
+    Arc::new(LazyTokenKeychain::default())
 }
