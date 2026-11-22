@@ -123,6 +123,7 @@ pub struct TeamSession {
     conflicts: Option<ConflictStore>,
     sync: Option<TeamSync>,
     view: Option<TeamView>,
+    revoke_note: Option<&'static str>,
     _pump: Task<()>,
     _quit: Subscription,
 }
@@ -181,6 +182,7 @@ impl TeamSession {
             conflicts,
             sync,
             view,
+            revoke_note: None,
             _pump: pump,
             _quit: quit,
         }
@@ -189,6 +191,17 @@ impl TeamSession {
     /// The last status the sync reported, if any yet.
     pub fn view(&self) -> Option<&TeamView> {
         self.view.as_ref()
+    }
+
+    /// Why the last sign-out may have left its token live on the server, until a sign-in.
+    pub fn revoke_note(&self) -> Option<&str> {
+        self.revoke_note
+    }
+
+    /// Records whether the last sign-out could not revoke its token; a sign-in passes None.
+    pub fn set_revoke_note(&mut self, note: Option<&'static str>, cx: &mut Context<Self>) {
+        self.revoke_note = note;
+        cx.notify();
     }
 
     /// The bound folder.

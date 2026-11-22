@@ -2573,8 +2573,9 @@ impl Shell {
                 &server,
                 Some(&record.username),
             ) {
+                Ok(report) => Ok(!report.revoked),
                 // An account already gone is as signed out as one just removed.
-                Ok(_) | Err(LogoutError::NotSignedIn { .. }) => Ok(()),
+                Err(LogoutError::NotSignedIn { .. }) => Ok(false),
                 Err(e) => Err(e.to_string()),
             }
         });
@@ -2584,7 +2585,10 @@ impl Shell {
             let outcome = job.await;
             let _ = team.update(cx, |t, cx| match outcome {
                 // The next cycle finds no token and reports Signed out.
-                Ok(()) => t.retry(),
+                Ok(live) => {
+                    t.set_revoke_note(live.then_some(team_view::NOT_REVOKED), cx);
+                    t.retry();
+                }
                 Err(why) => {
                     let view = t.view().cloned();
                     t.show(
@@ -4144,7 +4148,10 @@ impl Shell {
                 TeamDialogEvent::SignedIn => {
                     this.close_team_dialog(window, cx);
                     if let Some(team) = this.team() {
-                        team.read(cx).retry();
+                        team.update(cx, |t, cx| {
+                            t.set_revoke_note(None, cx);
+                            t.retry();
+                        });
                     }
                 }
                 TeamDialogEvent::Joined(folder) => {

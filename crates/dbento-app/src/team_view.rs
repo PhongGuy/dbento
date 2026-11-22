@@ -62,6 +62,19 @@ pub fn chip_detail(view: &TeamView) -> Option<String> {
     }
 }
 
+/// The signed-out chip's tooltip when the server did not revoke the old token.
+pub const NOT_REVOKED: &str = "Signed out here, but the server did not revoke the old session token. Revoke it on the server.";
+
+/// The chip's tooltip: chip_detail, or while signed out the sign-out's revoke note.
+pub fn chip_tooltip(view: Option<&TeamView>, revoke_note: Option<&str>) -> Option<String> {
+    let view = view?;
+    if view.state == SyncState::SignedOut {
+        revoke_note.map(str::to_owned)
+    } else {
+        chip_detail(view)
+    }
+}
+
 /// Whether a retry can help: the server, the lock or git may be back, or the failure passed.
 pub fn retry_offered(state: &SyncState) -> bool {
     matches!(
@@ -70,13 +83,13 @@ pub fn retry_offered(state: &SyncState) -> bool {
     )
 }
 
-/// `team-status` (ui::chip, named by its label, tooltip from chip_detail) and, when
+/// `team-status` (ui::chip, named by its label, tooltip from chip_tooltip) and, when
 /// retry_offered, a `team-status-retry` button that calls `TeamSession::retry`. While signed
 /// out, clicking the chip opens the sign-in dialog for the binding's account.
 pub fn chip(shell: &Entity<Shell>, session: &Entity<TeamSession>, cx: &App) -> AnyElement {
     let view = session.read(cx).view();
     let says = chip_label(view);
-    let detail = view.and_then(chip_detail);
+    let detail = chip_tooltip(view, session.read(cx).revoke_note());
     let retry = view.is_some_and(|v| retry_offered(&v.state));
     let signed_out = view.is_some_and(|v| v.state == SyncState::SignedOut);
     let mut chip = ui::chip_base(cx)
