@@ -1,15 +1,16 @@
 //! What the app shows of a team sync: the status-bar chip with its retry, and the panel
-//! listing why the server refused a push.
+//! listing why the server refused a push, and a banner per conflicted file.
 
-use dbento_core::{Refusal, SyncState};
+use dbento_core::{ConflictKind, Refusal, SyncState};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Role,
-    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, px,
+    AnyElement, App, ElementId, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Role, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, px,
 };
 
 use crate::explorer::part_id;
+use crate::shell::Shell;
 use crate::team::{TeamSession, TeamView};
 use crate::update_banner::label;
 use crate::{theme, ui};
@@ -152,4 +153,95 @@ pub fn refusal_panel(session: &Entity<TeamSession>, cx: &App) -> Option<AnyEleme
         )
         .child(retry);
     Some(panel.into_any_element())
+}
+
+/// The banner line for conflicted `path`: where the server's side and mine each went.
+pub fn conflict_text(path: &str, kind: ConflictKind) -> String {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ConflictKind is non_exhaustive; a kind added later reads as both changed"
+    )]
+    match kind {
+        ConflictKind::DeletedLocally => format!(
+            "{path} was deleted here and changed on the server. The server's version is back."
+        ),
+        ConflictKind::DeletedRemotely => {
+            format!("{path} was deleted on the server and changed here. Yours is saved.")
+        }
+        _ => format!(
+            "{path} changed here and on the server. The server's version is open; yours is saved."
+        ),
+    }
+}
+
+/// One row per conflicted file while the state is Conflicted, all keyed by path with
+/// `part_id`: row `team-conflict`, text `team-conflict-text`, buttons `team-conflict-reload`,
+/// `team-conflict-keep`, `team-conflict-compare`.
+pub fn conflict_banners(
+    shell: &Entity<Shell>,
+    session: &Entity<TeamSession>,
+    cx: &App,
+) -> Vec<AnyElement> {
+    let Some(SyncState::Conflicted(files)) = session.read(cx).view().map(|v| &v.state) else {
+        return Vec::new();
+    };
+    let theme = cx.theme();
+    files
+        .iter()
+        .map(|file| {
+            let path = file.path.clone();
+            // Reload keeps the server's file already on disk, so the saved copy is dropped and
+            // open tabs reread it; Keep mine puts the copy back and pushes it.
+            let reload = {
+                let (shell, session, path) = (shell.clone(), session.clone(), path.clone());
+                button(part_id("team-conflict-reload", &path), "Reload").on_click(
+                    move |_, window, cx| {
+                        session.read(cx).take_theirs(&path);
+                        shell.update(cx, |s, cx| s.workspace_files_changed(window, cx));
+                    },
+                )
+            };
+            let keep = {
+                let (session, path) = (session.clone(), path.clone());
+                button(part_id("team-conflict-keep", &path), "Keep mine")
+                    .on_click(move |_, _, cx| session.read(cx).keep_mine(&path))
+            };
+            let compare = {
+                let (shell, path) = (shell.clone(), path.clone());
+                button(part_id("team-conflict-compare", &path), "Compare").on_click(
+                    move |_, window, cx| {
+                        shell.update(cx, |s, cx| s.ask_team_compare(path.clone(), window, cx));
+                    },
+                )
+            };
+            h_flex()
+                .id(part_id("team-conflict", &path))
+                .role(Role::Status)
+                .test_support()
+                // A narrow window wraps the row onto more lines instead of clipping its actions.
+                .min_h(px(32.))
+                .py_1()
+                .flex_wrap()
+                .flex_none()
+                .gap_2()
+                .px_3()
+                .border_b_1()
+                .border_color(theme.border)
+                .bg(theme.secondary)
+                .text_sm()
+                .child(label(
+                    part_id("team-conflict-text", &path),
+                    conflict_text(&path, file.kind),
+                    theme.foreground,
+                ))
+                .child(reload)
+                .child(compare)
+                .child(keep)
+                .into_any_element()
+        })
+        .collect()
+}
+
+fn button(id: ElementId, text: &'static str) -> Button {
+    ui::secondary(Button::new(id)).small().label(text)
 }

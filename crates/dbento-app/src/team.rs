@@ -8,7 +8,8 @@ use std::time::SystemTime;
 
 use dbento_core::paths::StatePaths;
 use dbento_core::{
-    BindingRecord, GitOptions, SyncConfig, SyncState, SyncStatus, TeamFile, TeamSync, TokenStore,
+    BindingRecord, ConflictStore, GitOptions, SyncConfig, SyncState, SyncStatus, TeamFile,
+    TeamSync, TokenStore,
 };
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
 
@@ -111,6 +112,7 @@ impl From<SyncStatus> for TeamView {
 pub struct TeamSession {
     dir: PathBuf,
     record: BindingRecord,
+    conflicts: Option<ConflictStore>,
     sync: Option<TeamSync>,
     view: Option<TeamView>,
     _pump: Task<()>,
@@ -125,6 +127,8 @@ impl TeamSession {
         cx: &mut Context<TeamSession>,
     ) -> TeamSession {
         let (tx, rx) = async_channel::unbounded::<SyncStatus>();
+        // A folder that cannot be resolved has no saved copies to show.
+        let conflicts = ConflictStore::for_workspace(&hooks.paths, &dir).ok();
         let config = hooks.sync.clone().git(hooks.git.clone());
         // The driver thread only forwards; all state changes happen on the UI thread.
         let started = TeamSync::start_with(
@@ -166,6 +170,7 @@ impl TeamSession {
         TeamSession {
             dir,
             record,
+            conflicts,
             sync,
             view,
             _pump: pump,
@@ -186,6 +191,12 @@ impl TeamSession {
     /// The folder's binding as `team.json` held it when the session started.
     pub fn record(&self) -> &BindingRecord {
         &self.record
+    }
+
+    /// The text of my saved side of conflicted `rel`, if a copy is kept.
+    pub fn saved_copy(&self, rel: &str) -> Option<String> {
+        let path = self.conflicts.as_ref()?.copy_path(rel);
+        std::fs::read_to_string(path).ok()
     }
 
     /// Shows `view` as the sync's status.

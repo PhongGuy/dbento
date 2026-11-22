@@ -14,9 +14,9 @@ use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
     EditError, EditPlan, Engine, FolderPath, GrantState, ObjectRef, OpenError, RelationKind,
     RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey, SecretSource,
-    SessionOptions, Sort, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher, WriteError,
-    connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var,
-    secret_renames, seen_text, seen_workspace, tls_key_is_encrypted,
+    SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem, WorkspaceWatcher,
+    WriteError, connect, move_secret, plan_edit, resolve_key_passphrase, resolve_secret,
+    secret_env_var, secret_renames, seen_text, seen_workspace, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -95,6 +95,7 @@ use crate::update_banner;
 use crate::updates::{self, UpdatesEvent};
 use crate::workspace_reload::{
     self, DiskBanner, DiskRead, TabDisk, TabVerdict, TomlVerdict, disk_diff, judge_tab, judge_toml,
+    labelled_diff,
 };
 
 /// The database a Postgres Test opens when the form names none: every server has it.
@@ -3155,6 +3156,69 @@ impl Shell {
         .detach();
     }
 
+    /// Shows conflicted `path` as the server's file on disk (-) against my saved copy (+);
+    /// "Use theirs" and "Keep mine" act as the banner's Reload and Keep mine while the file is
+    /// still conflicted when the answer comes.
+    pub fn ask_team_compare(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(team) = self.team().cloned() else {
+            return;
+        };
+        let session = team.read(cx);
+        let theirs = std::fs::read_to_string(session.dir().join(&path)).unwrap_or_default();
+        let mine = session.saved_copy(&path).unwrap_or_default();
+        let reply = ask(
+            Ask {
+                title: format!("Conflict in {path}").into(),
+                detail: Some("Lines on the server (-) and yours (+).".into()),
+                sql: Some(labelled_diff("server", &theirs, "mine", &mine).into()),
+                language: "text",
+                choices: vec![
+                    Choice {
+                        id: "team-compare-cancel",
+                        label: "Cancel".into(),
+                        danger: false,
+                    },
+                    Choice {
+                        id: "team-compare-theirs",
+                        label: "Use theirs".into(),
+                        danger: false,
+                    },
+                    Choice {
+                        id: "team-compare-keep",
+                        label: "Keep mine".into(),
+                        danger: false,
+                    },
+                ],
+                default: 0,
+                cancel: 0,
+            },
+            window,
+            cx,
+        );
+        let team = team.downgrade();
+        cx.spawn_in(window, async move |this, cx| {
+            let answer = reply.recv().await;
+            let _ = this.update_in(cx, |shell, window, cx| {
+                let Some(team) = team.upgrade() else {
+                    return;
+                };
+                let still = matches!(
+                    team.read(cx).view().map(|v| &v.state),
+                    Some(SyncState::Conflicted(files)) if files.iter().any(|f| f.path == path)
+                );
+                match answer {
+                    Ok(1) if still => {
+                        team.read(cx).take_theirs(&path);
+                        shell.workspace_files_changed(window, cx);
+                    }
+                    Ok(2) if still => team.read(cx).keep_mine(&path),
+                    _ => {}
+                }
+            });
+        })
+        .detach();
+    }
+
     // Takes the text the disk banner reported into `tab`, as a reload applies a read.
     fn take_disk_text(
         &mut self,
@@ -5587,6 +5651,11 @@ impl Render for Shell {
             .child(self.title_bar(window, cx))
             .children(self.workspace_banner(cx))
             .children(self.team().and_then(|t| team_view::refusal_panel(t, cx)))
+            .children(
+                self.team()
+                    .map(|t| team_view::conflict_banners(&cx.entity(), t, cx))
+                    .unwrap_or_default(),
+            )
             .children(update_banner::banner(&cx.entity(), window, cx))
             .child(
                 div().flex_1().min_h_0().flex().children(rail).child(

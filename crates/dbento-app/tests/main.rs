@@ -223,6 +223,7 @@ mod tab_titles;
 mod table_restore;
 mod tabs;
 mod team_chip;
+mod team_conflict;
 mod team_hooks;
 mod team_refusal;
 mod team_session;
