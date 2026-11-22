@@ -5,7 +5,10 @@ use dbento_app::team_dialog::{TeamDialogEvent, TeamDialogMode, TeamField, TeamSt
 use dbento_core::{SyncState, TeamFile, TokenStore as _};
 use dbento_testkit::potluck::Reply;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AppContext as _, TestAppContext};
+use gpui_kit::{
+    AppContext as _, Focusable as _, InputEvent as _, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseUpEvent, TestAppContext,
+};
 
 use crate::support::team::{TeamFx, TeamStarted, start_on, team_fx_with, wait_view};
 use crate::support::{click_id, label_of, present, wait_real};
@@ -181,5 +184,108 @@ fn a_join_in_flight_holds_the_dialog_open_and_still_switches(cx: &mut TestAppCon
             .read_with(cx, |sh, _| sh.workspace().map(|w| w.dir().to_path_buf()));
         open.is_some() && open == real()
     });
+    assert!(s.shell.read_with(cx, |sh, _| sh.team_dialog().is_none()));
+}
+
+// Focuses `field` as typing into it would.
+fn focus(cx: &mut TestAppContext, s: &TeamStarted, field: TeamField) {
+    let dialog = s
+        .shell
+        .read_with(cx, |sh, _| sh.team_dialog().cloned())
+        .unwrap();
+    let input = dialog.read_with(cx, |d, _| d.input(field).clone());
+    cx.update_window(s.win, |_, w, cx| {
+        input.read(cx).focus_handle(cx).focus(w, cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+// With `field` focused, clicks `button` and presses Escape in one update with no parking, so
+// the call is still in flight; true when the dialog is still drawn afterwards. The click is
+// raw events and the frame after it a plain draw, as in the app: the kit's click and press
+// force a full refresh, which would redraw the dialog's frame and hide a stale one.
+fn escape_while(
+    cx: &mut TestAppContext,
+    s: &TeamStarted,
+    field: TeamField,
+    button: &'static str,
+) -> bool {
+    focus(cx, s, field);
+    cx.update_window(s.win, |_, w, cx| {
+        w.render_frame(cx);
+        let at = w.find(button).bounds().center();
+        let down = MouseDownEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        w.dispatch_event(down.to_platform_input(), cx);
+        let up = MouseUpEvent {
+            button: MouseButton::Left,
+            position: at,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        };
+        w.dispatch_event(up.to_platform_input(), cx);
+        w.draw(cx).clear(cx);
+        w.dispatch_keystroke(Keystroke::parse("escape").unwrap(), cx);
+        w.render_frame(cx);
+        w.try_find("team-dialog").is_some()
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn escape_during_a_sign_in_keeps_the_dialog_and_its_answer(cx: &mut TestAppContext) {
+    let fx = team_fx_with("write", false);
+    let s = start_on(cx, &fx.ws, Some(fx.hooks()));
+    open(cx, &s);
+    fill(cx, &s, TeamField::Server, fx.stub.uri());
+    fill(cx, &s, TeamField::User, "ada");
+    fill(cx, &s, TeamField::Password, "pw");
+    assert!(
+        escape_while(cx, &s, TeamField::Password, "team-sign-in"),
+        "Escape waits for the sign-in"
+    );
+    wait_real(cx, "the workspace list", |cx| {
+        present(cx, s.win, part_id("team-workspace", "acme/shared"))
+    });
+    // Once the answer is in, Escape closes the dialog again.
+    focus(cx, &s, TeamField::Folder);
+    cx.update_window(s.win, |_, w, cx| {
+        w.render_frame(cx);
+        w.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        !present(cx, s.win, "team-dialog"),
+        "Escape closes an idle dialog"
+    );
+}
+
+#[gpui_kit::test]
+fn escape_during_a_join_keeps_the_dialog_and_still_switches(cx: &mut TestAppContext) {
+    let fx = team_fx_with("write", false);
+    let s = start_on(cx, &fx.ws, Some(fx.hooks()));
+    signed_in_list(cx, &fx, &s);
+    let target = fx.root.join("joined");
+    click_id(cx, s.win, part_id("team-workspace", "acme/shared"));
+    fill(cx, &s, TeamField::Folder, target.to_str().unwrap());
+    assert!(
+        escape_while(cx, &s, TeamField::Folder, "team-join"),
+        "Escape waits for the join"
+    );
+    let real = || std::fs::canonicalize(&target).ok();
+    wait_real(cx, "the switch", |cx| {
+        let open = s
+            .shell
+            .read_with(cx, |sh, _| sh.workspace().map(|w| w.dir().to_path_buf()));
+        open.is_some() && open == real()
+    });
+    // The join's answer closes the dialog as it switches.
     assert!(s.shell.read_with(cx, |sh, _| sh.team_dialog().is_none()));
 }
