@@ -3,8 +3,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use dbento_core::{
-    ConflictKind, ConflictStore, GitOptions, Role, StatePaths, SyncError, SyncOutcome, repo_lock,
-    sync_once, unpushed,
+    ConflictKind, ConflictStore, GitOptions, ReadBlock, Role, StatePaths, SyncError, SyncOutcome,
+    repo_lock, sync_once, unpushed,
 };
 
 use crate::support::{Sandbox, binding, read, write};
@@ -116,6 +116,88 @@ fn a_read_member_pulls_and_never_pushes() {
         Some("select 1;\n")
     );
     assert_eq!(sb.git(&w, &["status", "--porcelain"]), " M queries/a.sql\n");
+}
+
+#[test]
+fn a_reader_whose_edit_collides_is_held_instead_of_stuck() {
+    let sb = Sandbox::new();
+    sb.origin();
+    let (mate, w) = (sb.clone_as("mate"), sb.clone_as("w"));
+    sb.teammate(&mate, "dbento.toml", Some("name = \"theirs\"\n"));
+    write(&w, "dbento.toml", "name = \"mine\"\n");
+    let reader = binding(&w).with_role(Role::Read);
+    for _ in 0..2 {
+        assert_eq!(
+            sync_once(&reader, TOKEN, &state(&sb), &sb.options()).unwrap(),
+            SyncOutcome::ReadOnlyBlocked(ReadBlock::Edits(vec!["dbento.toml".into()]))
+        );
+    }
+    assert_eq!(
+        read(&w, "dbento.toml").as_deref(),
+        Some("name = \"mine\"\n")
+    );
+    assert_eq!(
+        sb.git(&w, &["status", "--porcelain"]),
+        " M dbento.toml\n",
+        "nothing committed"
+    );
+    assert_eq!(unpushed(&reader, &sb.options()).unwrap(), 0);
+}
+
+#[test]
+fn a_reader_with_an_unpushed_commit_is_held_and_says_so() {
+    let sb = Sandbox::new();
+    sb.origin();
+    let (mate, w) = (sb.clone_as("mate"), sb.clone_as("w"));
+    write(&w, "queries/mine.sql", "select 2;\n");
+    sb.git(&w, &["add", "-A"]);
+    sb.git(&w, &["commit", "-q", "-m", "before the demotion"]);
+    sb.teammate(&mate, "dbento.toml", Some("name = \"theirs\"\n"));
+    let reader = binding(&w).with_role(Role::Read);
+    assert_eq!(
+        sync_once(&reader, TOKEN, &state(&sb), &sb.options()).unwrap(),
+        SyncOutcome::ReadOnlyBlocked(ReadBlock::Commits(1))
+    );
+    assert_eq!(
+        read(&w, "dbento.toml").as_deref(),
+        Some("name = \"seed\"\n")
+    );
+    assert_eq!(sb.origin_show("queries/mine.sql"), None);
+}
+
+#[test]
+fn a_branch_deleted_on_the_server_stops_the_sync_and_is_never_recreated() {
+    let sb = Sandbox::new();
+    sb.origin();
+    let w = sb.clone_as("w");
+    sb.git(
+        sb.path(),
+        &[
+            "--git-dir",
+            "origin.git",
+            "update-ref",
+            "-d",
+            "refs/heads/main",
+        ],
+    );
+    write(&w, "queries/b.sql", "select 2;\n");
+    for role in [Role::Write, Role::Read] {
+        let got = sync_once(
+            &binding(&w).with_role(role),
+            TOKEN,
+            &state(&sb),
+            &sb.options(),
+        );
+        assert!(
+            matches!(&got, Err(SyncError::BranchGone { branch }) if branch == "main"),
+            "{role:?}: {got:?}"
+        );
+    }
+    assert_eq!(
+        sb.origin_show("dbento.toml"),
+        None,
+        "the branch stays deleted"
+    );
 }
 
 /// Options whose `git` is a wrapper that, before a push, makes the racer clone push first:

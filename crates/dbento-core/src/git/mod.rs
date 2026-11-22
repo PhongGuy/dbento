@@ -239,6 +239,12 @@ pub enum SyncError {
         /// How many pushes were tried.
         pushes: u32,
     },
+    /// The server no longer has the bound branch; nothing was pushed, so it is not recreated.
+    #[error("the server no longer has branch {branch}; nothing was pushed")]
+    BranchGone {
+        /// The bound branch.
+        branch: String,
+    },
     /// Reading or writing a file failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),

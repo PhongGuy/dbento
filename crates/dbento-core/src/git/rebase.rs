@@ -9,6 +9,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use super::commit::{commit_pending, ensure_on_branch, failed, local, with_identity};
+use super::push::remote_tip;
 use super::{GitError, GitOptions, SAVE_MESSAGE, SyncError, run};
 use crate::team::{Binding, ConflictStore, merge_workspace_text};
 use crate::workspace::Workspace;
@@ -285,12 +286,23 @@ fn keep_local(
     }
 }
 
-/// Fetch the bound branch from `origin` into its remote-tracking ref.
+/// Fetch the bound branch from `origin` into its remote-tracking ref. A fetch that fails
+/// because the server has no such branch is `BranchGone`, so no caller goes on to push it.
 pub(crate) fn fetch(binding: &Binding, opts: &GitOptions) -> Result<(), SyncError> {
     let spec = format!("+refs/heads/{0}:refs/remotes/origin/{0}", binding.branch);
     let args = ["fetch", "-q", "--no-tags", "origin", spec.as_str()];
-    run::git_ok(&args, &binding.dir, run::Reach::Network, opts)?;
-    Ok(())
+    match run::git_ok(&args, &binding.dir, run::Reach::Network, opts) {
+        Ok(_) => Ok(()),
+        // Ask the server rather than read stderr; only a definite "no such branch" changes
+        // the error.
+        Err(e @ GitError::Failed { .. }) => match remote_tip(binding, opts) {
+            Ok(None) => Err(SyncError::BranchGone {
+                branch: binding.branch.clone(),
+            }),
+            _ => Err(e.into()),
+        },
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// After an aborted rebase: keep each conflicted path's local side in the store, and only

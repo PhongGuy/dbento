@@ -275,3 +275,24 @@ async fn a_read_member_keeps_following_the_server() {
     let (_, status, _) = e.run(Some(&e.tok), &["status"]).await;
     assert!(status.contains("unpushed:  0"), "{status}");
 }
+
+#[tokio::test]
+async fn a_read_member_with_a_colliding_edit_is_told_why_nothing_was_pulled() {
+    let e = joined_as("read").await;
+    e.mate_pushes(&TOML.replace("db.example", "theirs.example"));
+    let mine = TOML.replace("db.example", "mine.example");
+    std::fs::write(e.ws.join("dbento.toml"), &mine).unwrap();
+    let (code, stdout, stderr) = e.run(Some(&e.tok), &["sync"]).await;
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(
+            "read-only: acme/shared not updated; local edits block updates (dbento.toml)"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("pulled"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(e.ws.join("dbento.toml")).unwrap(),
+        mine
+    );
+}

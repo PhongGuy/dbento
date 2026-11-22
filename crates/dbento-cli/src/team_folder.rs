@@ -149,6 +149,10 @@ fn print_sync(paths: &StatePaths, done: &FolderSync) -> Exit {
             println!("read-only: pulled {name}; local changes stay unpushed");
             Exit::Ok
         }
+        SyncOutcome::ReadOnlyBlocked(block) => {
+            println!("read-only: {name} not updated; {block}");
+            Exit::Ok
+        }
         SyncOutcome::Refused(refusal) => {
             for row in refusal.rows() {
                 println!("refused: {row}");

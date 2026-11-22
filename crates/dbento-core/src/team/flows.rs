@@ -640,7 +640,9 @@ pub fn team_sync(
 
     let binding = match outcome {
         SyncOutcome::Synced | SyncOutcome::ReadOnly => stamp_synced(&file, &folder, binding)?,
-        SyncOutcome::Conflicted(_) | SyncOutcome::Refused(_) => binding,
+        SyncOutcome::Conflicted(_) | SyncOutcome::Refused(_) | SyncOutcome::ReadOnlyBlocked(_) => {
+            binding
+        }
     };
     Ok(FolderSync {
         dir: folder,
