@@ -41,8 +41,17 @@ async fn until_node(pilot: &Pilot, log: &mut String, id: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn typed_secrets_never_reach_the_replies() {
-    // Unusual characters, so a three-character run cannot turn up in a tree by chance.
-    let (asked, auto, plain) = ("Qz7#vK9!xW", "Jq4%Xb8&Zp", "Vy3@Wk6^Hj");
+    // Every three-character run holds a symbol, so no temp dir name or tree id can match by chance.
+    let (asked, auto, plain) = ("Q#z7!v%K9&", "J%q4&X^b8@", "V@y3^W#k6!");
+    for secret in [asked, auto, plain] {
+        let chars: Vec<char> = secret.chars().collect();
+        assert!(
+            chars
+                .windows(3)
+                .all(|w| w.iter().any(|c| !c.is_ascii_alphanumeric())),
+            "{secret} has a run of three letters or digits"
+        );
+    }
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     let mut log = String::new();
