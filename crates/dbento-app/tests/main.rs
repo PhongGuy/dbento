@@ -223,6 +223,7 @@ mod tab_titles;
 mod table_restore;
 mod tabs;
 mod team_hooks;
+mod team_session;
 mod theme;
 mod title_controls;
 mod tree_affordances;

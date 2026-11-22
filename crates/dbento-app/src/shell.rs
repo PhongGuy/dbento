@@ -87,6 +87,7 @@ use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
+use crate::team::{self, TeamSession};
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
 use crate::update_banner;
@@ -392,8 +393,11 @@ pub struct Shell {
     // A window close is waiting on the sessions; the next close request goes through.
     closing: bool,
     // Sessions of closed tabs, each drained off the main thread until it ends; a window close
-    // waits for the unfinished ones too.
-    closings: Vec<(Arc<AtomicBool>, Task<()>)>,
+    // waits for the unfinished ones too, taking their tasks but leaving the flags counted.
+    closings: Vec<(Arc<AtomicBool>, Option<Task<()>>)>,
+    // The open workspace's team sync, when the folder is bound and team mode is installed,
+    // and the observation that redraws the window when its status changes.
+    team: Option<(Entity<TeamSession>, Subscription)>,
     // A discard question (window close, tab close, switch, disconnect) is on screen, so no
     // second one stacks on it; `close_confirmed` records Close on the window close question.
     asking: Option<Question>,
@@ -604,6 +608,7 @@ impl Shell {
             appearance,
             closing: false,
             closings: Vec::new(),
+            team: None,
             asking: None,
             questions: 0,
             close_confirmed: false,
@@ -689,6 +694,8 @@ impl Shell {
         }
         self.save_layout(window, cx);
         self.flush_saved();
+        // The window waits for the sync's last push like it waits for the sessions.
+        self.stop_team(cx);
         let catalogs = self
             .sidebar
             .as_ref()
@@ -707,7 +714,11 @@ impl Shell {
                 model.update(cx, |m, cx| m.close(cx))
             })
             .collect();
-        let earlier: Vec<Task<()>> = self.closings.drain(..).map(|(_, task)| task).collect();
+        let earlier: Vec<Task<()>> = self
+            .closings
+            .iter_mut()
+            .filter_map(|(_, task)| task.take())
+            .collect();
         let sessions = async move {
             let catalogs = join_all(catalogs.into_iter().map(CatalogClosing::wait));
             let tabs = join_all(tabs.into_iter().map(Closing::wait));
@@ -2515,7 +2526,21 @@ impl Shell {
             closing.await;
             flag.store(true, Ordering::SeqCst);
         });
-        self.closings.push((done, task));
+        self.closings.push((done, Some(task)));
+    }
+
+    // Stops the team sync off the UI thread, keeping its flush for a window close to wait on.
+    fn stop_team(&mut self, cx: &mut Context<Self>) {
+        if let Some((team, _)) = self.team.take()
+            && let Some(stopping) = team.update(cx, |t, _| t.stop())
+        {
+            self.keep_closing(stopping, cx);
+        }
+    }
+
+    /// The open workspace's team session, if it has one.
+    pub fn team(&self) -> Option<&Entity<TeamSession>> {
+        self.team.as_ref().map(|(team, _)| team)
     }
 
     /// How many times the app state file has been written since start.
@@ -2523,7 +2548,7 @@ impl Shell {
         self.state_file.writes()
     }
 
-    /// How many closed tabs' and catalogs' sessions are still closing.
+    /// How many closed tabs' and catalogs' sessions, and stopped team syncs, are still closing.
     pub fn pending_closings(&self) -> usize {
         self.closings
             .iter()
@@ -2615,6 +2640,7 @@ impl Shell {
         self.watch_generation = self.watch_generation.wrapping_add(1);
         self.watch_problem = None;
         self.toml_problem = None;
+        self.stop_team(cx);
     }
 
     fn clear_workspace(&mut self) {
@@ -2754,6 +2780,10 @@ impl Shell {
                 self.workspace = Some(ws);
                 self.watch_generation = self.watch_generation.wrapping_add(1);
                 self.start_watch(&real, window, cx);
+                self.team = team::session_for(&real, cx).map(|session| {
+                    let redraw = cx.observe(&session, |_, _, cx| cx.notify());
+                    (session, redraw)
+                });
                 self.error = None;
                 // Forgetting the folder next time is a small loss, so it never blocks opening.
                 self.update_saved(
@@ -2936,6 +2966,9 @@ impl Shell {
     pub fn workspace_files_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing || self.workspace.is_none() {
             return;
+        }
+        if let Some((team, _)) = &self.team {
+            team.read(cx).changed();
         }
         if self.reload_running {
             self.reload_again = true;

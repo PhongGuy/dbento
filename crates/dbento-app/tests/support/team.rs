@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dbento_app::shell::Shell;
-use dbento_app::team::TeamHooks;
+use dbento_app::team::{TeamHooks, TeamView};
 use dbento_core::paths::StatePaths;
 use dbento_core::{
     AccountRecord, BindingRecord, GitOptions, MemoryTokenStore, ServerUrl, SyncConfig, TeamAccount,
@@ -13,7 +13,7 @@ use dbento_core::{
 };
 pub use dbento_testkit::potluck::write;
 use dbento_testkit::potluck::{self, Origin, Stub};
-use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
+use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 
 pub const TOML: &str = "dbento = 1\n\n[connections.lite]\nengine = \"sqlite\"\npath = \"app.db\"\n";
 
@@ -142,4 +142,39 @@ pub fn start_on(cx: &mut TestAppContext, dir: &Path, hooks: Option<TeamHooks>) -
 }
 pub fn team_started(cx: &mut TestAppContext, fx: &TeamFx) -> TeamStarted {
     start_on(cx, &fx.ws, Some(fx.hooks()))
+}
+
+pub fn view_of(cx: &mut TestAppContext, s: &TeamStarted) -> Option<TeamView> {
+    s.shell.read_with(cx, |sh, cx| {
+        sh.team().and_then(|t| t.read(cx).view().cloned())
+    })
+}
+/// Waits up to `wait_real`'s bound for a view that satisfies `ok`, and returns it.
+pub fn wait_view(
+    cx: &mut TestAppContext,
+    s: &TeamStarted,
+    what: &str,
+    ok: impl Fn(&TeamView) -> bool,
+) -> TeamView {
+    let mut got = None;
+    super::wait_real(cx, what, |cx| {
+        got = view_of(cx, s).filter(|v| ok(v));
+        got.is_some()
+    });
+    got.unwrap()
+}
+/// Runs the shell's file-change path, as a watcher event would.
+pub fn touch(cx: &mut TestAppContext, s: &TeamStarted) {
+    let shell = s.shell.clone();
+    cx.update_window(s.win, |_, w, cx| {
+        shell.update(cx, |sh, cx| sh.workspace_files_changed(w, cx))
+    })
+    .unwrap();
+    super::settle_reload(cx, &s.shell);
+}
+/// Shows `view` in the open session, as a status from the driver would.
+pub fn show(cx: &mut TestAppContext, s: &TeamStarted, view: TeamView) {
+    let team = s.shell.read_with(cx, |sh, _| sh.team().cloned()).unwrap();
+    team.update(cx, |t, cx| t.show(view, cx));
+    cx.run_until_parked();
 }
