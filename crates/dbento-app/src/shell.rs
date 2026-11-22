@@ -87,7 +87,7 @@ use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
-use crate::team::{self, TeamSession};
+use crate::team::{self, TeamEvent, TeamSession};
 use crate::team_view;
 use crate::theme::{self, Appearance, CycleAppearance};
 use crate::ui::{self, Icons};
@@ -399,7 +399,7 @@ pub struct Shell {
     closings: Vec<(Arc<AtomicBool>, Option<Task<()>>)>,
     // The open workspace's team sync, when the folder is bound and team mode is installed,
     // and the observation that redraws the window when its status changes.
-    team: Option<(Entity<TeamSession>, Subscription)>,
+    team: Option<(Entity<TeamSession>, [Subscription; 2])>,
     // A discard question (window close, tab close, switch, disconnect) is on screen, so no
     // second one stacks on it; `close_confirmed` records Close on the window close question.
     asking: Option<Question>,
@@ -2784,7 +2784,12 @@ impl Shell {
                 self.start_watch(&real, window, cx);
                 self.team = team::session_for(&real, cx).map(|session| {
                     let redraw = cx.observe(&session, |_, _, cx| cx.notify());
-                    (session, redraw)
+                    // Settling a conflict writes the winning side, which open tabs reread.
+                    let settled =
+                        cx.subscribe_in(&session, window, |this, _, _: &TeamEvent, window, cx| {
+                            this.workspace_files_changed(window, cx);
+                        });
+                    (session, [redraw, settled])
                 });
                 self.error = None;
                 // Forgetting the folder next time is a small loss, so it never blocks opening.

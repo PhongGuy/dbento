@@ -11,7 +11,7 @@ use dbento_core::{
     BindingRecord, ConflictStore, GitOptions, SyncConfig, SyncState, SyncStatus, TeamFile,
     TeamSync, TokenStore,
 };
-use gpui_kit::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
+use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 /// What team mode runs on: the token store, the state files, and how git and the sync run.
 /// `main.rs` installs the real ones; tests install a memory store, a temp state dir and a
@@ -108,6 +108,14 @@ impl From<SyncStatus> for TeamView {
     }
 }
 
+/// What a session tells the window beyond a redraw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TeamEvent {
+    /// A conflicted file was settled, so the side that won is now on disk.
+    Settled,
+}
+
 /// The running sync of one open bound folder, and the last status it reported.
 pub struct TeamSession {
     dir: PathBuf,
@@ -199,9 +207,16 @@ impl TeamSession {
         std::fs::read_to_string(path).ok()
     }
 
-    /// Shows `view` as the sync's status.
+    /// Shows `view` as the sync's status, telling the window when a conflict left the list.
     pub fn show(&mut self, view: TeamView, cx: &mut Context<Self>) {
+        let now = conflict_paths(Some(&view));
+        let settled = conflict_paths(self.view.as_ref())
+            .iter()
+            .any(|p| !now.contains(p));
         self.view = Some(view);
+        if settled {
+            cx.emit(TeamEvent::Settled);
+        }
         cx.notify();
     }
 
@@ -249,6 +264,19 @@ impl TeamSession {
         Some(async move {
             let _ = finished.recv().await;
         })
+    }
+}
+
+impl EventEmitter<TeamEvent> for TeamSession {}
+
+fn conflict_paths(view: Option<&TeamView>) -> Vec<String> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "only Conflicted carries files; every other state has none"
+    )]
+    match view.map(|v| &v.state) {
+        Some(SyncState::Conflicted(files)) => files.iter().map(|f| f.path.clone()).collect(),
+        _ => Vec::new(),
     }
 }
 

@@ -4,7 +4,7 @@ use dbento_app::explorer::part_id;
 use dbento_app::team_view::conflict_text;
 use dbento_app::workspace_reload::{disk_diff, labelled_diff};
 use dbento_core::{ConflictKind, SyncState};
-use gpui_kit::TestAppContext;
+use gpui_kit::{AppContext as _, TestAppContext};
 
 use crate::support::team::{TeamFx, TeamStarted, team_fx, team_started, wait_view};
 use crate::support::{click_id, label_of, present, wait_real};
@@ -129,4 +129,38 @@ fn compare_shows_both_sides_and_its_keep_mine_settles(cx: &mut TestAppContext) {
         fx.origin_show(A).as_deref() == Some("select 2;\n")
     });
     assert_eq!(fx.origin_show(A).as_deref(), Some("select 2;\n"));
+}
+
+// Opens `A` as the palette opens a saved query and returns the tab's text.
+fn open_a(cx: &mut TestAppContext, s: &TeamStarted) -> String {
+    let ws = s
+        .shell
+        .read_with(cx, |sh, _| sh.workspace().cloned().unwrap());
+    let q = ws
+        .saved_queries()
+        .unwrap()
+        .into_iter()
+        .find(|q| q.path() == std::path::Path::new(A))
+        .unwrap();
+    let shell = s.shell.clone();
+    cx.update_window(s.win, |_, w, cx| {
+        shell.update(cx, |sh, cx| sh.open_saved(&q, w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    s.shell
+        .read_with(cx, |sh, cx| sh.tab().unwrap().read(cx).sql(cx))
+}
+
+#[gpui_kit::test]
+fn keep_mine_rereads_an_open_tab_of_the_file(cx: &mut TestAppContext) {
+    // Tests never start the watcher, so only the app's own reread can update the tab.
+    let (_fx, s) = conflicted(cx);
+    assert_eq!(open_a(cx, &s), "select 3;\n");
+    click_id(cx, s.win, part_id("team-conflict-keep", A));
+    wait_real(cx, "the tab to show my side", |cx| {
+        s.shell
+            .read_with(cx, |sh, cx| sh.tab().unwrap().read(cx).sql(cx))
+            == "select 2;\n"
+    });
 }
