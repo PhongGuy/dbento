@@ -8,10 +8,11 @@ use anyhow::{Context as _, bail};
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::persist::save_json;
 use dbento_app::settings::Settings;
+use dbento_app::team::{self, TeamHooks};
 use dbento_app::theme::Appearance;
 use dbento_app::updates::{self, UpdateHooks};
-use dbento_core::MemoryStore;
-use dbento_core::paths::STATE_DIR_VAR;
+use dbento_core::paths::{STATE_DIR_VAR, StatePaths};
+use dbento_core::{AccountRecord, MemoryStore, MemoryTokenStore, TeamFile, TeamToken, TokenStore};
 use gpui_kit::{App, AssetSource};
 use gpui_pilot_host::{Launch, PilotApp};
 
@@ -19,6 +20,10 @@ use gpui_pilot_host::{Launch, PilotApp};
 /// appearance into a launch whose settings file does not exist yet. The headless host reports
 /// a dark system, so `light` is the only way to a light shot.
 pub const THEME_VAR: &str = "DBENTO_PILOT_THEME";
+
+/// A session token (through the launch call's `env`) the run starts signed in with, for every
+/// account the state folder's `team.json` records; the same variable the CLI's test store reads.
+pub const TEAM_TOKEN_VAR: &str = "DBENTO_TEST_TEAM_TOKEN";
 
 /// Dbento's own startup, run inside the host against the launch's fresh data directory.
 /// The one optional launch argument is the workspace folder (see [`workspace_arg`]).
@@ -56,9 +61,30 @@ impl PilotApp for Dbento {
             UpdateHooks::real(),
             cx,
         );
+        team::install(
+            team_hooks(&dir, std::env::var(TEAM_TOKEN_VAR).ok().as_deref()),
+            cx,
+        );
         start(services, workspace, cx)?;
         Ok(())
     }
+}
+
+/// Team hooks over the state folder `dir` with tokens kept in memory, so a piloted run never
+/// reaches the keychain. A `seed` that parses as a token is stored for every recorded account.
+pub fn team_hooks(dir: &Path, seed: Option<&str>) -> TeamHooks {
+    let paths = StatePaths::in_dir(dir);
+    let tokens = MemoryTokenStore::new();
+    if let Some(token) = seed.and_then(TeamToken::parse) {
+        let accounts = TeamFile::new(&paths.team)
+            .load()
+            .map(|d| d.accounts().to_vec())
+            .unwrap_or_default();
+        for account in accounts.iter().filter_map(AccountRecord::account) {
+            let _ = tokens.set(&account, &token);
+        }
+    }
+    TeamHooks::new(Arc::new(tokens), paths)
 }
 
 /// The folder the app keeps its files in: the launch env's `DBENTO_STATE_DIR` when set and
