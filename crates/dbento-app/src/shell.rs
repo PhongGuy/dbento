@@ -4087,20 +4087,26 @@ impl Shell {
             return;
         }
         let view = cx.new(|cx| TeamDialog::new(mode, hooks, window, cx));
-        let events = cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
-            TeamDialogEvent::Close => this.close_team_dialog(window, cx),
-            TeamDialogEvent::SignedIn => {
-                this.close_team_dialog(window, cx);
-                if let Some(team) = this.team() {
-                    team.read(cx).retry();
+        let events = cx.subscribe_in(
+            &view,
+            window,
+            |this, dialog, event, window, cx| match event {
+                // A call in flight keeps the dialog, so its result is always seen.
+                TeamDialogEvent::Close if dialog.read(cx).signing_in() => {}
+                TeamDialogEvent::Close => this.close_team_dialog(window, cx),
+                TeamDialogEvent::SignedIn => {
+                    this.close_team_dialog(window, cx);
+                    if let Some(team) = this.team() {
+                        team.read(cx).retry();
+                    }
                 }
-            }
-            TeamDialogEvent::Joined(folder) => {
-                let folder = folder.clone();
-                this.close_team_dialog(window, cx);
-                this.switch_workspace(folder, window, cx);
-            }
-        });
+                TeamDialogEvent::Joined(folder) => {
+                    let folder = folder.clone();
+                    this.close_team_dialog(window, cx);
+                    this.switch_workspace(folder, window, cx);
+                }
+            },
+        );
         self.team_dialog = Some((view.clone(), events));
         let shell = cx.weak_entity();
         window.defer(cx, move |window, cx| {
@@ -4113,9 +4119,12 @@ impl Shell {
             window.open_dialog(cx, move |dialog, window, cx| {
                 let shell = shell.clone();
                 let muted = cx.theme().muted_foreground;
+                // Escape waits while a call is in flight, like Cancel.
+                let busy = view.read(cx).signing_in();
                 confirm::frame(dialog, px(520.), None, cx)
                     .margin_top((content_size(window).height / 10.).max(px(64.)))
                     .overlay_closable(false)
+                    .keyboard(!busy)
                     .on_close(move |_, window, cx| {
                         let _ = shell.update(cx, |s, cx| s.drop_team_dialog(window, cx));
                     })

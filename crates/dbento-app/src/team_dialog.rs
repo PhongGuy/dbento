@@ -93,7 +93,8 @@ pub struct TeamDialog {
     user: Entity<InputState>,
     password: Entity<InputState>,
     folder: Entity<InputState>,
-    insecure_ok: bool,
+    // The server text the plain-http tick was given for; any other text is unticked.
+    ticked_for: Option<String>,
     step: TeamStep,
     account: Option<Account>,
     list: Vec<RemoteWorkspace>,
@@ -154,7 +155,7 @@ impl TeamDialog {
             user,
             password,
             folder,
-            insecure_ok: false,
+            ticked_for: None,
             step: TeamStep::Credentials,
             account: None,
             list: Vec::new(),
@@ -200,7 +201,7 @@ impl TeamDialog {
                 filled(&self.server)
                     && filled(&self.user)
                     && filled(&self.password)
-                    && (self.insecure_ok || !self.insecure(cx))
+                    && (self.ticked(cx) || !self.insecure(cx))
             }
             TeamStep::Workspaces => self.selected.is_some() && self.target(cx).is_some(),
         }
@@ -213,7 +214,17 @@ impl TeamDialog {
 
     // Read from the text each time, since a programmatic `set_value` emits no change.
     fn insecure(&self, cx: &App) -> bool {
-        ServerUrl::parse(self.server.read(cx).value().trim()).is_ok_and(|u| u.is_insecure_http())
+        ServerUrl::parse(&self.server_text(cx)).is_ok_and(|u| u.is_insecure_http())
+    }
+
+    fn server_text(&self, cx: &App) -> String {
+        self.server.read(cx).value().trim().to_owned()
+    }
+
+    fn ticked(&self, cx: &App) -> bool {
+        self.ticked_for
+            .as_ref()
+            .is_some_and(|t| *t == self.server_text(cx))
     }
 
     // The join target: only an absolute path, so the clone never lands relative to the cwd.
@@ -231,7 +242,7 @@ impl TeamDialog {
             Ok(url) => url,
             Err(e) => return self.fail(e.to_string(), cx),
         };
-        let allow_insecure = self.insecure_ok && server.is_insecure_http();
+        let allow_insecure = self.ticked(cx) && server.is_insecure_http();
         let username = self.user.read(cx).value().trim().to_owned();
         let password = self.password.read(cx).value().to_string();
         let tokens = Arc::clone(self.hooks.tokens());
@@ -414,11 +425,12 @@ impl TeamDialog {
                     .child(
                         Checkbox::new("team-insecure")
                             .label("Send the password over plain http to this server")
-                            .checked(self.insecure_ok)
+                            .checked(self.ticked(cx))
                             .on_click(move |checked: &bool, _, cx| {
                                 let on = *checked;
                                 let _ = this.update(cx, |d, cx| {
-                                    d.insecure_ok = on;
+                                    let text = d.server_text(cx);
+                                    d.ticked_for = on.then_some(text);
                                     cx.notify();
                                 });
                             }),
@@ -483,7 +495,13 @@ impl TeamDialog {
         let cancel = ui::secondary(Button::new("team-cancel"))
             .h(px(32.))
             .label("Cancel")
-            .on_click(cx.listener(|_, _, _, cx| cx.emit(TeamDialogEvent::Close)));
+            .disabled(self.busy)
+            .on_click(cx.listener(|this, _, _, cx| {
+                // A call in flight finishes first, so a join never binds a folder unseen.
+                if !this.busy {
+                    cx.emit(TeamDialogEvent::Close);
+                }
+            }));
         let footer = confirm::footer(cx).child(div().flex_1());
         match self.step {
             TeamStep::Credentials => footer.child(cancel).child(

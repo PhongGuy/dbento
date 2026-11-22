@@ -1,9 +1,10 @@
 //! The sign-in and join dialog: credentials, the workspace list, the clone into a folder and
 //! the switch to it; a wrong password and a remote plain-http server each stop it.
 use dbento_app::explorer::part_id;
-use dbento_app::team_dialog::{TeamDialogMode, TeamField, TeamStep};
+use dbento_app::team_dialog::{TeamDialogEvent, TeamDialogMode, TeamField, TeamStep};
 use dbento_core::{SyncState, TeamFile, TokenStore as _};
 use dbento_testkit::potluck::Reply;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 
 use crate::support::team::{TeamFx, TeamStarted, start_on, team_fx_with, wait_view};
@@ -116,4 +117,69 @@ fn remote_plain_http_holds_sign_in_until_ticked(cx: &mut TestAppContext) {
     assert!(dialog.read_with(cx, |d, cx| d.can_sign_in(cx)));
     fill(cx, &s, TeamField::Server, fx.stub.uri());
     assert!(!present(cx, s.win, "team-insecure"));
+}
+
+#[gpui_kit::test]
+fn the_plain_http_tick_holds_only_for_the_server_it_was_given_for(cx: &mut TestAppContext) {
+    let fx = team_fx_with("write", false);
+    let s = start_on(cx, &fx.ws, Some(fx.hooks()));
+    open(cx, &s);
+    fill(cx, &s, TeamField::Server, "http://team.example");
+    fill(cx, &s, TeamField::User, "ada");
+    fill(cx, &s, TeamField::Password, "pw");
+    click_id(cx, s.win, "team-insecure");
+    let dialog = s
+        .shell
+        .read_with(cx, |sh, _| sh.team_dialog().cloned())
+        .unwrap();
+    assert!(dialog.read_with(cx, |d, cx| d.can_sign_in(cx)));
+    // Consent for one host never carries to another; nothing is clicked, so nothing is sent.
+    fill(cx, &s, TeamField::Server, "http://other.example");
+    assert!(!dialog.read_with(cx, |d, cx| d.can_sign_in(cx)));
+    let checked = cx
+        .update_window(s.win, |_, w, cx| {
+            w.render_frame(cx);
+            w.try_find("team-insecure").and_then(|e| e.checked())
+        })
+        .unwrap();
+    assert_eq!(checked, Some(false), "the tick reads unchecked");
+}
+
+#[gpui_kit::test]
+fn a_join_in_flight_holds_the_dialog_open_and_still_switches(cx: &mut TestAppContext) {
+    let fx = team_fx_with("write", false);
+    let s = start_on(cx, &fx.ws, Some(fx.hooks()));
+    signed_in_list(cx, &fx, &s);
+    let target = fx.root.join("joined");
+    click_id(cx, s.win, part_id("team-workspace", "acme/shared"));
+    fill(cx, &s, TeamField::Folder, target.to_str().unwrap());
+    let dialog = s
+        .shell
+        .read_with(cx, |sh, _| sh.team_dialog().cloned())
+        .unwrap();
+    // One update with no parking in it, so the join's answer cannot land before the checks.
+    let held = cx
+        .update_window(s.win, |_, w, cx| {
+            w.click("team-join", cx);
+            let busy = dialog.read(cx).signing_in();
+            w.render_frame(cx);
+            let cancel_disabled = w.try_find("team-cancel").and_then(|e| e.disabled());
+            w.click("team-cancel", cx);
+            dialog.update(cx, |_, cx| cx.emit(TeamDialogEvent::Close));
+            (busy, cancel_disabled)
+        })
+        .unwrap();
+    assert_eq!(held, (true, Some(true)), "busy with Cancel disabled");
+    assert!(
+        s.shell.read_with(cx, |sh, _| sh.team_dialog().is_some()),
+        "neither Cancel nor a close event drops a dialog mid-join"
+    );
+    let real = || std::fs::canonicalize(&target).ok();
+    wait_real(cx, "the switch", |cx| {
+        let open = s
+            .shell
+            .read_with(cx, |sh, _| sh.workspace().map(|w| w.dir().to_path_buf()));
+        open.is_some() && open == real()
+    });
+    assert!(s.shell.read_with(cx, |sh, _| sh.team_dialog().is_none()));
 }
