@@ -4,6 +4,11 @@ mod account;
 mod api;
 mod conflicts;
 mod flows;
+#[expect(
+    dead_code,
+    reason = "the sync driver is the machine's caller and the only sender of StreamDown"
+)]
+mod machine;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the sync driver is the reader thread's caller")
@@ -24,6 +29,7 @@ pub use flows::{
     RefreshError, Resolution, TeamResolveError, WorkspacesError, refresh_role, team_join,
     team_login, team_logout, team_resolve, team_sync, team_workspaces,
 };
+pub use machine::{SyncState, SyncStatus};
 pub use team_file::{AccountRecord, BindingRecord, TeamData, TeamFile, TeamFileError};
 pub(crate) use toml_merge::merge_workspace_text;
 

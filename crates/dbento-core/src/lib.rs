@@ -87,9 +87,10 @@ pub use team::{
     AccountRecord, ApiError, Binding, BindingRecord, ConflictStore, Credential, FolderSync,
     FolderSyncError, JoinError, LoginError, LogoutError, LogoutReport, MemoryTokenStore,
     PotluckClient, PotluckInfo, RefreshError, RemoteWorkspace, Resolution, Role, ServerUrl,
-    ServerUrlError, SignIn, SyncOutcome, TeamAccount, TeamData, TeamFile, TeamFileError,
-    TeamResolveError, TeamToken, TokenStore, WorkspacesError, public_url_of, refresh_role,
-    sync_once, team_join, team_login, team_logout, team_resolve, team_sync, team_workspaces,
+    ServerUrlError, SignIn, SyncOutcome, SyncState, SyncStatus, TeamAccount, TeamData, TeamFile,
+    TeamFileError, TeamResolveError, TeamToken, TokenStore, WorkspacesError, public_url_of,
+    refresh_role, sync_once, team_join, team_login, team_logout, team_resolve, team_sync,
+    team_workspaces,
 };
 
 mod introspect;
