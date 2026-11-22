@@ -1,5 +1,4 @@
 #![cfg(unix)]
-#![allow(dead_code)] // the fixture also serves Tasks 7 and 8
 use crate::potluck::{fresh_token, user, ws};
 use crate::stub::{Reply, Stub};
 use crate::support::{Sandbox, read, real_git, write};

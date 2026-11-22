@@ -170,6 +170,7 @@ impl TokenStore for MemoryTokenStore {
 
 /// Bounds each call of `inner` to `limit`. The first timeout marks the store stuck, and later
 /// calls fail at once without a thread.
+#[non_exhaustive]
 pub struct TimedTokenStore {
     inner: Arc<dyn TokenStore>,
     limit: Duration,

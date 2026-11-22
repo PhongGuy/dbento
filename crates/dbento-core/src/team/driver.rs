@@ -129,7 +129,8 @@ enum Msg {
 }
 
 /// A running sync of one bound folder. Dropping it flushes pending changes, waiting at most
-/// the drop bound before killing any git still running; it never joins the thread.
+/// the drop bound before killing any git still running; it never joins the thread. Dropping it
+/// from inside its own `on_status` callback always waits the full bound, so do not.
 pub struct TeamSync {
     tx: Sender<Msg>,
     /// Disconnects when the thread ends.
