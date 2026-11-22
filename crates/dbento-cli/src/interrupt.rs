@@ -70,7 +70,7 @@ impl Interrupt {
                                 if let Some(cancel) = lock(&armed).as_ref() {
                                     cancel.cancel();
                                 }
-                                eprintln!("cancelling; press Ctrl-C again to exit");
+                                eprintln!("stopping; press Ctrl-C again to exit now");
                             }
                             Press::Exit => std::process::exit(1),
                         }

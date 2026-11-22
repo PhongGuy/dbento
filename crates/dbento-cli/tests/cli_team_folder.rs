@@ -367,6 +367,17 @@ async fn watch_pushes_a_saved_file_and_exits_0_on_ctrl_c() {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
+        // The push is a new end state of its own, so it prints a second synced line.
+        loop {
+            let line = lines
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("no line for the push: {out:?}"));
+            let hit = line.contains("synced acme/shared");
+            out.push(line);
+            if hit {
+                break;
+            }
+        }
         assert!(
             Command::new("kill")
                 .args(["-INT", &child.id().to_string()])

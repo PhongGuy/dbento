@@ -283,8 +283,13 @@ pub(crate) fn watch(tokens: Arc<dyn TokenStore>, paths: &StatePaths, dir: &Path)
 }
 
 fn watch_lost(reason: &str) {
-    eprintln!("warning: {reason}; saves are picked up on the next notice or poll");
+    eprintln!(
+        "warning: not watching the folder ({reason}); local saves sync when the server changes or on the next start"
+    );
 }
+
+/// An end state as `--watch` compares it: the state, its read-only note and, for a sync, when.
+type EndState = (SyncState, Option<String>, Option<SystemTime>);
 
 /// Turns `--watch` statuses into lines: one per new end state, none for progress.
 struct Printer {
@@ -293,45 +298,54 @@ struct Printer {
     name: String,
     server: String,
     code: Arc<AtomicI32>,
-    last: Mutex<Option<(SyncState, Option<String>)>>,
+    last: Mutex<Option<EndState>>,
 }
 
 impl Printer {
     fn show(&self, status: SyncStatus) {
-        let SyncStatus { state, note, .. } = status;
+        let SyncStatus {
+            state,
+            note,
+            last_synced,
+            ..
+        } = status;
         if matches!(
             state,
             SyncState::Committing | SyncState::Pulling | SyncState::Pushing
         ) {
             return;
         }
-        let end = (state, note);
+        // Each completed sync stamps a new time, so every push gets a line; retries stay deduped.
+        let stamp = (state == SyncState::Synced)
+            .then_some(last_synced)
+            .flatten();
+        let end = (state, note, stamp);
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
         if last.as_ref() == Some(&end) {
             return;
         }
         let name = &self.name;
         match &end {
-            (SyncState::Synced, _) => println!("synced {name}"),
-            (SyncState::ReadOnly, None) => println!("read-only: following {name}"),
-            (SyncState::ReadOnly, Some(note)) => {
+            (SyncState::Synced, _, _) => println!("synced {name}"),
+            (SyncState::ReadOnly, None, _) => println!("read-only: following {name}"),
+            (SyncState::ReadOnly, Some(note), _) => {
                 println!("read-only: {name} not updated; {note}");
             }
-            (SyncState::Refused(refusal), _) => print_refused(refusal),
-            (SyncState::Conflicted(files), _) => print_conflicts(&self.paths, &self.dir, files),
-            (SyncState::Offline, _) => println!("offline; retrying"),
-            (SyncState::Busy, _) => {
+            (SyncState::Refused(refusal), _, _) => print_refused(refusal),
+            (SyncState::Conflicted(files), _, _) => print_conflicts(&self.paths, &self.dir, files),
+            (SyncState::Offline, _, _) => println!("offline; retrying"),
+            (SyncState::Busy, _, _) => {
                 println!("busy: another Dbento is syncing this workspace; retrying");
             }
-            (SyncState::Failed(text), _) => println!("error: {text}"),
-            (SyncState::SignedOut, _) => {
+            (SyncState::Failed(text), _, _) => println!("error: {text}"),
+            (SyncState::SignedOut, _, _) => {
                 eprintln!(
                     "error: signed out of {}; run dbento team login",
                     self.server
                 );
                 self.code.store(Exit::SignedOut as i32, Ordering::SeqCst);
             }
-            (SyncState::GitMissing, _) => {
+            (SyncState::GitMissing, _, _) => {
                 eprintln!("error: git is not installed");
                 self.code.store(Exit::Failed as i32, Ordering::SeqCst);
             }
