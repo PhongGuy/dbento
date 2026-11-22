@@ -222,6 +222,7 @@ mod tab_switch;
 mod tab_titles;
 mod table_restore;
 mod tabs;
+mod team_hooks;
 mod theme;
 mod title_controls;
 mod tree_affordances;

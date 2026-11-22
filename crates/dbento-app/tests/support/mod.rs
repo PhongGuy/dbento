@@ -1,5 +1,6 @@
 //! Fixtures shared by the app's integration tests.
 #![allow(dead_code)]
+pub mod team;
 use dbento_app::app::{AppPaths, Services};
 use dbento_app::explorer::connection_id;
 use gpui_kit::test::TestWindowExt as _;

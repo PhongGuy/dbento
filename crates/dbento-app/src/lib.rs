@@ -68,6 +68,7 @@ pub mod staged;
 pub mod statements;
 pub mod status_bar;
 pub mod tab_model;
+pub mod team;
 pub mod theme;
 pub mod tokio_bridge;
 pub mod ui;
