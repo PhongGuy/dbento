@@ -54,6 +54,31 @@ fn a_post_body_is_read_before_the_answer() {
 }
 
 #[test]
+fn the_answer_waits_for_the_whole_post_body() {
+    let stub = Stub::start();
+    stub.reply("POST", "/api/v1/session", Reply::Json(201, "{}".into()));
+    let mut c = TcpStream::connect(stub.uri().trim_start_matches("http://")).unwrap();
+    write!(
+        c,
+        "POST /api/v1/session HTTP/1.1\r\nhost: x\r\ncontent-length: 4\r\n\r\n"
+    )
+    .unwrap();
+    c.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut early = [0u8; 1];
+    let read = c.read(&mut early);
+    assert!(
+        read.is_err(),
+        "the stub answered before the body arrived: {read:?}"
+    );
+    c.set_read_timeout(None).unwrap();
+    c.write_all(b"body").unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    assert!(out.starts_with("HTTP/1.1 201 "), "{out}");
+}
+
+#[test]
 fn a_stream_gets_frames_sent_after_it_opened_until_closed() {
     let stub = Stub::start();
     stub.reply("GET", &potluck::events_path(), Reply::Stream);

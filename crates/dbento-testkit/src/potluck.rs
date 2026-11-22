@@ -91,7 +91,8 @@ impl Stub {
         }
     }
 
-    /// Requests answered for `verb path`, query ignored; a stream counts once `send` reaches it.
+    /// Requests answered for `verb path`, query ignored; a stream counts once it is registered
+    /// to receive `send`.
     pub fn hits(&self, verb: &str, path: &str) -> usize {
         lock(&self.inner)
             .hits
