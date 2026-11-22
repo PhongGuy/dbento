@@ -574,3 +574,21 @@ fn an_unreadable_conflict_store_fails_instead_of_showing_synced() {
     l.seen
         .wait(from, |s| matches!(s.state, SyncState::Failed(_)));
 }
+
+#[test]
+fn a_read_folder_whose_fetch_fails_reports_failed_not_read_only() {
+    let l = live("read");
+    let body = "case \" $* \" in *\" fetch \"*) echo 'fatal: the server broke' >&2; exit 1;; esac\nexec \"$REAL_GIT\" \"$@\"";
+    let git =
+        l.sb.options()
+            .env("PATH", l.sb.fake_git("broken-bin", body))
+            .env("REAL_GIT", real_git());
+    let _sync = l.start(l.config().git(git));
+    let got = l.seen.wait(0, |s| {
+        matches!(s.state, SyncState::Failed(_) | SyncState::ReadOnly)
+    });
+    assert!(
+        matches!(got.state, SyncState::Failed(_)),
+        "the fetch error is shown: {got:?}"
+    );
+}

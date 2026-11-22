@@ -288,7 +288,7 @@ impl Report {
 
 /// The running reader: dropping `stop` ends it at its next wait. It is never joined.
 struct Reader {
-    _stop: Sender<()>,
+    stop: Option<Sender<()>>,
     handle: JoinHandle<()>,
 }
 
@@ -418,7 +418,7 @@ impl Driver {
         );
         if let Ok(handle) = spawned {
             self.reader = Some(Reader {
-                _stop: stop,
+                stop: Some(stop),
                 handle,
             });
         }
@@ -479,8 +479,15 @@ impl Driver {
                 diagnose(&self.tokens, &self.paths, &self.binding.dir, &client, token)
             });
         match failure {
-            GitFailure::SignedOut => Ended::SignedOut,
-            GitFailure::Demoted(_) => {
+            GitFailure::SignedOut => {
+                // The reader holds the refused token; once it ends, a retry starts a fresh one.
+                if let Some(reader) = &mut self.reader {
+                    reader.stop = None;
+                }
+                Ended::SignedOut
+            }
+            // Only a folder that could write is demoted; a reader's own failure stays an error.
+            GitFailure::Demoted(_) if self.binding.role == Role::Write => {
                 self.binding.role = Role::Read;
                 self.machine.on(Input::Role(Role::Read), Instant::now());
                 Ended::ReadOnly
@@ -489,7 +496,9 @@ impl Driver {
                 "you no longer have access to this workspace on the server".to_owned(),
             ),
             GitFailure::Offline => Ended::Offline,
-            GitFailure::Other => Ended::Failed(SyncError::Git(git).to_string()),
+            GitFailure::Demoted(_) | GitFailure::Other => {
+                Ended::Failed(SyncError::Git(git).to_string())
+            }
         }
     }
 
