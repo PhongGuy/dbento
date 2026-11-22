@@ -12,5 +12,6 @@ mod push;
 mod refusal;
 mod runner;
 mod session;
+mod stub;
 mod support;
 mod sync;

@@ -4,9 +4,9 @@ mod account;
 mod api;
 mod conflicts;
 mod flows;
-#[expect(
-    dead_code,
-    reason = "the reader thread and the sync driver are its callers"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the sync driver is the reader thread's caller")
 )]
 mod notice;
 mod team_file;

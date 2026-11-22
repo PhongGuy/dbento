@@ -1,10 +1,16 @@
-//! The server's notice stream: a server-sent events parser and the reconnect backoff.
+//! The server's notice stream: a server-sent events parser, the reconnect backoff and the
+//! reader thread that ties them together.
 
 use std::hash::{BuildHasher, RandomState};
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead, BufReader, Read};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+
+use super::account::TeamToken;
+use super::api::{ApiError, PotluckClient};
 
 /// The longest event line accepted; a longer one ends the stream as an error.
 pub(crate) const LINE_CAP: usize = 64 * 1024;
@@ -146,6 +152,68 @@ pub(crate) fn jitter() -> f64 {
     (RandomState::new().hash_one(nanos) >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// How long the reader waits between reconnects.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReaderConfig {
+    pub(crate) backoff_min: Duration,
+    pub(crate) backoff_max: Duration,
+}
+
+/// Start a thread that keeps the workspace's notice stream open and hands every notice to `out`.
+///
+/// Any close or failure is `Down` and a backed-off reconnect; a 401 is `SignedOut` and ends the
+/// thread, as do `out` returning false and `stop` firing or being dropped during a wait. A read
+/// blocked on a silent socket cannot be interrupted, so callers never join this thread.
+pub(crate) fn spawn_reader(
+    client: PotluckClient,
+    token: TeamToken,
+    team: &str,
+    workspace: &str,
+    config: ReaderConfig,
+    stop: Receiver<()>,
+    out: impl Fn(Notice) -> bool + Send + 'static,
+) -> io::Result<JoinHandle<()>> {
+    let (team, workspace) = (team.to_owned(), workspace.to_owned());
+    thread::Builder::new()
+        .name("dbento-team-notices".to_owned())
+        .spawn(move || {
+            let mut backoff = Backoff::new(config.backoff_min, config.backoff_max);
+            loop {
+                match client.open_events(&token, &team, &workspace) {
+                    Ok(body) => {
+                        if !out(Notice::Connected) {
+                            return;
+                        }
+                        backoff.reset();
+                        let mut open = true;
+                        // A read error mid-stream is a close like any other.
+                        let _ = read_stream(&mut BufReader::new(body), &mut |n| {
+                            open = out(n);
+                            open
+                        });
+                        if !open || !out(Notice::Down) {
+                            return;
+                        }
+                    }
+                    Err(ApiError::Unauthenticated) => {
+                        out(Notice::SignedOut);
+                        return;
+                    }
+                    Err(_) => {
+                        if !out(Notice::Down) {
+                            return;
+                        }
+                    }
+                }
+                // The wait doubles as the stop signal: a dropped sender ends the reader.
+                match stop.recv_timeout(backoff.delay(jitter())) {
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +272,85 @@ mod tests {
         assert_eq!(b.delay(1.0), Duration::from_millis(750));
         assert_eq!(b.delay(0.5), Duration::from_millis(1750));
         assert!((0..100).map(|_| jitter()).all(|j| (0.0..1.0).contains(&j)));
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/team/stub.rs"]
+mod stub;
+
+#[cfg(test)]
+mod reader_tests {
+    use super::stub::{Reply, Stub};
+    use super::tests::reference;
+    use super::*;
+    use crate::team::{ServerUrl, TeamToken};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    const EVENTS: &str = "/api/v1/workspaces/acme/shared/events";
+
+    fn reader(stub: &Stub, stop: mpsc::Receiver<()>) -> (JoinHandle<()>, mpsc::Receiver<Notice>) {
+        let client = PotluckClient::new(&ServerUrl::parse(stub.uri()).unwrap(), false).unwrap();
+        let token = TeamToken::parse(&format!("plk_{}", "A".repeat(43))).unwrap();
+        let config = ReaderConfig {
+            backoff_min: Duration::from_millis(10),
+            backoff_max: Duration::from_millis(40),
+        };
+        let (tx, rx) = mpsc::channel();
+        let handle = spawn_reader(client, token, "acme", "shared", config, stop, move |n| {
+            tx.send(n).is_ok()
+        })
+        .unwrap();
+        (handle, rx)
+    }
+    fn next(rx: &mpsc::Receiver<Notice>) -> Notice {
+        rx.recv_timeout(Duration::from_secs(10)).unwrap()
+    }
+    fn until(what: &str, f: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !f() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn the_reader_reconnects_after_every_close_and_ends_on_401() {
+        let stub = Stub::start();
+        stub.reply("GET", EVENTS, Reply::Stream);
+        let (_stop, stop_rx) = mpsc::channel();
+        let (handle, rx) = reader(&stub, stop_rx);
+        assert_eq!(next(&rx), Notice::Connected);
+        until("first stream", || stub.hits("GET", EVENTS) == 1);
+        stub.send("event: ref\ndata: {\"ref\":\"refs/heads/main\",\"sha\":\"a1\"}\n\n");
+        assert_eq!(next(&rx), reference("refs/heads/main", "a1"));
+        stub.close_streams();
+        assert_eq!(next(&rx), Notice::Down);
+        assert_eq!(next(&rx), Notice::Connected);
+        until("second stream", || stub.hits("GET", EVENTS) == 2);
+        stub.send(":keep-alive\n\n");
+        assert_eq!(next(&rx), Notice::Alive);
+        stub.reply("GET", EVENTS, Reply::Status(401));
+        stub.close_streams();
+        assert_eq!(next(&rx), Notice::Down);
+        assert_eq!(next(&rx), Notice::SignedOut);
+        until("the reader ended", || handle.is_finished());
+        let head = stub.head("GET", EVENTS).unwrap();
+        assert!(
+            head.contains(&format!("authorization: bearer plk_{}", "a".repeat(43))),
+            "{head}"
+        );
+        assert!(head.contains("accept: text/event-stream"), "{head}");
+    }
+
+    #[test]
+    fn dropping_the_stop_sender_ends_a_backing_off_reader() {
+        let stub = Stub::start();
+        let (stop, stop_rx) = mpsc::channel();
+        let (handle, rx) = reader(&stub, stop_rx);
+        assert_eq!(next(&rx), Notice::Down, "a 404 counts as a close");
+        drop(stop);
+        until("the reader ended", || handle.is_finished());
     }
 }
