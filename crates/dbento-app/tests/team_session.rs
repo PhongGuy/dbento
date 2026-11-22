@@ -55,7 +55,7 @@ fn an_unbound_folder_has_no_session(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn closing_the_workspace_while_a_push_hangs_returns_at_once(cx: &mut TestAppContext) {
     let fx = team_fx("write");
-    fx.hook("pre-receive", "sleep 30");
+    fx.hook("pre-receive", "sleep 5");
     let s = team_started(cx, &fx);
     wait_view(cx, &s, "synced", |v| v.state == SyncState::Synced);
     write(&fx.ws, "queries/a.sql", "select 2;\n");
@@ -95,5 +95,8 @@ fn closing_the_window_waits_for_the_last_push(cx: &mut TestAppContext) {
     assert!(s.shell.read_with(cx, |sh, _| sh.pending_closings()) >= 1);
     wait_real(cx, "the push", |_| {
         fx.origin_show("queries/a.sql").as_deref() == Some("select 2;\n")
+    });
+    wait_real(cx, "the window to close", |cx| {
+        cx.update(|cx| cx.windows().is_empty())
     });
 }
