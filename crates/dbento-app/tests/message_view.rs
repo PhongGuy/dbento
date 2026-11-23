@@ -128,3 +128,41 @@ fn panel_texts_name_counts_in_their_units() {
         ("1 older dropped".to_owned(), "5 older dropped".to_owned())
     );
 }
+
+#[test]
+fn a_fresh_newest_page_restores_paging_back_and_the_full_wait() {
+    let mut v = MessageView::new(0, b"s".to_vec());
+    v.set_follow(Follow::On);
+    v.browsed(None, Some(MessageCursor::redis_id("1-1")), false, false);
+    v.note_dropped(2);
+    assert!(v.wait_too_long(Duration::from_millis(750)));
+    // A Run replaced the rows; Follow resumes with a fresh newest page.
+    v.begin_read();
+    v.browsed(
+        Some(MessageCursor::redis_id("2-9")),
+        Some(MessageCursor::redis_id("2-1")),
+        true,
+        false,
+    );
+    assert_eq!((v.dropped(), v.wait()), (0, FOLLOW_WAIT));
+    assert!(v.has_older() && v.older_read().is_some());
+}
+
+#[test]
+fn a_poll_in_flight_holds_an_older_page() {
+    let mut v = MessageView::new(0, b"s".to_vec());
+    v.browsed(
+        Some(MessageCursor::redis_id("1-9")),
+        Some(MessageCursor::redis_id("1-1")),
+        true,
+        false,
+    );
+    v.set_follow(Follow::On);
+    v.begin_poll();
+    assert!(
+        v.older_read().is_none(),
+        "a browse never queues behind a poll"
+    );
+    v.polled(None);
+    assert!(v.older_read().is_some());
+}

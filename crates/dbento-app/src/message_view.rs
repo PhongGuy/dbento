@@ -134,9 +134,10 @@ impl MessageView {
         ))
     }
 
-    /// The page before the oldest row shown; None while a read is in flight or none is older.
+    /// The page before the oldest row shown; None while a browse or poll is in flight or none
+    /// is older, so a browse never queues behind a poll's wait.
     pub fn older_read(&self) -> Option<MessageRead> {
-        if self.reading || !self.has_older() {
+        if self.reading || self.polling || !self.has_older() {
             return None;
         }
         let prev = self.prev.clone()?;
@@ -172,8 +173,9 @@ impl MessageView {
         self.error = None;
     }
 
-    /// Takes a landed browse page's cursors: the first page sets `newest`, a last page ends
-    /// paging back, and a page without `next` never clears `newest`.
+    /// Takes a landed browse page's cursors: the first page sets `newest` and, as it replaces
+    /// every row, forgets the ring's drops and a shortened wait; a last page ends paging back,
+    /// and a page without `next` never clears `newest`.
     pub fn browsed(
         &mut self,
         next: Option<MessageCursor>,
@@ -181,8 +183,12 @@ impl MessageView {
         first: bool,
         last: bool,
     ) {
-        if first && next.is_some() {
-            self.newest = next;
+        if first {
+            self.dropped = 0;
+            self.wait = FOLLOW_WAIT;
+            if next.is_some() {
+                self.newest = next;
+            }
         }
         self.prev = if last { None } else { prev };
         self.reading = false;

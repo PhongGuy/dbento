@@ -22,7 +22,10 @@ use crate::grid::{ColumnView, cell_display, fit_width_at};
 use crate::history::{HistoryLog, history_outcome};
 use crate::key_view::KeyView;
 use crate::link::{ConnectFailure, LinkState};
-use crate::message_view::{GroupRow, MESSAGE_PAGE, MessageView, Panel, group_text, pending_text};
+use crate::message_view::{
+    Follow, GroupRow, MESSAGE_PAGE, MessageView, Panel, RING_BYTES, RING_ROWS, group_text,
+    pending_text,
+};
 use crate::parks;
 use crate::results::ResultStore;
 use crate::runner::{
@@ -459,6 +462,9 @@ pub struct TabModel {
     message_run: u64,
     /// The stream browse or poll in flight; dropping it drops its answer.
     message_task: Option<Task<()>>,
+    /// The most rows and result heap a followed stream keeps.
+    ring_rows: u64,
+    ring_bytes: usize,
     /// The groups read in flight.
     groups_task: Option<Task<()>>,
     /// The pending-entries read in flight.
@@ -613,6 +619,8 @@ impl TabModel {
             message_view: None,
             message_run: 0,
             message_task: None,
+            ring_rows: RING_ROWS,
+            ring_bytes: RING_BYTES,
             groups_task: None,
             pending_task: None,
         }
@@ -999,6 +1007,13 @@ impl TabModel {
         self.append = None;
         self.ticking = None;
         self.executing = None;
+        // A retired session answers no stream read, so Follow ends with it.
+        if let Some(view) = &mut self.message_view {
+            view.stop(None);
+        }
+        self.message_task = None;
+        self.groups_task = None;
+        self.pending_task = None;
         self.flush_history(cx);
         cx.notify();
         Closing(events)
@@ -1477,6 +1492,111 @@ impl TabModel {
         self.message_view.as_ref()
     }
 
+    /// Turns Follow on, pauses it or turns it off. Never fires the session cancel: a poll in
+    /// flight lands (at most FOLLOW_WAIT) and no next one is sent.
+    pub fn set_follow(&mut self, follow: Follow, cx: &mut Context<Self>) {
+        if let Some(view) = &mut self.message_view {
+            view.set_follow(follow);
+            self.flush_follow(cx);
+            cx.notify();
+        }
+    }
+
+    /// The ring caps a followed stream keeps; RING_ROWS and RING_BYTES until set.
+    pub fn set_message_ring(&mut self, rows: u64, bytes: usize) {
+        self.ring_rows = rows;
+        self.ring_bytes = bytes;
+    }
+
+    // Sends Follow's next read when the session is free and nothing is in flight. Once a Run
+    // has replaced result 0, that read is a fresh newest page rather than a poll.
+    fn flush_follow(&mut self, cx: &mut Context<Self>) {
+        if self.closed || self.fence.is_some() || self.running {
+            return;
+        }
+        let Some(view) = &self.message_view else {
+            return;
+        };
+        if self.message_run != self.run_id {
+            if view.follow() == Follow::On && !view.reading() && !view.polling() {
+                let read = view.newest_read();
+                self.browse_messages(read, true, cx);
+            }
+            return;
+        }
+        let Some(read) = view.poll_read() else {
+            return;
+        };
+        let Some(answer) = self.send_messages(MessageCall::Read(read), cx) else {
+            return;
+        };
+        if let Some(view) = &mut self.message_view {
+            view.begin_poll();
+        }
+        self.message_task = Some(cx.spawn(async move |this, cx| {
+            let answer = answer.recv().await.ok();
+            let _ = this.update(cx, |m, cx| {
+                m.message_task = None;
+                m.poll_landed(answer, cx);
+                m.flush_follow(cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    // A poll's rows go on top of result 0 and the ring trims the bottom. A poll that met a Run
+    // is dropped unseen, so `newest` stays and the next poll reads the same entries.
+    fn poll_landed(&mut self, answer: Option<MessageAnswer>, cx: &mut Context<Self>) {
+        let held = self.running || self.message_run != self.run_id;
+        let alive = self.runner.is_some();
+        let Some(view) = &mut self.message_view else {
+            return;
+        };
+        let page = match answer {
+            Some(Ok(MessageReply::Page(page))) => page,
+            Some(Ok(MessageReply::Groups(_))) => return view.stop(Some(UNEXPECTED_REPLY.into())),
+            Some(Err(MessageError::NotFound)) => {
+                return view.stop(Some("the stream no longer exists".into()));
+            }
+            Some(Err(e @ MessageError::WaitTooLong { max })) => {
+                if !view.wait_too_long(max) {
+                    view.stop(Some(e.to_string()));
+                }
+                return;
+            }
+            Some(Err(MessageError::Server { code, .. })) if code == "WRONGTYPE" => {
+                let (db, key) = (view.db(), view.key().to_vec());
+                return self.open_key(db, key, cx);
+            }
+            Some(Err(e)) => return view.stop(Some(e.to_string())),
+            // The runner drops a read that meets a run; a retired runner ends Follow.
+            None if alive => return view.poll_dropped(),
+            None => return view.stop(None),
+        };
+        if held {
+            return view.poll_dropped();
+        }
+        let Some(result) = self.results.first_mut() else {
+            return view.poll_dropped();
+        };
+        let store = &mut result.store;
+        store.push_newest(page.batch);
+        let dropped = store.trim_oldest(self.ring_rows, self.ring_bytes);
+        // A complete result stays complete only while the ring has dropped nothing.
+        if store.end().is_some() {
+            let rows = store.rows();
+            if dropped == 0 && view.dropped() == 0 {
+                store.finish(StatementEnd::Complete(Outcome::complete(rows)));
+            } else {
+                store.reopen();
+            }
+        }
+        if dropped > 0 {
+            view.note_dropped(dropped);
+        }
+        view.polled(page.next);
+    }
+
     /// Asks for the page below the shown rows; false without one or while a read is in flight.
     pub fn older_messages(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(read) = self.message_view.as_ref().and_then(MessageView::older_read) else {
@@ -1617,6 +1737,7 @@ impl TabModel {
             let _ = this.update(cx, |m, cx| {
                 m.message_task = None;
                 m.browse_landed(answer, want, first, cx);
+                m.flush_follow(cx);
                 cx.notify();
             });
         }));
@@ -3769,6 +3890,7 @@ impl TabModel {
                     m.flush_save(cx);
                     m.flush_stale(cx);
                     m.flush_target();
+                    m.flush_follow(cx);
                     cx.notify();
                 });
                 if alive.is_err() {

@@ -99,3 +99,32 @@ fn stream_shaped_pages_report_heap_per_row_and_trim_to_three_pages() {
         eprintln!("ring field={field} per_row={} page_heap={page}", page / 500);
     }
 }
+
+#[test]
+fn a_store_trimmed_to_nothing_takes_newest_rows_again() {
+    let (columns, page) = ids(1, 3, true);
+    let mut s = ResultStore::new(columns);
+    s.push(page);
+    assert_eq!(s.trim_oldest(0, usize::MAX), 3);
+    assert_eq!(s.rows(), 0);
+    s.push_newest(ids(4, 5, false).1);
+    assert_eq!(shown(&s), ["n5", "n4"]);
+}
+
+#[test]
+fn a_trim_into_a_newest_batch_keeps_its_newest_rows() {
+    let (columns, first) = ids(1, 3, false);
+    let mut s = ResultStore::new(columns);
+    s.push_newest(first);
+    s.push_newest(ids(4, 6, false).1);
+    assert_eq!(s.trim_oldest(4, usize::MAX), 2);
+    assert_eq!(shown(&s), ["n6", "n5", "n4", "n3"]);
+}
+
+#[test]
+fn a_push_after_a_trim_lands_below_the_shrunk_rows() {
+    let mut s = followed();
+    assert_eq!(s.trim_oldest(4, usize::MAX), 2);
+    s.push(ids(0, 0, false).1);
+    assert_eq!(shown(&s), ["n6", "n5", "n4", "n3", "n0"]);
+}
