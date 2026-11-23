@@ -20,6 +20,9 @@ pub use workspace::{
     parse_duration, valid_database_name,
 };
 
+mod ssh;
+pub use ssh::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};
+
 mod form;
 pub use form::{ConnectionForm, FieldKind, FormField, FormSection, connection_form};
 
