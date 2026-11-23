@@ -1294,13 +1294,18 @@ impl Session {
     }
 
     /// The consumer groups of stream `s`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
     pub async fn stream_groups(&mut self, s: &SourceRef) -> Result<Vec<GroupInfo>, MessageError> {
-        let _ = s;
-        Err(no_streams())
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.stream_groups(s).await,
+            _ => Err(no_streams()),
+        }
     }
 
     /// One page of `group`'s delivered and unacknowledged messages of stream `s`, forward from
     /// `from`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
     pub async fn pending(
         &mut self,
         s: &SourceRef,
@@ -1308,8 +1313,11 @@ impl Session {
         from: Position,
         want: u32,
     ) -> Result<MessagePage, MessageError> {
-        let _ = (s, group, from, want);
-        Err(no_streams())
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.pending(s, group, from, want).await,
+            _ => Err(no_streams()),
+        }
     }
 
     /// For each of `columns`, the column of `rel` it reads, or None when it is computed or

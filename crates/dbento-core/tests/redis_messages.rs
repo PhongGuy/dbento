@@ -8,6 +8,7 @@ use dbento_core::message::{
     Direction, MessageCursor, MessageError, MessagePage, MessageRead, Position, SourceRef,
 };
 use dbento_core::{CellRef, SessionOptions};
+use dbento_testkit::NO_XREAD_RULES;
 use dbento_testkit::RdUser::Reader;
 use dbento_testkit::RdUser::Writer;
 
@@ -464,4 +465,104 @@ async fn a_message_with_a_repeated_field_name_reads_as_pairs() {
         column(&p, 2),
         [r#"{"$pairs":[["f","a"],["f","b"],["g","c"]]}"#]
     );
+}
+
+#[tokio::test]
+async fn groups_show_consumers_pending_and_lag() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let groups = s.stream_groups(&src(&fx, "stream:groups")).await.unwrap();
+    let got: Vec<_> = groups
+        .iter()
+        .map(|g| {
+            (
+                g.name.as_str(),
+                g.consumers,
+                g.pending,
+                g.last_delivered.as_redis_id(),
+                g.lag,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("g1", 1, 3, Some("1-3"), Some(2)),
+            ("g2", 0, 0, Some("1-5"), Some(0))
+        ]
+    );
+    assert!(
+        s.stream_groups(&src(&fx, "stream"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        s.stream_groups(&src(&fx, "nosuch")).await,
+        Err(MessageError::NotFound)
+    ));
+    match s.stream_groups(&src(&fx, "str")).await {
+        Err(MessageError::Server { code, .. }) => assert_eq!(code, "WRONGTYPE"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pending_pages_forward() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let g = src(&fx, "stream:groups");
+    let p = s.pending(&g, "g1", Position::Start, 2).await.unwrap();
+    let names: Vec<_> = p.columns.iter().map(|c| c.name()).collect();
+    assert_eq!(names, ["id", "consumer", "idle_ms", "deliveries"]);
+    assert_eq!(
+        (ids(&p), column(&p, 1), column(&p, 3)),
+        (
+            vec!["1-1".to_owned(), "1-2".to_owned()],
+            vec!["alice".to_owned(), "alice".to_owned()],
+            vec!["1".to_owned(), "1".to_owned()],
+        )
+    );
+    assert!(column(&p, 2).iter().all(|ms| ms.parse::<u64>().is_ok()));
+    assert_eq!(
+        (p.length, id(p.next.as_ref()), p.prev.clone()),
+        (Some(3), Some("1-2"), None)
+    );
+    let p = s
+        .pending(&g, "g1", Position::After(p.next.unwrap()), 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(&p), ["1-3"]);
+    let p = s.pending(&g, "g1", Position::End, 2).await.unwrap();
+    assert_eq!((p.batch.len(), p.length), (0, Some(3)));
+    let before = Position::Before(MessageCursor::redis_id("1-3"));
+    assert!(matches!(
+        s.pending(&g, "g1", before, 2).await,
+        Err(MessageError::Unsupported { .. })
+    ));
+    match s.pending(&g, "nogroup", Position::Start, 2).await {
+        Err(MessageError::Server { code, .. }) => assert_eq!(code, "NOGROUP"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_acl_without_xread_is_denied_but_browsing_works() {
+    let fx = rd("").await;
+    let (name, pw) = fx.db.create_user("noxread", NO_XREAD_RULES).await;
+    let mut s = fx
+        .session_for(&name, &pw, SessionOptions::default())
+        .await
+        .unwrap();
+    let r = MessageRead::follow(src(&fx, "stream"), after("1-2"), Duration::from_millis(100));
+    match s.read_messages(&r).await {
+        Err(MessageError::Denied { message }) => assert!(message.contains("xread"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        s.stream_groups(&src(&fx, "stream:groups")).await,
+        Err(MessageError::Denied { .. })
+    ));
+    let r = MessageRead::browse(src(&fx, "stream"), Position::Start, Direction::Forward);
+    assert_eq!(ids(&s.read_messages(&r).await.unwrap()), ["1-1", "1-2"]);
 }

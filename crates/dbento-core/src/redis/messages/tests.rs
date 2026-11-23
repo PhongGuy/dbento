@@ -72,3 +72,46 @@ fn a_fields_cell_cut_mid_char_keeps_only_whole_chars() {
         &text[text.len() - 4..]
     );
 }
+
+#[test]
+fn xinfo_groups_reads_each_map_and_a_nil_lag() {
+    let bytes = b"*2\r\n%6\r\n$4\r\nname\r\n$2\r\ng1\r\n$9\r\nconsumers\r\n:1\r\n$7\r\npending\r\n:3\r\n\
+                  $17\r\nlast-delivered-id\r\n$3\r\n1-3\r\n$12\r\nentries-read\r\n:3\r\n$3\r\nlag\r\n:2\r\n\
+                  %6\r\n$4\r\nname\r\n$2\r\ng2\r\n$9\r\nconsumers\r\n:0\r\n$7\r\npending\r\n:0\r\n\
+                  $17\r\nlast-delivered-id\r\n$3\r\n1-5\r\n$12\r\nentries-read\r\n_\r\n$3\r\nlag\r\n_\r\n";
+    let groups = super::group_infos(parse_redis_value(bytes).unwrap()).unwrap();
+    let got: Vec<_> = groups
+        .iter()
+        .map(|g| {
+            (
+                g.name.as_str(),
+                g.consumers,
+                g.pending,
+                g.last_delivered.as_redis_id(),
+                g.lag,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("g1", 1, 3, Some("1-3"), Some(2)),
+            ("g2", 0, 0, Some("1-5"), None)
+        ]
+    );
+}
+
+#[test]
+fn xpending_rows_are_id_consumer_idle_and_deliveries() {
+    let bytes = b"*1\r\n*4\r\n$3\r\n1-1\r\n$5\r\nalice\r\n:8710\r\n:1\r\n";
+    let rows = super::pending_rows(parse_redis_value(bytes).unwrap()).unwrap();
+    assert_eq!(
+        rows,
+        [[
+            b"1-1".to_vec(),
+            b"alice".to_vec(),
+            b"8710".to_vec(),
+            b"1".to_vec()
+        ]]
+    );
+}
