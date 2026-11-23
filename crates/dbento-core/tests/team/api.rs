@@ -223,3 +223,41 @@ fn the_public_url_is_everything_before_the_last_git_segment() {
         );
     }
 }
+
+/// A signal landing while a call waits for its answer, as a git child's exit does, is not a
+/// lost connection.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_signal_during_a_call_is_not_offline() {
+    use std::os::unix::thread::JoinHandleExt;
+    extern "C" fn ignore(_: libc::c_int) {}
+    // The default SIGUSR1 action ends the process, so a no-op handler goes in first, once.
+    static HANDLER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    HANDLER.get_or_init(|| {
+        // SAFETY: a zeroed sigaction with a handler that does nothing is a valid action.
+        unsafe {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = ignore as extern "C" fn(libc::c_int) as libc::sighandler_t;
+            act.sa_flags = libc::SA_RESTART;
+            assert_eq!(
+                libc::sigaction(libc::SIGUSR1, &act, std::ptr::null_mut()),
+                0
+            );
+        }
+    });
+    let s = MockServer::start().await;
+    let slow = crate::potluck::me("ada").set_delay(std::time::Duration::from_millis(300));
+    answer(&s, "GET", "/api/v1/me", slow).await;
+    let c = client(&s);
+    let call = std::thread::spawn(move || c.me(&token()));
+    // Signal the caller until it has its answer, so signals land while it waits to read.
+    while !call.is_finished() {
+        // SAFETY: the thread is not joined yet, so its id is still valid.
+        unsafe { libc::pthread_kill(call.as_pthread_t(), libc::SIGUSR1) };
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        call.join().unwrap().map_err(|e| kind(&e)),
+        Ok("ada".to_owned())
+    );
+}
