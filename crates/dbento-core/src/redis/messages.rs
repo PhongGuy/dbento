@@ -3,9 +3,12 @@
 use ::redis::{Pipeline, Value};
 
 use crate::message::{
-    MessageCursor, MessageError, MessagePage, MessageRead, Position, ReadPlan, plan_read,
+    Direction, MessageCursor, MessageError, MessagePage, MessageRead, Position, ReadPlan, plan_read,
 };
-use crate::redis::browse::{KeyBrowseError, Layout, Row, bulk, columns, fill_within, xrange_rows};
+use crate::redis::browse::{
+    KeyBrowseError, Layout, Row, VALUE_CAP, bulk, columns, fill_within, stream_range, whole_chars,
+    xrange_rows,
+};
 use crate::redis::driver::{BracketError, Failure, RedisSession};
 use crate::session::TruncatedBy;
 
@@ -21,10 +24,47 @@ impl RedisSession {
     pub(crate) async fn read_messages(&self, r: &MessageRead) -> Result<MessagePage, MessageError> {
         match plan_read(r, self.shared.timeout())? {
             ReadPlan::Follow { want, block_ms } => self.follow(r, want, block_ms).await,
-            ReadPlan::Browse { .. } => Err(MessageError::Unsupported {
-                reason: "stream reads are not built yet".to_owned(),
-            }),
+            ReadPlan::Browse { want } => self.browse(r, want).await,
         }
+    }
+
+    /// A browse in one round trip: `TYPE`, `XLEN`, then the range when the page can have rows.
+    /// Forward from the end reads only the newest id, so the page can hand it on as `next`.
+    async fn browse(&self, r: &MessageRead, want: u32) -> Result<MessagePage, MessageError> {
+        let db = self.db_of(r)?;
+        let key = r.source.name.as_slice();
+        let bound = match &r.from {
+            Position::After(cursor) | Position::Before(cursor) => Some(cursor_id(cursor)?),
+            Position::Start | Position::End => None,
+        };
+        let mut pipe = Pipeline::new();
+        pipe.cmd("TYPE").arg(key);
+        pipe.cmd("XLEN").arg(key);
+        match (&r.from, r.direction) {
+            (Position::End, Direction::Forward) => {
+                stream_range(&mut pipe, key, Direction::Backward, None, 1);
+            }
+            (Position::Start, Direction::Backward) => {}
+            (Position::Start | Position::End | Position::After(_) | Position::Before(_), dir) => {
+                stream_range(&mut pipe, key, dir, bound.map(str::as_bytes), want as usize);
+            }
+        }
+        let mut replies = self.bracket(db, pipe).await?.into_iter();
+        stream_type(replies.next())?;
+        let length = xlen(replies.next())?;
+        let (rows, cut, empty_next) = match (&r.from, r.direction) {
+            (Position::End, Direction::Forward) => {
+                let newest = newest_id(checked(replies.next())?)?;
+                (Vec::new(), false, Some(newest))
+            }
+            (Position::Start, Direction::Backward) => (Vec::new(), false, None),
+            (Position::Start | Position::End | Position::After(_) | Position::Before(_), _) => {
+                let (rows, cut) = message_rows(checked(replies.next())?)?;
+                let empty_next = bound.map_or_else(|| "0-0".to_owned(), str::to_owned);
+                (rows, cut, Some(empty_next))
+            }
+        };
+        Ok(page(r, rows, cut, empty_next, length))
     }
 
     /// A follow in two round trips: `TYPE` (and the newest id when starting at the end), then
@@ -35,13 +75,7 @@ impl RedisSession {
         want: u32,
         block_ms: u64,
     ) -> Result<MessagePage, MessageError> {
-        let db = match r.source.db {
-            Some(db) => db,
-            None => self
-                .shared
-                .bracket_db()
-                .map_err(|refusal| from_bracket(BracketError::Refused(refusal)))?,
-        };
+        let db = self.db_of(r)?;
         let key = r.source.name.as_slice();
         let mut pipe = Pipeline::new();
         pipe.cmd("TYPE").arg(key);
@@ -57,17 +91,7 @@ impl RedisSession {
         stream_type(replies.next())?;
         let start = match &r.from {
             Position::After(cursor) => cursor_id(cursor)?.to_owned(),
-            Position::End => {
-                let newest = xrange_rows(checked(replies.next())?).map_err(from_browse)?;
-                match newest
-                    .into_iter()
-                    .next()
-                    .and_then(|row| row.into_iter().next())
-                {
-                    Some(id) => String::from_utf8_lossy(&id).into_owned(),
-                    None => "0-0".to_owned(),
-                }
-            }
+            Position::End => newest_id(checked(replies.next())?)?,
             Position::Start | Position::Before(_) => {
                 return Err(MessageError::Unsupported {
                     reason: "a follow reads forward from the end or after a cursor".to_owned(),
@@ -87,40 +111,20 @@ impl RedisSession {
         pipe.cmd("XLEN").arg(key);
         let mut replies = self.bracket(db, pipe).await?.into_iter();
         let entries = xread_entries(checked(replies.next())?)?;
-        #[allow(
-            clippy::wildcard_enum_match_arm,
-            reason = "Value has too many variants to list; the rest share one arm"
-        )]
-        let length = match checked(replies.next())? {
-            Value::Int(n) => u64::try_from(n).unwrap_or(0),
-            _ => return Err(unexpected("XLEN")),
-        };
-        let rows = xrange_rows(Value::Array(entries))
-            .map_err(from_browse)?
-            .into_iter()
-            .map(timed_row)
-            .collect::<Vec<Row>>();
-        let budget = r
-            .max_bytes
-            .map_or(usize::MAX, |b| usize::try_from(b).unwrap_or(usize::MAX));
-        let (batch, shown) = fill_within(&rows, rows.len(), MESSAGE, budget);
-        let id_at = |i: usize| {
-            rows.get(i)
-                .and_then(|row| row.first())
-                .map(|id| MessageCursor::redis_id(String::from_utf8_lossy(id)))
-        };
-        Ok(MessagePage {
-            columns: columns(MESSAGE),
-            batch,
-            next: shown
-                .checked_sub(1)
-                .and_then(id_at)
-                .or_else(|| Some(MessageCursor::redis_id(start))),
-            prev: if shown > 0 { id_at(0) } else { None },
-            length: Some(length),
-            gap: false,
-            truncated_by: (shown < rows.len()).then_some(TruncatedBy::Bytes),
-        })
+        let length = xlen(replies.next())?;
+        let (rows, cut) = message_rows(Value::Array(entries))?;
+        Ok(page(r, rows, cut, Some(start), length))
+    }
+
+    /// The database a read brackets: its own, or the session's.
+    fn db_of(&self, r: &MessageRead) -> Result<u32, MessageError> {
+        match r.source.db {
+            Some(db) => Ok(db),
+            None => self
+                .shared
+                .bracket_db()
+                .map_err(|refusal| from_bracket(BracketError::Refused(refusal))),
+        }
     }
 
     async fn bracket(&self, db: u32, pipe: Pipeline) -> Result<Vec<Value>, MessageError> {
@@ -150,6 +154,91 @@ fn cursor_id(cursor: &MessageCursor) -> Result<&str, MessageError> {
         .ok_or_else(|| MessageError::Unsupported {
             reason: "the cursor is not a Redis stream id".to_owned(),
         })
+}
+
+/// Shows the rows `max_bytes` lets through. A page reads its cursors off the rows shown, in
+/// its own direction; an empty forward page keeps `empty_next` so the reader can go on.
+fn page(
+    r: &MessageRead,
+    rows: Vec<Row>,
+    cut: bool,
+    empty_next: Option<String>,
+    length: u64,
+) -> MessagePage {
+    let budget = r
+        .max_bytes
+        .map_or(usize::MAX, |b| usize::try_from(b).unwrap_or(usize::MAX));
+    let (batch, shown) = fill_within(&rows, rows.len(), MESSAGE, budget);
+    let id_at = |i: usize| {
+        rows.get(i)
+            .and_then(|row| row.first())
+            .map(|id| MessageCursor::redis_id(String::from_utf8_lossy(id)))
+    };
+    let (first, last) = match shown {
+        0 => (None, None),
+        n => (id_at(0), id_at(n - 1)),
+    };
+    let (next, prev) = match r.direction {
+        Direction::Forward => (
+            last.or_else(|| empty_next.map(MessageCursor::redis_id)),
+            first,
+        ),
+        Direction::Backward => (first, last),
+    };
+    MessagePage {
+        columns: columns(MESSAGE),
+        batch,
+        next,
+        prev,
+        length: Some(length),
+        gap: false,
+        truncated_by: (cut || shown < rows.len()).then_some(TruncatedBy::Bytes),
+    }
+}
+
+/// Range entries as message rows, with any `fields` cell over `VALUE_CAP` cut to whole chars;
+/// the flag says whether a cell was cut.
+fn message_rows(reply: Value) -> Result<(Vec<Row>, bool), MessageError> {
+    let mut cut = false;
+    let rows = xrange_rows(reply)
+        .map_err(from_browse)?
+        .into_iter()
+        .map(|mut row| {
+            if let Some(fields) = row.get_mut(1)
+                && fields.len() > VALUE_CAP
+            {
+                fields.truncate(VALUE_CAP);
+                *fields = whole_chars(std::mem::take(fields), true);
+                cut = true;
+            }
+            timed_row(row)
+        })
+        .collect();
+    Ok((rows, cut))
+}
+
+/// The id of the one entry an `XREVRANGE .. COUNT 1` answers, or `0-0` for an empty stream.
+fn newest_id(reply: Value) -> Result<String, MessageError> {
+    let newest = xrange_rows(reply).map_err(from_browse)?;
+    Ok(newest
+        .into_iter()
+        .next()
+        .and_then(|row| row.into_iter().next())
+        .map_or_else(
+            || "0-0".to_owned(),
+            |id| String::from_utf8_lossy(&id).into_owned(),
+        ))
+}
+
+fn xlen(reply: Option<Value>) -> Result<u64, MessageError> {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "Value has too many variants to list; the rest share one arm"
+    )]
+    match checked(reply)? {
+        Value::Int(n) => Ok(u64::try_from(n).unwrap_or(0)),
+        _ => Err(unexpected("XLEN")),
+    }
 }
 
 /// `[id, fields]` with the id's millisecond part inserted as `time`.

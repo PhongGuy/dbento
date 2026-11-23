@@ -215,7 +215,9 @@ use self::server::fields_json;
 #[cfg(feature = "redis")]
 pub(super) use self::server::server_error;
 #[cfg(feature = "redis")]
-pub(in crate::redis) use self::server::{Layout, Row, bulk, columns, fill_within, xrange_rows};
+pub(in crate::redis) use self::server::{
+    Layout, Row, VALUE_CAP, bulk, columns, fill_within, stream_range, whole_chars, xrange_rows,
+};
 
 #[cfg(feature = "redis")]
 mod server {
@@ -226,6 +228,7 @@ mod server {
     use super::{
         KeyBrowseError, KeyEntry, KeyKind, KeyPage, KeyRead, KeyScan, KeyTtl, KeyValuePage,
     };
+    use crate::message::Direction;
     use crate::redis::driver::{BracketError, Failure, RedisSession};
     use crate::redis::shape::{double_text, json, json_key};
     use crate::value::{BatchBuilder, CellRef, ColumnInfo, MAX_BATCH_BYTES, ResultBatch};
@@ -533,17 +536,14 @@ mod server {
                         .arg("WITHSCORES");
                 }
                 KeyKind::Stream => {
-                    let from = match &cursor.last_id {
-                        Some(id) => [b"(".as_slice(), id].concat(),
-                        None => b"-".to_vec(),
-                    };
                     pipe.cmd("XLEN").arg(k);
-                    pipe.cmd("XRANGE")
-                        .arg(k)
-                        .arg(from)
-                        .arg("+")
-                        .arg("COUNT")
-                        .arg(want);
+                    stream_range(
+                        &mut pipe,
+                        k,
+                        Direction::Forward,
+                        cursor.last_id.as_deref(),
+                        want,
+                    );
                 }
                 KeyKind::Other(_) => {
                     pipe.cmd("MEMORY").arg("USAGE").arg(k);
@@ -711,9 +711,34 @@ mod server {
         (builder.finish(), shown)
     }
 
+    /// Adds the range of up to `want` stream entries past `bound` (exclusive) in `direction`,
+    /// or from the stream's own edge when there is no bound.
+    pub(in crate::redis) fn stream_range(
+        pipe: &mut Pipeline,
+        key: &[u8],
+        direction: Direction,
+        bound: Option<&[u8]>,
+        want: usize,
+    ) {
+        let (cmd, edge, end) = match direction {
+            Direction::Forward => ("XRANGE", "-", "+"),
+            Direction::Backward => ("XREVRANGE", "+", "-"),
+        };
+        let start = bound.map_or_else(
+            || edge.as_bytes().to_vec(),
+            |id| [b"(".as_slice(), id].concat(),
+        );
+        pipe.cmd(cmd)
+            .arg(key)
+            .arg(start)
+            .arg(end)
+            .arg("COUNT")
+            .arg(want);
+    }
+
     /// A capped string cut inside a UTF-8 character drops the partial character, so it still
     /// reads as text.
-    fn whole_chars(mut value: Vec<u8>, truncated: bool) -> Vec<u8> {
+    pub(in crate::redis) fn whole_chars(mut value: Vec<u8>, truncated: bool) -> Vec<u8> {
         if truncated
             && let Err(e) = std::str::from_utf8(&value)
             && e.error_len().is_none()

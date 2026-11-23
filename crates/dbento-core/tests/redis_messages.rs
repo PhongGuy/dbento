@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 
 use crate::support::{RdFixture, forced, rd};
 use dbento_core::message::{
-    MessageCursor, MessageError, MessagePage, MessageRead, Position, SourceRef,
+    Direction, MessageCursor, MessageError, MessagePage, MessageRead, Position, SourceRef,
 };
 use dbento_core::{CellRef, SessionOptions};
 use dbento_testkit::RdUser::Reader;
+use dbento_testkit::RdUser::Writer;
 
 fn src(fx: &RdFixture, key: &str) -> SourceRef {
     SourceRef::redis(fx.db.index(), key.as_bytes().to_vec())
@@ -253,4 +254,201 @@ async fn max_bytes_holds_a_follow_back_at_the_cut() {
     assert_eq!(id(page.next.as_ref()), Some("5-1"));
     r.from = Position::After(page.next.unwrap());
     assert_eq!(ids(&s.read_messages(&r).await.unwrap()), ["5-2"]);
+}
+
+fn browse(fx: &RdFixture, key: &str, from: Position, dir: Direction, want: u32) -> MessageRead {
+    let mut r = MessageRead::browse(src(fx, key), from, dir);
+    r.want = want;
+    r
+}
+
+#[tokio::test]
+async fn browse_pages_forward_to_the_end() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let mut r = browse(
+        &fx,
+        "big:stream",
+        Position::Start,
+        Direction::Forward,
+        1_000,
+    );
+    let first = s.read_messages(&r).await.unwrap();
+    assert_eq!(
+        (id(first.prev.as_ref()), id(first.next.as_ref())),
+        (Some("1-1"), Some("1-1000"))
+    );
+    assert_eq!(
+        (first.length, column(&first, 1)[0].as_str()),
+        (Some(3_000), "1")
+    );
+    let (mut all, mut reads) = (Vec::new(), 0);
+    loop {
+        let p = s.read_messages(&r).await.unwrap();
+        reads += 1;
+        if p.batch.is_empty() {
+            assert_eq!((id(p.next.as_ref()), p.prev), (Some("1-3000"), None));
+            break;
+        }
+        all.extend(ids(&p));
+        r.from = Position::After(p.next.clone().unwrap());
+    }
+    assert_eq!((all.len(), reads), (3_000, 4));
+    assert_eq!((all[0].as_str(), all[2_999].as_str()), ("1-1", "1-3000"));
+}
+
+#[tokio::test]
+async fn browse_pages_backward_newest_first() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let mut r = browse(&fx, "big:stream", Position::End, Direction::Backward, 1_000);
+    let mut all = Vec::new();
+    loop {
+        let p = s.read_messages(&r).await.unwrap();
+        if p.batch.is_empty() {
+            assert_eq!((p.next, p.prev), (None, None));
+            break;
+        }
+        let got = ids(&p);
+        assert_eq!(id(p.next.as_ref()), Some(got[0].as_str()));
+        assert_eq!(id(p.prev.as_ref()), got.last().map(String::as_str));
+        all.extend(got);
+        r.from = Position::Before(p.prev.clone().unwrap());
+    }
+    assert_eq!(all.len(), 3_000);
+    assert_eq!(
+        (all[0].as_str(), all[999].as_str(), all[1_000].as_str()),
+        ("1-3000", "1-2001", "1-2000")
+    );
+}
+
+#[tokio::test]
+async fn the_edges_are_empty_pages() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let p = s
+        .read_messages(&browse(
+            &fx,
+            "big:stream",
+            Position::End,
+            Direction::Forward,
+            10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (p.batch.len(), id(p.next.as_ref()), p.length),
+        (0, Some("1-3000"), Some(3_000))
+    );
+    let p = s
+        .read_messages(&browse(
+            &fx,
+            "big:stream",
+            Position::Start,
+            Direction::Backward,
+            10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!((p.batch.len(), p.next, p.prev), (0, None, None));
+    fx.db
+        .cmd(&["XGROUP", "CREATE", "fresh", "g", "$", "MKSTREAM"])
+        .await;
+    let p = s
+        .read_messages(&browse(
+            &fx,
+            "fresh",
+            Position::Start,
+            Direction::Forward,
+            10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!((p.batch.len(), id(p.next.as_ref())), (0, Some("0-0")));
+    let e = s
+        .read_messages(&browse(
+            &fx,
+            "nosuch",
+            Position::Start,
+            Direction::Forward,
+            10,
+        ))
+        .await;
+    assert!(matches!(e, Err(MessageError::NotFound)), "{e:?}");
+    let follow_str =
+        MessageRead::follow(src(&fx, "str"), Position::End, Duration::from_millis(100));
+    for r in [
+        browse(&fx, "str", Position::Start, Direction::Forward, 10),
+        follow_str,
+    ] {
+        match s.read_messages(&r).await {
+            Err(MessageError::Server { code, .. }) => assert_eq!(code, "WRONGTYPE"),
+            other => panic!("{other:?}"),
+        }
+    }
+    let mut w = fx.session(Writer, SessionOptions::default()).await;
+    crate::support::read(&mut w, "MULTI").await;
+    let e = w
+        .read_messages(&browse(
+            &fx,
+            "stream",
+            Position::Start,
+            Direction::Forward,
+            10,
+        ))
+        .await;
+    assert!(matches!(e, Err(MessageError::Unsupported { .. })), "{e:?}");
+}
+
+#[tokio::test]
+async fn max_bytes_cuts_the_page_and_says_so() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let mut r = browse(&fx, "big:stream", Position::Start, Direction::Forward, 100);
+    r.max_bytes = Some(1);
+    let p = s.read_messages(&r).await.unwrap();
+    assert_eq!(
+        (ids(&p), id(p.next.as_ref())),
+        (vec!["1-1".to_owned()], Some("1-1"))
+    );
+    assert_eq!(p.truncated_by, Some(dbento_core::TruncatedBy::Bytes));
+    r.max_bytes = None;
+    let p = s.read_messages(&r).await.unwrap();
+    assert_eq!((p.batch.len(), p.truncated_by), (100, None));
+}
+
+#[tokio::test]
+async fn a_cell_over_the_value_cap_is_cut_not_dropped() {
+    let fx = rd("").await;
+    let big = "x".repeat(2 << 20);
+    fx.db.cmd(&["XADD", "huge", "1-1", "f", &big]).await;
+    let mut s = fx.session(Reader, forced()).await;
+    let p = s
+        .read_messages(&browse(
+            &fx,
+            "huge",
+            Position::Start,
+            Direction::Forward,
+            10,
+        ))
+        .await
+        .unwrap();
+    let fields = &column(&p, 2)[0];
+    assert_eq!((ids(&p), fields.len()), (vec!["1-1".to_owned()], 1 << 20));
+    assert!(fields.starts_with(r#"{"f":"xxx"#), "{}", &fields[..20]);
+    assert_eq!(p.truncated_by, Some(dbento_core::TruncatedBy::Bytes));
+}
+
+#[tokio::test]
+async fn a_followed_cell_over_the_value_cap_is_cut_too() {
+    let fx = rd("").await;
+    let big = "x".repeat(2 << 20);
+    fx.db.cmd(&["XADD", "huge", "1-1", "f", &big]).await;
+    let mut s = fx.session(Reader, forced()).await;
+    let r = MessageRead::follow(src(&fx, "huge"), after("0-0"), Duration::from_millis(100));
+    let p = s.read_messages(&r).await.unwrap();
+    let fields = &column(&p, 2)[0];
+    assert_eq!((ids(&p), fields.len()), (vec!["1-1".to_owned()], 1 << 20));
+    assert!(fields.starts_with(r#"{"f":"xxx"#), "{}", &fields[..20]);
+    assert_eq!(p.truncated_by, Some(dbento_core::TruncatedBy::Bytes));
 }
