@@ -18,7 +18,7 @@ use aws_smithy_types::body::SdkBody;
 use serde_json::{Value, json};
 
 use super::client::{CONNECT_TIMEOUT, ClientSettings, DynamoClient};
-use super::creds::AwsCredentials;
+use crate::aws::AwsCredentials;
 use crate::secrets::Secret;
 
 /// The connection a replayed session reports as its target.

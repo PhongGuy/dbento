@@ -54,8 +54,8 @@ A connection name matches `[A-Za-z0-9_-]+`.
 ## Keys per engine
 
 `engine` takes `postgres`, `mysql` (alias `mariadb`), `mssql` (alias `sqlserver`), `sqlite`,
-`duckdb`, `mongodb` (alias `mongo`), `surrealdb` (alias `surreal`), `redis` (alias `valkey`) or
-`dynamodb` (alias `dynamo`). A key that belongs to another engine is refused with `invalid`.
+`duckdb`, `mongodb` (alias `mongo`), `surrealdb` (alias `surreal`), `redis` (alias `valkey`),
+`dynamodb` (alias `dynamo`) or `s3`. A key that belongs to another engine is refused with `invalid`.
 
 | Engine | Required | Optional |
 | --- | --- | --- |
@@ -67,6 +67,7 @@ A connection name matches `[A-Za-z0-9_-]+`.
 | `surrealdb` | `host`, `namespace`, `database` | `port` (8000), `user`, `auth_level` (`root`, `namespace` or `database`, required with `user`), `secret` (only with `user`; `"none"` is always accepted), `tls`, `tls_ca` |
 | `redis` | none | `host` (`127.0.0.1`), `port` (6379), `database` (a DB index, `0`), `user`, `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key` |
 | `dynamodb` | none | `region`, `endpoint`, `access_key_id`, `secret` (only with `access_key_id`, and never `"none"` there), `consistent_read` (bool) |
+| `s3` | none | `region`, `endpoint`, `access_key_id`, `secret` (only with `access_key_id`, and never `"none"` there), `virtual_hosted` (bool, only with `endpoint`), `buckets` (a non-empty list of distinct bucket names, each without whitespace, a comma or `/`) |
 
 Further rules:
 
@@ -82,7 +83,7 @@ Further rules:
   child connection named `<parent>/<database>`.
 - `read_only_user` (SQL Server only) is the non-blank (not empty or only whitespace) reader user
   that read-only work impersonates.
-- `endpoint` (DynamoDB) is an `http` or `https` URL with no user, path, query or fragment. Plain
+- `endpoint` (DynamoDB and S3) is an `http` or `https` URL with no user, path, query or fragment. Plain
   `http` is allowed only to `localhost` or a loopback address. `region` and `access_key_id` must
   be non-blank (not empty or only whitespace).
 
@@ -100,7 +101,7 @@ No secret is ever written in `dbento.toml`.
   `host:port`, as in `mongodb://h:27017/db?appName=a@b`: write that `@` as `%40`. The uri is
   also refused when it holds the option `tlsCertificateKeyFilePassword`, `proxyPassword`,
   or `authMechanismProperties` holding `AWS_SESSION_TOKEN`. Option keys match in any case.
-- A DynamoDB `endpoint` holding a user or password is refused with `secret` (key `endpoint`).
+- A DynamoDB or S3 `endpoint` holding a user or password is refused with `secret` (key `endpoint`).
 - A MongoDB `uri` port, when written for a host, must be ASCII digits in 1-65535, bracketed IPv6
   hosts and `mongodb+srv://` included; otherwise `invalid`. The message never quotes the uri, so a
   uri such as `mongodb://u:secret/` can never be shown as the connection's target.
@@ -131,6 +132,7 @@ Saved queries are files below `queries/` with the extension of their language, i
 | `.surql` | SurrealQL |
 | `.redis` | Redis commands |
 | `.partiql` | PartiQL |
+| `.s3` | S3 commands |
 
 - The first folder below `queries/` names the connection the file runs on:
   `queries/app-prod/report.sql` runs on `app-prod`. A file directly in `queries/` binds nothing.
@@ -154,7 +156,7 @@ Saved queries are files below `queries/` with the extension of their language, i
 | `invalid-name` | A connection name outside `[A-Za-z0-9_-]+`. | `name` |
 | `invalid` | A connection's keys are wrong for its engine. | `connection` |
 | `invalid-folder` | A `[folders]` path or colour is wrong. | `folder` |
-| `secret` | A secret in a MongoDB `uri` or a DynamoDB `endpoint`. | `connection`, `key` |
+| `secret` | A secret in a MongoDB `uri` or a DynamoDB or S3 `endpoint`. | `connection`, `key` |
 
 ### Precedence
 

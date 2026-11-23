@@ -47,6 +47,7 @@ pub(crate) fn language_mismatch(file: &Path, engine: Engine) -> Option<String> {
         QueryLanguage::SurrealQl,
         QueryLanguage::RedisCommands,
         QueryLanguage::PartiQl,
+        QueryLanguage::S3Cmd,
     ]
     .into_iter()
     .find(|l| l.file_extension() == ext)?;
@@ -85,6 +86,8 @@ mod tests {
         assert!(e.contains("Redis commands") && e.contains(".redis"), "{e}");
         let e = language_mismatch(Path::new("q.PartiQL"), Engine::Postgres).unwrap();
         assert!(e.contains("PartiQL") && e.contains(".partiql"), "{e}");
+        let e = language_mismatch(Path::new("q.S3"), Engine::Postgres).unwrap();
+        assert!(e.contains("S3 commands") && e.contains(".s3"), "{e}");
     }
 
     const PARENT: &str = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = [\"booking\"]\n[connections.plain]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n";

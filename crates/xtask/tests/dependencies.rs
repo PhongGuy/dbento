@@ -166,6 +166,7 @@ fn the_aws_crates_resolve_once_at_their_pins_without_aws_config() {
         named(&packages, "aws-sdk-dynamodb"),
         ["aws-sdk-dynamodb v1.138.0"]
     );
+    assert_eq!(named(&packages, "aws-sdk-s3"), ["aws-sdk-s3 v1.158.0"]);
     assert_eq!(
         named(&packages, "aws-smithy-http-client"),
         ["aws-smithy-http-client v1.5.2"]
