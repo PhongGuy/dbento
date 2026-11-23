@@ -429,14 +429,14 @@ pub fn formats(engine: Engine) -> bool {
 }
 
 /// The highlighter language for `engine`'s query editor: "sql" for an SQL engine and PartiQL,
-/// "javascript" for the MongoDB shell, "bash" for Redis command lines (close enough to colour
+/// "javascript" for the MongoDB shell, "bash" for Redis and S3 command lines (close enough to colour
 /// words and quotes), "text" (plain, no highlighting) for SurrealQL.
 pub fn editor_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         // PartiQL's `<<`, `>>` and `{}` fall outside the SQL grammar; its keywords still colour.
         QueryLanguage::Sql | QueryLanguage::PartiQl => "sql",
         QueryLanguage::MongoShell => "javascript",
-        QueryLanguage::RedisCommands => "bash",
+        QueryLanguage::RedisCommands | QueryLanguage::S3Cmd => "bash",
         QueryLanguage::SurrealQl => "text",
     }
 }

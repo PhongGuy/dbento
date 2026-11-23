@@ -447,7 +447,8 @@ impl SavedQuery {
     }
 
     /// The language its extension implies, in any case: `.js` is the shell, `.surql` is
-    /// SurrealQL, `.redis` is Redis commands, `.partiql` is PartiQL, anything else SQL.
+    /// SurrealQL, `.redis` is Redis commands, `.partiql` is PartiQL, `.s3` is S3 commands,
+    /// anything else SQL.
     pub fn language(&self) -> QueryLanguage {
         let ext = self.path.extension();
         [
@@ -455,6 +456,7 @@ impl SavedQuery {
             QueryLanguage::SurrealQl,
             QueryLanguage::RedisCommands,
             QueryLanguage::PartiQl,
+            QueryLanguage::S3Cmd,
         ]
         .into_iter()
         .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
@@ -880,8 +882,8 @@ impl Workspace {
         std::fs::create_dir_all(&queries).map_err(|e| io(&queries, e))
     }
 
-    /// Every `.sql`, `.js`, `.surql`, `.redis` and `.partiql` file under `queries/`, sorted by
-    /// path.
+    /// Every `.sql`, `.js`, `.surql`, `.redis`, `.partiql` and `.s3` file under `queries/`,
+    /// sorted by path.
     pub fn saved_queries(&self) -> Result<Vec<SavedQuery>, OpenError> {
         let root = self.dir.join("queries");
         let mut found = Vec::new();
@@ -1253,7 +1255,7 @@ impl Workspace {
     }
 }
 
-/// Recursively gathers `.sql`, `.js`, `.surql`, `.redis` and `.partiql` files below `dir`,
+/// Recursively gathers `.sql`, `.js`, `.surql`, `.redis`, `.partiql` and `.s3` files below `dir`,
 /// skipping any whose real path leaves `root` (the canonical `queries/`) and dangling links.
 fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
@@ -1268,6 +1270,7 @@ fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::
                 QueryLanguage::SurrealQl,
                 QueryLanguage::RedisCommands,
                 QueryLanguage::PartiQl,
+                QueryLanguage::S3Cmd,
             ]
             .iter()
             .any(|l| e.eq_ignore_ascii_case(l.file_extension()))
