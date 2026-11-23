@@ -150,7 +150,7 @@ pub async fn apply_with(
     // Key text is the browse session's output text, so the apply session takes on that
     // session's DateStyle, TimeZone and the like to parse it and to return written keys.
     let pins = batch.target().pins();
-    if started.is_ok() && !pins.is_empty() {
+    if conn.engine() == Engine::Postgres && started.is_ok() && !pins.is_empty() {
         let calls = (0..pins.len())
             .map(|i| {
                 format!(
@@ -168,7 +168,13 @@ pub async fn apply_with(
         started = session.run_bound(&format!("SELECT {calls}"), &params).await;
     }
     if started.is_ok() {
-        started = session.run_bound("BEGIN", &[]).await;
+        // MySQL reads BEGIN as a block opener in stored programs; START TRANSACTION never is.
+        let begin = if conn.engine() == Engine::Mysql {
+            "START TRANSACTION"
+        } else {
+            "BEGIN"
+        };
+        started = session.run_bound(begin, &[]).await;
     }
     if let Err(e) = started {
         let _ = session.close().await;

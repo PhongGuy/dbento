@@ -78,6 +78,17 @@ fn my() -> EditTarget {
     )
 }
 
+fn ms() -> EditTarget {
+    EditTarget::new(
+        RelationRef::new("dbo", "t"),
+        Engine::Mssql,
+        vec![col("id", "int", true, None)],
+        strings(&["id"]),
+        vec![],
+        false,
+    )
+}
+
 #[test]
 fn a_batch_needs_an_engine_that_edits_rows() {
     let insert = || {
@@ -86,19 +97,19 @@ fn a_batch_needs_an_engine_that_edits_rows() {
         }]
     };
     let refused = BatchError::UnsupportedEngine {
-        engine: Engine::Mysql,
+        engine: Engine::Mssql,
     };
-    assert_eq!(EditBatch::new(my(), insert()).unwrap_err(), refused);
+    assert_eq!(EditBatch::new(ms(), insert()).unwrap_err(), refused);
     assert_eq!(
-        EditBatch::new(my(), vec![]).unwrap_err(),
+        EditBatch::new(ms(), vec![]).unwrap_err(),
         refused,
         "the engine is checked before anything else"
     );
     assert_eq!(
         refused.to_string(),
-        "editing rows is not available on mysql yet"
+        "editing rows is not available on mssql yet"
     );
-    for target in [pg(), lite(), my()] {
+    for target in [pg(), lite(), my(), ms()] {
         let engine = target.engine();
         assert_eq!(
             EditBatch::new(target, insert()).is_ok(),
@@ -106,6 +117,7 @@ fn a_batch_needs_an_engine_that_edits_rows() {
             "{engine:?}"
         );
     }
+    assert!(Engine::Mysql.capabilities().edit_rows, "MySQL edits rows");
 }
 
 fn t(s: &str) -> EditValue {

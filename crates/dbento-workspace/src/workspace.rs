@@ -88,12 +88,13 @@ impl Engine {
                 table_definition: true,
                 ..none
             },
-            // Only what works today: editing and EXPLAIN come in later plans.
+            // Only what works today: EXPLAIN comes in a later plan.
             Engine::Mysql => Capabilities {
                 schemas: true,
                 server_cancel: true,
                 password: true,
                 tls: true,
+                edit_rows: true,
                 table_definition: true,
                 ..none
             },
