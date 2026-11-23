@@ -67,7 +67,7 @@ A connection name matches `[A-Za-z0-9_-]+`.
 | `surrealdb` | `host`, `namespace`, `database` | `port` (8000), `user`, `auth_level` (`root`, `namespace` or `database`, required with `user`), `secret` (only with `user`; `"none"` is always accepted), `tls`, `tls_ca` |
 | `redis` | none | `host` (`127.0.0.1`), `port` (6379), `database` (a DB index, `0`), `user`, `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key` |
 | `dynamodb` | none | `region`, `endpoint`, `access_key_id`, `secret` (only with `access_key_id`, and never `"none"` there), `consistent_read` (bool) |
-| `s3` | none | `region`, `endpoint`, `access_key_id`, `secret` (only with `access_key_id`, and never `"none"` there) |
+| `s3` | none | `region`, `endpoint`, `access_key_id`, `secret` (only with `access_key_id`, and never `"none"` there), `virtual_hosted` (bool, only with `endpoint`), `buckets` (a non-empty list of distinct bucket names, each without whitespace, a comma or `/`) |
 
 Further rules:
 

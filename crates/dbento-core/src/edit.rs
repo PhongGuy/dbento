@@ -733,7 +733,7 @@ fn update_entry(
 }
 
 /// Every key in the order a new entry writes them, with its TOML value when present.
-fn values(spec: &ConnectionSpec) -> [(&'static str, Option<Value>); 24] {
+fn values(spec: &ConnectionSpec) -> [(&'static str, Option<Value>); 26] {
     let engine = spec.engine.name();
     let tls = |t: &TlsMode| match t {
         TlsMode::Verify => "verify",
@@ -766,6 +766,7 @@ fn values(spec: &ConnectionSpec) -> [(&'static str, Option<Value>); 24] {
         ("auth_level", spec.auth_level.map(|l| Value::from(l.name()))),
         ("region", text(&spec.region)),
         ("endpoint", text(&spec.endpoint)),
+        ("virtual_hosted", spec.virtual_hosted.map(Value::from)),
         ("access_key_id", text(&spec.access_key_id)),
         ("secret", spec.secret.as_ref().map(secret)),
         ("tls", spec.tls.as_ref().map(|t| Value::from(tls(t)))),
@@ -774,6 +775,12 @@ fn values(spec: &ConnectionSpec) -> [(&'static str, Option<Value>); 24] {
         ("tls_key", text(&spec.tls_key)),
         ("read_only_user", text(&spec.read_only_user)),
         ("consistent_read", spec.consistent_read.map(Value::from)),
+        (
+            "buckets",
+            spec.buckets
+                .as_ref()
+                .map(|names| Value::Array(names.iter().map(String::as_str).collect())),
+        ),
         ("read_only", spec.read_only.map(Value::from)),
         ("color", spec.color.map(|c| Value::from(color_word(c)))),
         (

@@ -27,6 +27,7 @@ const MG: &str =
     "engine = \"mongodb\"\nuri = \"mongodb://app@db.internal:27017/shop?authSource=admin\"\n";
 const SR: &str = "engine = \"surrealdb\"\nhost = \"db.internal\"\nnamespace = \"n\"\ndatabase = \"d\"\nuser = \"u\"\nauth_level = \"root\"\n";
 const DY: &str = "engine = \"dynamodb\"\nregion = \"eu-west-1\"\nendpoint = \"http://127.0.0.1:5000\"\naccess_key_id = \"AKIDTEST\"\nsecret = \"keychain\"\nconsistent_read = true\n";
+const S3: &str = "engine = \"s3\"\nregion = \"auto\"\nendpoint = \"http://127.0.0.1:5000\"\naccess_key_id = \"AKIDTEST\"\nsecret = \"keychain\"\n";
 
 // (the one key differing_keys reports, whether that key identifies the login, a, b)
 fn cases() -> Vec<(&'static str, bool, String, String)> {
@@ -155,6 +156,18 @@ fn cases() -> Vec<(&'static str, bool, String, String)> {
             false,
             DY.into(),
             DY.replace("consistent_read = true", "consistent_read = false"),
+        ),
+        (
+            "virtual_hosted",
+            false,
+            S3.into(),
+            with(S3, "virtual_hosted = true\n"),
+        ),
+        (
+            "buckets",
+            false,
+            S3.into(),
+            with(S3, "buckets = [\"logs\"]\n"),
         ),
     ]
 }

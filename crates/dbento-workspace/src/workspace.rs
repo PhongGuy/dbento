@@ -578,6 +578,8 @@ pub struct ConnectionConfig {
     endpoint: Option<String>,
     access_key_id: Option<String>,
     consistent_read: bool,
+    virtual_hosted: bool,
+    buckets: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -627,6 +629,8 @@ struct RawConnection {
     endpoint: Option<String>,
     access_key_id: Option<String>,
     consistent_read: Option<bool>,
+    virtual_hosted: Option<bool>,
+    buckets: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -674,6 +678,31 @@ fn databases(raw: RawDatabases, engine: Engine) -> Result<Databases, String> {
         }
     }
     Ok(Databases::Listed(names))
+}
+
+// An s3 `buckets` list: non-empty, each name non-empty without whitespace, comma or `/`, and
+// no name twice. The server judges anything else when the bucket is listed.
+fn bucket_names(names: &[String]) -> Result<(), String> {
+    if names.is_empty() {
+        return Err(
+            "`buckets` must list at least one bucket; leave it out to list every bucket".to_owned(),
+        );
+    }
+    for (i, name) in names.iter().enumerate() {
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|c| c.is_whitespace() || c == ',' || c == '/')
+        {
+            return Err(
+                "`buckets` names must not be empty or hold a space, comma or `/`".to_owned(),
+            );
+        }
+        if names[..i].contains(name) {
+            return Err(format!("`buckets` lists `{name}` twice"));
+        }
+    }
+    Ok(())
 }
 
 // Its own struct because `deny_unknown_fields` is ignored on an untagged struct variant.
@@ -1260,6 +1289,8 @@ impl Workspace {
         spec.endpoint = raw.endpoint;
         spec.access_key_id = raw.access_key_id;
         spec.consistent_read = raw.consistent_read;
+        spec.virtual_hosted = raw.virtual_hosted;
+        spec.buckets = raw.buckets;
         Some(spec)
     }
 }
@@ -1507,6 +1538,8 @@ impl ConnectionConfig {
             endpoint: None,
             access_key_id: None,
             consistent_read: false,
+            virtual_hosted: false,
+            buckets: None,
         };
 
         // Checked ahead of the per-engine rules, whose messages would call it a postgres key.
@@ -1554,6 +1587,19 @@ impl ConnectionConfig {
                 "`consistent_read` is a dynamodb key, not valid for {}",
                 engine.name()
             )));
+        }
+        if engine != Engine::S3 {
+            for (key, present) in [
+                ("virtual_hosted", raw.virtual_hosted.is_some()),
+                ("buckets", raw.buckets.is_some()),
+            ] {
+                if present {
+                    return Err(invalid(format!(
+                        "`{key}` is an s3 key, not valid for {}",
+                        engine.name()
+                    )));
+                }
+            }
         }
 
         // Ahead of the per-engine rules, so its message wins over a "postgres key" one.
@@ -1903,6 +1949,18 @@ impl ConnectionConfig {
                 config.access_key_id = raw.access_key_id;
                 // Always false on s3: the guard above refuses the key there.
                 config.consistent_read = raw.consistent_read.unwrap_or(false);
+                // The s3-only keys; the guard above keeps them off dynamodb.
+                if raw.virtual_hosted.is_some() && config.endpoint.is_none() {
+                    return Err(invalid(
+                        "`virtual_hosted` needs `endpoint`: AWS itself is always virtual-hosted"
+                            .to_owned(),
+                    ));
+                }
+                config.virtual_hosted = raw.virtual_hosted.unwrap_or(false);
+                if let Some(names) = &raw.buckets {
+                    bucket_names(names).map_err(invalid)?;
+                }
+                config.buckets = raw.buckets;
             }
         }
         Ok(config)
@@ -2022,6 +2080,8 @@ impl ConnectionConfig {
             databases: _,
             parent: _,
             consistent_read: _,
+            virtual_hosted: _,
+            buckets: _,
             engine,
             host,
             port,
@@ -2080,6 +2140,8 @@ impl ConnectionConfig {
             endpoint,
             access_key_id,
             consistent_read,
+            virtual_hosted,
+            buckets,
         } = self;
         [
             (
@@ -2111,6 +2173,8 @@ impl ConnectionConfig {
             ("endpoint", *endpoint != other.endpoint),
             ("access_key_id", *access_key_id != other.access_key_id),
             ("consistent_read", *consistent_read != other.consistent_read),
+            ("virtual_hosted", *virtual_hosted != other.virtual_hosted),
+            ("buckets", *buckets != other.buckets),
         ]
         .into_iter()
         .filter_map(|(key, differs)| differs.then_some(key))
@@ -2332,6 +2396,16 @@ impl ConnectionConfig {
     pub fn consistent_read(&self) -> bool {
         self.consistent_read
     }
+
+    /// Whether S3 puts the bucket in the host name; `false` when absent, and only with `endpoint`.
+    pub fn virtual_hosted(&self) -> bool {
+        self.virtual_hosted
+    }
+
+    /// The S3 buckets to list instead of calling ListBuckets; `None` when absent.
+    pub fn buckets(&self) -> Option<&[String]> {
+        self.buckets.as_deref()
+    }
 }
 
 // Everything a session depends on, in the form session_binding encodes. Built from one
@@ -2361,6 +2435,13 @@ struct SessionKey<'a> {
     endpoint: Option<&'a str>,
     access_key_id: Option<&'a str>,
     consistent_read: bool,
+    // Skipped when false so every binding written before the key existed stays byte-identical.
+    #[serde(skip_serializing_if = "is_false")]
+    virtual_hosted: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 // Where the secret comes from, by kind and variable name only; never the secret.
@@ -2399,7 +2480,7 @@ impl ConnectionConfig {
     fn session_key(&self) -> SessionKey<'_> {
         // Excluded: the name is the caller's key; colour, folder and the derived colour are
         // labels; mariadb is MySQL's driver and target; path resolves into file_path; parent
-        // and databases describe listing, not where a statement runs.
+        // and databases and buckets describe listing, not where a statement runs.
         let ConnectionConfig {
             name: _,
             color: _,
@@ -2409,6 +2490,7 @@ impl ConnectionConfig {
             path: _,
             parent: _,
             databases: _,
+            buckets: _,
             engine,
             read_only,
             statement_timeout,
@@ -2431,6 +2513,7 @@ impl ConnectionConfig {
             endpoint,
             access_key_id,
             consistent_read,
+            virtual_hosted,
         } = self;
         SessionKey {
             b: 1,
@@ -2464,6 +2547,7 @@ impl ConnectionConfig {
             endpoint: endpoint.as_deref(),
             access_key_id: access_key_id.as_deref(),
             consistent_read: *consistent_read,
+            virtual_hosted: *virtual_hosted,
         }
     }
 }

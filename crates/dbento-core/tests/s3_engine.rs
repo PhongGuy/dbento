@@ -289,3 +289,92 @@ fn an_s3_entry_round_trips_through_a_save() {
     assert!(text.contains("engine = \"s3\""), "{text}");
     assert_eq!(open(&text).1.connection_spec("assets"), Some(spec));
 }
+
+#[test]
+fn virtual_hosted_needs_an_endpoint_and_defaults_to_path_style() {
+    let (_d, ws) = open(S3);
+    assert!(!ws.declared("assets").unwrap().virtual_hosted());
+    let (_d, ws) = open(&format!("{S3}virtual_hosted = true\n"));
+    assert!(ws.declared("assets").unwrap().virtual_hosted());
+    for value in ["true", "false"] {
+        let m = invalid(&format!("{HEAD}virtual_hosted = {value}\n"));
+        assert!(
+            m.contains("`virtual_hosted` needs `endpoint`"),
+            "{value}: {m}"
+        );
+    }
+}
+
+#[test]
+fn buckets_are_a_non_empty_list_of_plain_distinct_names() {
+    let (_d, ws) = open(&format!("{HEAD}buckets = [\"logs\", \"media.v2\"]\n"));
+    let listed = ws
+        .declared("assets")
+        .unwrap()
+        .buckets()
+        .map(<[String]>::to_vec);
+    assert_eq!(listed, Some(vec!["logs".to_owned(), "media.v2".to_owned()]));
+    let (_d, ws) = open(HEAD);
+    assert_eq!(ws.declared("assets").unwrap().buckets(), None);
+    let m = invalid(&format!("{HEAD}buckets = []\n"));
+    assert!(m.contains("must list at least one bucket"), "{m}");
+    for bad in ["", "a b", "a,b", "a/b", "tab\tx"] {
+        let m = invalid(&format!("{HEAD}buckets = [\"{bad}\"]\n").replace('\t', "\\t"));
+        assert!(m.contains("must not be empty or hold"), "{bad:?}: {m}");
+    }
+    let m = invalid(&format!("{HEAD}buckets = [\"logs\", \"logs\"]\n"));
+    assert!(m.contains("lists `logs` twice"), "{m}");
+}
+
+#[test]
+fn the_s3_keys_are_refused_on_every_other_engine() {
+    for base in [
+        "engine = \"sqlite\"\npath = \"a.db\"\n",
+        "engine = \"redis\"\n",
+        "engine = \"dynamodb\"\nendpoint = \"http://127.0.0.1:5000\"\n",
+        "engine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n",
+    ] {
+        for (line, key) in [
+            ("virtual_hosted = true", "virtual_hosted"),
+            ("buckets = [\"logs\"]", "buckets"),
+        ] {
+            let m = invalid(&format!("dbento = 1\n[connections.c]\n{base}{line}\n"));
+            assert!(
+                m.contains(&format!("`{key}` is an s3 key, not valid for")),
+                "{base}{line}: {m}"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_s3_key_round_trips_through_a_save_and_an_unticked_box_drops_the_key() {
+    let (_dir, ws) = open("dbento = 1\n");
+    let mut spec = ConnectionSpec::new(Engine::S3);
+    spec.endpoint = Some("http://127.0.0.1:9000".into());
+    spec.virtual_hosted = Some(true);
+    spec.buckets = Some(vec!["logs".into(), "media".into()]);
+    let put = |spec: &ConnectionSpec, previous: Option<&str>| Edit::PutConnection {
+        previous: previous.map(str::to_owned),
+        name: "assets".into(),
+        spec: spec.clone(),
+    };
+    let text = plan_edit(&ws, &put(&spec, None))
+        .unwrap()
+        .new_text()
+        .to_owned();
+    assert!(text.contains("virtual_hosted = true"), "{text}");
+    assert!(text.contains("buckets = [\"logs\", \"media\"]"), "{text}");
+    let (_d2, saved) = open(&text);
+    assert_eq!(saved.connection_spec("assets"), Some(spec.clone()));
+    spec.virtual_hosted = None;
+    spec.buckets = None;
+    let cleared = plan_edit(&saved, &put(&spec, Some("assets")))
+        .unwrap()
+        .new_text()
+        .to_owned();
+    assert!(
+        !cleared.contains("virtual_hosted") && !cleared.contains("buckets"),
+        "{cleared}"
+    );
+}
