@@ -38,6 +38,7 @@ mod dynamo_shell_seams;
 mod edit;
 mod edit_apply;
 mod edit_folders;
+mod edit_ssh;
 mod error_fields;
 mod explain_plan;
 mod explain_request;

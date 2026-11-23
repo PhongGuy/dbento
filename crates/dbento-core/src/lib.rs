@@ -28,7 +28,7 @@ pub use form::{ConnectionForm, FieldKind, FormField, FormSection, connection_for
 
 mod edit;
 mod write;
-pub use edit::{ConnectionSpec, Edit, EditError, EditPlan, WriteError, plan_edit};
+pub use edit::{ConnectionSpec, Edit, EditError, EditPlan, SshSpec, WriteError, plan_edit};
 
 mod approval;
 pub use approval::{

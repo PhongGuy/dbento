@@ -7,7 +7,7 @@ use crate::folder::{FolderPath, parse_written};
 use crate::kinds::{
     Capabilities, ConstraintKind, DefinitionKind, QueryLanguage, ReadOnlyEnforcement,
 };
-use crate::spec::ConnectionSpec;
+use crate::spec::{ConnectionSpec, SshSpec};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1365,6 +1365,15 @@ impl Workspace {
         spec.endpoint = raw.endpoint;
         spec.access_key_id = raw.access_key_id;
         spec.consistent_read = raw.consistent_read;
+        // The source text already loaded, so `auth` is one of the known words.
+        spec.ssh = raw.ssh.map(|s| SshSpec {
+            host: s.host,
+            port: s.port,
+            user: s.user,
+            auth: s.auth.as_deref().and_then(SshAuth::parse),
+            identity_file: s.identity_file,
+            keepalive: s.keepalive,
+        });
         Some(spec)
     }
 }

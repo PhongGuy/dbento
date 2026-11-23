@@ -1,7 +1,7 @@
 //! A connection's keys as `dbento.toml` writes them, for building or editing one entry.
 
 use crate::folder::FolderPath;
-use crate::workspace::{AuthLevel, Color, Databases, Engine, SecretSource, TlsMode};
+use crate::workspace::{AuthLevel, Color, Databases, Engine, SecretSource, SshAuth, TlsMode};
 
 /// A connection's keys as written in `dbento.toml`; `None` means the key is absent.
 #[non_exhaustive]
@@ -55,6 +55,40 @@ pub struct ConnectionSpec {
     pub access_key_id: Option<String>,
     /// `consistent_read` (DynamoDB).
     pub consistent_read: Option<bool>,
+    /// The `[connections.<name>.ssh]` sub-table.
+    pub ssh: Option<SshSpec>,
+}
+
+/// A connection's `[connections.<name>.ssh]` keys as written; `None` means the key is absent.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshSpec {
+    /// `host`: the SSH host or `~/.ssh/config` alias.
+    pub host: String,
+    /// `port`.
+    pub port: Option<u16>,
+    /// `user`.
+    pub user: Option<String>,
+    /// `auth`.
+    pub auth: Option<SshAuth>,
+    /// `identity_file`, as written.
+    pub identity_file: Option<String>,
+    /// `keepalive`.
+    pub keepalive: Option<bool>,
+}
+
+impl SshSpec {
+    /// A spec with only `host` set.
+    pub fn new(host: impl Into<String>) -> SshSpec {
+        SshSpec {
+            host: host.into(),
+            port: None,
+            user: None,
+            auth: None,
+            identity_file: None,
+            keepalive: None,
+        }
+    }
 }
 
 impl ConnectionSpec {
@@ -85,6 +119,7 @@ impl ConnectionSpec {
             endpoint: None,
             access_key_id: None,
             consistent_read: None,
+            ssh: None,
         }
     }
 }
