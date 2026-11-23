@@ -261,6 +261,11 @@ impl Shared {
         state.db.ok_or(Unbracketable::DbUnknown)
     }
 
+    /// The statement timeout that bounds each round trip.
+    pub(super) fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
+
     pub(super) fn in_multi(&self) -> bool {
         self.state().in_multi
     }

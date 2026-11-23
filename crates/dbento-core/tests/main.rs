@@ -113,6 +113,7 @@ mod redis_catalog;
 mod redis_crate;
 mod redis_engine;
 mod redis_limits;
+mod redis_messages;
 mod redis_probe;
 mod redis_scan;
 mod redis_session;
