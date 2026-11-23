@@ -15,7 +15,7 @@ use crate::duckdb::{DuckCancel, DuckDriver};
 #[cfg(feature = "dynamodb")]
 use crate::dynamo::{driver::DynamoSession, stream::DynamoCancel};
 use crate::explain::{ExplainOutput, ExplainRequest};
-use crate::fkeys::{ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
+use crate::fkeys::{FkDirection, ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 #[cfg(feature = "mongodb")]
 use crate::mongo::driver::{MongoCancel, MongoDriver};
@@ -1133,7 +1133,8 @@ impl Session {
     }
 
     /// Keys of `rel` in both directions: outgoing first, then by the far relation, then by
-    /// columns. An unknown schema or relation has none.
+    /// columns. An unknown schema or relation has none. On MySQL a key whose columns on `rel`'s
+    /// side include a BIT or FLOAT column is left out, since no literal matches those values.
     pub async fn foreign_keys(
         &mut self,
         rel: &RelationRef,
@@ -1141,7 +1142,11 @@ impl Session {
         let mut keys = match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_foreign_keys(d, rel).await?,
             SessionInner::Postgres(d) => pg_foreign_keys(d, rel).await?,
-            SessionInner::Mysql(d) => crate::mysql::catalog::foreign_keys(d, rel).await?,
+            SessionInner::Mysql(d) => {
+                let keys = crate::mysql::catalog::foreign_keys(d, rel).await?;
+                let columns = crate::mysql::catalog::columns(d, rel).await?;
+                matchable_mysql_keys(keys, &columns)
+            }
             SessionInner::Mssql(d) => crate::mssql::catalog::foreign_keys(d, rel).await?,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => {
@@ -1795,6 +1800,29 @@ fn bound_unsupported() -> ExecuteError {
     ExecuteError::Unsupported {
         reason: "bound statements are not built for this engine yet".to_owned(),
     }
+}
+
+/// `keys` without those whose columns on the browsed side are BIT or FLOAT in `columns`: a
+/// browse filtered on such a key would come back empty or wrong. MySQL names ignore case.
+fn matchable_mysql_keys(keys: Vec<ForeignKey>, columns: &[ColumnMeta]) -> Vec<ForeignKey> {
+    let inexact: Vec<&str> = columns
+        .iter()
+        .filter(|c| {
+            let base = c.type_name().split(['(', ' ']).next().unwrap_or_default();
+            base.eq_ignore_ascii_case("float") || base.eq_ignore_ascii_case("bit")
+        })
+        .map(ColumnMeta::name)
+        .collect();
+    keys.into_iter()
+        .filter(|k| {
+            let own = match k.direction() {
+                FkDirection::Outgoing => k.columns(),
+                FkDirection::Incoming => k.referenced_columns(),
+            };
+            !own.iter()
+                .any(|c| inexact.iter().any(|i| i.eq_ignore_ascii_case(c)))
+        })
+        .collect()
 }
 
 #[cfg(test)]

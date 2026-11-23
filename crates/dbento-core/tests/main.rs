@@ -41,6 +41,7 @@ mod edit_folders;
 mod error_fields;
 mod explain_plan;
 mod explain_request;
+mod fkeys_my;
 mod fkeys_pg;
 mod fkeys_sqlite;
 mod format_sql;
