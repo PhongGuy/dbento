@@ -1346,8 +1346,8 @@ impl Session {
         }
     }
 
-    /// Runs one statement with bound parameters and returns the rows it changed. Used only
-    /// by `apply` on its private session, so it bypasses the script and settle machinery.
+    /// Runs one statement with bound parameters and returns the rows it changed (matched, on
+    /// MySQL). Used only by `apply` on its private session, so it bypasses the script machinery.
     pub(crate) async fn run_bound(
         &mut self,
         sql: &str,
@@ -1356,7 +1356,8 @@ impl Session {
         match &mut self.inner {
             SessionInner::Sqlite(d) => d.run_bound(sql, params).await,
             SessionInner::Postgres(d) => d.run_bound(sql, params).await,
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
+            SessionInner::Mysql(d) => d.run_bound(sql, params).await,
+            SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
             #[cfg(feature = "surrealdb")]
@@ -1389,7 +1390,8 @@ impl Session {
                         .collect()
                 })
                 .collect()),
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
+            SessionInner::Mysql(d) => d.query_bound(sql, params).await,
+            SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
             #[cfg(feature = "surrealdb")]
@@ -1400,6 +1402,31 @@ impl Session {
             SessionInner::Redis(_) => Err(bound_unsupported()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Err(bound_unsupported()),
+        }
+    }
+
+    /// The `(Level, Message)` rows of `SHOW WARNINGS` after the last bound statement on MySQL;
+    /// empty when that statement left none, and always empty on other engines.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "apply's warning check is the caller")
+    )]
+    pub(crate) async fn bound_warnings(&mut self) -> Result<Vec<(String, String)>, ExecuteError> {
+        match &mut self.inner {
+            SessionInner::Mysql(d) => d.bound_warnings().await,
+            SessionInner::Sqlite(_) | SessionInner::Postgres(_) | SessionInner::Mssql(_) => {
+                Ok(Vec::new())
+            }
+            #[cfg(feature = "duckdb")]
+            SessionInner::Duckdb(_) => Ok(Vec::new()),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Ok(Vec::new()),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Ok(Vec::new()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Ok(Vec::new()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Ok(Vec::new()),
         }
     }
 
