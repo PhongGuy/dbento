@@ -30,7 +30,9 @@ use crate::redis::browse::{KeyBrowseError, KeyPage, KeyRead, KeyScan, KeyValuePa
 use crate::redis::catalog::CommandDoc;
 #[cfg(feature = "redis")]
 use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
-use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
+use crate::rowedit::{
+    EditTarget, EditValue, Param, mysql_edit_target, pg_edit_target, sqlite_edit_target,
+};
 use crate::sqlite::{SqliteCancel, SqliteDriver};
 #[cfg(feature = "surrealdb")]
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
@@ -1103,7 +1105,8 @@ impl Session {
         match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_edit_target(d, rel).await,
             SessionInner::Postgres(d) => pg_edit_target(d, rel).await,
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
+            SessionInner::Mysql(d) => mysql_edit_target(d, rel).await,
+            SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
             #[cfg(feature = "duckdb")]

@@ -120,6 +120,7 @@ mod redis_state;
 mod redis_values;
 mod rename_secret;
 mod rowedit_browse;
+mod rowedit_my_target;
 mod rowedit_pg_apply;
 mod rowedit_pg_edges;
 mod rowedit_pg_torture;
