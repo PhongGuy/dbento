@@ -4,3 +4,5 @@
 #![allow(dead_code, unused_imports)]
 
 pub(crate) mod lex;
+pub(crate) mod names;
+pub(crate) mod ops;

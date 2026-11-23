@@ -152,6 +152,7 @@ mod aws;
 mod duckdb;
 mod dynamo;
 mod s3;
+pub use s3::names::{display_key, suggested_file_name};
 mod sqlite;
 
 mod rowedit;
