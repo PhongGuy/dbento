@@ -10,7 +10,7 @@ pub use browse::{Browse, BrowseError, Keyset, Sort, browse_sql, key_filter};
 use sql::Dialect;
 pub(crate) use sql::Param;
 pub use sql::render_sql;
-pub use target::{EditColumn, EditTarget};
+pub use target::{EditColumn, EditTarget, NotEditable};
 pub(crate) use target::{pg_edit_target, sqlite_edit_target};
 
 /// One value written to or matched in a cell.

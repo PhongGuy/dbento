@@ -47,6 +47,41 @@ impl EditColumn {
     }
 }
 
+/// Why a relation cannot be edited. `Display` reads as the tail of "Read-only: ...".
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotEditable {
+    /// No primary key or usable unique key identifies a row.
+    NoKey,
+    /// The relation is a view.
+    View,
+    /// The relation is a sequence.
+    Sequence,
+    /// The storage engine cannot roll a change back.
+    NonTransactional {
+        /// The engine's name, as the server reports it.
+        engine: String,
+    },
+    /// A MariaDB system-versioned table.
+    SystemVersioned,
+}
+
+impl std::fmt::Display for NotEditable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoKey => f.write_str(
+                "the table has no primary key or NOT NULL unique key that can identify a row",
+            ),
+            Self::View => f.write_str("views are not edited"),
+            Self::Sequence => f.write_str("sequences are not edited"),
+            Self::NonTransactional { engine } => {
+                write!(f, "{engine} tables cannot roll back a change")
+            }
+            Self::SystemVersioned => f.write_str("system-versioned tables are not edited"),
+        }
+    }
+}
+
 /// A relation described for editing: its columns and how one row is identified.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +94,7 @@ pub struct EditTarget {
     only: bool,
     returning: bool,
     pins: Vec<(String, String)>,
+    not_editable: Option<NotEditable>,
 }
 
 impl EditTarget {
@@ -79,7 +115,14 @@ impl EditTarget {
             only,
             returning: true,
             pins: Vec::new(),
+            not_editable: None,
         }
+    }
+
+    /// Why a MySQL relation cannot be edited; None on Postgres and SQLite, and on an
+    /// editable MySQL table.
+    pub fn not_editable(&self) -> Option<&NotEditable> {
+        self.not_editable.as_ref()
     }
 
     /// Whether an UPDATE may return the identity; false for a Postgres table whose INSTEAD
@@ -380,4 +423,42 @@ fn missing(rel: &RelationRef) -> IntrospectError {
     IntrospectError::Missing {
         relation: format!("{}.{}", rel.schema(), rel.name()),
     }
+}
+
+/// The identity columns: PRIMARY wherever it sits, else the first given unique index whose
+/// parts are all named (None is a functional part), NOT NULL, and neither FLOAT nor BIT;
+/// empty when none qualifies. A FLOAT or BIT key never matches as a literal.
+// No production caller yet: the MySQL edit target will take this rule.
+#[cfg_attr(not(test), expect(dead_code))]
+pub(super) fn mysql_identity(
+    columns: &[ColumnMeta],
+    indexes: &[(String, bool, Vec<Option<String>>)],
+) -> Vec<String> {
+    let usable = |parts: &[Option<String>]| -> Option<Vec<String>> {
+        if parts.is_empty() {
+            return None;
+        }
+        parts
+            .iter()
+            .map(|part| {
+                let meta = columns.iter().find(|c| Some(c.name()) == part.as_deref())?;
+                let base = meta
+                    .type_name()
+                    .split(['(', ' '])
+                    .next()
+                    .unwrap_or_default();
+                let exact =
+                    !base.eq_ignore_ascii_case("float") && !base.eq_ignore_ascii_case("bit");
+                (!meta.nullable() && exact).then(|| meta.name().to_owned())
+            })
+            .collect()
+    };
+    let primary = indexes.iter().filter(|(name, ..)| name == "PRIMARY");
+    let others = indexes
+        .iter()
+        .filter(|(name, unique, _)| *unique && name != "PRIMARY");
+    primary
+        .chain(others)
+        .find_map(|(_, _, parts)| usable(parts))
+        .unwrap_or_default()
 }

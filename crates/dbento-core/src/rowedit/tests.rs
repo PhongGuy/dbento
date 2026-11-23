@@ -1,4 +1,5 @@
 use super::sql::{BoundStatement, Dialect, Param, bound};
+use super::target::mysql_identity;
 use super::*;
 use crate::{ColumnMeta, Engine, RelationRef};
 
@@ -890,5 +891,85 @@ fn a_mysql_browse_names_its_locators_before_the_qualified_star() {
     assert_eq!(
         browse_sql(&my_full(), &Browse::default()).unwrap(),
         "SELECT *\nFROM `shop`.`t``x`\nORDER BY `id` ASC"
+    );
+}
+
+fn meta(name: &str, ty: &str, nullable: bool) -> ColumnMeta {
+    ColumnMeta::new(name, ty, nullable, None, None)
+}
+
+fn ix(name: &str, unique: bool, parts: &[Option<&str>]) -> (String, bool, Vec<Option<String>>) {
+    (
+        name.to_owned(),
+        unique,
+        parts.iter().map(|p| p.map(str::to_owned)).collect(),
+    )
+}
+
+#[test]
+fn mysql_identity_takes_the_primary_key_then_the_first_usable_unique_key() {
+    let cols = [
+        meta("id", "int", false),
+        meta("f", "float", false),
+        meta("b", "bit(8)", false),
+        meta("u", "int", false),
+        meta("v", "varchar(5)", false),
+        meta("n", "int", true),
+        meta("d", "double", false),
+    ];
+    let pk = ix("PRIMARY", true, &[Some("id")]);
+    assert_eq!(
+        mysql_identity(&cols, &[ix("a", true, &[Some("u")]), pk]),
+        ["id"]
+    );
+    let skipped = vec![
+        ix("a_plain", false, &[Some("u")]),
+        ix("b_null", true, &[Some("n")]),
+        ix("c_fn", true, &[None]),
+        ix("d_float", true, &[Some("u"), Some("f")]),
+        ix("e_bit", true, &[Some("b")]),
+    ];
+    assert!(
+        mysql_identity(&cols, &skipped).is_empty(),
+        "every candidate is unusable"
+    );
+    let mut with_last = skipped.clone();
+    with_last.push(ix("f_ok", true, &[Some("v"), Some("u")]));
+    assert_eq!(mysql_identity(&cols, &with_last), ["v", "u"]);
+    let float_pk = [
+        ix("PRIMARY", true, &[Some("f")]),
+        ix("z", true, &[Some("d")]),
+    ];
+    assert_eq!(
+        mysql_identity(&cols, &float_pk),
+        ["d"],
+        "a FLOAT key falls through; DOUBLE is kept"
+    );
+    assert!(mysql_identity(&cols, &[]).is_empty(), "no index");
+}
+
+#[test]
+fn not_editable_reasons_read_as_the_tail_of_a_sentence() {
+    let says = |r: NotEditable| r.to_string();
+    assert_eq!(
+        says(NotEditable::NoKey),
+        "the table has no primary key or NOT NULL unique key that can identify a row"
+    );
+    assert_eq!(says(NotEditable::View), "views are not edited");
+    assert_eq!(says(NotEditable::Sequence), "sequences are not edited");
+    assert_eq!(
+        says(NotEditable::NonTransactional {
+            engine: "MyISAM".to_owned()
+        }),
+        "MyISAM tables cannot roll back a change"
+    );
+    assert_eq!(
+        says(NotEditable::SystemVersioned),
+        "system-versioned tables are not edited"
+    );
+    assert_eq!(
+        pg().not_editable(),
+        None,
+        "only MySQL targets carry a reason"
     );
 }
