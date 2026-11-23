@@ -125,6 +125,7 @@ mod rowedit_pg_edges;
 mod rowedit_pg_torture;
 mod rowedit_sqlite;
 mod rowedit_target;
+mod s3_crate;
 mod secret_hint;
 mod secrets;
 mod seen_text;
