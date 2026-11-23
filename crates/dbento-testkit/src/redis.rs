@@ -27,6 +27,9 @@ pub const VALKEY_TAG: &str = "9.0.7-alpine";
 /// The spec's reader ACL, after name and password.
 pub const READER_RULES: &str = "~* &* -@all +@read +ping +echo +time +hello +select +command +multi +discard +client|setname +client|setinfo +client|id +client|info";
 
+/// The rules of a user denied `XREAD` and `XINFO`, for `create_user`.
+pub const NO_XREAD_RULES: &str = "~* &* +@all -xread -xinfo";
+
 /// The key and value of the seed's binary string: neither is UTF-8.
 pub const BINARY_KEY: &[u8] = b"bin:\xff\x00name";
 pub const BINARY_VALUE: &[u8] = b"\x00\xff\xfeA";
@@ -38,8 +41,8 @@ pub const BIG_STRING_LEN: usize = 2 << 20;
 pub const BIG_LEN: usize = 3_000;
 /// `many:{i}` = i.
 pub const MANY_KEYS: usize = 2_000;
-/// Every key the seed writes: 16 named ones plus `MANY_KEYS`.
-pub const SEED_KEYS: u64 = 2_016;
+/// Every key the seed writes: 19 named ones plus `MANY_KEYS`.
+pub const SEED_KEYS: u64 = 2_019;
 
 const URL_VAR: &str = "DBENTO_REDIS_URL";
 const URL_FORM: &str = "redis://[user[:password]@]host:port[/index]";
@@ -312,6 +315,38 @@ impl RedisDb {
             .arg("1-2")
             .arg("g")
             .arg("w")
+            .cmd("XADD")
+            .arg("stream:dup")
+            .arg("1-1")
+            .arg(&["f", "a", "f", "b", "g", "c"]);
+        // One group has read three entries and holds them pending; the other starts
+        // at the tail. `stream:empty` exists only through its group.
+        for i in 1..=5 {
+            named
+                .cmd("XADD")
+                .arg("stream:groups")
+                .arg(format!("1-{i}"))
+                .arg("n")
+                .arg(i);
+        }
+        named
+            .cmd("XGROUP")
+            .arg(&["CREATE", "stream:groups", "g1", "0"])
+            .cmd("XREADGROUP")
+            .arg(&[
+                "GROUP",
+                "g1",
+                "alice",
+                "COUNT",
+                "3",
+                "STREAMS",
+                "stream:groups",
+                ">",
+            ])
+            .cmd("XGROUP")
+            .arg(&["CREATE", "stream:groups", "g2", "$"])
+            .cmd("XGROUP")
+            .arg(&["CREATE", "stream:empty", "probe", "$", "MKSTREAM"])
             .cmd("SET")
             .arg("ttl")
             .arg("t")
