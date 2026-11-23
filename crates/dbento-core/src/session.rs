@@ -1807,10 +1807,7 @@ fn bound_unsupported() -> ExecuteError {
 fn matchable_mysql_keys(keys: Vec<ForeignKey>, columns: &[ColumnMeta]) -> Vec<ForeignKey> {
     let inexact: Vec<&str> = columns
         .iter()
-        .filter(|c| {
-            let base = c.type_name().split(['(', ' ']).next().unwrap_or_default();
-            base.eq_ignore_ascii_case("float") || base.eq_ignore_ascii_case("bit")
-        })
+        .filter(|c| crate::rowedit::mysql_inexact(c))
         .map(ColumnMeta::name)
         .collect();
     keys.into_iter()

@@ -550,6 +550,16 @@ pub(crate) async fn mysql_edit_target(
     Ok(target)
 }
 
+/// Whether a MySQL column is FLOAT or BIT, whose values never match reliably as a literal.
+pub(crate) fn mysql_inexact(meta: &ColumnMeta) -> bool {
+    let base = meta
+        .type_name()
+        .split(['(', ' '])
+        .next()
+        .unwrap_or_default();
+    base.eq_ignore_ascii_case("float") || base.eq_ignore_ascii_case("bit")
+}
+
 /// The identity columns: PRIMARY wherever it sits, else the first given unique index whose
 /// parts are all named (None is a functional part), NOT NULL, and neither FLOAT nor BIT;
 /// empty when none qualifies. A FLOAT or BIT key never matches as a literal.
@@ -565,14 +575,7 @@ pub(super) fn mysql_identity(
             .iter()
             .map(|part| {
                 let meta = columns.iter().find(|c| Some(c.name()) == part.as_deref())?;
-                let base = meta
-                    .type_name()
-                    .split(['(', ' '])
-                    .next()
-                    .unwrap_or_default();
-                let exact =
-                    !base.eq_ignore_ascii_case("float") && !base.eq_ignore_ascii_case("bit");
-                (!meta.nullable() && exact).then(|| meta.name().to_owned())
+                (!meta.nullable() && !mysql_inexact(meta)).then(|| meta.name().to_owned())
             })
             .collect()
     };

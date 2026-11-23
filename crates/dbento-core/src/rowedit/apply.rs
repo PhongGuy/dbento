@@ -212,6 +212,9 @@ pub async fn apply_with(
     let mut outcomes = Vec::with_capacity(batch.changes().len());
     let mut keys = Vec::with_capacity(batch.changes().len());
     let mut failed = false;
+    let identity = batch.target().identity();
+    let as_key =
+        |values: Vec<EditValue>| RowKey::new(identity.iter().cloned().zip(values).collect());
     for statement in bound(&batch) {
         if failed {
             outcomes.push(ChangeOutcome::NotAttempted);
@@ -231,9 +234,6 @@ pub async fn apply_with(
         };
         // The warning check runs straight after the change, before a re-read replaces the
         // server's warning list; only a clean single-row change learns its written key.
-        let identity = batch.target().identity();
-        let as_key =
-            |values: Vec<EditValue>| RowKey::new(identity.iter().cloned().zip(values).collect());
         let mut key = None;
         let outcome = match ran {
             Err(e) => ChangeOutcome::Failed(failure_message(e)),
