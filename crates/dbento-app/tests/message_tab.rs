@@ -439,3 +439,45 @@ fn a_followed_complete_stream_counts_its_new_rows_until_the_ring_drops_some(
         "a ring that dropped rows is no longer complete"
     );
 }
+
+#[gpui_kit::test]
+fn a_stream_page_that_lands_during_a_run_keeps_out_of_its_results(cx: &mut TestAppContext) {
+    let rt = runtime(cx);
+    let _inside = rt.enter();
+    let db = rt.block_on(redis_db());
+    let (_dir, spec) = spec(&db);
+    let m = cx.new(|_| TabModel::new(spec));
+    m.update(cx, |m, cx| {
+        m.open_key(db.index(), b"big:stream".to_vec(), cx)
+    });
+    wait_real(cx, "the newest read", |cx| {
+        m.read_with(cx, |m, _| m.message_view().is_some_and(|v| v.reading()))
+    });
+    // The runner answers the read before the Run, but the answer lands once the Run started.
+    let run = "XRANGE big:stream - +";
+    m.update(cx, |m, cx| m.run(run.into(), cx));
+    wait_real(cx, "the run to park", |cx| {
+        m.read_with(cx, |m, _| m.parked_at_cap().is_some())
+    });
+    // Once the run ends, an older page still belongs to the stream, not to the run.
+    m.update(cx, |m, _| m.fetch_all());
+    wait_real(cx, "the run to end", |cx| {
+        m.read_with(cx, |m, _| {
+            !m.running() && m.parked_at_cap().is_none() && m.paused().is_none()
+        }) && m.read_with(cx, |m, _| m.results()[0].store.end().is_some())
+    });
+    let ran = rows(cx, &m);
+    if m.update(cx, |m, cx| m.older_messages(cx)) {
+        wait_real(cx, "the older page", |cx| view_idle(cx, &m));
+    }
+    settle(cx, 300);
+    m.read_with(cx, |m, _| {
+        let r = &m.results()[0];
+        let names: Vec<&str> = r.store.columns().iter().map(|c| c.name()).collect();
+        assert_eq!((r.sql.as_str(), r.store.rows()), (run, ran), "{names:?}");
+        assert!(
+            !m.message_view().unwrap().reading(),
+            "no read is left in flight"
+        );
+    });
+}

@@ -1769,6 +1769,11 @@ impl TabModel {
         };
         let last = page.batch.len() < want as usize && page.truncated_by.is_none();
         view.browsed(page.next, page.prev, first, last);
+        // A page answered before a Run but landing after it belongs to no shown result: it
+        // must not replace the Run's rows or join them. Follow re-reads the newest page.
+        if self.running || (!first && self.message_run != self.run_id) {
+            return;
+        }
         if first {
             let sql = self
                 .key_view
