@@ -143,6 +143,7 @@ mod sqlite_safety;
 mod sqlite_stream;
 mod ssh2_config_probe;
 mod ssh_resolve;
+mod ssh_secrets;
 mod statement_ranges;
 mod support;
 mod surreal_cancel;
