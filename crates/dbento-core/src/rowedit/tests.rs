@@ -1,4 +1,4 @@
-use super::sql::{BoundStatement, Param, bound};
+use super::sql::{BoundStatement, Dialect, Param, bound};
 use super::*;
 use crate::{ColumnMeta, Engine, RelationRef};
 
@@ -130,6 +130,7 @@ fn stmt(sql: &str, params: Vec<Param>) -> BoundStatement {
         sql: sql.to_owned(),
         params,
         returning: sql.contains(" RETURNING "),
+        reread: None,
     }
 }
 
@@ -718,5 +719,176 @@ fn the_executed_statement_keeps_its_qualified_casts() {
         render_sql(&b),
         "UPDATE ONLY public.t SET s = 'a'::pg_catalog.text \
          WHERE ctid = '(0,2)'::pg_catalog.tid AND xmin = '750'::pg_catalog.xid;"
+    );
+}
+
+fn my_full() -> EditTarget {
+    EditTarget::new(
+        RelationRef::new("shop", "t`x"),
+        Engine::Mysql,
+        vec![
+            col("id", "int", true, None),
+            col("title", "varchar(10)", true, None),
+            col("pic", "varbinary(16)", true, None),
+            col("g", "int", false, None),
+        ],
+        strings(&["id"]),
+        vec![],
+        false,
+    )
+}
+
+fn my_pair() -> EditTarget {
+    EditTarget::new(
+        RelationRef::new("shop", "p"),
+        Engine::Mysql,
+        vec![
+            col("a", "int", true, None),
+            col("b", "varbinary(4)", true, None),
+            col("n", "int", true, None),
+        ],
+        strings(&["a", "b"]),
+        vec![],
+        false,
+    )
+}
+
+/// A MySQL batch built directly, so these generator tests do not depend on the capability flag.
+fn my_batch(target: EditTarget, changes: Vec<Change>) -> EditBatch {
+    EditBatch {
+        target,
+        changes,
+        dialect: Dialect::Mysql,
+    }
+}
+
+#[test]
+fn mysql_binds_question_marks_with_bytes_through_unhex_and_renders_literals() {
+    let b = my_batch(
+        my_full(),
+        vec![Change::Update {
+            key: key(&[("id", t("7"))]),
+            set: pairs(&[
+                ("title", t("it's \\ ok")),
+                ("pic", EditValue::Bytes(vec![0x00, 0xff])),
+            ]),
+        }],
+    );
+    assert_eq!(
+        bound(&b),
+        vec![stmt(
+            "UPDATE `shop`.`t``x` SET `title` = ?, `pic` = UNHEX(?) WHERE `id` = ?",
+            vec![p("it's \\ ok"), p("00ff"), p("7")],
+        )]
+    );
+    assert_eq!(
+        render_sql(&b),
+        "UPDATE `shop`.`t``x` SET `title` = CONVERT(X'69742773205c206f6b' USING utf8mb4), `pic` = X'00ff' WHERE `id` = '7';"
+    );
+}
+
+#[test]
+fn mysql_inserts_name_given_columns_and_an_all_default_row_is_two_empty_lists() {
+    let b = my_batch(
+        my_full(),
+        vec![
+            Change::Insert {
+                values: pairs(&[
+                    ("id", t("1")),
+                    ("title", EditValue::Default),
+                    ("pic", EditValue::Null),
+                ]),
+            },
+            Change::Insert {
+                values: pairs(&[("title", EditValue::Default)]),
+            },
+            Change::Update {
+                key: key(&[("id", t("3"))]),
+                set: pairs(&[("title", EditValue::Default)]),
+            },
+            Change::Delete {
+                key: key(&[("id", t("2"))]),
+            },
+        ],
+    );
+    assert_eq!(
+        bound(&b),
+        vec![
+            stmt(
+                "INSERT INTO `shop`.`t``x` (`id`, `pic`) VALUES (?, NULL)",
+                vec![p("1")]
+            ),
+            stmt("INSERT INTO `shop`.`t``x` () VALUES ()", vec![]),
+            stmt(
+                "UPDATE `shop`.`t``x` SET `title` = DEFAULT WHERE `id` = ?",
+                vec![p("3")]
+            ),
+            stmt("DELETE FROM `shop`.`t``x` WHERE `id` = ?", vec![p("2")]),
+        ]
+    );
+    assert_eq!(
+        render_sql(&b),
+        "INSERT INTO `shop`.`t``x` (`id`, `pic`) VALUES ('1', NULL);\n\
+         INSERT INTO `shop`.`t``x` () VALUES ();\n\
+         UPDATE `shop`.`t``x` SET `title` = DEFAULT WHERE `id` = '3';\n\
+         DELETE FROM `shop`.`t``x` WHERE `id` = '2';"
+    );
+}
+
+#[test]
+fn a_mysql_key_update_re_reads_the_new_key_as_text_and_bytes() {
+    let b = my_batch(
+        my_pair(),
+        vec![
+            Change::Update {
+                key: key(&[("a", t("1")), ("b", EditValue::Bytes(vec![1]))]),
+                set: pairs(&[("a", t("010"))]),
+            },
+            Change::Update {
+                key: key(&[("a", t("2")), ("b", EditValue::Bytes(vec![2]))]),
+                set: pairs(&[("n", t("5"))]),
+            },
+            Change::Update {
+                key: key(&[("a", t("3")), ("b", EditValue::Bytes(vec![3]))]),
+                set: pairs(&[("a", EditValue::Default)]),
+            },
+        ],
+    );
+    let s = bound(&b);
+    assert_eq!(
+        s[0].sql,
+        "UPDATE `shop`.`p` SET `a` = ? WHERE `a` = ? AND `b` = UNHEX(?)"
+    );
+    assert_eq!(s[0].params, vec![p("010"), p("1"), p("01")]);
+    assert!(!s[0].returning, "MySQL has no RETURNING");
+    let reread = BoundStatement {
+        sql: "SELECT CAST(`a` AS CHAR), `b` FROM `shop`.`p` WHERE `a` = ? AND `b` = UNHEX(?)"
+            .to_owned(),
+        params: vec![p("010"), p("01")],
+        returning: true,
+        reread: None,
+    };
+    assert_eq!(s[0].reread.as_deref(), Some(&reread));
+    assert_eq!(s[1].reread, None, "the key was not written");
+    assert_eq!(s[2].reread, None, "a DEFAULT key cannot be matched");
+}
+
+#[test]
+fn a_mysql_browse_names_its_locators_before_the_qualified_star() {
+    let located = EditTarget::new(
+        RelationRef::new("shop", "g"),
+        Engine::Mysql,
+        vec![col("a", "int", true, None)],
+        strings(&["my_row_id"]),
+        strings(&["my_row_id"]),
+        false,
+    );
+    assert_eq!(
+        browse_sql(&located, &Browse::default()).unwrap(),
+        "SELECT `my_row_id`, `shop`.`g`.*\nFROM `shop`.`g`\nORDER BY `my_row_id` ASC"
+    );
+    assert_eq!(
+        browse_sql(&my_full(), &Browse::default()).unwrap(),
+        "SELECT *\nFROM `shop`.`t``x`\nORDER BY `id` ASC"
     );
 }
