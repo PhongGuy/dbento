@@ -15,7 +15,7 @@ use crate::duckdb::{DuckCancel, DuckDriver};
 #[cfg(feature = "dynamodb")]
 use crate::dynamo::{driver::DynamoSession, stream::DynamoCancel};
 use crate::explain::{ExplainOutput, ExplainRequest};
-use crate::fkeys::{ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
+use crate::fkeys::{FkDirection, ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 #[cfg(feature = "mongodb")]
 use crate::mongo::driver::{MongoCancel, MongoDriver};
@@ -30,7 +30,9 @@ use crate::redis::browse::{KeyBrowseError, KeyPage, KeyRead, KeyScan, KeyValuePa
 use crate::redis::catalog::CommandDoc;
 #[cfg(feature = "redis")]
 use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
-use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
+use crate::rowedit::{
+    EditTarget, EditValue, Param, mysql_edit_target, pg_edit_target, sqlite_edit_target,
+};
 use crate::sqlite::{SqliteCancel, SqliteDriver};
 #[cfg(feature = "surrealdb")]
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
@@ -1111,7 +1113,8 @@ impl Session {
         match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_edit_target(d, rel).await,
             SessionInner::Postgres(d) => pg_edit_target(d, rel).await,
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
+            SessionInner::Mysql(d) => mysql_edit_target(d, rel).await,
+            SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
             #[cfg(feature = "duckdb")]
@@ -1138,7 +1141,8 @@ impl Session {
     }
 
     /// Keys of `rel` in both directions: outgoing first, then by the far relation, then by
-    /// columns. An unknown schema or relation has none.
+    /// columns. An unknown schema or relation has none. On MySQL a key whose columns on `rel`'s
+    /// side include a BIT or FLOAT column is left out, since no literal matches those values.
     pub async fn foreign_keys(
         &mut self,
         rel: &RelationRef,
@@ -1146,7 +1150,11 @@ impl Session {
         let mut keys = match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_foreign_keys(d, rel).await?,
             SessionInner::Postgres(d) => pg_foreign_keys(d, rel).await?,
-            SessionInner::Mysql(d) => crate::mysql::catalog::foreign_keys(d, rel).await?,
+            SessionInner::Mysql(d) => {
+                let keys = crate::mysql::catalog::foreign_keys(d, rel).await?;
+                let columns = crate::mysql::catalog::columns(d, rel).await?;
+                matchable_mysql_keys(keys, &columns)
+            }
             SessionInner::Mssql(d) => crate::mssql::catalog::foreign_keys(d, rel).await?,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => {
@@ -1354,8 +1362,8 @@ impl Session {
         }
     }
 
-    /// Runs one statement with bound parameters and returns the rows it changed. Used only
-    /// by `apply` on its private session, so it bypasses the script and settle machinery.
+    /// Runs one statement with bound parameters and returns the rows it changed (matched, on
+    /// MySQL). Used only by `apply` on its private session, so it bypasses the script machinery.
     pub(crate) async fn run_bound(
         &mut self,
         sql: &str,
@@ -1364,7 +1372,8 @@ impl Session {
         match &mut self.inner {
             SessionInner::Sqlite(d) => d.run_bound(sql, params).await,
             SessionInner::Postgres(d) => d.run_bound(sql, params).await,
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
+            SessionInner::Mysql(d) => d.run_bound(sql, params).await,
+            SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
             #[cfg(feature = "surrealdb")]
@@ -1397,7 +1406,8 @@ impl Session {
                         .collect()
                 })
                 .collect()),
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
+            SessionInner::Mysql(d) => d.query_bound(sql, params).await,
+            SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
             #[cfg(feature = "surrealdb")]
@@ -1408,6 +1418,27 @@ impl Session {
             SessionInner::Redis(_) => Err(bound_unsupported()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Err(bound_unsupported()),
+        }
+    }
+
+    /// The `(Level, Message)` rows of `SHOW WARNINGS` after the last bound statement on MySQL;
+    /// empty when that statement left none, and always empty on other engines.
+    pub(crate) async fn bound_warnings(&mut self) -> Result<Vec<(String, String)>, ExecuteError> {
+        match &mut self.inner {
+            SessionInner::Mysql(d) => d.bound_warnings().await,
+            SessionInner::Sqlite(_) | SessionInner::Postgres(_) | SessionInner::Mssql(_) => {
+                Ok(Vec::new())
+            }
+            #[cfg(feature = "duckdb")]
+            SessionInner::Duckdb(_) => Ok(Vec::new()),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Ok(Vec::new()),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Ok(Vec::new()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Ok(Vec::new()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Ok(Vec::new()),
         }
     }
 
@@ -1777,6 +1808,26 @@ fn bound_unsupported() -> ExecuteError {
     ExecuteError::Unsupported {
         reason: "bound statements are not built for this engine yet".to_owned(),
     }
+}
+
+/// `keys` without those whose columns on the browsed side are BIT or FLOAT in `columns`: a
+/// browse filtered on such a key would come back empty or wrong. MySQL names ignore case.
+fn matchable_mysql_keys(keys: Vec<ForeignKey>, columns: &[ColumnMeta]) -> Vec<ForeignKey> {
+    let inexact: Vec<&str> = columns
+        .iter()
+        .filter(|c| crate::rowedit::mysql_inexact(c))
+        .map(ColumnMeta::name)
+        .collect();
+    keys.into_iter()
+        .filter(|k| {
+            let own = match k.direction() {
+                FkDirection::Outgoing => k.columns(),
+                FkDirection::Incoming => k.referenced_columns(),
+            };
+            !own.iter()
+                .any(|c| inexact.iter().any(|i| i.eq_ignore_ascii_case(c)))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use super::{Change, EditBatch, EditValue, RowKey};
-use crate::introspect::quote_ident;
+use crate::introspect::{quote_ident, quote_literal};
 use crate::workspace::Engine;
 
 /// The engines row edits generate SQL for; `EditBatch::new` refuses every other engine.
@@ -12,6 +12,7 @@ use crate::workspace::Engine;
 pub(crate) enum Dialect {
     Postgres,
     Sqlite,
+    Mysql,
 }
 
 impl Dialect {
@@ -20,7 +21,8 @@ impl Dialect {
         match engine {
             Engine::Postgres => Some(Dialect::Postgres),
             Engine::Sqlite => Some(Dialect::Sqlite),
-            Engine::Mysql | Engine::Mssql => None,
+            Engine::Mysql => Some(Dialect::Mysql),
+            Engine::Mssql => None,
             Engine::Duckdb => None,
             Engine::Mongodb => None,
             Engine::Surrealdb => None,
@@ -35,11 +37,12 @@ impl Dialect {
         match self {
             Dialect::Postgres => Engine::Postgres,
             Dialect::Sqlite => Engine::Sqlite,
+            Dialect::Mysql => Engine::Mysql,
         }
     }
 }
 
-/// One bound parameter: Postgres receives every value as text, SQLite text or a blob.
+/// One bound parameter: Postgres and MySQL receive every value as text, SQLite text or a blob.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Param {
     Text(String),
@@ -53,11 +56,14 @@ pub(crate) struct BoundStatement {
     pub(crate) params: Vec<Param>,
     /// Whether the statement returns the row's identity columns, as `Gen::returning` reads them.
     pub(crate) returning: bool,
+    /// MySQL: the SELECT that reads back the key an Update wrote; `returning` is true on it.
+    pub(crate) reread: Option<Box<BoundStatement>>,
 }
 
 /// One bound statement per change, in batch order. An Update that writes an identity
 /// column, or moves a Postgres row its ctid locates, also returns the identity, so the
 /// caller learns the key the database stored; a target whose rules refuse it never does.
+/// MySQL has no RETURNING, so such an Update carries a re-read of the key instead.
 pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
     let target = batch.target();
     let identity = target.identity();
@@ -68,16 +74,24 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
         .map(|c| {
             let mut g = Gen::new(batch, true);
             let mut sql = g.change(c);
-            let returning = target.returning()
+            let returning = batch.dialect() != Dialect::Mysql
+                && target.returning()
                 && matches!(c, Change::Update { set, .. }
                     if located || set.iter().any(|(col, _)| identity.contains(col)));
             if returning {
                 sql.push_str(&g.returning());
             }
+            let reread = match c {
+                Change::Update { key, set } if batch.dialect() == Dialect::Mysql => {
+                    Gen::new(batch, true).reread(key, set).map(Box::new)
+                }
+                Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => None,
+            };
             BoundStatement {
                 sql,
                 params: g.params,
                 returning,
+                reread,
             }
         })
         .collect()
@@ -153,7 +167,12 @@ impl<'a> Gen<'a> {
                     .filter(|(_, v)| *v != EditValue::Default)
                     .collect();
                 if given.is_empty() {
-                    return format!("INSERT INTO {rel} DEFAULT VALUES");
+                    return match self.dialect() {
+                        Dialect::Mysql => format!("INSERT INTO {rel} () VALUES ()"),
+                        Dialect::Postgres | Dialect::Sqlite => {
+                            format!("INSERT INTO {rel} DEFAULT VALUES")
+                        }
+                    };
                 }
                 let cols = given
                     .iter()
@@ -185,7 +204,8 @@ impl<'a> Gen<'a> {
             .map(|c| {
                 let k = self.ident(c);
                 match self.dialect() {
-                    Dialect::Sqlite => k,
+                    // MySQL never asks: it re-reads the key instead of returning it.
+                    Dialect::Sqlite | Dialect::Mysql => k,
                     Dialect::Postgres => format!(
                         "CASE WHEN {k} IS NULL THEN NULL ELSE pg_catalog.format('%s', {k}) END"
                     ),
@@ -194,6 +214,46 @@ impl<'a> Gen<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         format!(" RETURNING {cols}")
+    }
+
+    /// The SELECT that reads back the key an Update with `set` left on the row `key` named:
+    /// each identity column's set value, else its old one. None when the Update writes no
+    /// identity column or a new key value is NULL or DEFAULT, which no `=` can match.
+    /// Text columns come back as `CAST(.. AS CHAR)` text, byte columns as their bytes.
+    fn reread(mut self, key: &RowKey, set: &[(String, EditValue)]) -> Option<BoundStatement> {
+        let identity = self.batch.target().identity();
+        if !set.iter().any(|(c, _)| identity.contains(c)) {
+            return None;
+        }
+        let lookup = |pairs: &[(String, EditValue)], col: &str| {
+            pairs.iter().find(|(c, _)| c == col).map(|(_, v)| v.clone())
+        };
+        let mut new_key = Vec::new();
+        for col in identity {
+            let value = lookup(set, col).or_else(|| lookup(key.values(), col))?;
+            if !matches!(value, EditValue::Text(_) | EditValue::Bytes(_)) {
+                return None;
+            }
+            new_key.push((col.clone(), value));
+        }
+        let cols = new_key
+            .iter()
+            .map(|(c, v)| match v {
+                EditValue::Bytes(_) => self.ident(c),
+                EditValue::Null | EditValue::Default | EditValue::Text(_) => {
+                    format!("CAST({} AS CHAR)", self.ident(c))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rel = self.relation(false);
+        let filter = self.key(&RowKey::new(new_key));
+        Some(BoundStatement {
+            sql: format!("SELECT {cols} FROM {rel} WHERE {filter}"),
+            params: self.params,
+            returning: true,
+            reread: None,
+        })
     }
 
     fn key(&mut self, key: &RowKey) -> String {
@@ -260,12 +320,20 @@ impl<'a> Gen<'a> {
                     Some(d) => format!("({d})"),
                     None => "NULL".to_owned(),
                 },
-                Dialect::Postgres => "DEFAULT".to_owned(),
+                Dialect::Postgres | Dialect::Mysql => "DEFAULT".to_owned(),
             },
             EditValue::Text(s) => self.param(column, Param::Text(s.clone())),
             EditValue::Bytes(b) => {
                 let param = match dialect {
-                    Dialect::Sqlite => Param::Bytes(b.clone()),
+                    // MySQL binds bytes as hex text that `UNHEX` decodes, decided here
+                    // because the placeholder no longer knows the text was bytes.
+                    Dialect::Mysql if self.bind => {
+                        let hex = pg_hex(b);
+                        let placeholder =
+                            self.placeholder(column, Param::Text(hex[2..].to_owned()));
+                        return format!("UNHEX({placeholder})");
+                    }
+                    Dialect::Sqlite | Dialect::Mysql => Param::Bytes(b.clone()),
                     Dialect::Postgres => Param::Text(pg_hex(b)),
                 };
                 self.param(column, param)
@@ -287,6 +355,7 @@ impl<'a> Gen<'a> {
         let n = self.params.len();
         match self.dialect() {
             Dialect::Sqlite => format!("?{n}"),
+            Dialect::Mysql => "?".to_owned(),
             Dialect::Postgres => format!("${n}::text::{}", self.cast_type(column)),
         }
     }
@@ -303,6 +372,7 @@ impl<'a> Gen<'a> {
                 format!("X'{}'", &hex[2..])
             }
             (Param::Text(s), Dialect::Sqlite) => format!("'{}'", s.replace('\'', "''")),
+            (Param::Text(s), Dialect::Mysql) => quote_literal(Engine::Mysql, s),
             (Param::Text(s), Dialect::Postgres) => {
                 let cast = self.cast_type(column);
                 let quoted = s.replace('\'', "''");
@@ -319,6 +389,9 @@ impl<'a> Gen<'a> {
     /// text: Postgres in-range integers, numerics and booleans, and SQLite numbers under
     /// INTEGER, REAL or NUMERIC affinity. Anything else keeps its quoted form.
     fn bare(&self, column: &str, text: &str) -> Option<String> {
+        if self.dialect() == Dialect::Mysql {
+            return None;
+        }
         if self.dialect() == Dialect::Sqlite {
             // Affinity rules in SQLite's order; a STRICT `ANY` column stores text as text.
             let t = self.batch.target().column(column)?.meta().type_name();

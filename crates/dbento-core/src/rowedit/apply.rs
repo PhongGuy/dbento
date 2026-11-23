@@ -4,8 +4,9 @@
 use std::fmt;
 
 use super::sql::{Param, bound};
-use super::{EditBatch, RowKey};
+use super::{EditBatch, EditValue, RowKey};
 use crate::Secret;
+use crate::introspect::quote_literal;
 use crate::session::{ConnectError, ExecuteError, Session, SessionOptions, connect};
 use crate::workspace::{ConnectionConfig, Engine, Workspace};
 
@@ -147,10 +148,36 @@ pub async fn apply_with(
     if conn.engine() == Engine::Postgres {
         started = session.run_bound("SET lock_timeout = '5s'", &[]).await;
     }
+    // MySQL waits five seconds on row and metadata locks alike, and takes the browse
+    // session's time zone and SQL mode over the text protocol, the mode made strict so a
+    // value too long or out of range errors instead of being silently cut.
+    let pins = batch.target().pins();
+    if conn.engine() == Engine::Mysql {
+        started = session
+            .run_bound(
+                "SET SESSION innodb_lock_wait_timeout = 5, lock_wait_timeout = 5",
+                &[],
+            )
+            .await;
+        if started.is_ok() && !pins.is_empty() {
+            let sets = pins
+                .iter()
+                .map(|(name, value)| {
+                    let value = if name == "sql_mode" {
+                        strict_sql_mode(value)
+                    } else {
+                        value.clone()
+                    };
+                    format!("{name} = {}", quote_literal(Engine::Mysql, &value))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            started = session.run_bound(&format!("SET SESSION {sets}"), &[]).await;
+        }
+    }
     // Key text is the browse session's output text, so the apply session takes on that
     // session's DateStyle, TimeZone and the like to parse it and to return written keys.
-    let pins = batch.target().pins();
-    if started.is_ok() && !pins.is_empty() {
+    if conn.engine() == Engine::Postgres && started.is_ok() && !pins.is_empty() {
         let calls = (0..pins.len())
             .map(|i| {
                 format!(
@@ -168,7 +195,13 @@ pub async fn apply_with(
         started = session.run_bound(&format!("SELECT {calls}"), &params).await;
     }
     if started.is_ok() {
-        started = session.run_bound("BEGIN", &[]).await;
+        // MySQL reads BEGIN as a block opener in stored programs; START TRANSACTION never is.
+        let begin = if conn.engine() == Engine::Mysql {
+            "START TRANSACTION"
+        } else {
+            "BEGIN"
+        };
+        started = session.run_bound(begin, &[]).await;
     }
     if let Err(e) = started {
         let _ = session.close().await;
@@ -179,6 +212,9 @@ pub async fn apply_with(
     let mut outcomes = Vec::with_capacity(batch.changes().len());
     let mut keys = Vec::with_capacity(batch.changes().len());
     let mut failed = false;
+    let identity = batch.target().identity();
+    let as_key =
+        |values: Vec<EditValue>| RowKey::new(identity.iter().cloned().zip(values).collect());
     for statement in bound(&batch) {
         if failed {
             outcomes.push(ChangeOutcome::NotAttempted);
@@ -196,41 +232,38 @@ pub async fn apply_with(
                 .await
                 .map(|n| (n, None))
         };
+        // The warning check runs straight after the change, before a re-read replaces the
+        // server's warning list; only a clean single-row change learns its written key.
         let mut key = None;
-        outcomes.push(match ran {
-            Ok((0, _)) => ChangeOutcome::Conflict,
-            Ok((1, row)) => {
-                key = row.map(|values| {
-                    RowKey::new(
-                        batch
-                            .target()
-                            .identity()
-                            .iter()
-                            .cloned()
-                            .zip(values)
-                            .collect(),
-                    )
-                });
-                ChangeOutcome::Applied(1)
+        let outcome = match ran {
+            Err(e) => ChangeOutcome::Failed(failure_message(e)),
+            Ok((matched, row)) => {
+                let outcome = match session.bound_warnings().await {
+                    Err(e) => ChangeOutcome::Failed(failure_message(e)),
+                    Ok(warnings) => change_outcome(matched, &warnings),
+                };
+                if outcome == ChangeOutcome::Applied(1) {
+                    key = row.map(as_key);
+                }
+                outcome
             }
-            Ok((n, _)) => ChangeOutcome::Ambiguous(n),
-            Err(e) => {
-                failed = true;
-                ChangeOutcome::Failed(match e {
-                    ExecuteError::Database { message, .. } => message,
-                    other @ (ExecuteError::Timeout
-                    | ExecuteError::Cancelled
-                    | ExecuteError::ReadOnlyViolation { .. }
-                    | ExecuteError::Unsupported { .. }
-                    | ExecuteError::TransactionControl { .. }
-                    | ExecuteError::SessionClosed
-                    | ExecuteError::StoppedAtDrainCap
-                    | ExecuteError::Syntax { .. }
-                    | ExecuteError::ResultExpired
-                    | ExecuteError::SessionEnded { .. }) => other.to_string(),
-                })
+        };
+        let outcome = match (outcome, statement.reread.as_deref()) {
+            (ChangeOutcome::Applied(1), Some(reread)) => {
+                match session.query_bound(&reread.sql, &reread.params).await {
+                    Ok(mut rows) => {
+                        if rows.len() == 1 {
+                            key = rows.pop().map(as_key);
+                        }
+                        ChangeOutcome::Applied(1)
+                    }
+                    Err(e) => ChangeOutcome::Failed(failure_message(e)),
+                }
             }
-        });
+            (other, _) => other,
+        };
+        failed = matches!(outcome, ChangeOutcome::Failed(_));
+        outcomes.push(outcome);
         keys.push(key);
     }
     if outcomes.iter().all(|o| *o == ChangeOutcome::Applied(1)) {
@@ -245,4 +278,50 @@ pub async fn apply_with(
     let _ = session.run_bound("ROLLBACK", &[]).await;
     let _ = session.close().await;
     Err(ApplyError::Rejected { outcomes })
+}
+
+/// `mode` with STRICT_TRANS_TABLES appended unless it is already one of the comma-separated modes.
+pub(crate) fn strict_sql_mode(mode: &str) -> String {
+    if mode.split(',').any(|m| m == "STRICT_TRANS_TABLES") {
+        mode.to_owned()
+    } else if mode.is_empty() {
+        "STRICT_TRANS_TABLES".to_owned()
+    } else {
+        format!("{mode},STRICT_TRANS_TABLES")
+    }
+}
+
+/// The outcome of a change that ran: any Warning or Error row fails it with their messages
+/// joined by "; " (Notes are ignored); else 0 rows is Conflict, 1 is Applied(1), more is Ambiguous.
+pub(crate) fn change_outcome(matched: u64, warnings: &[(String, String)]) -> ChangeOutcome {
+    let failures: Vec<&str> = warnings
+        .iter()
+        .filter(|(level, _)| level == "Warning" || level == "Error")
+        .map(|(_, message)| message.as_str())
+        .collect();
+    if !failures.is_empty() {
+        return ChangeOutcome::Failed(failures.join("; "));
+    }
+    match matched {
+        0 => ChangeOutcome::Conflict,
+        1 => ChangeOutcome::Applied(1),
+        n => ChangeOutcome::Ambiguous(n),
+    }
+}
+
+/// The message a failed change reports: the database's own words when it refused.
+fn failure_message(e: ExecuteError) -> String {
+    match e {
+        ExecuteError::Database { message, .. } => message,
+        other @ (ExecuteError::Timeout
+        | ExecuteError::Cancelled
+        | ExecuteError::ReadOnlyViolation { .. }
+        | ExecuteError::Unsupported { .. }
+        | ExecuteError::TransactionControl { .. }
+        | ExecuteError::SessionClosed
+        | ExecuteError::StoppedAtDrainCap
+        | ExecuteError::Syntax { .. }
+        | ExecuteError::ResultExpired
+        | ExecuteError::SessionEnded { .. }) => other.to_string(),
+    }
 }

@@ -291,6 +291,37 @@ impl MyFixture {
     pub async fn session(&self, opts: SessionOptions) -> Session {
         self.try_session(opts).await.unwrap()
     }
+    /// Runs `sql`, several statements allowed, on an admin connection to the test database.
+    pub async fn exec(&self, sql: &str) {
+        use mysql_async::prelude::Queryable;
+        let mut c = self.db.admin().await;
+        c.query_drop(sql).await.unwrap();
+        c.disconnect().await.unwrap();
+    }
+    pub fn rel(&self, name: &str) -> RelationRef {
+        RelationRef::new(self.db.database(), name)
+    }
+    pub async fn target(&self, name: &str) -> EditTarget {
+        let mut s = self.session(SessionOptions::default()).await;
+        let t = s.edit_target(&self.rel(name)).await.unwrap();
+        s.close().await.unwrap();
+        t
+    }
+    pub async fn apply_changes(
+        &self,
+        target: &EditTarget,
+        changes: Vec<Change>,
+    ) -> Result<Applied, ApplyError> {
+        let batch = EditBatch::new(target.clone(), changes).unwrap();
+        apply(&self.ws, self.conn(), Some(self.secret()), batch).await
+    }
+    /// The first row of `sql` through a Dbento session, as the grid would hold it.
+    pub async fn row(&self, sql: &str) -> Vec<Cell> {
+        let mut s = self.session(SessionOptions::default()).await;
+        let mut ran = run(&mut s, sql, Limits::default()).await.remove(0).unwrap();
+        s.close().await.unwrap();
+        ran.rows.remove(0)
+    }
 }
 
 /// What `tcp_proxy` does with each connection after the first.

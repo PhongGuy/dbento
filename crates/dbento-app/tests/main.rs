@@ -133,6 +133,7 @@ mod lone_schema;
 mod look;
 mod menu_rows;
 mod mongo_documents;
+mod mysql_browse;
 mod narrow;
 mod nav_history;
 mod new_tab_pick;
