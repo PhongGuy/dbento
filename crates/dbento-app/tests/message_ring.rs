@@ -71,3 +71,31 @@ fn growth_at_the_top_clears_a_local_sort_and_snapshots_keep_the_order() {
     );
     assert_eq!(s.max_chars(0), 2);
 }
+
+/// Heap per row of one stream-shaped 500-row page with `field`-byte fields text, and a ring
+/// capped at three such pages: the heap bound holds only for this batch size.
+#[test]
+fn stream_shaped_pages_report_heap_per_row_and_trim_to_three_pages() {
+    for field in [64u32, 1024] {
+        let sql = format!(
+            "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 500) \
+             SELECT '1700000000000-' || x AS id, 1700000000000 AS time, \
+             '{{\"k\":\"' || hex(randomblob({half})) || '\"}}' AS fields FROM r",
+            half = field / 2
+        );
+        let (columns, batches) = support::batches(&sql);
+        let page: usize = batches.iter().map(|b| b.heap_bytes()).sum();
+        let mut s = ResultStore::new(columns);
+        for _ in 0..10 {
+            for b in &batches {
+                s.push_newest(b.clone());
+            }
+            s.trim_oldest(u64::MAX, 3 * page);
+        }
+        assert!(
+            s.heap_bytes() <= 3 * page + batches[0].heap_bytes(),
+            "at most one batch over"
+        );
+        eprintln!("ring field={field} per_row={} page_heap={page}", page / 500);
+    }
+}
