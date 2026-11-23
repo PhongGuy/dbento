@@ -1288,7 +1288,8 @@ impl ConnectionForm {
             | Engine::Mongodb
             | Engine::Surrealdb
             | Engine::Redis
-            | Engine::Dynamodb => f.help,
+            | Engine::Dynamodb
+            | Engine::S3 => f.help,
         }
     }
 
@@ -1604,7 +1605,8 @@ impl ConnectionForm {
                         | Engine::Mongodb
                         | Engine::Surrealdb
                         | Engine::Redis
-                        | Engine::Dynamodb => "Choose SQLite file",
+                        | Engine::Dynamodb
+                        | Engine::S3 => "Choose SQLite file",
                     };
                     rows.push(self.file_row(f.label, id, field, prompt, cx));
                 }
@@ -2134,6 +2136,7 @@ pub fn engine_hint(engine: Engine) -> &'static str {
         Engine::Mongodb => ":27017",
         Engine::Redis => ":6379",
         Engine::Dynamodb => "region",
+        Engine::S3 => "endpoint",
     }
 }
 
@@ -2255,10 +2258,10 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
 }
 
 // Whether the engine takes a client certificate and key: SQL Server and SurrealDB refuse both,
-// and DynamoDB has no TLS key at all.
+// and DynamoDB and S3 have no TLS key at all.
 fn client_cert(engine: Engine) -> bool {
     match engine {
-        Engine::Mssql | Engine::Surrealdb | Engine::Dynamodb => false,
+        Engine::Mssql | Engine::Surrealdb | Engine::Dynamodb | Engine::S3 => false,
         Engine::Postgres
         | Engine::Sqlite
         | Engine::Mysql

@@ -26,6 +26,7 @@ impl Dialect {
             Engine::Surrealdb => None,
             Engine::Redis => None,
             Engine::Dynamodb => None,
+            Engine::S3 => None,
         }
     }
 

@@ -70,6 +70,7 @@ pub(crate) fn map_connection(raw: &RawConnection, ctx: &MapContext) -> Result<Ma
         Engine::Surrealdb => return Err(SkipReason::UnsupportedDriver("surrealdb".to_owned())),
         Engine::Redis => return Err(SkipReason::UnsupportedDriver("redis".to_owned())),
         Engine::Dynamodb => return Err(SkipReason::UnsupportedDriver("dynamodb".to_owned())),
+        Engine::S3 => return Err(SkipReason::UnsupportedDriver("s3".to_owned())),
     };
     mapped.draft = mapped.draft.with_folder(raw.folder.clone());
     match color(raw.label_color.as_deref()) {

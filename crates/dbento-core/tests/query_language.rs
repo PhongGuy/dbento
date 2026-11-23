@@ -388,6 +388,7 @@ fn every_engine_skips_a_line_its_marker_comments_out() {
         Engine::Surrealdb,
         Engine::Redis,
         Engine::Dynamodb,
+        Engine::S3,
     ] {
         let marker = e.capabilities().language.line_comment().unwrap();
         let text = format!("{marker} DELETE x\n  {marker} DELETE y\n");

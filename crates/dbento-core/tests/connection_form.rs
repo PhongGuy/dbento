@@ -1,7 +1,7 @@
 //! The connection form descriptor agrees with the dbento.toml parser for every engine.
 use dbento_core::{Engine, FieldKind, FormField, Workspace, connection_form};
 
-const ENGINES: [Engine; 9] = [
+const ENGINES: [Engine; 10] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -11,6 +11,7 @@ const ENGINES: [Engine; 9] = [
     Engine::Surrealdb,
     Engine::Redis,
     Engine::Dynamodb,
+    Engine::S3,
 ];
 /// Engine-specific keys the parser knows; the TLS kind's file keys and `settings` are not
 /// form fields of their own.
