@@ -123,6 +123,7 @@ mod rowedit_browse;
 mod rowedit_my_apply;
 mod rowedit_my_session;
 mod rowedit_my_target;
+mod rowedit_my_types;
 mod rowedit_pg_apply;
 mod rowedit_pg_edges;
 mod rowedit_pg_torture;
