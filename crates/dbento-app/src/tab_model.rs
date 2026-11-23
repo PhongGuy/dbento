@@ -6,26 +6,28 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_channel::Receiver;
+use dbento_core::message::{MessageError, MessageRead, SourceRef};
 use dbento_core::{
     Applied, ApplyError, Browse, CancelHandle, CellRef, Change, ChangeOutcome, ColumnInfo,
     EditBatch, EditTarget, EditValue, Engine, ExecuteError, ExplainMode, ExplainOutput,
-    ExplainRequest, ForeignKey, HistoryEntry, HistoryOutcome, Keyset, Outcome, ReadOnlyEnforcement,
-    RelationRef, RowKey, Sort, Unguarded, Workspace, browse_sql, render_sql, result_ranges,
-    statement_count,
+    ExplainRequest, ForeignKey, HistoryEntry, HistoryOutcome, KeyKind, Keyset, Outcome,
+    ReadOnlyEnforcement, RelationRef, ResultBatch, RowKey, Sort, Unguarded, Workspace, browse_sql,
+    render_sql, result_ranges, statement_count,
 };
 use gpui_kit::{Context, Entity, EventEmitter, Pixels, Task};
 
 use crate::browse::{self, BrowseEvent, BrowseState, EditBlock};
 use crate::catalog::catalog_options;
-use crate::grid::{ColumnView, fit_width_at};
+use crate::grid::{ColumnView, cell_display, fit_width_at};
 use crate::history::{HistoryLog, history_outcome};
 use crate::key_view::KeyView;
 use crate::link::{ConnectFailure, LinkState};
+use crate::message_view::{GroupRow, MESSAGE_PAGE, MessageView, Panel, group_text, pending_text};
 use crate::parks;
 use crate::results::ResultStore;
 use crate::runner::{
-    self, AppLimits, Command, Event, KeyValueAnswer, Runner, RunnerSpec, RunnerTuning,
-    SourceColumns, StatementEnd, StopReason,
+    self, AppLimits, Command, Event, KeyValueAnswer, MessageAnswer, MessageCall, MessageReply,
+    Runner, RunnerSpec, RunnerTuning, SourceColumns, StatementEnd, StopReason,
 };
 use crate::settings;
 use crate::staged::{self, EditHistory, GridRow, StagedEdits};
@@ -225,6 +227,21 @@ pub enum Fence {
     },
     /// The connection is no longer in the workspace.
     Gone,
+}
+
+/// A stream read the runner dropped unanswered, or whose runner went away.
+const SESSION_STOPPED: &str = "the session stopped";
+/// A stream call answered with the other call's reply shape.
+const UNEXPECTED_REPLY: &str = "the session answered a different stream call";
+
+/// The pending list's texts from an extended XPENDING page: id, consumer, idle ms, deliveries;
+/// a number that does not parse counts as 0.
+fn pending_rows(batch: &ResultBatch) -> Vec<String> {
+    let text = |row: usize, col: usize| cell_display(batch.cell(row, col)).0.to_string();
+    let number = |row: usize, col: usize| text(row, col).parse::<u64>().unwrap_or(0);
+    (0..batch.len())
+        .map(|r| pending_text(&text(r, 0), &text(r, 1), number(r, 2), number(r, 3)))
+        .collect()
 }
 
 /// The chip's text for a fenced tab: why it no longer runs and what lifts the fence.
@@ -436,6 +453,16 @@ pub struct TabModel {
     key_view: Option<KeyView>,
     /// The value page in flight; dropping it drops its answer.
     key_task: Option<Task<()>>,
+    /// The stream view, once the key's first page showed it is a stream.
+    message_view: Option<MessageView>,
+    /// The run that was current when result 0 became the stream's rows.
+    message_run: u64,
+    /// The stream browse or poll in flight; dropping it drops its answer.
+    message_task: Option<Task<()>>,
+    /// The groups read in flight.
+    groups_task: Option<Task<()>>,
+    /// The pending-entries read in flight.
+    pending_task: Option<Task<()>>,
 }
 
 /// The conflicting rows as a reload read them, and which fresh row each loaded row is now.
@@ -583,6 +610,11 @@ impl TabModel {
             announce_fresh: false,
             key_view: None,
             key_task: None,
+            message_view: None,
+            message_run: 0,
+            message_task: None,
+            groups_task: None,
+            pending_task: None,
         }
     }
 
@@ -1342,6 +1374,7 @@ impl TabModel {
             return;
         }
         self.key_task = None;
+        self.drop_message_view();
         self.results.clear();
         self.key_view = Some(KeyView::new(db, key));
         self.read_value(cx);
@@ -1352,7 +1385,7 @@ impl TabModel {
     /// already in flight, or a run holds the session.
     pub fn load_more_value(&mut self, cx: &mut Context<Self>) -> bool {
         let more = self.key_view.as_ref().is_some_and(KeyView::has_more);
-        more && self.read_value(cx)
+        more && self.message_view.is_none() && self.read_value(cx)
     }
 
     /// The key whose value this tab shows, if any.
@@ -1362,7 +1395,7 @@ impl TabModel {
 
     // Sends the key view's next read to the runner and lands its answer in result 0.
     fn read_value(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.closed || self.fence.is_some() || self.running {
+        if self.closed || self.fence.is_some() || self.running || self.message_view.is_some() {
             return false;
         }
         let Some(read) = self.key_view.as_ref().and_then(KeyView::read) else {
@@ -1385,7 +1418,7 @@ impl TabModel {
                 (answer.recv().await).unwrap_or_else(|_| Err("the session stopped".into()));
             let _ = this.update(cx, |m, cx| {
                 m.key_task = None;
-                m.value_landed(answer);
+                m.value_landed(answer, cx);
                 cx.notify();
             });
         }));
@@ -1394,8 +1427,9 @@ impl TabModel {
     }
 
     // A first page, or one whose kind differs from the last because the read restarted on the
-    // key's new kind, starts result 0 afresh; any other page appends to it.
-    fn value_landed(&mut self, answer: KeyValueAnswer) {
+    // key's new kind, starts result 0 afresh; any other page appends to it. A stream's page
+    // only gives the header: its rows are dropped and the stream view reads its newest page.
+    fn value_landed(&mut self, answer: KeyValueAnswer, cx: &mut Context<Self>) {
         let Some(view) = &mut self.key_view else {
             return;
         };
@@ -1403,6 +1437,15 @@ impl TabModel {
             Ok(page) => page,
             Err(e) => return view.fail(e),
         };
+        if page.kind == KeyKind::Stream && self.message_view.is_none() {
+            view.apply(page);
+            let stream = MessageView::new(view.db(), view.key().to_vec());
+            let read = stream.newest_read();
+            self.results.clear();
+            self.message_view = Some(stream);
+            self.browse_messages(read, true, cx);
+            return;
+        }
         let restart = view.kind() != Some(&page.kind);
         let (columns, batch) = view.apply(page);
         let sql = view.title();
@@ -1424,6 +1467,215 @@ impl TabModel {
         let store = &mut self.results[0].store;
         store.push(batch);
         if !view.has_more() {
+            let rows = store.rows();
+            store.finish(StatementEnd::Complete(Outcome::complete(rows)));
+        }
+    }
+
+    /// The stream view, once the key's first page showed it is a stream.
+    pub fn message_view(&self) -> Option<&MessageView> {
+        self.message_view.as_ref()
+    }
+
+    /// Asks for the page below the shown rows; false without one or while a read is in flight.
+    pub fn older_messages(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(read) = self.message_view.as_ref().and_then(MessageView::older_read) else {
+            return false;
+        };
+        self.browse_messages(read, false, cx)
+    }
+
+    /// Opens the groups panel as Loading and asks for the stream's groups.
+    pub fn load_groups(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(source) = self.message_source() else {
+            return false;
+        };
+        let Some(answer) = self.send_messages(MessageCall::Groups(source), cx) else {
+            return false;
+        };
+        if let Some(view) = &mut self.message_view {
+            view.set_groups(Some(Panel::Loading));
+        }
+        self.groups_task = Some(cx.spawn(async move |this, cx| {
+            let answer = answer.recv().await.ok();
+            let _ = this.update(cx, |m, cx| {
+                m.groups_task = None;
+                let panel = match answer {
+                    Some(Ok(MessageReply::Groups(groups))) => Panel::Ready(
+                        groups
+                            .iter()
+                            .map(|g| GroupRow {
+                                name: g.name.clone(),
+                                text: group_text(&g.name, g.consumers, g.pending, g.lag),
+                            })
+                            .collect(),
+                    ),
+                    Some(Ok(MessageReply::Page(_))) => Panel::Failed(UNEXPECTED_REPLY.into()),
+                    Some(Err(e)) => Panel::Failed(e.to_string()),
+                    None => Panel::Failed(SESSION_STOPPED.into()),
+                };
+                if let Some(view) = &mut m.message_view {
+                    view.set_groups(Some(panel));
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+        true
+    }
+
+    /// Closes the groups panel and its pending list.
+    pub fn close_groups(&mut self, cx: &mut Context<Self>) {
+        self.groups_task = None;
+        self.pending_task = None;
+        if let Some(view) = &mut self.message_view {
+            view.set_groups(None);
+        }
+        cx.notify();
+    }
+
+    /// Asks for up to MESSAGE_PAGE pending entries of `group`, oldest first.
+    pub fn load_pending(&mut self, group: String, cx: &mut Context<Self>) -> bool {
+        let Some(source) = self.message_source() else {
+            return false;
+        };
+        let call = MessageCall::Pending {
+            source,
+            group: group.clone(),
+            want: MESSAGE_PAGE,
+        };
+        let Some(answer) = self.send_messages(call, cx) else {
+            return false;
+        };
+        if let Some(view) = &mut self.message_view {
+            view.set_pending(group.clone(), Panel::Loading);
+        }
+        self.pending_task = Some(cx.spawn(async move |this, cx| {
+            let answer = answer.recv().await.ok();
+            let _ = this.update(cx, |m, cx| {
+                m.pending_task = None;
+                let panel = match answer {
+                    Some(Ok(MessageReply::Page(page))) => Panel::Ready(pending_rows(&page.batch)),
+                    Some(Ok(MessageReply::Groups(_))) => Panel::Failed(UNEXPECTED_REPLY.into()),
+                    Some(Err(e)) => Panel::Failed(e.to_string()),
+                    None => Panel::Failed(SESSION_STOPPED.into()),
+                };
+                if let Some(view) = &mut m.message_view {
+                    view.set_pending(group, panel);
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+        true
+    }
+
+    fn message_source(&self) -> Option<SourceRef> {
+        let view = self.message_view.as_ref()?;
+        Some(SourceRef::redis(view.db(), view.key().to_vec()))
+    }
+
+    // Forgets the stream view and drops every stream answer still in flight.
+    fn drop_message_view(&mut self) {
+        self.message_view = None;
+        self.message_task = None;
+        self.groups_task = None;
+        self.pending_task = None;
+    }
+
+    // Sends one stream call to the runner, starting it if needed; None while the tab may not
+    // read (closed, fenced or running a statement).
+    fn send_messages(
+        &mut self,
+        call: MessageCall,
+        cx: &mut Context<Self>,
+    ) -> Option<Receiver<MessageAnswer>> {
+        if self.closed || self.fence.is_some() || self.running {
+            return None;
+        }
+        if self.runner.is_none() {
+            self.start_runner(cx);
+        }
+        let (reply, answer) = async_channel::bounded(1);
+        self.runner
+            .as_ref()?
+            .send(Command::Messages { call, reply });
+        Some(answer)
+    }
+
+    // Sends a browse page read; `first` marks the newest page, which starts result 0.
+    fn browse_messages(&mut self, read: MessageRead, first: bool, cx: &mut Context<Self>) -> bool {
+        let want = read.want;
+        let Some(answer) = self.send_messages(MessageCall::Read(read), cx) else {
+            return false;
+        };
+        if let Some(view) = &mut self.message_view {
+            view.begin_read();
+        }
+        self.message_task = Some(cx.spawn(async move |this, cx| {
+            let answer = answer.recv().await.ok();
+            let _ = this.update(cx, |m, cx| {
+                m.message_task = None;
+                m.browse_landed(answer, want, first, cx);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+        true
+    }
+
+    // A short page that no byte bound cut is the last one older. The newest page starts result 0
+    // even when empty; an older page goes below the rows, and an empty one adds nothing.
+    fn browse_landed(
+        &mut self,
+        answer: Option<MessageAnswer>,
+        want: u32,
+        first: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = &mut self.message_view else {
+            return;
+        };
+        let page = match answer {
+            Some(Ok(MessageReply::Page(page))) => page,
+            Some(Ok(MessageReply::Groups(_))) => return view.fail(UNEXPECTED_REPLY.into()),
+            Some(Err(MessageError::Server { code, .. })) if code == "WRONGTYPE" => {
+                let (db, key) = (view.db(), view.key().to_vec());
+                return self.open_key(db, key, cx);
+            }
+            Some(Err(e)) => return view.fail(e.to_string()),
+            None => return view.fail(SESSION_STOPPED.into()),
+        };
+        let last = page.batch.len() < want as usize && page.truncated_by.is_none();
+        view.browsed(page.next, page.prev, first, last);
+        if first {
+            let sql = self
+                .key_view
+                .as_ref()
+                .map(KeyView::title)
+                .unwrap_or_default();
+            self.results.clear();
+            self.results.push(StatementResult {
+                stmt: 0,
+                sql,
+                engine: Some(Engine::Redis),
+                epoch: self.epoch,
+                store: ResultStore::new(page.columns.into()),
+                elapsed: None,
+                source: None,
+                plan: None,
+            });
+            self.message_run = self.run_id;
+        }
+        let Some(result) = self.results.first_mut() else {
+            return;
+        };
+        let store = &mut result.store;
+        if !page.batch.is_empty() {
+            store.reopen();
+            store.push(page.batch);
+        }
+        if last {
             let rows = store.rows();
             store.finish(StatementEnd::Complete(Outcome::complete(rows)));
         }

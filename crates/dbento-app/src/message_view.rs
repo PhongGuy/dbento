@@ -297,8 +297,11 @@ impl MessageView {
         self.groups.as_ref()
     }
 
-    /// Opens, refreshes or closes the groups panel.
+    /// Opens, refreshes or closes the groups panel; closing it closes the pending list too.
     pub fn set_groups(&mut self, groups: Option<Panel<Vec<GroupRow>>>) {
+        if groups.is_none() {
+            self.pending = None;
+        }
         self.groups = groups;
     }
 

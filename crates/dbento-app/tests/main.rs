@@ -134,6 +134,7 @@ mod look;
 mod menu_rows;
 mod message_ring;
 mod message_runner;
+mod message_tab;
 mod message_view;
 mod mongo_documents;
 mod narrow;
