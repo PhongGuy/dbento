@@ -5,7 +5,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{Pilot, bounds, find_node, launch_args, run_query, sqlite_workspace};
+use common::{Pilot, bounds, find_node, launch_args, run_query, session_app, sqlite_workspace};
 use serde_json::{Value, json};
 
 async fn until(pilot: &Pilot, what: &str, done: impl Fn(&Value) -> bool) -> Value {
@@ -121,10 +121,19 @@ async fn settings_apply_live_and_come_back_after_a_restart() {
     pilot.assert_bus_untouched();
 }
 
+/// The text the size field `id` shows: its editor's value in the tree.
+fn shown<'a>(tree: &'a Value, id: &str) -> Option<&'a str> {
+    tree["nodes"].as_array()?.iter().find_map(|n| {
+        let inside = n["path"].as_array()?.contains(&json!(id));
+        (inside && n["role"] == json!("TextInput")).then(|| n["value"].as_str())?
+    })
+}
+
 // A step and then a click into the size field each move focus to it once; with a11y on, a
-// field that reported focus twice per frame aborted the app.
+// field that reported focus twice per frame aborted the app. The field then still types and
+// steps from the keyboard.
 #[tokio::test(flavor = "multi_thread")]
-async fn stepping_a_size_and_clicking_into_it_keeps_the_app_up() {
+async fn stepping_a_size_and_clicking_into_it_keeps_the_field_working() {
     let ws = sqlite_workspace();
     let pilot = Pilot::start().await;
     pilot.ok("launch", launch_args("headless", ws.path())).await;
@@ -136,10 +145,99 @@ async fn stepping_a_size_and_clicking_into_it_keeps_the_app_up() {
         find_node(t, "settings-dialog").is_some()
     })
     .await;
-    increment(&pilot, "settings-grid-font-size", 1).await;
-    click(&pilot, "settings-grid-font-size").await;
-    pilot.ok("wait", json!({ "ms": 200 })).await;
-    find_node(&pilot.ok("tree", json!({})).await, "settings-dialog").expect("the dialog is gone");
+    let field = "settings-grid-font-size";
+    increment(&pilot, field, 1).await;
+    click(&pilot, field).await;
+    until(&pilot, "the stepped size", |t| {
+        shown(t, field) == Some("13")
+    })
+    .await;
+    key(&pilot, "ctrl-a").await;
+    pilot.ok("type", json!({ "text": "15" })).await;
+    key(&pilot, "enter").await;
+    let tree = until(&pilot, "the typed size", |t| shown(t, field) == Some("15")).await;
+    find_node(&tree, "settings-dialog").expect("Enter keeps the dialog open");
+    key(&pilot, "up").await;
+    until(&pilot, "the size Up stepped", |t| {
+        shown(t, field) == Some("16")
+    })
+    .await;
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+    pilot.assert_bus_untouched();
+}
+
+// The same step and click under the session's accessibility tree, which reports focus but
+// few ids: one node holds the focus, and it sits inside the size field.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stepped_and_clicked_size_field_is_the_one_focused_node() {
+    let app = session_app();
+    assert!(app.is_file(), "no optimised app at {}", app.display());
+    let ws = sqlite_workspace();
+    let pilot = Pilot::start().await;
+    let mut args = launch_args("session", ws.path());
+    args["env"] = json!({ "DBENTO_STATE_DIR": ws.path().join(".state") });
+    pilot.ok("launch", args).await;
+    pilot
+        .ok("tree", json!({ "wait_for": { "id": ["title-search"] } }))
+        .await;
+    key(&pilot, "ctrl-,").await;
+    let spin = |n: &Value| n["role"] == json!("SpinButton") && n["name"] == json!("Grid font size");
+    let tree = until(&pilot, "the size field", |t| {
+        t["nodes"].as_array().is_some_and(|n| n.iter().any(spin))
+    })
+    .await;
+    let field = tree["nodes"]
+        .as_array()
+        .and_then(|n| n.iter().find(|n| spin(n)))
+        .expect("the size field")
+        .clone();
+    // The increment button is the field's right end; the click then lands mid-field.
+    let b = &field["bounds"];
+    let at = |k: &str| b[k].as_f64().expect("bounds");
+    let (right, mid) = (at("x") + at("w") - 10., at("y") + at("h") / 2.);
+    pilot
+        .ok("click", json!({ "target": { "x": right, "y": mid } }))
+        .await;
+    pilot
+        .ok(
+            "click",
+            json!({ "target": { "role": "SpinButton", "name": "Grid font size" } }),
+        )
+        .await;
+    // Wait for focus to reach the field, then require it to be the only focused node.
+    let outer = field["path"].as_array().expect("a path").clone();
+    let inside = |n: &Value| {
+        n["path"]
+            .as_array()
+            .is_some_and(|p| p.len() > outer.len() && p.starts_with(&outer))
+    };
+    let tree = until(&pilot, "focus inside the size field", |t| {
+        t["nodes"]
+            .as_array()
+            .is_some_and(|n| n.iter().any(|n| n["focused"] == json!(true) && inside(n)))
+    })
+    .await;
+    let focused: Vec<&Value> = tree["nodes"]
+        .as_array()
+        .expect("tree nodes")
+        .iter()
+        .filter(|n| n["focused"] == json!(true))
+        .collect();
+    assert_eq!(focused.len(), 1, "one focused node: {focused:?}");
+    // The click on the right end stepped 12 to 13, as the saved file shows.
+    let file = ws.path().join(".state/settings.json");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let read = std::fs::read_to_string(&file).ok();
+        let saved = read
+            .as_deref()
+            .and_then(|t| serde_json::from_str::<Value>(t).ok());
+        if saved.is_some_and(|s| s["grid_font"]["size"] == json!(13)) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the step never saved: {read:?}");
+        pilot.ok("wait", json!({ "ms": 50 })).await;
+    }
+    pilot.ok("close", json!({})).await;
     pilot.assert_bus_untouched();
 }

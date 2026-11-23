@@ -122,6 +122,7 @@ jobs:
         --skip the_optimised_app_runs_a_query_in_a_private_session
         --skip the_session_tree_names_the_chrome_and_the_approval_buttons
         --skip open_hands_the_keymap_file_to_xdg_open
+        --skip a_stepped_and_clicked_size_field_is_the_one_focused_node
     steps:
       - name: Free disk space
         # The hosted runner leaves about 14 GB free; these preinstalled toolchains are unused.

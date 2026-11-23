@@ -6,10 +6,9 @@
 use std::ops::RangeInclusive;
 
 use gpui_kit::base::actions::{Cancel, Confirm};
-use gpui_kit::base::{Decrement, Increment, StepAction, step_value};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -17,7 +16,7 @@ use gpui_kit::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, Role,
     SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
-    TextAlign, Window, div, px,
+    Window, div, px,
 };
 
 use crate::confirm;
@@ -166,8 +165,14 @@ impl SettingsView {
         let installed = cx.text_system().all_font_names();
         let current = store.read(cx).get().clone();
         let sizes = FontTarget::ALL.map(|t| {
-            let size = t.choice(&current).size;
-            cx.new(|cx| InputState::new(window, cx).default_value(size.to_string()))
+            // The kit's number field steps by 1 and stops at the target's ends on its own.
+            let (size, range) = (t.choice(&current).size, t.sizes());
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(size.to_string())
+                    .min(f64::from(*range.start()))
+                    .max(f64::from(*range.end()))
+            })
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let mut subscriptions: Vec<Subscription> = FontTarget::ALL
@@ -235,26 +240,6 @@ impl SettingsView {
             InputEvent::PressEnter { .. } | InputEvent::Blur => self.show_stored(t, window, cx),
             _ => {}
         }
-    }
-
-    // A step works like the kit's number field: it focuses the field, moves the shown value
-    // one size within range, and applies it as a typed change would.
-    fn step(
-        &mut self,
-        t: FontTarget,
-        action: StepAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let (range, input) = (t.sizes(), self.sizes[t.index()].clone());
-        input.update(cx, |s, cx| s.focus(window, cx));
-        let shown = input.read(cx).value();
-        let (min, max) = (f64::from(*range.start()), f64::from(*range.end()));
-        let Some(next) = step_value(&shown, action, 1., Some(min), Some(max)) else {
-            return;
-        };
-        input.update(cx, |s, cx| s.set_value(next, window, cx));
-        self.size_event(t, &InputEvent::Change, window, cx);
     }
 
     fn typed_size(&self, t: FontTarget, cx: &App) -> Option<u8> {
@@ -357,28 +342,11 @@ impl SettingsView {
             .child(div().flex_1().min_w_0().truncate().child(family.clone()))
             .child(ui::icon(Icons::ChevronDown, px(12.), theme::dim(cx)))
             .on_click(cx.listener(move |this, _, window, cx| this.toggle_picker(t, window, cx)));
-        // Our own spin field: the kit's NumberInput tracks one focus handle on two elements,
-        // which aborts the app under a11y. Up and Down keep the kit's step bindings.
-        let step_button = |id: &'static str, icon, action: StepAction| {
-            Button::new(id)
-                .ghost()
-                .xsmall()
-                .icon(icon)
-                .tab_stop(false)
-                .on_click(cx.listener(move |this, _, window, cx| this.step(t, action, window, cx)))
-        };
         let size = h_flex()
             .id(t.id("font-size"))
-            .role(Role::SpinButton)
+            .role(Role::Group)
             .aria_label(SharedString::from(format!("{} font size", t.label())))
             .test_support()
-            .key_context("NumberInput")
-            .on_action(cx.listener(move |this, _: &Increment, window, cx| {
-                this.step(t, StepAction::Increment, window, cx)
-            }))
-            .on_action(cx.listener(move |this, _: &Decrement, window, cx| {
-                this.step(t, StepAction::Decrement, window, cx)
-            }))
             // A single-line field passes Enter on as the dialog's Confirm; the size field
             // keeps it, so Enter commits the clamped value and the dialog stays open.
             .on_action(
@@ -386,26 +354,15 @@ impl SettingsView {
             )
             .flex_none()
             .w(px(112.))
-            .h(px(32.))
-            .px_1()
-            .border_1()
-            .border_color(border)
-            .rounded(radius)
-            .bg(fill)
-            .child(step_button(
-                "decrement",
-                Icons::Minus,
-                StepAction::Decrement,
-            ))
             .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(&self.sizes[t.index()])
-                        .small()
-                        .appearance(false)
-                        .text_align(TextAlign::Center),
-                ),
-            )
-            .child(step_button("increment", Icons::Plus, StepAction::Increment));
+                NumberInput::new(&self.sizes[t.index()])
+                    .accessibility_label(format!("{} font size", t.label()))
+                    .small()
+                    .h(px(32.))
+                    .border_color(border)
+                    .rounded(radius)
+                    .bg(fill),
+            );
         let missing = (!is_installed(&family, &self.installed)).then(|| {
             div()
                 .id(SharedString::from(format!(
