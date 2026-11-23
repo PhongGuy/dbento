@@ -72,6 +72,7 @@ impl Engine {
             table_definition: false,
             language: QueryLanguage::Sql,
             key_browser: false,
+            object_browser: false,
         };
         match self {
             Engine::Postgres => Capabilities {
@@ -145,6 +146,7 @@ impl Engine {
             Engine::S3 => Capabilities {
                 password: true,
                 language: QueryLanguage::S3Cmd,
+                object_browser: true,
                 ..none
             },
         }

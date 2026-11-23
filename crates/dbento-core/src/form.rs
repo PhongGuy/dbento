@@ -64,6 +64,9 @@ pub enum FieldKind {
     /// Which of the server's databases become child connections: `"all"` or a list of names;
     /// absent means only the connection's own database.
     Databases,
+    /// Names separated by commas or whitespace, saved as a TOML array of strings; the key is
+    /// removed when none are left.
+    Names,
 }
 
 const DATABASES_HELP: &str = "Each database shows as its own connection, <name>/<database>, \
@@ -332,7 +335,10 @@ const DYNAMODB_READ_ONLY_HELP: &str = "DynamoDB has no read-only session: Dbento
 /// DynamoDB's layout: every key is optional, since the AWS_* variables can supply the
 /// region and the credentials, and the endpoint only overrides the region's own.
 fn dynamodb_form() -> ConnectionForm {
-    let mut sections = aws_sections();
+    let mut sections = aws_sections(help(
+        field("region", "Region", FieldKind::Text, "e.g. eu-west-1", false),
+        "Leave empty to take it from AWS_REGION or AWS_DEFAULT_REGION.",
+    ));
     sections.push(section(
         "Options",
         vec![help(
@@ -356,9 +362,46 @@ const S3_READ_ONLY_HELP: &str = "S3 has no read-only session: Dbento sends only 
      anyone holding these keys can write with other tools. For a reader IAM enforces, grant only \
      s3:ListAllMyBuckets, s3:ListBucket and s3:GetObject.";
 
+/// S3's layout: DynamoDB's region and key, plus the addressing style an endpoint needs and
+/// the buckets to list when the key cannot list them itself.
 fn s3_form() -> ConnectionForm {
+    let mut sections = aws_sections(help(
+        field(
+            "region",
+            "Region",
+            FieldKind::Text,
+            "e.g. auto or eu-west-1",
+            false,
+        ),
+        "Leave empty to take it from AWS_REGION or AWS_DEFAULT_REGION. Cloudflare R2 uses auto.",
+    ));
+    if let Some(connection) = sections.first_mut() {
+        connection.fields.push(help(
+            field(
+                "virtual_hosted",
+                "Virtual-hosted addressing",
+                FieldKind::Flag,
+                "",
+                false,
+            ),
+            "Puts the bucket in the host name instead of the path; only with an endpoint.",
+        ));
+    }
+    sections.push(section(
+        "Options",
+        vec![help(
+            field(
+                "buckets",
+                "Buckets",
+                FieldKind::Names,
+                "e.g. logs, media",
+                false,
+            ),
+            "Lists only these buckets. Needed when the key may not list buckets itself.",
+        )],
+    ));
     ConnectionForm {
-        sections: aws_sections(),
+        sections,
         read_only_help: Some(S3_READ_ONLY_HELP),
     }
 }
@@ -369,15 +412,13 @@ fn help(mut f: FormField, text: &'static str) -> FormField {
 }
 
 /// The region and signing key DynamoDB and S3 share: each falls back to the AWS_* variables.
-fn aws_sections() -> Vec<FormSection> {
+/// The region field differs per engine in its placeholder and help.
+fn aws_sections(region: FormField) -> Vec<FormSection> {
     vec![
         section(
             "Connection",
             vec![
-                help(
-                    field("region", "Region", FieldKind::Text, "e.g. eu-west-1", false),
-                    "Leave empty to take it from AWS_REGION or AWS_DEFAULT_REGION.",
-                ),
+                region,
                 help(
                     field("endpoint", "Endpoint", FieldKind::Text, "optional", false),
                     "Overrides the region's endpoint: https, or http only to this machine.",

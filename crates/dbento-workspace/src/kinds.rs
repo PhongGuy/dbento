@@ -25,6 +25,8 @@ pub struct Capabilities {
     pub language: QueryLanguage,
     /// Keys can be scanned and their values read in pages.
     pub key_browser: bool,
+    /// Buckets and prefixes can be listed, and objects read and downloaded.
+    pub object_browser: bool,
 }
 
 /// The language a connection's query text is written in.

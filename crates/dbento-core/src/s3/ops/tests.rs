@@ -36,3 +36,15 @@ fn every_operation_needs_only_a_reader_iam_action() {
     assert_eq!(S3Op::ListObjectsV2.iam_action(), "s3:ListBucket");
     assert_eq!(S3Op::HeadObject.iam_action(), "s3:GetObject");
 }
+
+#[test]
+fn the_reader_policy_text_names_every_iam_action() {
+    let residual = crate::read_only_residual(crate::Engine::S3).unwrap();
+    let help = crate::connection_form(crate::Engine::S3)
+        .read_only_help
+        .unwrap();
+    for op in EVERY_OP {
+        assert!(residual.contains(op.iam_action()), "{op:?}: {residual}");
+        assert!(help.contains(op.iam_action()), "{op:?}: {help}");
+    }
+}

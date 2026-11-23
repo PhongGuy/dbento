@@ -940,7 +940,7 @@ impl ConnectionForm {
                         spec.consistent_read = self.consistent_read.then_some(true);
                     }
                 }
-                FieldKind::Text | FieldKind::Path | FieldKind::Uri | _ => {
+                FieldKind::Text | FieldKind::Path | FieldKind::Uri | FieldKind::Names | _ => {
                     let Some((field, _)) = field_of(f.key) else {
                         continue;
                     };
@@ -1083,6 +1083,7 @@ impl ConnectionForm {
                 | FieldKind::Uri
                 | FieldKind::Flag
                 | FieldKind::Databases
+                | FieldKind::Names
                 | _ => None,
             })
         };
@@ -2204,12 +2205,15 @@ fn fields_owned(f: &FormField) -> Vec<Field> {
         ],
         // A flag is a checkbox and Databases a choice, not inputs, so they own none.
         FieldKind::Flag | FieldKind::Databases => Vec::new(),
-        FieldKind::Text | FieldKind::Port { .. } | FieldKind::Path | FieldKind::Uri | _ => {
-            field_of(f.key)
-                .map(|(field, _)| field)
-                .into_iter()
-                .collect()
-        }
+        FieldKind::Text
+        | FieldKind::Port { .. }
+        | FieldKind::Path
+        | FieldKind::Uri
+        | FieldKind::Names
+        | _ => field_of(f.key)
+            .map(|(field, _)| field)
+            .into_iter()
+            .collect(),
     }
 }
 

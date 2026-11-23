@@ -395,3 +395,21 @@ fn every_engine_skips_a_line_its_marker_comments_out() {
         assert!(dbento_core::statement_ranges(e, &text).is_empty(), "{e:?}");
     }
 }
+
+#[test]
+fn only_s3_has_the_object_browser() {
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Duckdb,
+        Engine::Mongodb,
+        Engine::Surrealdb,
+        Engine::Redis,
+        Engine::Dynamodb,
+    ] {
+        assert!(!e.capabilities().object_browser, "{e:?}");
+    }
+    assert!(Engine::S3.capabilities().object_browser);
+}

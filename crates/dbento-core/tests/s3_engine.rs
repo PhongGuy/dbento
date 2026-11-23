@@ -214,6 +214,7 @@ fn statement_ranges_are_the_s3_commands() {
 fn capabilities_and_the_sql_helpers_fit_s3_commands() {
     let s = Engine::S3.capabilities();
     assert!(s.password, "{s:?}");
+    assert!(s.object_browser, "{s:?}");
     assert!(
         !s.schemas
             && !s.tls
