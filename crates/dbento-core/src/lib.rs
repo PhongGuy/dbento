@@ -48,8 +48,8 @@ pub use paths::StatePaths;
 
 mod rename_secret;
 pub use rename_secret::{
-    Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, adopt_secret, secret_renames, seen_text,
-    seen_workspace,
+    Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, SshAdopted, SshPasswordMove, adopt_secret,
+    adopt_ssh_secrets, secret_renames, seen_text, seen_workspace,
 };
 
 mod secrets;
