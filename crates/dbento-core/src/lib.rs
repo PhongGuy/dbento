@@ -151,6 +151,7 @@ mod aws;
 #[cfg(feature = "duckdb")]
 mod duckdb;
 mod dynamo;
+mod s3;
 mod sqlite;
 
 mod rowedit;
