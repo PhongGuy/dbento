@@ -50,7 +50,7 @@ pub(crate) fn cell(row: &Row, ix: usize) -> Result<Option<String>, IntrospectErr
 }
 
 /// Cell `ix` as text that must not be NULL.
-fn text(row: &Row, ix: usize) -> Result<String, IntrospectError> {
+pub(crate) fn text(row: &Row, ix: usize) -> Result<String, IntrospectError> {
     cell(row, ix)?.ok_or_else(|| IntrospectError::Unexpected {
         message: format!("catalog column {ix} is NULL"),
     })
@@ -210,7 +210,12 @@ pub(crate) async fn columns(
 }
 
 /// `rel`'s schema and name matched against two catalog columns, as the server resolves names.
-fn rel_filter(rel: &RelationRef, schema_col: &str, name_col: &str, fold: bool) -> String {
+pub(crate) fn rel_filter(
+    rel: &RelationRef,
+    schema_col: &str,
+    name_col: &str,
+    fold: bool,
+) -> String {
     format!(
         "{} AND {}",
         name_eq(schema_col, rel.schema(), fold),

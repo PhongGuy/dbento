@@ -24,6 +24,7 @@ const MG: &str =
     "engine = \"mongodb\"\nuri = \"mongodb://app@db.internal:27017/shop?authSource=admin\"\n";
 const SR: &str = "engine = \"surrealdb\"\nhost = \"db.internal\"\nnamespace = \"n\"\ndatabase = \"d\"\nuser = \"u\"\nauth_level = \"root\"\n";
 const DY: &str = "engine = \"dynamodb\"\nregion = \"eu-west-1\"\nendpoint = \"http://127.0.0.1:5000\"\naccess_key_id = \"AKIDTEST\"\nsecret = \"keychain\"\nconsistent_read = true\n";
+const S3: &str = "engine = \"s3\"\nregion = \"auto\"\nendpoint = \"http://127.0.0.1:5000\"\naccess_key_id = \"AKIDTEST\"\nsecret = \"keychain\"\n";
 
 fn pair_differs(label: &str, a: &str, b: &str) {
     let (a, b) = (conn(a), conn(b));
@@ -131,6 +132,11 @@ fn every_bound_field_changes_the_binding_and_the_session() {
             DY.into(),
             DY.replace("consistent_read = true", "consistent_read = false"),
         ),
+        (
+            "virtual_hosted",
+            S3.into(),
+            with(S3, "virtual_hosted = true\n"),
+        ),
     ];
     for (label, a, b) in &cases {
         pair_differs(label, a, b);
@@ -167,6 +173,11 @@ fn labels_and_spellings_leave_the_binding_alone() {
             PG.to_owned(),
             format!("{PG}databases = [\"d1\"]\n"),
         ),
+        (
+            "buckets",
+            S3.to_owned(),
+            format!("{S3}buckets = [\"logs\"]\n"),
+        ),
     ];
     for (label, a, b) in &cases {
         pair_same(label, &conn(a), &conn(b));
@@ -194,6 +205,15 @@ fn a_derived_child_binds_like_the_declared_connection_it_equals() {
         PG,
         &PG.replace("database = \"d\"", "database = \"d1\""),
     );
+}
+
+#[test]
+fn virtual_hosted_enters_the_binding_only_when_true() {
+    let plain: serde_json::Value = serde_json::from_str(&conn(S3).session_binding()).unwrap();
+    assert!(plain.get("virtual_hosted").is_none(), "{plain}");
+    let hosted = conn(&format!("{S3}virtual_hosted = true\n"));
+    let v: serde_json::Value = serde_json::from_str(&hosted.session_binding()).unwrap();
+    assert_eq!(v["virtual_hosted"], serde_json::Value::Bool(true));
 }
 
 #[test]

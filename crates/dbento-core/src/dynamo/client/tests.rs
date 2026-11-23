@@ -163,33 +163,6 @@ async fn a_read_only_client_still_sends_catalog_calls_scans_and_selects() {
 }
 
 #[test]
-fn an_endpoint_is_handed_over_as_its_normalised_origin() {
-    for (written, origin) in [
-        ("http://127.0.0.1:5000", "http://127.0.0.1:5000"),
-        ("http://LOCALHOST:5000/", "http://localhost:5000"),
-        (" http://localhost:8000", "http://localhost:8000"),
-        ("http://%6cocalhost:8000", "http://localhost:8000"),
-        ("http:localhost:8000", "http://localhost:8000"),
-        (
-            "https://dynamodb.eu-west-1.amazonaws.com:443/",
-            "https://dynamodb.eu-west-1.amazonaws.com",
-        ),
-    ] {
-        assert_eq!(
-            endpoint_origin(written).as_deref(),
-            Some(origin),
-            "{written}"
-        );
-    }
-    assert_eq!(endpoint_origin("not a url"), None);
-    assert_eq!(
-        endpoint_origin("file:///x"),
-        None,
-        "an opaque origin has no endpoint"
-    );
-}
-
-#[test]
 fn settings_resolve_the_region_credentials_and_endpoint_origin() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("dbento.toml"), "dbento = 1\n\
@@ -239,11 +212,4 @@ fn settings_resolve_the_region_credentials_and_endpoint_origin() {
         ),
         ("us-east-1", "AKIDENV", None)
     );
-}
-
-#[test]
-fn a_deeply_nested_blob_endpoint_has_no_origin_and_does_not_crash() {
-    // A shared workspace can carry any endpoint text; a nested blob: chain once overflowed the stack.
-    let endpoint = format!("{}http://h/", "blob:".repeat(10_000));
-    assert_eq!(endpoint_origin(&endpoint), None);
 }

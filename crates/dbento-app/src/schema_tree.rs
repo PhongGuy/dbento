@@ -2370,7 +2370,8 @@ pub fn select_text(conn: &ConnectionConfig, rel: &RelationRef) -> String {
         | Engine::Mssql
         | Engine::Duckdb
         | Engine::Redis
-        | Engine::Dynamodb => select,
+        | Engine::Dynamodb
+        | Engine::S3 => select,
     }
 }
 

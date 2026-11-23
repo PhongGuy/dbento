@@ -44,6 +44,7 @@ cbor4ii = { version = "=1.2.4", features = ["use_alloc", "half-f16"] }
 half = "=2.7.1"
 redis = { version = "=1.8.1", default-features = false, features = ["tokio-rustls-comp", "tls-rustls"] }
 aws-sdk-dynamodb = { version = "=1.138.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-s3 = { version = "=1.158.0", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http-client = { version = "=1.5.2", default-features = false, features = ["rustls-ring"] }
 aws-smithy-runtime-api = { version = "=1.21.0", default-features = false, features = ["client"] }
 aws-smithy-types = "=1.9.4"

@@ -83,7 +83,7 @@ fn mysql_refuses_other_engines_keys_and_needs_host_and_user() {
 fn capabilities_are_static_per_engine() {
     let my = Engine::Mysql.capabilities();
     assert!(my.schemas && my.password && my.tls);
-    assert!(!my.file && my.server_cancel && !my.edit_rows && !my.explain && my.table_definition);
+    assert!(!my.file && my.server_cancel && my.edit_rows && !my.explain && my.table_definition);
     let pg = Engine::Postgres.capabilities();
     assert!(pg.schemas && pg.server_cancel && pg.password && pg.tls && pg.edit_rows && pg.explain);
     assert!(!pg.file && !pg.table_definition);

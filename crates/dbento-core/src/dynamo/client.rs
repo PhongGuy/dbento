@@ -13,11 +13,10 @@ use aws_sdk_dynamodb::operation::execute_statement::{
 use aws_sdk_dynamodb::operation::list_tables::{ListTablesError, ListTablesOutput};
 use aws_sdk_dynamodb::operation::scan::{ScanError, ScanOutput};
 use aws_sdk_dynamodb::types::ReturnConsumedCapacity;
-use aws_smithy_http_client::tls::{self, rustls_provider::CryptoMode};
 
-use super::creds::{AwsCredentials, resolve_credentials, resolve_region};
 use super::ops::{DynamoOp, allowed};
 use super::statement::Kind;
+use crate::aws::{AwsCredentials, endpoint_origin, resolve_credentials, resolve_region};
 use crate::secrets::Secret;
 use crate::session::ConnectError;
 use crate::workspace::ConnectionConfig;
@@ -226,19 +225,6 @@ fn own_retry_quota(region: &str) -> RetryPartition {
     RetryPartition::custom(format!("dbento-dynamodb-{region}"))
         .token_bucket(bucket)
         .build()
-}
-
-/// An HTTPS client on ring rustls, the one every real connection uses.
-pub(crate) fn https_client() -> SharedHttpClient {
-    aws_smithy_http_client::Builder::new()
-        .tls_provider(tls::Provider::Rustls(CryptoMode::Ring))
-        .build_https()
-}
-
-/// The WHATWG-normalised origin of an endpoint, or `None` when it is not a URL with a host.
-pub(crate) fn endpoint_origin(text: &str) -> Option<String> {
-    let origin = url::Url::parse(text).ok()?.origin();
-    origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
 #[cfg(test)]

@@ -332,6 +332,38 @@ fn partiql_files_under_queries_are_saved_queries_in_partiql() {
 }
 
 #[test]
+fn s3_command_files_under_queries_are_saved_queries() {
+    let q = QueryLanguage::S3Cmd;
+    assert_eq!((q.name(), q.file_extension()), ("S3 commands", "s3"));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n",
+    )
+    .unwrap();
+    let queries = dir.path().join("queries");
+    std::fs::create_dir_all(queries.join("lite")).unwrap();
+    for f in ["lite/a.s3", "b.S3", "lite/c.sql", "e.s3x"] {
+        std::fs::write(queries.join(f), "ls").unwrap();
+    }
+    let ws = Workspace::open(dir.path()).unwrap();
+    let listed: Vec<(String, QueryLanguage)> = ws
+        .saved_queries()
+        .unwrap()
+        .iter()
+        .map(|s| (s.path().to_string_lossy().replace('\\', "/"), s.language()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("queries/b.S3".to_owned(), QueryLanguage::S3Cmd),
+            ("queries/lite/a.s3".to_owned(), QueryLanguage::S3Cmd),
+            ("queries/lite/c.sql".to_owned(), QueryLanguage::Sql),
+        ]
+    );
+}
+
+#[test]
 fn each_language_names_its_line_comment() {
     use QueryLanguage as L;
     assert_eq!(L::Sql.line_comment(), Some("--"));
@@ -339,6 +371,7 @@ fn each_language_names_its_line_comment() {
     assert_eq!(L::MongoShell.line_comment(), Some("//"));
     assert_eq!(L::SurrealQl.line_comment(), Some("//"));
     assert_eq!(L::RedisCommands.line_comment(), Some("#"));
+    assert_eq!(L::S3Cmd.line_comment(), Some("#"));
 }
 
 // The marker the editor inserts must be one Dbento's own splitter skips on every engine, so a
@@ -355,9 +388,28 @@ fn every_engine_skips_a_line_its_marker_comments_out() {
         Engine::Surrealdb,
         Engine::Redis,
         Engine::Dynamodb,
+        Engine::S3,
     ] {
         let marker = e.capabilities().language.line_comment().unwrap();
         let text = format!("{marker} DELETE x\n  {marker} DELETE y\n");
         assert!(dbento_core::statement_ranges(e, &text).is_empty(), "{e:?}");
     }
+}
+
+#[test]
+fn only_s3_has_the_object_browser() {
+    for e in [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Duckdb,
+        Engine::Mongodb,
+        Engine::Surrealdb,
+        Engine::Redis,
+        Engine::Dynamodb,
+    ] {
+        assert!(!e.capabilities().object_browser, "{e:?}");
+    }
+    assert!(Engine::S3.capabilities().object_browser);
 }
