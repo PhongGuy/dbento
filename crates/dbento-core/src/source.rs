@@ -43,6 +43,7 @@ pub fn single_source(
         Engine::Surrealdb => None,
         Engine::Redis => None,
         Engine::Dynamodb => None,
+        Engine::S3 => None,
     }
 }
 

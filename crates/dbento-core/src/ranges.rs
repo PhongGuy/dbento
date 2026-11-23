@@ -34,6 +34,7 @@ pub fn statement_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
         Engine::Surrealdb => crate::surreal::units::statement_ranges(sql),
         Engine::Redis => crate::redis::lex::statement_ranges(sql),
         Engine::Dynamodb => crate::dynamo::lex::statement_ranges(sql),
+        Engine::S3 => crate::s3::lex::statement_ranges(sql),
     }
 }
 
@@ -49,7 +50,8 @@ pub fn statement_count(engine: Engine, sql: &str) -> usize {
         | Engine::Duckdb
         | Engine::Mongodb
         | Engine::Redis
-        | Engine::Dynamodb => statement_ranges(engine, sql).len(),
+        | Engine::Dynamodb
+        | Engine::S3 => statement_ranges(engine, sql).len(),
     }
 }
 
@@ -65,7 +67,8 @@ pub fn result_ranges(engine: Engine, sql: &str) -> Vec<Range<usize>> {
         | Engine::Duckdb
         | Engine::Mongodb
         | Engine::Redis
-        | Engine::Dynamodb => statement_ranges(engine, sql),
+        | Engine::Dynamodb
+        | Engine::S3 => statement_ranges(engine, sql),
     }
 }
 

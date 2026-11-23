@@ -236,7 +236,8 @@ fn engines(engine: Engine, sql: &str) -> Vec<String> {
         | Engine::Mongodb
         | Engine::Surrealdb
         | Engine::Redis
-        | Engine::Dynamodb => {
+        | Engine::Dynamodb
+        | Engine::S3 => {
             use sqlite3_parser::lexer::{Scanner, sql::Tokenizer};
             let mut s = Scanner::new(Tokenizer::new());
             let mut out = Vec::new();

@@ -1,4 +1,4 @@
-//! The region and static credentials a DynamoDB connection signs its requests with.
+//! The region and static credentials an AWS connection signs its requests with.
 
 use crate::secrets::Secret;
 use crate::workspace::ConnectionConfig;

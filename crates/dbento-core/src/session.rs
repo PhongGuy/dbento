@@ -739,6 +739,9 @@ pub async fn connect(
         Engine::Dynamodb => Err(ConnectError::Unsupported {
             reason: "DynamoDB is not available in this build".to_owned(),
         }),
+        Engine::S3 => Err(ConnectError::Unsupported {
+            reason: "S3 is not available in this build yet".to_owned(),
+        }),
     }
 }
 
@@ -763,6 +766,11 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
              tools. For a reader the server enforces, grant only dynamodb:ListTables, \
              DescribeTable, Scan, Query, GetItem, BatchGetItem and dynamodb:PartiQLSelect, \
              scoped to the tables.",
+        ),
+        Engine::S3 => Some(
+            "S3 has no read-only session. Dbento sends only reads, but it cannot see IAM, so \
+             anyone holding these keys can still write with other tools. For a reader the server \
+             enforces, grant only s3:ListAllMyBuckets, s3:ListBucket and s3:GetObject.",
         ),
         Engine::Postgres
         | Engine::Sqlite

@@ -161,17 +161,23 @@ fn the_dynamodb_keys_are_refused_on_every_other_engine() {
         "engine = \"mongodb\"\nuri = \"mongodb://localhost/x\"\n",
         "engine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n",
     ] {
-        for line in [
-            "region = \"eu-west-1\"",
-            "endpoint = \"https://h\"",
-            "access_key_id = \"A\"",
-            "consistent_read = true",
+        for (line, want) in [
+            (
+                "region = \"eu-west-1\"",
+                "is a dynamodb and s3 key, not valid for",
+            ),
+            (
+                "endpoint = \"https://h\"",
+                "is a dynamodb and s3 key, not valid for",
+            ),
+            (
+                "access_key_id = \"A\"",
+                "is a dynamodb and s3 key, not valid for",
+            ),
+            ("consistent_read = true", "is a dynamodb key, not valid for"),
         ] {
             let m = invalid(&format!("dbento = 1\n[connections.c]\n{base}{line}\n"));
-            assert!(
-                m.contains("is a dynamodb key, not valid for"),
-                "{base}{line}: {m}"
-            );
+            assert!(m.contains(want), "{base}{line}: {m}");
         }
     }
 }

@@ -372,6 +372,10 @@ fn best_effort_note(engine: Engine, connection: &str) -> String {
              dynamodb:DescribeTable, dynamodb:Scan, dynamodb:Query, dynamodb:GetItem, \
              dynamodb:BatchGetItem, dynamodb:PartiQLSelect)"
         }
+        Engine::S3 => {
+            "Dbento sends S3 only reads, but IAM decides what the credentials may do; for \
+             production grant only s3:ListAllMyBuckets, s3:ListBucket and s3:GetObject"
+        }
         _ => {
             "SQL Server refuses writes in the database only with read_only_user; set \
              read_only_user or use a reader login for production"
