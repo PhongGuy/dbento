@@ -16,8 +16,8 @@ mod workspace;
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, DurationError, Engine, Folder,
     FormattedDuration, InitError, MAX_QUERY_FILE_BYTES, OpenError, QueryFileError, ResolveError,
-    SavedQuery, SecretSource, TlsMode, Workspace, format_duration, parse_duration,
-    valid_database_name,
+    SavedQuery, SecretSource, SshAuth, SshConfig, TlsMode, Workspace, format_duration,
+    parse_duration, valid_database_name,
 };
 
 mod form;

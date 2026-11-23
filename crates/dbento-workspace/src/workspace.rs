@@ -240,6 +240,81 @@ impl AuthLevel {
     }
 }
 
+/// How an SSH tunnel signs in to its host.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SshAuth {
+    /// The running ssh-agent.
+    Agent,
+    /// A private key file.
+    Key,
+    /// A password.
+    Password,
+}
+
+impl SshAuth {
+    /// The word `dbento.toml` uses: `agent`, `key` or `password`.
+    pub fn name(self) -> &'static str {
+        match self {
+            SshAuth::Agent => "agent",
+            SshAuth::Key => "key",
+            SshAuth::Password => "password",
+        }
+    }
+
+    /// The auth a `dbento.toml` word names, if any.
+    pub fn parse(word: &str) -> Option<SshAuth> {
+        [SshAuth::Agent, SshAuth::Key, SshAuth::Password]
+            .into_iter()
+            .find(|auth| auth.name() == word)
+    }
+}
+
+/// A connection's `[connections.<name>.ssh]` table: the tunnel its server is reached through.
+/// Every key but `host` may be left to `~/.ssh/config`.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshConfig {
+    host: String,
+    port: Option<u16>,
+    user: Option<String>,
+    auth: Option<SshAuth>,
+    identity_file: Option<String>,
+    keepalive: bool,
+}
+
+impl SshConfig {
+    /// The SSH host or `~/.ssh/config` alias.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// The SSH port, if written.
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// The SSH user, if written.
+    pub fn user(&self) -> Option<&str> {
+        self.user.as_deref()
+    }
+
+    /// How the tunnel signs in, if written.
+    pub fn auth(&self) -> Option<SshAuth> {
+        self.auth
+    }
+
+    /// The private key path exactly as written, `~` unexpanded.
+    pub fn identity_file(&self) -> Option<&str> {
+        self.identity_file.as_deref()
+    }
+
+    /// Whether the tunnel sends keepalives; true when absent.
+    pub fn keepalive(&self) -> bool {
+        self.keepalive
+    }
+}
+
 /// Where a connection's secret comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretSource {
@@ -567,6 +642,7 @@ pub struct ConnectionConfig {
     endpoint: Option<String>,
     access_key_id: Option<String>,
     consistent_read: bool,
+    ssh: Option<SshConfig>,
 }
 
 #[derive(Deserialize)]
@@ -616,6 +692,46 @@ struct RawConnection {
     endpoint: Option<String>,
     access_key_id: Option<String>,
     consistent_read: Option<bool>,
+    ssh: Option<RawSsh>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSsh {
+    host: String,
+    port: Option<u16>,
+    user: Option<String>,
+    auth: Option<String>,
+    identity_file: Option<String>,
+    keepalive: Option<bool>,
+}
+
+// The ssh table's own rules; which engines may carry one is the caller's check.
+fn ssh_config(raw: RawSsh) -> Result<SshConfig, String> {
+    if raw.host.trim().is_empty() {
+        return Err("`ssh.host` must not be empty".to_owned());
+    }
+    if raw.port == Some(0) {
+        return Err("`ssh.port` must be between 1 and 65535".to_owned());
+    }
+    let auth =
+        match raw.auth.as_deref() {
+            None => None,
+            Some(word) => Some(SshAuth::parse(word).ok_or_else(|| {
+                format!("auth `{word}` must be \"agent\", \"key\" or \"password\"")
+            })?),
+        };
+    if raw.identity_file.is_some() && matches!(auth, Some(SshAuth::Agent | SshAuth::Password)) {
+        return Err("`identity_file` needs auth = \"key\" or no auth".to_owned());
+    }
+    Ok(SshConfig {
+        host: raw.host,
+        port: raw.port,
+        user: raw.user,
+        auth,
+        identity_file: raw.identity_file,
+        keepalive: raw.keepalive.unwrap_or(true),
+    })
 }
 
 #[derive(Deserialize)]
@@ -1495,6 +1611,7 @@ impl ConnectionConfig {
             endpoint: None,
             access_key_id: None,
             consistent_read: false,
+            ssh: None,
         };
 
         // Checked ahead of the per-engine rules, whose messages would call it a postgres key.
@@ -1885,6 +2002,25 @@ impl ConnectionConfig {
                 config.consistent_read = raw.consistent_read.unwrap_or(false);
             }
         }
+        // After the engine rules, so their messages win; a tunnel needs a TCP server host.
+        if let Some(ssh) = raw.ssh {
+            match engine {
+                Engine::Mongodb | Engine::Dynamodb | Engine::Sqlite | Engine::Duckdb => {
+                    return Err(invalid(format!("`ssh` is not valid for {}", engine.name())));
+                }
+                Engine::Postgres if config.host.as_deref().is_some_and(|h| h.starts_with('/')) => {
+                    return Err(invalid(
+                        "a postgres socket cannot be reached over SSH".to_owned(),
+                    ));
+                }
+                Engine::Postgres
+                | Engine::Mysql
+                | Engine::Mssql
+                | Engine::Surrealdb
+                | Engine::Redis => {}
+            }
+            config.ssh = Some(ssh_config(ssh).map_err(invalid)?);
+        }
         Ok(config)
     }
 
@@ -2012,8 +2148,12 @@ impl ConnectionConfig {
             region,
             endpoint,
             access_key_id,
+            ssh,
         } = self;
+        // The tunnel's host and port decide which server a database host name means.
+        let tunnel = |s: &Option<SshConfig>| s.as_ref().map(|s| (s.host.clone(), s.port));
         *engine == other.engine
+            && tunnel(ssh) == tunnel(&other.ssh)
             && *host == other.host
             && *port == other.port
             && *user == other.user
@@ -2060,6 +2200,7 @@ impl ConnectionConfig {
             endpoint,
             access_key_id,
             consistent_read,
+            ssh,
         } = self;
         [
             (
@@ -2091,6 +2232,7 @@ impl ConnectionConfig {
             ("endpoint", *endpoint != other.endpoint),
             ("access_key_id", *access_key_id != other.access_key_id),
             ("consistent_read", *consistent_read != other.consistent_read),
+            ("ssh", *ssh != other.ssh),
         ]
         .into_iter()
         .filter_map(|(key, differs)| differs.then_some(key))
@@ -2311,6 +2453,11 @@ impl ConnectionConfig {
     pub fn consistent_read(&self) -> bool {
         self.consistent_read
     }
+
+    /// The SSH tunnel the server is reached through; `None` for a direct connection.
+    pub fn ssh(&self) -> Option<&SshConfig> {
+        self.ssh.as_ref()
+    }
 }
 
 // Everything a session depends on, in the form session_binding encodes. Built from one
@@ -2340,6 +2487,19 @@ struct SessionKey<'a> {
     endpoint: Option<&'a str>,
     access_key_id: Option<&'a str>,
     consistent_read: bool,
+    // Absent without a tunnel, so every untunnelled binding stays byte for byte as it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ssh: Option<SshWire<'a>>,
+}
+
+#[derive(PartialEq, Serialize)]
+struct SshWire<'a> {
+    host: &'a str,
+    port: Option<u16>,
+    user: Option<&'a str>,
+    auth: Option<&'static str>,
+    identity_file: Option<&'a str>,
+    keepalive: bool,
 }
 
 // Where the secret comes from, by kind and variable name only; never the secret.
@@ -2410,6 +2570,7 @@ impl ConnectionConfig {
             endpoint,
             access_key_id,
             consistent_read,
+            ssh,
         } = self;
         SessionKey {
             b: 1,
@@ -2443,6 +2604,14 @@ impl ConnectionConfig {
             endpoint: endpoint.as_deref(),
             access_key_id: access_key_id.as_deref(),
             consistent_read: *consistent_read,
+            ssh: ssh.as_ref().map(|s| SshWire {
+                host: &s.host,
+                port: s.port,
+                user: s.user.as_deref(),
+                auth: s.auth.map(SshAuth::name),
+                identity_file: s.identity_file.as_deref(),
+                keepalive: s.keepalive,
+            }),
         }
     }
 }

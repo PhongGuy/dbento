@@ -60,12 +60,12 @@ A connection name matches `[A-Za-z0-9_-]+`.
 | Engine | Required | Optional |
 | --- | --- | --- |
 | `sqlite`, `duckdb` | `path` (relative paths resolve against the workspace folder) | none |
-| `postgres` | `host`, `database`, `user` | `port` (5432), `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key`, `settings`, `databases` |
-| `mysql` | `host`, `user` | `database`, `port` (3306), `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key` |
-| `mssql` | `host`, `user` | `database`, `port` (1433), `secret`, `tls`, `tls_ca`, `databases`, `read_only_user` |
+| `postgres` | `host`, `database`, `user` | `port` (5432), `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key`, `settings`, `databases`, `ssh` |
+| `mysql` | `host`, `user` | `database`, `port` (3306), `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key`, `ssh` |
+| `mssql` | `host`, `user` | `database`, `port` (1433), `secret`, `tls`, `tls_ca`, `databases`, `read_only_user`, `ssh` |
 | `mongodb` | `uri` (`mongodb://` or `mongodb+srv://`) | `secret`, only with a user in `uri` (`"none"` is always accepted) |
-| `surrealdb` | `host`, `namespace`, `database` | `port` (8000), `user`, `auth_level` (`root`, `namespace` or `database`, required with `user`), `secret` (only with `user`; `"none"` is always accepted), `tls`, `tls_ca` |
-| `redis` | none | `host` (`127.0.0.1`), `port` (6379), `database` (a DB index, `0`), `user`, `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key` |
+| `surrealdb` | `host`, `namespace`, `database` | `port` (8000), `user`, `auth_level` (`root`, `namespace` or `database`, required with `user`), `secret` (only with `user`; `"none"` is always accepted), `tls`, `tls_ca`, `ssh` |
+| `redis` | none | `host` (`127.0.0.1`), `port` (6379), `database` (a DB index, `0`), `user`, `secret`, `tls`, `tls_ca`, `tls_cert`, `tls_key`, `ssh` |
 | `dynamodb` | none | `region`, `endpoint`, `access_key_id`, `secret` (only with `access_key_id`, and never `"none"` there), `consistent_read` (bool) |
 
 Further rules:
@@ -85,6 +85,50 @@ Further rules:
 - `endpoint` (DynamoDB) is an `http` or `https` URL with no user, path, query or fragment. Plain
   `http` is allowed only to `localhost` or a loopback address. `region` and `access_key_id` must
   be non-blank (not empty or only whitespace).
+- `ssh` is a sub-table; see [SSH tunnels](#ssh-tunnels).
+
+## SSH tunnels
+
+A server connection (`postgres`, `mysql`, `mssql`, `surrealdb` or `redis`) may be reached through
+an SSH tunnel, written as a sub-table directly under its entry:
+
+```toml
+[connections.prod.ssh]
+host = "bastion"
+```
+
+| Key | Meaning | When absent |
+| --- | --- | --- |
+| `host` (required) | the SSH host or a `Host` alias of `~/.ssh/config` | refused |
+| `port` | the SSH port, 1-65535 | `Port` from `~/.ssh/config`, else 22 |
+| `user` | the SSH user | `User` from `~/.ssh/config`, else the local user |
+| `auth` | `"agent"`, `"key"` or `"password"`: only that way is tried | the agent, then key files, then a stored password |
+| `identity_file` | the private key; `~/` is the home folder, a relative path the workspace folder | `IdentityFile` from `~/.ssh/config`, else `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa` |
+| `keepalive` | whether the tunnel sends keepalives (bool) | `true` |
+
+The connection's own `host` and `port` are then resolved on the SSH host's side. Values written
+in `dbento.toml` win over `~/.ssh/config`. A derived child connection uses its parent's tunnel.
+
+Refused with `invalid` when the file is read:
+
+- `ssh` on `mongodb`, `dynamodb`, `sqlite` or `duckdb`;
+- `ssh` on a Postgres connection whose `host` is a unix socket directory (starts with `/`);
+- an empty or blank `host`, a `port` of 0, or an `auth` word other than the three above;
+- `identity_file` together with `auth = "agent"` or `auth = "password"`;
+- any other key in the table, and a `password` key, which is refused as a secret.
+
+Refused when the connection is opened, since `~/.ssh/config` is read then, never at load:
+
+- a `Match` block anywhere in `~/.ssh/config` or a file it `Include`s;
+- `ProxyJump` or `ProxyCommand` (other than `none`) for the host;
+- a `%` token in a value Dbento would use: `HostName`, and `User` or `IdentityFile` when
+  `dbento.toml` does not set them.
+
+In each of these cases, write `host`, `port`, `user` and `identity_file` in `dbento.toml` instead.
+
+An `identity_file` written as an absolute path outside the home folder loads with a warning,
+since a teammate sharing the workspace will rarely have the key at that path; prefer `~/` or a
+`~/.ssh/config` alias.
 
 ## Secrets
 
@@ -106,6 +150,11 @@ No secret is ever written in `dbento.toml`.
   uri such as `mongodb://u:secret/` can never be shown as the connection's target.
 
 No error message quotes the value of `uri`, `endpoint` or `secret`.
+
+An SSH tunnel's password and key passphrase are secrets too, kept in the OS keychain beside the
+database secret, or read from `DBENTO_SSH_PASSWORD_<NAME>` and `DBENTO_SSH_KEY_PASSPHRASE_<NAME>`
+when the keychain has none (`<NAME>` is the connection name upper-cased, `-` written `_`). The stored SSH password is tied to the resolved `user@host:port`, so a
+changed SSH host, port or user does not reuse it.
 
 The full MongoDB driver syntax check is not part of the format: Dbento runs it when it connects
 and when it saves a connection, so a malformed but secret-free uri fails that one connection only.
