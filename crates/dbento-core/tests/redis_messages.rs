@@ -452,3 +452,16 @@ async fn a_followed_cell_over_the_value_cap_is_cut_too() {
     assert!(fields.starts_with(r#"{"f":"xxx"#), "{}", &fields[..20]);
     assert_eq!(p.truncated_by, Some(dbento_core::TruncatedBy::Bytes));
 }
+
+#[tokio::test]
+async fn a_message_with_a_repeated_field_name_reads_as_pairs() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let r = MessageRead::browse(src(&fx, "stream:dup"), Position::Start, Direction::Forward);
+    let p = s.read_messages(&r).await.unwrap();
+    assert_eq!(ids(&p), ["1-1"]);
+    assert_eq!(
+        column(&p, 2),
+        [r#"{"$pairs":[["f","a"],["f","b"],["g","c"]]}"#]
+    );
+}

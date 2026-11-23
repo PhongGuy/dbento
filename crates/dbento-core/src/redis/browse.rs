@@ -221,6 +221,7 @@ pub(in crate::redis) use self::server::{
 
 #[cfg(feature = "redis")]
 mod server {
+    use std::collections::HashSet;
     use std::time::Duration;
 
     use ::redis::{Pipeline, Value};
@@ -230,7 +231,7 @@ mod server {
     };
     use crate::message::Direction;
     use crate::redis::driver::{BracketError, Failure, RedisSession};
-    use crate::redis::shape::{double_text, json, json_key};
+    use crate::redis::shape::{ShapeError, double_text, json, json_key};
     use crate::value::{BatchBuilder, CellRef, ColumnInfo, MAX_BATCH_BYTES, ResultBatch};
 
     /// The most of a string one value page shows.
@@ -820,17 +821,34 @@ mod server {
     /// A stream entry's flat field list as a compact JSON object; a non-UTF-8 string is
     /// {"$bytes": base64}.
     pub(crate) fn fields_json(fields: &[Value]) -> String {
-        let object = fields
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|[k, v]| Ok((json_key(k)?, json(v)?)))
-            .collect::<Result<serde_json::Map<_, _>, crate::redis::shape::ShapeError>>();
-        match object {
-            Ok(object) => serde_json::Value::Object(object).to_string(),
+        match shaped_fields(fields.as_chunks::<2>().0) {
+            Ok(shaped) => shaped.to_string(),
             // Stream fields are always strings; anything else shows as what went wrong.
             Err(e) => e.to_string(),
         }
+    }
+
+    /// An object would keep only the last value of a repeated name, so any repeat turns the
+    /// whole entry into {"$pairs": [[k, v], ...]} in server order.
+    fn shaped_fields(pairs: &[[Value; 2]]) -> Result<serde_json::Value, ShapeError> {
+        let mut seen = HashSet::new();
+        let mut repeated = false;
+        for [k, _] in pairs {
+            repeated |= !seen.insert(json_key(k)?);
+        }
+        Ok(if repeated {
+            let pairs = pairs
+                .iter()
+                .map(|[k, v]| Ok(serde_json::json!([json(k)?, json(v)?])))
+                .collect::<Result<Vec<_>, ShapeError>>()?;
+            serde_json::json!({ "$pairs": pairs })
+        } else {
+            pairs
+                .iter()
+                .map(|[k, v]| Ok((json_key(k)?, json(v)?)))
+                .collect::<Result<serde_json::Map<_, _>, ShapeError>>()?
+                .into()
+        })
     }
 }
 
