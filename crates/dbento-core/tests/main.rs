@@ -121,6 +121,7 @@ mod redis_values;
 mod rename_secret;
 mod rowedit_browse;
 mod rowedit_my_apply;
+mod rowedit_my_session;
 mod rowedit_my_target;
 mod rowedit_pg_apply;
 mod rowedit_pg_edges;

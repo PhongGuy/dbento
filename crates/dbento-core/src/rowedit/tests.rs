@@ -985,3 +985,50 @@ fn not_editable_reasons_read_as_the_tail_of_a_sentence() {
         "only MySQL targets carry a reason"
     );
 }
+
+#[test]
+fn the_apply_session_is_always_strict() {
+    use super::apply::strict_sql_mode;
+    assert_eq!(strict_sql_mode(""), "STRICT_TRANS_TABLES");
+    assert_eq!(
+        strict_sql_mode("ANSI_QUOTES"),
+        "ANSI_QUOTES,STRICT_TRANS_TABLES"
+    );
+    assert_eq!(
+        strict_sql_mode("STRICT_ALL_TABLES"),
+        "STRICT_ALL_TABLES,STRICT_TRANS_TABLES"
+    );
+    assert_eq!(
+        strict_sql_mode("XSTRICT_TRANS_TABLES"),
+        "XSTRICT_TRANS_TABLES,STRICT_TRANS_TABLES",
+        "whole modes only"
+    );
+    let mysql = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_DATE";
+    assert_eq!(strict_sql_mode(mysql), mysql, "already strict");
+}
+
+#[test]
+fn a_warning_fails_a_change_before_its_rows_count_and_a_note_does_not() {
+    use super::apply::change_outcome;
+    let w = |level: &str, message: &str| (level.to_owned(), message.to_owned());
+    assert_eq!(change_outcome(1, &[]), ChangeOutcome::Applied(1));
+    assert_eq!(change_outcome(0, &[]), ChangeOutcome::Conflict);
+    assert_eq!(change_outcome(2, &[]), ChangeOutcome::Ambiguous(2));
+    let note = [w("Note", "Data truncated for column 'dc' at row 1")];
+    assert_eq!(
+        change_outcome(1, &note),
+        ChangeOutcome::Applied(1),
+        "a note is not a failure"
+    );
+    let mixed = [w("Warning", "a"), w("Note", "n"), w("Error", "b")];
+    assert_eq!(
+        change_outcome(1, &mixed),
+        ChangeOutcome::Failed("a; b".to_owned()),
+        "no re-read follows"
+    );
+    assert_eq!(
+        change_outcome(0, &[w("Warning", "a")]),
+        ChangeOutcome::Failed("a".to_owned()),
+        "a warning outranks a miss"
+    );
+}

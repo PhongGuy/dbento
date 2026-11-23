@@ -690,10 +690,6 @@ impl MysqlDriver {
 
     /// The `(Level, Message)` rows of `SHOW WARNINGS` after the last bound statement;
     /// empty without asking the server when its OK packet counted none.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "apply's warning check is the caller")
-    )]
     pub(crate) async fn bound_warnings(&mut self) -> Result<Vec<(String, String)>, ExecuteError> {
         if self.last_warnings == 0 {
             return Ok(Vec::new());

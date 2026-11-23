@@ -1410,10 +1410,6 @@ impl Session {
 
     /// The `(Level, Message)` rows of `SHOW WARNINGS` after the last bound statement on MySQL;
     /// empty when that statement left none, and always empty on other engines.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "apply's warning check is the caller")
-    )]
     pub(crate) async fn bound_warnings(&mut self) -> Result<Vec<(String, String)>, ExecuteError> {
         match &mut self.inner {
             SessionInner::Mysql(d) => d.bound_warnings().await,
