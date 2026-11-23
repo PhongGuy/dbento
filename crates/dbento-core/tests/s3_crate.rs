@@ -5,7 +5,7 @@ use aws_sdk_s3::config::{
 };
 use aws_smithy_http_client::tls::{self, rustls_provider::CryptoMode};
 
-// The knobs plan 2's client sets: third-party stores get path style and checksums only when
+// The knobs the S3 client sets: third-party stores get path style and checksums only when
 // required; AWS keeps its default checksums. Directory-bucket session auth is always off.
 fn client(endpoint: Option<&str>) -> aws_sdk_s3::Client {
     let http = aws_smithy_http_client::Builder::new()

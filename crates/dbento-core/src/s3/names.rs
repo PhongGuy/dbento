@@ -46,12 +46,12 @@ pub fn suggested_file_name(key: &str) -> String {
         .chars()
         .filter(|&c| !hidden(c) && !matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
         .collect();
-    // Trim again after the cut so a cut never leaves a trailing dot or space.
     let trimmed = trim_ends(&kept);
     let mut end = trimmed.len().min(MAX_NAME_BYTES);
     while !trimmed.is_char_boundary(end) {
         end -= 1;
     }
+    // Trim again after the cut so a cut never leaves a trailing dot or space.
     let name = trim_ends(&trimmed[..end]);
     if name.is_empty() {
         "download".to_owned()
