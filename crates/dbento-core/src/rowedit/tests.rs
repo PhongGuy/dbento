@@ -987,6 +987,37 @@ fn not_editable_reasons_read_as_the_tail_of_a_sentence() {
 }
 
 #[test]
+fn a_target_with_a_not_editable_reason_refuses_every_change() {
+    let mut refused = my();
+    refused.not_editable = Some(NotEditable::NonTransactional {
+        engine: "MyISAM".to_owned(),
+    });
+    let insert = Change::Insert {
+        values: pairs(&[("id", t("1"))]),
+    };
+    let update = Change::Update {
+        key: key(&[("id", t("1"))]),
+        set: pairs(&[("id", t("2"))]),
+    };
+    let expected = BatchError::NotEditable {
+        reason: NotEditable::NonTransactional {
+            engine: "MyISAM".to_owned(),
+        },
+    };
+    for change in [insert, update] {
+        assert_eq!(
+            EditBatch::new(refused.clone(), vec![change]).unwrap_err(),
+            expected,
+            "an all-default insert must not reach a table that cannot roll back"
+        );
+    }
+    assert_eq!(
+        expected.to_string(),
+        "the table cannot be edited: MyISAM tables cannot roll back a change"
+    );
+}
+
+#[test]
 fn the_apply_session_is_always_strict() {
     use super::apply::strict_sql_mode;
     assert_eq!(strict_sql_mode(""), "STRICT_TRANS_TABLES");

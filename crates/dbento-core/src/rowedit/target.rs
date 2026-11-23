@@ -96,7 +96,7 @@ pub struct EditTarget {
     only: bool,
     returning: bool,
     pins: Vec<(String, String)>,
-    not_editable: Option<NotEditable>,
+    pub(super) not_editable: Option<NotEditable>,
 }
 
 impl EditTarget {

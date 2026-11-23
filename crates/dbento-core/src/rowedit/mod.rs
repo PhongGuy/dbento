@@ -78,14 +78,20 @@ pub struct EditBatch {
     dialect: Dialect,
 }
 
-/// Why a batch of changes was refused; each variant but `Empty` and `UnsupportedEngine`
-/// names the bad change's index.
+/// Why a batch of changes was refused; each variant but `Empty`, `NotEditable` and
+/// `UnsupportedEngine` names the bad change's index.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BatchError {
     /// The batch has no changes.
     #[error("the batch has no changes")]
     Empty,
+    /// The target was described as not editable, so no change of any kind may reach it.
+    #[error("the table cannot be edited: {reason}")]
+    NotEditable {
+        /// Why the target cannot be edited.
+        reason: NotEditable,
+    },
     /// The target's engine cannot edit rows.
     #[error("editing rows is not available on {} yet", engine.name())]
     UnsupportedEngine {
@@ -137,14 +143,21 @@ pub enum BatchError {
 }
 
 impl EditBatch {
-    /// Refuses an engine that cannot edit rows, then an empty batch, validates `changes`
-    /// against `target` and drops values for non-editable columns, so generating and
-    /// applying the batch cannot fail on its shape.
+    /// Refuses an engine that cannot edit rows, then a target with a not-editable reason,
+    /// then an empty batch, validates `changes` against `target` and drops values for
+    /// non-editable columns, so generating and applying the batch cannot fail on its shape.
     pub fn new(target: EditTarget, changes: Vec<Change>) -> Result<EditBatch, BatchError> {
         let engine = target.engine();
         let Some(dialect) = Dialect::of(engine).filter(|_| engine.capabilities().edit_rows) else {
             return Err(BatchError::UnsupportedEngine { engine });
         };
+        // Every column of a refused target is read-only, so an Insert would otherwise
+        // shrink to an all-default row that a non-transactional table cannot roll back.
+        if let Some(reason) = target.not_editable() {
+            return Err(BatchError::NotEditable {
+                reason: reason.clone(),
+            });
+        }
         if changes.is_empty() {
             return Err(BatchError::Empty);
         }
