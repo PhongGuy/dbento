@@ -214,6 +214,8 @@ pub enum KeyBrowseError {
 use self::server::fields_json;
 #[cfg(feature = "redis")]
 pub(super) use self::server::server_error;
+#[cfg(feature = "redis")]
+pub(in crate::redis) use self::server::{Layout, Row, bulk, columns, fill_within, xrange_rows};
 
 #[cfg(feature = "redis")]
 mod server {
@@ -224,7 +226,7 @@ mod server {
     use super::{
         KeyBrowseError, KeyEntry, KeyKind, KeyPage, KeyRead, KeyScan, KeyTtl, KeyValuePage,
     };
-    use crate::redis::driver::{Failure, RedisSession};
+    use crate::redis::driver::{BracketError, Failure, RedisSession};
     use crate::redis::shape::{double_text, json, json_key};
     use crate::value::{BatchBuilder, CellRef, ColumnInfo, MAX_BATCH_BYTES, ResultBatch};
 
@@ -248,6 +250,18 @@ mod server {
                 Failure::Cancelled => KeyBrowseError::SessionEnded {
                     reason: "the browse was cancelled; reopen the session".to_owned(),
                 },
+            }
+        }
+    }
+
+    impl From<BracketError> for KeyBrowseError {
+        fn from(e: BracketError) -> Self {
+            match e {
+                BracketError::Refused(refusal) => KeyBrowseError::Unsupported {
+                    reason: refusal.reason().to_owned(),
+                },
+                BracketError::Failed(failure) => failure.into(),
+                BracketError::Reply { code, message } => KeyBrowseError::Database { code, message },
             }
         }
     }
@@ -351,19 +365,7 @@ mod server {
 
     /// A reply, or the server error it carries as `Database`.
     pub(in crate::redis) fn server_error(reply: Value) -> Result<Value, KeyBrowseError> {
-        #[allow(
-            clippy::wildcard_enum_match_arm,
-            reason = "Value has too many variants to list; the rest share one arm"
-        )]
-        match reply {
-            Value::ServerError(e) => {
-                let code = e.code().to_owned();
-                // A bare code has no message, and the code alone then says what failed.
-                let message = e.details().unwrap_or(&code).to_owned();
-                Err(KeyBrowseError::Database { code, message })
-            }
-            other => Ok(other),
-        }
+        BracketError::check(reply).map_err(KeyBrowseError::from)
     }
 
     fn unexpected(what: &str) -> KeyBrowseError {
@@ -433,10 +435,10 @@ mod server {
     }
 
     /// One page row as raw cell bytes; UTF-8 shows as text, anything else as bytes.
-    type Row = Vec<Vec<u8>>;
+    pub(in crate::redis) type Row = Vec<Vec<u8>>;
 
     /// A kind's page columns: name, type name and whether its cells are numbers.
-    type Layout = &'static [(&'static str, &'static str, bool)];
+    pub(in crate::redis) type Layout = &'static [(&'static str, &'static str, bool)];
 
     const STRING: Layout = &[("value", "string", false)];
     const HASH: Layout = &[("field", "string", false), ("value", "string", false)];
@@ -653,7 +655,7 @@ mod server {
         }
     }
 
-    fn columns(layout: Layout) -> Vec<ColumnInfo> {
+    pub(in crate::redis) fn columns(layout: Layout) -> Vec<ColumnInfo> {
         layout
             .iter()
             .map(|(name, ty, _)| ColumnInfo::new(*name, *ty, None))
@@ -673,15 +675,26 @@ mod server {
         }
     }
 
-    /// Pushes rows until `want` are shown or the next would take the batch past
-    /// `MAX_BATCH_BYTES`, and returns the batch and how many rows it holds. The first row
-    /// always goes in, so one huge row still shows.
+    /// `fill_within` the batch bound.
     fn fill(rows: &[Row], want: usize, layout: Layout) -> (ResultBatch, usize) {
+        fill_within(rows, want, layout, MAX_BATCH_BYTES)
+    }
+
+    /// Pushes rows until `want` are shown or the next would take the batch past `budget` bytes
+    /// (never past `MAX_BATCH_BYTES`), and returns the batch and how many rows it holds. The
+    /// first row always goes in, so one huge row still shows.
+    pub(in crate::redis) fn fill_within(
+        rows: &[Row],
+        want: usize,
+        layout: Layout,
+        budget: usize,
+    ) -> (ResultBatch, usize) {
+        let budget = budget.min(MAX_BATCH_BYTES);
         let mut builder = BatchBuilder::new(layout.len());
         let mut shown = 0;
         for row in rows.iter().take(want) {
             let size: usize = row.iter().map(Vec::len).sum();
-            if shown > 0 && builder.total_bytes() as usize + size > MAX_BATCH_BYTES {
+            if shown > 0 && builder.total_bytes() as usize + size > budget {
                 break;
             }
             let cells: Vec<CellRef<'_>> = row
@@ -710,7 +723,7 @@ mod server {
         value
     }
 
-    fn bulk(reply: Value, what: &str) -> Result<Vec<u8>, KeyBrowseError> {
+    pub(in crate::redis) fn bulk(reply: Value, what: &str) -> Result<Vec<u8>, KeyBrowseError> {
         #[allow(
             clippy::wildcard_enum_match_arm,
             reason = "Value has too many variants to list; the rest share one arm"
@@ -764,7 +777,7 @@ mod server {
     }
 
     /// `XRANGE`: each entry is `[id, [field, value, ...]]`.
-    fn xrange_rows(reply: Value) -> Result<Vec<Row>, KeyBrowseError> {
+    pub(in crate::redis) fn xrange_rows(reply: Value) -> Result<Vec<Row>, KeyBrowseError> {
         array(reply, "XRANGE")?
             .into_iter()
             .map(|entry| {
