@@ -146,6 +146,8 @@ mod source;
 mod sources;
 pub use source::single_source;
 pub use sources::named_source_columns;
+#[cfg(any(feature = "dynamodb", feature = "s3"))]
+mod aws;
 #[cfg(feature = "duckdb")]
 mod duckdb;
 mod dynamo;
