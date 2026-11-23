@@ -132,6 +132,7 @@ mod local_sort;
 mod lone_schema;
 mod look;
 mod menu_rows;
+mod message_ring;
 mod message_runner;
 mod mongo_documents;
 mod narrow;
