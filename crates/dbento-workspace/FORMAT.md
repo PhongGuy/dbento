@@ -112,7 +112,7 @@ in `dbento.toml` win over `~/.ssh/config`. A derived child connection uses its p
 
 Refused with `invalid` when the file is read:
 
-- `ssh` on `mongodb`, `dynamodb`, `sqlite` or `duckdb`;
+- `ssh` on `mongodb`, `dynamodb`, `s3`, `sqlite` or `duckdb`;
 - `ssh` on a Postgres connection whose `host` is a unix socket directory (starts with `/`);
 - an empty or blank `host`, a `port` of 0, or an `auth` word other than the three above;
 - `identity_file` together with `auth = "agent"` or `auth = "password"`;

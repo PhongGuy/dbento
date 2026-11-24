@@ -2095,7 +2095,11 @@ impl ConnectionConfig {
         // After the engine rules, so their messages win; a tunnel needs a TCP server host.
         if let Some(ssh) = raw.ssh {
             match engine {
-                Engine::Mongodb | Engine::Dynamodb | Engine::Sqlite | Engine::Duckdb => {
+                Engine::Mongodb
+                | Engine::Dynamodb
+                | Engine::S3
+                | Engine::Sqlite
+                | Engine::Duckdb => {
                     return Err(invalid(format!("`ssh` is not valid for {}", engine.name())));
                 }
                 Engine::Postgres if config.host.as_deref().is_some_and(|h| h.starts_with('/')) => {
@@ -2107,8 +2111,7 @@ impl ConnectionConfig {
                 | Engine::Mysql
                 | Engine::Mssql
                 | Engine::Surrealdb
-                | Engine::Redis
-                | Engine::S3 => {}
+                | Engine::Redis => {}
             }
             config.ssh = Some(ssh_config(ssh).map_err(invalid)?);
         }

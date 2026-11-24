@@ -86,7 +86,7 @@ fn the_tunnelled_engines_take_an_ssh_table() {
 }
 
 #[test]
-fn mongodb_dynamodb_and_file_engines_refuse_an_ssh_table() {
+fn mongodb_dynamodb_s3_and_file_engines_refuse_an_ssh_table() {
     for (engine, body) in [
         (
             "mongodb",
@@ -95,6 +95,10 @@ fn mongodb_dynamodb_and_file_engines_refuse_an_ssh_table() {
         (
             "dynamodb",
             "[connections.c]\nengine = \"dynamodb\"\nregion = \"eu-west-1\"\n",
+        ),
+        (
+            "s3",
+            "[connections.c]\nengine = \"s3\"\nregion = \"eu-west-1\"\n",
         ),
         (
             "sqlite",
