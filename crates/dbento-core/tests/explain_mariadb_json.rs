@@ -172,5 +172,17 @@ fn every_captured_mariadb_plan_parses_with_nothing_dropped() {
         if name.contains("-plan-") {
             assert!(!plan.analyzed, "{name}: a plain plan has no actuals");
         }
+        // read_sorted_file has rows but no timing, so its r_rows stays detail, not an actual.
+        if name == "mariadb114-analyze-filesort.json" {
+            let read = plan
+                .nodes
+                .iter()
+                .find(|n| n.node_type == "Read sorted file");
+            assert!(
+                read.is_some_and(|n| n.actual.is_none()
+                    && n.detail.contains(&("r_rows".to_owned(), "5".to_owned()))),
+                "{name}: {read:?}"
+            );
+        }
     }
 }

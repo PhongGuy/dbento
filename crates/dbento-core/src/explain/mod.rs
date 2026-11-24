@@ -41,8 +41,9 @@ pub struct ExplainRequest {
     pub analyze_unavailable: bool,
     /// The user's text as given, untrimmed.
     pub statement: String,
-    /// The text sent to the database: JSON EXPLAIN on Postgres and MySQL plans, the tree
-    /// form for MySQL `Analyze`, EXPLAIN QUERY PLAN on SQLite.
+    /// The canonical EXPLAIN text: JSON EXPLAIN on Postgres and MySQL plans, the tree form
+    /// for MySQL `Analyze`, EXPLAIN QUERY PLAN on SQLite. `Session::explain_sql` gives what
+    /// is actually sent, which differs for MariaDB's `ANALYZE FORMAT=JSON`.
     pub sql: String,
     /// The inner statement's classification, set when `Analyze` was asked on Postgres or
     /// MySQL, even when MySQL fell back to `Plan`.

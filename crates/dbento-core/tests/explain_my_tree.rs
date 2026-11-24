@@ -120,5 +120,14 @@ fn every_captured_mysql_analyze_tree_parses_with_a_line_per_node() {
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(plan.nodes.len(), raw.trim_end().lines().count(), "{name}");
         assert!(plan.analyzed, "{name}");
+        // A dependent subquery prints as a later top-level line, so it starts a second root.
+        if name.contains("dependent_sleep") {
+            let n = &plan.nodes[2];
+            assert_eq!(
+                (n.depth, n.parent, n.node_type.as_str()),
+                (0, None, "Select #2 (subquery in projection; dependent)"),
+                "{name}"
+            );
+        }
     }
 }

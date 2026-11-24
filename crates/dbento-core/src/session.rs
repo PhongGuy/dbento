@@ -1330,9 +1330,9 @@ impl Session {
 
     /// Runs `request` and returns its output. On Postgres every block it opens is rolled back,
     /// also on error, cancel or drop; on SQLite the statement is only planned. On MySQL a plan
-    /// never runs the statement, while ANALYZE runs a confirmed read for real, as MariaDB's
-    /// `ANALYZE FORMAT=JSON` on that flavor. A request that fails `explain_sql` is refused
-    /// unsent, as `ExecuteError::Unsupported`.
+    /// never runs the statement, while ANALYZE runs a confirmed read for real, on MariaDB
+    /// through `ANALYZE FORMAT=JSON`. A request that fails `explain_sql` is refused unsent,
+    /// as `ExecuteError::Unsupported`.
     pub async fn explain(
         &mut self,
         request: &ExplainRequest,

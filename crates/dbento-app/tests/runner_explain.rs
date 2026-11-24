@@ -381,3 +381,48 @@ async fn an_edited_mysql_request_is_refused_before_anything_is_sent() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edited_writing_analyze_is_refused_before_it_asks() {
+    let (db, _dir, spec) = pg_spec("").await;
+    let admin = db.admin().await;
+    admin
+        .batch_execute("CREATE TABLE t(a int); INSERT INTO t VALUES (1)")
+        .await
+        .unwrap();
+    let r = spawn_on(&here(), spec);
+    let ev = r.events();
+    // A writing ANALYZE on a writable session would ask, so the refusal must come first; the
+    // edited text is the bare UPDATE, which would change the row if it were ever sent.
+    let mut request =
+        explain_request(Engine::Postgres, "UPDATE t SET a = 2", ExplainMode::Analyze).unwrap();
+    request.sql = "UPDATE t SET a = 2".to_owned();
+    r.send(Command::Explain { run_id: 1, request });
+    let (seen, _) = until_event(&ev, |e| {
+        matches!(e, Event::RunDone { .. } | Event::NeedsConfirm { .. })
+    })
+    .await;
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::Planned {
+                run_id: 1,
+                result: Err(ExecuteError::Unsupported { .. }),
+                ..
+            }
+        )),
+        "{seen:?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|e| matches!(e, Event::Executing { .. } | Event::NeedsConfirm { .. })),
+        "{seen:?}"
+    );
+    let a: i32 = admin
+        .query_one("SELECT a FROM t", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(a, 1, "the edited request changed the row");
+}
