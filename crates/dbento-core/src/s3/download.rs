@@ -103,6 +103,9 @@ pub(crate) async fn download(
         if written != expected {
             return Err(DownloadError::Truncated);
         }
+        // tokio's write_all returns before the bytes reach the file, and sync_all does not
+        // report a pending write error, so flush first to surface it.
+        out.flush().await.map_err(place)?;
         out.sync_all().await.map_err(place)?;
         drop(out);
         // No-clobber unless forced; a failed hard link is a destination error with no fallback,
