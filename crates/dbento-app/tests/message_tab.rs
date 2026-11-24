@@ -113,7 +113,12 @@ fn a_short_stream_is_one_page_and_an_empty_stream_shows_its_headers(cx: &mut Tes
         assert_eq!(names, ["id", "time", "fields"]);
         assert_eq!(m.results()[0].store.rows(), 0);
         let v = m.message_view().unwrap();
-        assert!(v.newest().is_none() && !v.has_older() && v.error().is_none());
+        // Follow starts from 0-0, the stream's start as this page saw it.
+        assert_eq!(
+            v.newest(),
+            Some(&dbento_core::message::MessageCursor::redis_id("0-0"))
+        );
+        assert!(!v.has_older() && v.error().is_none());
     });
 }
 
@@ -276,6 +281,23 @@ fn follow_lands_new_entries_on_top_even_from_an_empty_stream(cx: &mut TestAppCon
     rt.block_on(seed(&db, "XADD mf:e 2-1 k v"));
     wait_real(cx, "the first entry", |cx| {
         id_at(cx, &e, 0).as_deref() == Some("2-1")
+    });
+}
+
+#[gpui_kit::test]
+fn an_entry_added_to_an_empty_stream_before_follow_starts_lands_on_top(cx: &mut TestAppContext) {
+    let rt = runtime(cx);
+    let _inside = rt.enter();
+    let db = rt.block_on(redis_db());
+    rt.block_on(seed(&db, "XADD mq:e 1-1 a 1\nXDEL mq:e 1-1"));
+    let (_dir, spec) = spec(&db);
+    let m = cx.new(|_| TabModel::new(spec));
+    open_stream(cx, &m, db.index(), "mq:e");
+    // The entry lands after the empty newest page and before the first poll is sent.
+    rt.block_on(seed(&db, "XADD mq:e 2-1 k v"));
+    m.update(cx, |m, cx| m.set_follow(Follow::On, cx));
+    wait_real(cx, "the first entry", |cx| {
+        id_at(cx, &m, 0).as_deref() == Some("2-1")
     });
 }
 

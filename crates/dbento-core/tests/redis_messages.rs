@@ -182,6 +182,37 @@ async fn an_empty_stream_follows_from_zero() {
 }
 
 #[tokio::test]
+async fn the_newest_page_of_an_empty_stream_follows_from_zero() {
+    let fx = rd("").await;
+    fx.db
+        .cmd(&["XGROUP", "CREATE", "fresh", "g", "$", "MKSTREAM"])
+        .await;
+    let mut s = fx.session(Reader, forced()).await;
+    let p = s
+        .read_messages(&browse(
+            &fx,
+            "fresh",
+            Position::End,
+            Direction::Backward,
+            10,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (p.batch.len(), id(p.next.as_ref()), p.prev),
+        (0, Some("0-0"), None)
+    );
+    // What lands before the follow starts is still read.
+    fx.db.cmd(&["XADD", "fresh", "1-1", "a", "b"]).await;
+    let r = MessageRead::follow(
+        src(&fx, "fresh"),
+        Position::After(p.next.unwrap()),
+        Duration::from_millis(50),
+    );
+    assert_eq!(ids(&s.read_messages(&r).await.unwrap()), ["1-1"]);
+}
+
+#[tokio::test]
 async fn a_missing_or_deleted_key_ends_the_follow() {
     let fx = rd("").await;
     let mut s = fx.session(Reader, forced()).await;
