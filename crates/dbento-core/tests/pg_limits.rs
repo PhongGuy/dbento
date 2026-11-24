@@ -559,8 +559,8 @@ async fn a_truncated_select_of_a_writing_function_whose_commit_fails_reports_the
     .await;
 }
 
-/// Twenty 1 kB-row megabytes, far more than the socket buffers hold, so an unread rest
-/// leaves the backend `active` and a drained one leaves it `idle`.
+/// Twenty 1 kB-row megabytes. A drained rest leaves the backend `idle`; an unread one need
+/// not leave it `active`, since a client slow to read lets the whole result into the buffers.
 const BIG: &str =
     "CREATE TABLE big AS SELECT g AS a, repeat('x', 1000) AS b FROM generate_series(1, 20000) g";
 
@@ -571,7 +571,8 @@ async fn our_state(fx: &PgFixture) -> Option<String> {
 }
 
 /// Whether a truncated last `sql` in a read-write session was drained at the end of its
-/// script, then closes the session.
+/// script, then closes the session. Only a result too large for any buffer, such as a
+/// cross join of `BIG` with itself, stays `active` while unread.
 async fn drained_at_end(fx: &PgFixture, sql: &str) -> bool {
     let mut s = fx.session(SessionOptions::default()).await;
     let waited = truncate_last(&mut s, sql).await;
@@ -600,7 +601,7 @@ async fn a_truncated_read_of_a_table_in_a_read_write_session_is_aborted() {
     bounded(async {
         let fx = pg_fixture("").await;
         fx.db.admin().await.batch_execute(BIG).await.unwrap();
-        assert!(!drained_at_end(&fx, "SELECT * FROM big").await);
+        assert!(!drained_at_end(&fx, "SELECT * FROM big, big AS c").await);
     })
     .await;
 }
@@ -617,7 +618,8 @@ async fn a_truncated_read_through_a_stable_function_is_aborted() {
             ))
             .await
             .unwrap();
-        assert!(!drained_at_end(&fx, "SELECT st(b), b FROM big WHERE a BETWEEN 1 AND 20000").await);
+        let sql = "SELECT st(big.b), big.b FROM big, big AS c WHERE big.a BETWEEN 1 AND 20000";
+        assert!(!drained_at_end(&fx, sql).await);
     })
     .await;
 }
