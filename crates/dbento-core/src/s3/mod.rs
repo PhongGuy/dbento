@@ -8,11 +8,15 @@ pub(crate) mod browse;
 pub(crate) mod client;
 pub(crate) mod command;
 #[cfg(feature = "s3")]
+pub(crate) mod driver;
+#[cfg(feature = "s3")]
 pub(crate) mod errors;
 pub(crate) mod lex;
 pub(crate) mod names;
 pub(crate) mod ops;
 #[cfg(all(test, feature = "s3"))]
 pub(crate) mod replay;
+#[cfg(feature = "s3")]
+pub(crate) mod stream;
 
 pub use browse::{ObjectKey, ObjectMeta};

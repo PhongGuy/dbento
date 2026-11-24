@@ -1,9 +1,11 @@
 //! S3 on the scripted HTTP client: replay settings, a client, and canned XML bodies.
 
 use super::client::{ClientSettings, S3Client};
+use super::driver::S3Session;
 use crate::aws::AwsCredentials;
 use crate::aws::replay::RawReplay;
 use crate::secrets::Secret;
+use crate::session::ConnectError;
 
 /// Settings for a replay client; one attempt, so a scripted failure is never retried.
 pub(crate) fn settings(
@@ -31,6 +33,21 @@ pub(crate) fn client(
     virtual_hosted: bool,
 ) -> S3Client {
     S3Client::new(settings(endpoint, region, virtual_hosted), replay.http())
+}
+
+/// A session on the replay at `http://replay.test` in `eu-west-1`, scoped to `buckets` if given.
+pub(crate) async fn session(
+    replay: &RawReplay,
+    buckets: Option<&[&str]>,
+) -> Result<S3Session, ConnectError> {
+    let buckets = buckets.map(|names| names.iter().map(|&n| n.to_owned()).collect());
+    S3Session::open(
+        settings(Some("http://replay.test"), "eu-west-1", false),
+        buckets,
+        None,
+        replay.http(),
+    )
+    .await
 }
 
 /// A ListObjectsV2 page (https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html).

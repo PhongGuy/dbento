@@ -127,6 +127,7 @@ mod rowedit_sqlite;
 mod rowedit_target;
 mod s3_crate;
 mod s3_engine;
+mod s3_session;
 mod secret_hint;
 mod secrets;
 mod seen_text;
