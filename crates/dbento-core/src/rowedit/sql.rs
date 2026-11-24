@@ -3,6 +3,7 @@
 
 use std::fmt::Write as _;
 
+use super::target::mysql_bytes;
 use super::{Change, EditBatch, EditValue, RowKey};
 use crate::introspect::{quote_ident, quote_literal};
 use crate::workspace::Engine;
@@ -69,7 +70,7 @@ pub(crate) struct BoundStatement {
 /// caller learns the key the database stored; a target whose rules refuse it never does.
 /// MySQL has no RETURNING, so such an Update carries a re-read of the key instead.
 /// An Update with expected values carries a guard that reads them first (a locking read
-/// on Postgres), as does a SQLite Delete; a Postgres Delete returns them instead.
+/// on Postgres and MySQL), as does a SQLite or MySQL Delete; a Postgres Delete returns them.
 pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
     let target = batch.target();
     let identity = target.identity();
@@ -93,27 +94,33 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
                 }
                 Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => None,
             };
-            // A Postgres guard locks the row it reads, so no other writer can change it before
-            // the write; an Update that rewrites the identity takes the key-share-blocking lock.
+            // A Postgres or MySQL guard locks the row it reads, so no other writer can change it
+            // before the write; a Postgres Update that rewrites the identity takes the
+            // key-share-blocking lock.
             let (guard, expected) = match c {
-                Change::Update { key, set, expected }
-                    if batch.dialect() != Dialect::Mysql && !expected.is_empty() =>
-                {
+                Change::Update { key, set, expected } if !expected.is_empty() => {
                     let lock = match batch.dialect() {
                         Dialect::Postgres if set.iter().any(|(col, _)| identity.contains(col)) => {
                             " FOR UPDATE"
                         }
                         Dialect::Postgres => " FOR NO KEY UPDATE",
-                        Dialect::Sqlite | Dialect::Mysql => "",
+                        Dialect::Mysql => " FOR UPDATE",
+                        Dialect::Sqlite => "",
                     };
                     let guard = Gen::new(batch, true).guard(key, expected, lock);
                     let values = expected.iter().map(|(_, v)| v.clone()).collect();
                     (Some(Box::new(guard)), values)
                 }
+                // A MySQL Delete locks the row it reads, as an Update does; SQLite already
+                // holds the database write lock.
                 Change::Delete { key, expected }
-                    if batch.dialect() == Dialect::Sqlite && !expected.is_empty() =>
+                    if batch.dialect() != Dialect::Postgres && !expected.is_empty() =>
                 {
-                    let guard = Gen::new(batch, true).guard(key, expected, "");
+                    let lock = match batch.dialect() {
+                        Dialect::Mysql => " FOR UPDATE",
+                        Dialect::Sqlite | Dialect::Postgres => "",
+                    };
+                    let guard = Gen::new(batch, true).guard(key, expected, lock);
                     let values = expected.iter().map(|(_, v)| v.clone()).collect();
                     (Some(Box::new(guard)), values)
                 }
@@ -340,12 +347,25 @@ impl<'a> Gen<'a> {
     }
 
     /// The form a read selects `column` in to get the value a browse shows: on SQLite the
-    /// column itself, on Postgres its output text. The Postgres NULL test is on the datum, as
-    /// `IS NULL` also holds for a composite whose fields are all NULL, which browses as `(,)`.
+    /// column itself, on Postgres its output text, on MySQL its text unless its type always
+    /// reads as bytes. The Postgres NULL test is on the datum, as `IS NULL` also holds for a
+    /// composite whose fields are all NULL, which browses as `(,)`.
     fn read_form(&self, column: &str) -> String {
         let c = self.ident(column);
         match self.dialect() {
-            Dialect::Sqlite | Dialect::Mysql => c,
+            Dialect::Sqlite => c,
+            Dialect::Mysql => {
+                let bytes = self
+                    .batch
+                    .target()
+                    .column(column)
+                    .is_some_and(|col| mysql_bytes(col.meta()));
+                if bytes {
+                    c
+                } else {
+                    format!("CAST({c} AS CHAR)")
+                }
+            }
             Dialect::Postgres => format!(
                 "CASE WHEN pg_catalog.num_nonnulls({c}) = 0 THEN NULL ELSE pg_catalog.format('%s', {c}) END"
             ),

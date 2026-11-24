@@ -1384,3 +1384,102 @@ fn a_postgres_delete_returns_its_guarded_columns_instead_of_locking_first() {
         "DELETE FROM app.\"My T\" WHERE id = 7;\nDELETE FROM app.\"My T\" WHERE id = 8;"
     );
 }
+
+#[test]
+fn a_mysql_guard_casts_text_columns_keeps_byte_columns_raw_and_locks() {
+    let b = my_batch(
+        my_full(),
+        vec![
+            Change::Update {
+                key: key(&[("id", t("7"))]),
+                set: pairs(&[("title", t("new"))]),
+                expected: pairs(&[
+                    ("title", t("old")),
+                    ("pic", EditValue::Bytes(vec![1])),
+                    ("g", EditValue::Null),
+                ]),
+            },
+            Change::Delete {
+                key: key(&[("id", t("7"))]),
+                expected: pairs(&[("id", t("7"))]),
+            },
+        ],
+    );
+    let s = bound(&b);
+    let g0 = s[0].guard.as_deref().unwrap();
+    assert_eq!(
+        g0.sql,
+        "SELECT CAST(`title` AS CHAR), `pic`, CAST(`g` AS CHAR) FROM `shop`.`t``x` WHERE `id` = ? FOR UPDATE"
+    );
+    assert_eq!(g0.params, vec![p("7")]);
+    assert_eq!(
+        s[1].guard.as_deref().unwrap().sql,
+        "SELECT CAST(`id` AS CHAR) FROM `shop`.`t``x` WHERE `id` = ? FOR UPDATE"
+    );
+    assert_eq!(s[1].sql, "DELETE FROM `shop`.`t``x` WHERE `id` = ?");
+}
+
+#[test]
+fn mysql_byte_typed_columns_are_read_raw_and_the_rest_as_char() {
+    let raw = [
+        "bit(8)",
+        "geometry",
+        "point",
+        "linestring",
+        "polygon",
+        "multipoint",
+        "multilinestring",
+        "multipolygon",
+        "geometrycollection",
+        "geomcollection",
+        "vector(3)",
+        "binary(4)",
+        "varbinary(4)",
+        "tinyblob",
+        "blob",
+        "mediumblob",
+        "longblob",
+    ];
+    let cast = [
+        "varchar(3)",
+        "char(3)",
+        "text",
+        "json",
+        "float",
+        "double",
+        "decimal(5,2)",
+        "timestamp(6)",
+        "year",
+        "enum('a','b')",
+        "set('a')",
+        "int unsigned",
+    ];
+    let cases = raw
+        .iter()
+        .map(|ty| (ty, true))
+        .chain(cast.iter().map(|ty| (ty, false)));
+    for (ty, want_raw) in cases {
+        let target = EditTarget::new(
+            RelationRef::new("s", "t"),
+            Engine::Mysql,
+            vec![col("id", "int", true, None), col("c", ty, true, None)],
+            strings(&["id"]),
+            vec![],
+            false,
+        );
+        let b = my_batch(
+            target,
+            vec![Change::Delete {
+                key: key(&[("id", t("1"))]),
+                expected: pairs(&[("c", EditValue::Null)]),
+            }],
+        );
+        let sql = bound(&b)[0].guard.as_deref().unwrap().sql.clone();
+        let want = if want_raw {
+            "SELECT `c` FROM"
+        } else {
+            "SELECT CAST(`c` AS CHAR) FROM"
+        };
+        assert!(sql.starts_with(want), "{ty}: {sql}");
+    }
+}

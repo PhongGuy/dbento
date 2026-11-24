@@ -562,6 +562,36 @@ pub(crate) fn mysql_inexact(meta: &ColumnMeta) -> bool {
     base.eq_ignore_ascii_case("float") || base.eq_ignore_ascii_case("bit")
 }
 
+/// Whether a MySQL column's values always come back as bytes, the rule the driver's decoder
+/// applies: BIT, VECTOR, the geometry types and the binary string types.
+pub(crate) fn mysql_bytes(meta: &ColumnMeta) -> bool {
+    const BYTES: [&str; 17] = [
+        "bit",
+        "vector",
+        "binary",
+        "varbinary",
+        "tinyblob",
+        "blob",
+        "mediumblob",
+        "longblob",
+        "geometry",
+        "point",
+        "linestring",
+        "polygon",
+        "multipoint",
+        "multilinestring",
+        "multipolygon",
+        "geometrycollection",
+        "geomcollection",
+    ];
+    let base = meta
+        .type_name()
+        .split(['(', ' '])
+        .next()
+        .unwrap_or_default();
+    BYTES.iter().any(|b| base.eq_ignore_ascii_case(b))
+}
+
 /// The identity columns: PRIMARY wherever it sits, else the first given unique index whose
 /// parts are all named (None is a functional part), NOT NULL, and neither FLOAT nor BIT;
 /// empty when none qualifies. A FLOAT or BIT key never matches as a literal.

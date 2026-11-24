@@ -122,6 +122,7 @@ mod redis_state;
 mod redis_values;
 mod rename_secret;
 mod rowedit_browse;
+mod rowedit_guard_my;
 mod rowedit_guard_pg;
 mod rowedit_guard_sqlite;
 mod rowedit_my_apply;
