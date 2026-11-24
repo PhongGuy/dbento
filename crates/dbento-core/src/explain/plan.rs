@@ -1,5 +1,5 @@
-//! Plans as a pre-order node list, parsed from Postgres or MySQL JSON output or from the
-//! rows of SQLite's `EXPLAIN QUERY PLAN`.
+//! Plans as a pre-order node list, parsed from Postgres, MySQL or MariaDB JSON output, MySQL's
+//! `EXPLAIN ANALYZE` tree text, or the rows of SQLite's `EXPLAIN QUERY PLAN`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -54,6 +54,12 @@ impl ExplainOutput {
     /// Keeps MySQL's `EXPLAIN ANALYZE` tree text and parses it.
     pub fn from_mysql_tree(raw: String) -> ExplainOutput {
         let plan = super::my_tree::parse(&raw);
+        ExplainOutput { raw, plan }
+    }
+
+    /// Keeps MariaDB's `EXPLAIN FORMAT=JSON` or `ANALYZE FORMAT=JSON` text and parses it.
+    pub fn from_mariadb_json(raw: String) -> ExplainOutput {
+        let plan = parse_json(&raw, JsonFlavor::Mariadb);
         ExplainOutput { raw, plan }
     }
 }
