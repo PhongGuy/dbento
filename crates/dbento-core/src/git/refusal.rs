@@ -189,6 +189,10 @@ pub fn rule_text(rule: &str) -> &str {
         "relax_read_only" => "relaxes read-only on a connection",
         "relax_color" => "relaxes a connection's color tag",
         "format_unsupported" => "a workspace format this server does not accept",
+        "default_branch_missing" => "the workspace's default branch is missing, so push it first",
+        "branch_delete" => "deletes the default branch",
+        "force_push" => "rewrites the default branch's history",
+        "ref_namespace" => "a ref outside branches and tags",
         other => other,
     }
 }
