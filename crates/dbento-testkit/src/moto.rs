@@ -1,6 +1,6 @@
-//! One Moto server per handle: the server `DBENTO_DYNAMO_URL` (or, for S3, `DBENTO_S3_URL`)
-//! names, or a capped container of the gate image that is killed when the handle drops. The
-//! DynamoDB and S3 harnesses both stand on it, since one Moto image serves both APIs.
+//! A Moto server: the one `DBENTO_DYNAMO_URL` (or, for S3, `DBENTO_S3_URL`) names, or a capped
+//! container of the gate image killed when its last owner drops. Each DynamoDB handle owns one;
+//! the S3 handles of a process share one. One Moto image serves both APIs.
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
