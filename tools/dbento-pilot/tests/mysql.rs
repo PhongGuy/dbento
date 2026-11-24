@@ -1,4 +1,5 @@
-//! MySQL in the app under gpui-pilot: a read-only refusal, the tree, open data, an edit committed and a foreign key followed.
+//! MySQL in the app under gpui-pilot: a read-only refusal, the tree, open data, an edit committed,
+//! a foreign key followed, and EXPLAIN analyzing a read while only planning a write.
 mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -258,6 +259,62 @@ async fn mysql_edits_a_row_commits_and_follows_a_foreign_key() {
         name(t, "footer-rows") == Some("1 row") && name(t, "cell-0-1") == Some("p2")
     })
     .await;
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+    pilot.assert_bus_untouched();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mysql_analyzes_a_read_and_only_plans_a_write() {
+    let db = dbento_testkit::mysql_db().await;
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::write(
+        ws.path().join("dbento.toml"),
+        format!("dbento = 1\n{}", db.connection_toml("my", "")),
+    )
+    .unwrap();
+    my_exec(
+        ws.path(),
+        db.password(),
+        "CREATE TABLE t (id INT PRIMARY KEY, a INT); INSERT INTO t VALUES (1, 10), (2, 20)",
+    )
+    .await;
+    let pilot = launch(ws.path(), db.password()).await;
+    common::open_connection(&pilot, "connection-my").await;
+    pilot
+        .ok("tree", json!({ "wait_for": { "id": ["editor"] } }))
+        .await;
+    pilot
+        .ok(
+            "type",
+            json!({ "target": { "id": ["editor"] },
+                    "text": "UPDATE t SET a = a + 1 WHERE id = 1;\nSELECT * FROM t WHERE a > 5" }),
+        )
+        .await;
+
+    // The caret sits in the SELECT: ANALYZE runs it unasked and shows its timings, no note.
+    pilot.ok("key", json!({ "keys": "ctrl-shift-e" })).await;
+    let tree = until(&pilot, "the analyzed read", |t| {
+        name(t, "plan-node-0").is_some_and(|n| n.starts_with("Filter"))
+    })
+    .await;
+    assert!(find_node(&tree, "confirm-run").is_none(), "{tree}");
+    assert!(find_node(&tree, "plan-note").is_none(), "{tree}");
+
+    // ANALYZE of the UPDATE asks nothing, shows its plan with the plan-only note, and runs nothing.
+    pilot.ok("key", json!({ "keys": "ctrl-home" })).await;
+    pilot.ok("key", json!({ "keys": "ctrl-shift-e" })).await;
+    let tree = until(&pilot, "the write's plan", |t| {
+        (0..8).any(|i| name(t, &format!("plan-node-{i}")).is_some_and(|n| n.starts_with("Update")))
+    })
+    .await;
+    assert!(find_node(&tree, "confirm-run").is_none(), "{tree}");
+    assert!(find_node(&tree, "plan-note").is_some(), "{tree}");
+    assert_eq!(
+        db.scalar("SELECT CAST(a AS CHAR) FROM t WHERE id = 1")
+            .await
+            .as_deref(),
+        Some("10")
+    );
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();
 }
