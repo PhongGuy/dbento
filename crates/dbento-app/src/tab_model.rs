@@ -2348,12 +2348,34 @@ impl TabModel {
                 let Some(key) = self.row_key(row) else {
                     return false;
                 };
-                self.track(|edits| edits.delete(row, key, Vec::new()));
+                let expected = self.loaded_target_values(row);
+                self.track(|edits| edits.delete(row, key, expected));
                 true
             }
         };
         cx.notify();
         deleted
+    }
+
+    /// The loaded value of every result column the edit target knows, in result order, so a
+    /// staged delete can be refused when the row changed since it loaded. Every browse cell
+    /// is Text, Null or Bytes today, so none is left out as unconvertible.
+    fn loaded_target_values(&self, row: u64) -> Vec<(String, EditValue)> {
+        let (Some(browse), Some(result)) = (self.browse.as_ref(), self.results.first()) else {
+            return Vec::new();
+        };
+        let target = browse.target();
+        result
+            .store
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| target.column(info.name()).is_some())
+            .filter_map(|(col, info)| {
+                let value = staged::edit_value(result.store.cell(row, col)?)?;
+                Some((info.name().to_owned(), value))
+            })
+            .collect()
     }
 
     /// Drops one row's change (an inserted row is removed); false when it has none or a
