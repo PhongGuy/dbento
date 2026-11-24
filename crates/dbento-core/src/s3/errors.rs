@@ -2,6 +2,7 @@
 
 use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 
+use super::browse::ObjectBrowseError;
 use super::client::Sdk;
 use crate::session::ExecuteError;
 
@@ -145,6 +146,38 @@ pub(crate) fn execute_error(failure: S3Failure) -> ExecuteError {
         *slot = hint;
     }
     error
+}
+
+/// The object browser's error for `failure` on `key`, given as `s3://bucket/key`.
+pub(crate) fn browse_error(failure: S3Failure, key: &str) -> ObjectBrowseError {
+    let database =
+        |code: String, message: String, hint: Option<String>| ObjectBrowseError::Database {
+            code,
+            message,
+            hint,
+        };
+    match failure {
+        S3Failure::NotFound { .. } => ObjectBrowseError::NotFound {
+            key: key.to_owned(),
+        },
+        S3Failure::AccessDenied { message } => ObjectBrowseError::AccessDenied { message },
+        S3Failure::WrongRegion { region } => ObjectBrowseError::WrongRegion {
+            hint: wrong_region_hint(region.as_deref()),
+        },
+        S3Failure::Auth { code, message } => database(
+            code,
+            message,
+            Some("check `access_key_id` and its secret".to_owned()),
+        ),
+        S3Failure::InvalidRange => database(
+            "InvalidRange".to_owned(),
+            "the requested range is not satisfiable".to_owned(),
+            None,
+        ),
+        S3Failure::Service { code, message } => database(code, message, None),
+        S3Failure::Timeout => ObjectBrowseError::Timeout,
+        S3Failure::Transport { message } => database("transport".to_owned(), message, None),
+    }
 }
 
 #[cfg(test)]

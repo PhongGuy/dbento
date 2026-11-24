@@ -35,6 +35,9 @@ use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
 use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
 #[cfg(feature = "s3")]
 use crate::s3::driver::{NO_TABLES as S3_NO_TABLES, S3Session};
+use crate::s3::{
+    ObjectBrowseError, ObjectChunk, ObjectKey, ObjectList, ObjectMeta, ObjectPage, ObjectRead,
+};
 use crate::sqlite::{SqliteCancel, SqliteDriver};
 #[cfg(feature = "surrealdb")]
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
@@ -1327,6 +1330,43 @@ impl Session {
         }
     }
 
+    /// One page of a bucket listing. S3 only; every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads it
+    pub async fn list_objects(
+        &mut self,
+        req: &ObjectList,
+    ) -> Result<ObjectPage, ObjectBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.list_objects(req).await,
+            _ => Err(no_objects()),
+        }
+    }
+
+    /// What a HEAD says about one object. S3 only; every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads it
+    pub async fn stat_object(&mut self, key: &ObjectKey) -> Result<ObjectMeta, ObjectBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.stat_object(key).await,
+            _ => Err(no_objects()),
+        }
+    }
+
+    /// An object's first bytes, at most [`crate::MAX_READ_BYTES`]. S3 only; every other engine
+    /// is `Unsupported`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads it
+    pub async fn read_object(
+        &mut self,
+        req: &ObjectRead,
+    ) -> Result<ObjectChunk, ObjectBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.read_object(req).await,
+            _ => Err(no_objects()),
+        }
+    }
+
     /// The server's `COMMAND DOCS` for completion, sorted by name. Redis only; refused inside
     /// `MULTI`, and every other engine is `Unsupported`.
     pub async fn command_docs(&mut self) -> Result<Vec<CommandDoc>, KeyBrowseError> {
@@ -1872,6 +1912,12 @@ impl CancelHandle {
 fn bound_unsupported() -> ExecuteError {
     ExecuteError::Unsupported {
         reason: "bound statements are not built for this engine yet".to_owned(),
+    }
+}
+
+fn no_objects() -> ObjectBrowseError {
+    ObjectBrowseError::Unsupported {
+        reason: "only an S3 session has objects to browse".to_owned(),
     }
 }
 

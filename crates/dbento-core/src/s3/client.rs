@@ -1,6 +1,5 @@
-//! The one door to the S3 API: an SDK client with one method per read call in [`S3Op`].
-//!
-//! [`S3Op`]: super::ops::S3Op
+//! The one door to the S3 API: an SDK client with one method per read call in the `S3Op`
+//! allowlist.
 
 use std::borrow::Cow;
 use std::time::Duration;
@@ -16,7 +15,7 @@ use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::operation::list_buckets::ListBucketsError;
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
-use aws_sdk_s3::primitives::{ByteStream, DateTime, DateTimeFormat, SdkBody};
+use aws_sdk_s3::primitives::{DateTime, DateTimeFormat, SdkBody};
 use aws_sdk_s3::types::EncodingType;
 use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use aws_smithy_runtime_api::client::result::ConnectorError;
@@ -107,13 +106,6 @@ pub(crate) struct RangeRead {
     pub(crate) bytes: Vec<u8>,
     pub(crate) total_size: u64,
     pub(crate) content_type: Option<String>,
-}
-
-/// A whole object's body, unread; `length` is the GET Content-Length.
-pub(crate) struct Body {
-    pub(crate) meta: ObjectMeta,
-    pub(crate) length: Option<u64>,
-    pub(crate) stream: ByteStream,
 }
 
 #[derive(Clone)]
@@ -301,35 +293,6 @@ impl S3Client {
             bytes,
             total_size,
             content_type,
-        })
-    }
-
-    /// `S3Op::GetObject` for the whole object, its body left for the caller to stream.
-    pub(crate) async fn get_object(
-        &self,
-        bucket: &str,
-        key: &str,
-    ) -> Result<Body, Sdk<GetObjectError>> {
-        let out = self
-            .inner
-            .get_object()
-            .bucket(bucket)
-            .key(key)
-            .send()
-            .await?;
-        let length = out.content_length().and_then(|n| u64::try_from(n).ok());
-        let meta = ObjectMeta {
-            key: key.to_owned(),
-            size: size(out.content_length()),
-            last_modified: out.last_modified().and_then(rfc3339),
-            etag: out.e_tag().map(unquote),
-            storage_class: out.storage_class().map(|c| c.as_str().to_owned()),
-            content_type: out.content_type().map(str::to_owned),
-        };
-        Ok(Body {
-            meta,
-            length,
-            stream: out.body,
         })
     }
 }

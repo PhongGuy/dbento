@@ -29,9 +29,9 @@ pub(crate) const PING_BOUND: Duration = Duration::from_secs(30);
 pub(crate) const NO_TABLES: &str = "tables (S3 browses with ls)";
 
 pub(crate) struct S3Session {
-    client: Arc<S3Client>,
+    pub(super) client: Arc<S3Client>,
     buckets: Option<Vec<String>>,
-    shared: Arc<Shared>,
+    pub(super) shared: Arc<Shared>,
 }
 
 /// The parsed statements of one script; `current` is the one prepared and not yet run.
