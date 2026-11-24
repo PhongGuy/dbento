@@ -207,6 +207,11 @@ impl MessageView {
         self.polling = false;
     }
 
+    /// Ends a browse that landed unseen; its cursors are not taken.
+    pub fn read_dropped(&mut self) {
+        self.reading = false;
+    }
+
     /// Ends the read in flight with `message`; Follow is left as it was.
     pub fn fail(&mut self, message: String) {
         self.reading = false;

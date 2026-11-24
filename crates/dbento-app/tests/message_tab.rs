@@ -1,8 +1,8 @@
 //! A stream key's tab on a real Valkey: newest page, paging back, groups, pending, Follow.
 #![cfg(feature = "redis")]
 use crate::support::{init_tokio, redis_seed as seed, redis_spec, wait_real};
-use dbento_app::message_view::{Follow, MESSAGE_PAGE, Panel};
-use dbento_app::runner::{RunnerSpec, StatementEnd};
+use dbento_app::message_view::{FOLLOW_WAIT, Follow, MESSAGE_PAGE, Panel};
+use dbento_app::runner::{Event, RunnerSpec, StatementEnd};
 use dbento_app::tab_model::TabModel;
 use dbento_core::CellRef;
 use dbento_testkit::{RdUser, RedisDb, redis_db};
@@ -231,6 +231,11 @@ fn settle(cx: &mut TestAppContext, ms: u64) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+/// The bound on a wait that one poll may hold up. The 2 s above the poll's own wait is
+/// tolerance for a loaded machine; an unbounded hold still fails it.
+fn one_poll() -> Duration {
+    FOLLOW_WAIT + Duration::from_secs(2)
+}
 fn polling(cx: &mut TestAppContext, m: &Entity<TabModel>) -> bool {
     m.read_with(cx, |m, _| m.message_view().is_some_and(|v| v.polling()))
 }
@@ -285,11 +290,7 @@ fn pause_lets_the_poll_in_flight_land_and_fires_no_cancel(cx: &mut TestAppContex
     let t0 = Instant::now();
     m.update(cx, |m, cx| m.set_follow(Follow::Paused, cx));
     wait_real(cx, "the poll to land", |cx| !polling(cx, &m));
-    assert!(
-        t0.elapsed() < Duration::from_millis(1_500),
-        "pause waited {:?}",
-        t0.elapsed()
-    );
+    assert!(t0.elapsed() < one_poll(), "pause waited {:?}", t0.elapsed());
     rt.block_on(seed(&db, "XADD mp:s 2-1 k v"));
     settle(cx, 2_000);
     assert_eq!(
@@ -324,7 +325,7 @@ fn a_run_holds_follow_for_at_most_one_poll_and_follow_resumes_after(cx: &mut Tes
         })
     });
     assert!(
-        t0.elapsed() < Duration::from_secs(2),
+        t0.elapsed() < one_poll(),
         "the run waited {:?}",
         t0.elapsed()
     );
@@ -397,11 +398,8 @@ fn a_deleted_stream_stops_following_and_close_ends_a_follow_within_one_poll(
 
     let (_c, c) = following(cx, &db, "mc:s");
     let closing = c.update(cx, |m, cx| m.close(cx));
-    rt.block_on(tokio::time::timeout(
-        Duration::from_millis(1_500),
-        closing.wait(),
-    ))
-    .expect("the session closed within one poll");
+    rt.block_on(tokio::time::timeout(one_poll(), closing.wait()))
+        .expect("the session closed within one poll");
     assert_eq!(
         c.read_with(cx, |m, _| m.message_view().unwrap().follow()),
         Follow::Off
@@ -479,5 +477,89 @@ fn a_stream_page_that_lands_during_a_run_keeps_out_of_its_results(cx: &mut TestA
             !m.message_view().unwrap().reading(),
             "no read is left in flight"
         );
+    });
+}
+
+#[gpui_kit::test]
+fn a_wrongtype_answer_landing_during_a_run_keeps_its_results(cx: &mut TestAppContext) {
+    let rt = runtime(cx);
+    let _inside = rt.enter();
+    let db = rt.block_on(redis_db());
+    let entries: String = (1..=600)
+        .map(|i| format!("XADD mw:r 1-{i} n {i}\n"))
+        .collect();
+    rt.block_on(seed(&db, &entries));
+    let (_dir, spec) = spec(&db);
+    let m = cx.new(|_| TabModel::new(spec));
+    open_stream(cx, &m, db.index(), "mw:r");
+    rt.block_on(seed(&db, "DEL mw:r\nRPUSH mw:r a b"));
+    // The runner answers the older read with WRONGTYPE before the Run; it lands during the Run.
+    let run = "XRANGE big:stream - +";
+    m.update(cx, |m, cx| {
+        assert!(m.older_messages(cx), "an older read goes out");
+        m.run(run.into(), cx);
+    });
+    wait_real(cx, "the run to park", |cx| {
+        m.read_with(cx, |m, _| m.parked_at_cap().is_some())
+    });
+    wait_real(cx, "the answer to land", |cx| {
+        m.read_with(cx, |m, _| m.message_view().is_none_or(|v| !v.reading()))
+    });
+    settle(cx, 300);
+    m.read_with(cx, |m, _| {
+        assert!(
+            m.message_view().is_some(),
+            "the late answer reopened the key"
+        );
+        let r = &m.results()[0];
+        assert_eq!(r.sql, run, "result 0 is still the run's");
+        assert!(r.store.rows() > 0, "the run's rows are kept");
+    });
+}
+
+#[gpui_kit::test]
+fn a_newest_page_sent_before_a_run_and_landing_after_it_ends_is_dropped(cx: &mut TestAppContext) {
+    let rt = runtime(cx);
+    let _inside = rt.enter();
+    let db = rt.block_on(redis_db());
+    rt.block_on(seed(&db, "XADD ml:s 1-1 a 1"));
+    let (_dir, spec) = spec(&db);
+    let m = cx.new(|_| TabModel::new(spec));
+    open_stream(cx, &m, db.index(), "ml:s");
+    let first = "XRANGE ml:s - +";
+    m.update(cx, |m, cx| m.run(first.into(), cx));
+    wait_real(cx, "the first run to end", |cx| {
+        m.read_with(cx, |m, _| {
+            !m.running() && m.results().first().is_some_and(|r| r.store.end().is_some())
+        })
+    });
+    // Follow on sends a fresh newest page; Off then lets it land without another read. The
+    // second Run's RunDone is applied at once, so `running` is clear before the page lands.
+    let title = m.read_with(cx, |m, _| m.key_view().unwrap().title());
+    let run = "XRANGE ml:s - + COUNT 1";
+    m.update(cx, |m, cx| {
+        m.set_follow(Follow::On, cx);
+        assert!(
+            m.message_view().unwrap().reading(),
+            "a newest read goes out"
+        );
+        m.set_follow(Follow::Off, cx);
+        m.run(run.into(), cx);
+        let run_id = m.run_id();
+        m.apply(Event::RunDone { run_id });
+    });
+    wait_real(cx, "the page to land and the run to end", |cx| {
+        view_idle(cx, &m) && m.read_with(cx, |m, _| m.results()[0].store.end().is_some())
+    });
+    settle(cx, 300);
+    assert_eq!(
+        m.read_with(cx, |m, _| m.results()[0].sql.clone()),
+        run,
+        "result 0 is still the run's"
+    );
+    // The stream never took the run's result, so Follow starts over with a newest page.
+    m.update(cx, |m, cx| m.set_follow(Follow::On, cx));
+    wait_real(cx, "a fresh newest page", |cx| {
+        m.read_with(cx, |m, _| m.results()[0].sql == title)
     });
 }

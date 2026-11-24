@@ -1533,25 +1533,30 @@ impl TabModel {
         if let Some(view) = &mut self.message_view {
             view.begin_poll();
         }
+        let sent = self.run_id;
         self.message_task = Some(cx.spawn(async move |this, cx| {
             let answer = answer.recv().await.ok();
             let _ = this.update(cx, |m, cx| {
                 m.message_task = None;
-                m.poll_landed(answer, cx);
+                m.poll_landed(answer, sent, cx);
                 m.flush_follow(cx);
                 cx.notify();
             });
         }));
     }
 
-    // A poll's rows go on top of result 0 and the ring trims the bottom. A poll that met a Run
-    // is dropped unseen, so `newest` stays and the next poll reads the same entries.
-    fn poll_landed(&mut self, answer: Option<MessageAnswer>, cx: &mut Context<Self>) {
-        let held = self.running || self.message_run != self.run_id;
+    // A poll's rows go on top of result 0 and the ring trims the bottom. A poll that met a Run,
+    // answer or error, is dropped unseen, so `newest` stays and the next poll reads the same
+    // entries.
+    fn poll_landed(&mut self, answer: Option<MessageAnswer>, sent: u64, cx: &mut Context<Self>) {
+        let held = self.running || sent != self.run_id || self.message_run != self.run_id;
         let alive = self.runner.is_some();
         let Some(view) = &mut self.message_view else {
             return;
         };
+        if held {
+            return view.poll_dropped();
+        }
         let page = match answer {
             Some(Ok(MessageReply::Page(page))) => page,
             Some(Ok(MessageReply::Groups(_))) => return view.stop(Some(UNEXPECTED_REPLY.into())),
@@ -1573,9 +1578,6 @@ impl TabModel {
             None if alive => return view.poll_dropped(),
             None => return view.stop(None),
         };
-        if held {
-            return view.poll_dropped();
-        }
         let Some(result) = self.results.first_mut() else {
             return view.poll_dropped();
         };
@@ -1732,11 +1734,12 @@ impl TabModel {
         if let Some(view) = &mut self.message_view {
             view.begin_read();
         }
+        let sent = self.run_id;
         self.message_task = Some(cx.spawn(async move |this, cx| {
             let answer = answer.recv().await.ok();
             let _ = this.update(cx, |m, cx| {
                 m.message_task = None;
-                m.browse_landed(answer, want, first, cx);
+                m.browse_landed(answer, want, first, sent, cx);
                 m.flush_follow(cx);
                 cx.notify();
             });
@@ -1752,11 +1755,19 @@ impl TabModel {
         answer: Option<MessageAnswer>,
         want: u32,
         first: bool,
+        sent: u64,
         cx: &mut Context<Self>,
     ) {
+        // An answer sent before a Run, or landing while one holds the session, belongs to no
+        // shown result: neither its rows nor its error may touch the Run's.
+        let held =
+            self.running || sent != self.run_id || (!first && self.message_run != self.run_id);
         let Some(view) = &mut self.message_view else {
             return;
         };
+        if held {
+            return view.read_dropped();
+        }
         let page = match answer {
             Some(Ok(MessageReply::Page(page))) => page,
             Some(Ok(MessageReply::Groups(_))) => return view.fail(UNEXPECTED_REPLY.into()),
@@ -1769,11 +1780,6 @@ impl TabModel {
         };
         let last = page.batch.len() < want as usize && page.truncated_by.is_none();
         view.browsed(page.next, page.prev, first, last);
-        // A page answered before a Run but landing after it belongs to no shown result: it
-        // must not replace the Run's rows or join them. Follow re-reads the newest page.
-        if self.running || (!first && self.message_run != self.run_id) {
-            return;
-        }
         if first {
             let sql = self
                 .key_view
