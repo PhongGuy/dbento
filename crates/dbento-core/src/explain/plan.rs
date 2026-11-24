@@ -50,6 +50,12 @@ impl ExplainOutput {
         let plan = parse_json(&raw, JsonFlavor::Mysql);
         ExplainOutput { raw, plan }
     }
+
+    /// Keeps MySQL's `EXPLAIN ANALYZE` tree text and parses it.
+    pub fn from_mysql_tree(raw: String) -> ExplainOutput {
+        let plan = super::my_tree::parse(&raw);
+        ExplainOutput { raw, plan }
+    }
 }
 
 /// Postgres output that is not a plan.
