@@ -189,7 +189,7 @@ pub fn read_only_tooltip(engine: Engine) -> &'static str {
         Engine::Mysql => READ_ONLY_MYSQL_TOOLTIP,
         Engine::Duckdb => READ_ONLY_DUCKDB_TOOLTIP,
         Engine::Dynamodb => READ_ONLY_DYNAMODB_TOOLTIP,
-        Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis => {
+        Engine::Mssql | Engine::Mongodb | Engine::Surrealdb | Engine::Redis | Engine::S3 => {
             "Read-only connection."
         }
     }
@@ -223,6 +223,11 @@ pub fn read_only_badge_text(c: &ConnectionConfig, level: Option<ReadOnlyEnforcem
         Engine::Dynamodb => {
             let residual = read_only_residual(Engine::Dynamodb).unwrap_or_default();
             return format!("{READ_ONLY_DYNAMODB_TOOLTIP} {residual}");
+        }
+        Engine::S3 => {
+            return read_only_residual(Engine::S3)
+                .unwrap_or_default()
+                .to_owned();
         }
         Engine::Surrealdb | Engine::Redis => {}
         Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Mssql | Engine::Duckdb => {
@@ -283,9 +288,8 @@ pub fn explain_warning(err: &ExplainError, engine: Engine, title: &str) -> Strin
                 | Engine::Mongodb
                 | Engine::Surrealdb
                 | Engine::Redis
-                | Engine::Dynamodb => {
-                    "SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or MERGE"
-                }
+                | Engine::Dynamodb
+                | Engine::S3 => "SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or MERGE",
             };
             format!("Only {statements} can be explained on {title}, and not after a block comment.")
         }
@@ -410,9 +414,12 @@ pub fn connection_chip_text(c: &ConnectionConfig) -> String {
             c.namespace().unwrap_or_default(),
             c.database().unwrap_or_default()
         ),
-        Engine::Sqlite | Engine::Duckdb | Engine::Mongodb | Engine::Redis | Engine::Dynamodb => {
-            c.display_target()
-        }
+        Engine::Sqlite
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Redis
+        | Engine::Dynamodb
+        | Engine::S3 => c.display_target(),
     };
     format!("{} \u{b7} {} \u{b7} {target}", c.name(), c.engine_label())
 }
@@ -430,14 +437,14 @@ pub fn formats(engine: Engine) -> bool {
 }
 
 /// The highlighter language for `engine`'s query editor: "sql" for an SQL engine and PartiQL,
-/// "javascript" for the MongoDB shell, "bash" for Redis command lines (close enough to colour
+/// "javascript" for the MongoDB shell, "bash" for Redis and S3 command lines (close enough to colour
 /// words and quotes), "text" (plain, no highlighting) for SurrealQL.
 pub fn editor_language(engine: Engine) -> &'static str {
     match engine.capabilities().language {
         // PartiQL's `<<`, `>>` and `{}` fall outside the SQL grammar; its keywords still colour.
         QueryLanguage::Sql | QueryLanguage::PartiQl => "sql",
         QueryLanguage::MongoShell => "javascript",
-        QueryLanguage::RedisCommands => "bash",
+        QueryLanguage::RedisCommands | QueryLanguage::S3Cmd => "bash",
         QueryLanguage::SurrealQl => "text",
     }
 }

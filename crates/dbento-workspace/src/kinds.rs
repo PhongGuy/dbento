@@ -25,6 +25,8 @@ pub struct Capabilities {
     pub language: QueryLanguage,
     /// Keys can be scanned and their values read in pages.
     pub key_browser: bool,
+    /// Buckets and prefixes can be listed, and objects read and downloaded.
+    pub object_browser: bool,
 }
 
 /// The language a connection's query text is written in.
@@ -40,11 +42,13 @@ pub enum QueryLanguage {
     RedisCommands,
     /// DynamoDB's PartiQL dialect.
     PartiQl,
+    /// S3 commands (`ls`, `stat`, `cat`), one per line or `;`.
+    S3Cmd,
 }
 
 impl QueryLanguage {
     /// The name shells show for the language: "SQL", "MongoDB shell", "SurrealQL", "Redis
-    /// commands" or "PartiQL".
+    /// commands", "PartiQL" or "S3 commands".
     pub fn name(self) -> &'static str {
         match self {
             Self::Sql => "SQL",
@@ -52,11 +56,12 @@ impl QueryLanguage {
             Self::SurrealQl => "SurrealQL",
             Self::RedisCommands => "Redis commands",
             Self::PartiQl => "PartiQL",
+            Self::S3Cmd => "S3 commands",
         }
     }
 
-    /// The saved-query file extension, without the dot: "sql", "js", "surql", "redis" or
-    /// "partiql".
+    /// The saved-query file extension, without the dot: "sql", "js", "surql", "redis",
+    /// "partiql" or "s3".
     pub fn file_extension(self) -> &'static str {
         match self {
             Self::Sql => "sql",
@@ -64,18 +69,19 @@ impl QueryLanguage {
             Self::SurrealQl => "surql",
             Self::RedisCommands => "redis",
             Self::PartiQl => "partiql",
+            Self::S3Cmd => "s3",
         }
     }
 
     /// The marker that comments out the rest of a line, as Dbento's own splitter reads it:
     /// "--" for SQL and PartiQL, "//" for the MongoDB shell and SurrealQL, "#" for Redis
-    /// commands. None would mean the language has no line comment.
+    /// commands and S3 commands. None would mean the language has no line comment.
     pub fn line_comment(self) -> Option<&'static str> {
         // SurrealQL also takes `--` and `#`, but only `//` still comments inside a script body.
         Some(match self {
             Self::Sql | Self::PartiQl => "--",
             Self::MongoShell | Self::SurrealQl => "//",
-            Self::RedisCommands => "#",
+            Self::RedisCommands | Self::S3Cmd => "#",
         })
     }
 }

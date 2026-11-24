@@ -98,6 +98,15 @@ static DYNAMODB: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+// S3 likewise: the driver has no operation that writes, and only IAM stops another tool.
+static S3: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "Dbento sends only listing and read calls on this connection; it has no operation that \
+         writes. {}",
+        read_only_residual(Engine::S3).unwrap_or_default()
+    )
+});
+
 /// The level's name in `list_connections`.
 pub(crate) fn enforcement_name(level: ReadOnlyEnforcement) -> &'static str {
     match level {
@@ -114,6 +123,7 @@ fn session_description(engine: Engine, level: ReadOnlyEnforcement) -> &'static s
         ReadOnlyEnforcement::Database if engine == Engine::Postgres => POSTGRES,
         ReadOnlyEnforcement::Database => ENFORCED,
         ReadOnlyEnforcement::BestEffort if engine == Engine::Dynamodb => DYNAMODB.as_str(),
+        ReadOnlyEnforcement::BestEffort if engine == Engine::S3 => S3.as_str(),
         ReadOnlyEnforcement::BestEffort => BEST_EFFORT,
     }
 }
@@ -301,5 +311,18 @@ mod tests {
             assert!(text.contains(word), "{word}: {text}");
         }
         assert!(!text.contains("read_only_user"), "{text}");
+    }
+
+    #[test]
+    fn an_s3_listing_says_best_effort_with_no_write_operation() {
+        let (name, text) = listed_level(Engine::S3, ReadOnlyEnforcement::BestEffort);
+        assert_eq!(name, "best_effort");
+        for word in ["listing and read calls", "IAM", "s3:GetObject"] {
+            assert!(text.contains(word), "{word}: {text}");
+        }
+        assert!(
+            !text.contains("read_only_user") && !text.contains("EXEC"),
+            "{text}"
+        );
     }
 }

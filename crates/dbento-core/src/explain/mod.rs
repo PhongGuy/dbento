@@ -82,6 +82,7 @@ pub fn explain_request(
         Engine::Surrealdb => return Err(ExplainError::UnsupportedEngine),
         Engine::Redis => return Err(ExplainError::UnsupportedEngine),
         Engine::Dynamodb => return Err(ExplainError::UnsupportedEngine),
+        Engine::S3 => return Err(ExplainError::UnsupportedEngine),
     };
     let prefix = match engine {
         Engine::Sqlite => "EXPLAIN QUERY PLAN",
@@ -95,6 +96,7 @@ pub fn explain_request(
         Engine::Surrealdb => return Err(ExplainError::UnsupportedEngine),
         Engine::Redis => return Err(ExplainError::UnsupportedEngine),
         Engine::Dynamodb => return Err(ExplainError::UnsupportedEngine),
+        Engine::S3 => return Err(ExplainError::UnsupportedEngine),
     };
     let sql = prefixed(engine, prefix, inner)?;
     // ANALYZE runs the statement, so the caller needs to know what it writes. The classifier
@@ -124,6 +126,7 @@ pub fn explain_text(engine: Engine, statement: &str) -> Result<String, ExplainEr
         Engine::Surrealdb => return Err(ExplainError::UnsupportedEngine),
         Engine::Redis => return Err(ExplainError::UnsupportedEngine),
         Engine::Dynamodb => return Err(ExplainError::UnsupportedEngine),
+        Engine::S3 => return Err(ExplainError::UnsupportedEngine),
     };
     prefixed(engine, prefix, inner)
 }

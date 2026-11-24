@@ -137,6 +137,7 @@ mod message_runner;
 mod message_tab;
 mod message_view;
 mod mongo_documents;
+mod mysql_browse;
 mod narrow;
 mod nav_history;
 mod new_tab_pick;

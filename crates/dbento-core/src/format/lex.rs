@@ -38,7 +38,9 @@ pub(crate) fn lex(engine: Engine, sql: &str) -> Option<Vec<Tok>> {
 /// whose languages the formatter does not know, so it leaves their text alone.
 pub(crate) fn lex_to(engine: Engine, sql: &str, upto: usize) -> Option<Vec<Tok>> {
     match engine {
-        Engine::Mongodb | Engine::Surrealdb | Engine::Redis | Engine::Dynamodb => return None,
+        Engine::Mongodb | Engine::Surrealdb | Engine::Redis | Engine::Dynamodb | Engine::S3 => {
+            return None;
+        }
         Engine::Mssql => return mssql_toks(sql, upto),
         Engine::Postgres | Engine::Sqlite | Engine::Mysql | Engine::Duckdb => {}
     }
@@ -261,7 +263,8 @@ fn word_or_prefixed(b: &[u8], i: usize, engine: Engine) -> Option<(Kind, usize)>
         | Engine::Mongodb
         | Engine::Surrealdb
         | Engine::Redis
-        | Engine::Dynamodb => &[&b"x"[..]][..],
+        | Engine::Dynamodb
+        | Engine::S3 => &[&b"x"[..]][..],
     };
     if next == Some(b'\'') && prefix.contains(&&word[..]) {
         if engine == Engine::Mysql {
@@ -289,7 +292,8 @@ fn is_op_byte(c: u8, engine: Engine) -> bool {
         | Engine::Mongodb
         | Engine::Surrealdb
         | Engine::Redis
-        | Engine::Dynamodb => b"'\"(),;._$`[",
+        | Engine::Dynamodb
+        | Engine::S3 => b"'\"(),;._$`[",
     };
     c.is_ascii_punctuation() && !claimed.contains(&c)
 }
@@ -312,7 +316,8 @@ fn op_run(b: &[u8], i: usize, engine: Engine) -> usize {
             | Engine::Mongodb
             | Engine::Surrealdb
             | Engine::Redis
-            | Engine::Dynamodb => c == b'?' || (matches!(c, b':' | b'@') && is_word_char(next)),
+            | Engine::Dynamodb
+            | Engine::S3 => c == b'?' || (matches!(c, b':' | b'@') && is_word_char(next)),
         };
         if !is_op_byte(c, engine) || comment || param {
             break;

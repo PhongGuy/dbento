@@ -158,6 +158,14 @@ impl Live {
         )
         .unwrap()
     }
+    /// Waits until the reader's opening role check has been answered, so a listing changed
+    /// afterwards is first read by the check that follows a failed push.
+    pub fn role_checked(&self) {
+        assert!(
+            eventually(|| self.stub.hits("GET", "/api/v1/workspaces") >= 1),
+            "the opening role check ran"
+        );
+    }
     pub fn origin_show(&self, rel: &str) -> Option<String> {
         let out = std::process::Command::new("git")
             .envs(self.sb.env())
@@ -536,6 +544,7 @@ fn a_push_403_after_a_demotion_lands_read_only_with_the_save_kept() {
     let l = live("write");
     let sync = l.start(l.config());
     l.seen.wait(0, |s| s.state == SyncState::Synced);
+    l.role_checked();
     l.push_to_stub(Reply::Status(403));
     l.stub.reply(
         "GET",

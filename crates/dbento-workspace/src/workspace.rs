@@ -37,11 +37,13 @@ pub enum Engine {
     Redis,
     /// Amazon DynamoDB.
     Dynamodb,
+    /// Amazon S3 or an S3-compatible object store.
+    S3,
 }
 
 impl Engine {
     /// The engine as `dbento.toml` names it: `postgres`, `sqlite`, `mysql`, `mssql`, `duckdb`,
-    /// `mongodb`, `surrealdb`, `redis` or `dynamodb`.
+    /// `mongodb`, `surrealdb`, `redis`, `dynamodb` or `s3`.
     pub fn name(self) -> &'static str {
         match self {
             Engine::Postgres => "postgres",
@@ -53,6 +55,7 @@ impl Engine {
             Engine::Surrealdb => "surrealdb",
             Engine::Redis => "redis",
             Engine::Dynamodb => "dynamodb",
+            Engine::S3 => "s3",
         }
     }
 
@@ -69,6 +72,7 @@ impl Engine {
             table_definition: false,
             language: QueryLanguage::Sql,
             key_browser: false,
+            object_browser: false,
         };
         match self {
             Engine::Postgres => Capabilities {
@@ -88,12 +92,13 @@ impl Engine {
                 table_definition: true,
                 ..none
             },
-            // Only what works today: editing and EXPLAIN come in later plans.
+            // Only what works today: EXPLAIN comes in a later plan.
             Engine::Mysql => Capabilities {
                 schemas: true,
                 server_cancel: true,
                 password: true,
                 tls: true,
+                edit_rows: true,
                 table_definition: true,
                 ..none
             },
@@ -139,6 +144,12 @@ impl Engine {
                 language: QueryLanguage::PartiQl,
                 ..none
             },
+            Engine::S3 => Capabilities {
+                password: true,
+                language: QueryLanguage::S3Cmd,
+                object_browser: true,
+                ..none
+            },
         }
     }
 
@@ -159,7 +170,7 @@ impl Engine {
                 K::View | K::Trigger | K::Routine | K::Constraint(ConstraintKind::Check)
             ),
             Engine::Duckdb | Engine::Surrealdb => kind == K::View,
-            Engine::Mongodb | Engine::Redis | Engine::Dynamodb => false,
+            Engine::Mongodb | Engine::Redis | Engine::Dynamodb | Engine::S3 => false,
         }
     }
 
@@ -177,6 +188,7 @@ impl Engine {
             "surrealdb" | "surreal" => Some(Engine::Surrealdb),
             "redis" | "valkey" => Some(Engine::Redis),
             "dynamodb" | "dynamo" => Some(Engine::Dynamodb),
+            "s3" => Some(Engine::S3),
             _ => None,
         }
     }
@@ -316,7 +328,7 @@ pub enum OpenError {
         message: String,
     },
     /// A secret written where the format keeps none: a password or secret option in a MongoDB
-    /// `uri`, or a user in a DynamoDB `endpoint`. The message never quotes the value.
+    /// `uri`, or a user in a DynamoDB or S3 `endpoint`. The message never quotes the value.
     #[error("connection `{connection}`: {message}")]
     Secret {
         /// The connection name.
@@ -447,7 +459,8 @@ impl SavedQuery {
     }
 
     /// The language its extension implies, in any case: `.js` is the shell, `.surql` is
-    /// SurrealQL, `.redis` is Redis commands, `.partiql` is PartiQL, anything else SQL.
+    /// SurrealQL, `.redis` is Redis commands, `.partiql` is PartiQL, `.s3` is S3 commands,
+    /// anything else SQL.
     pub fn language(&self) -> QueryLanguage {
         let ext = self.path.extension();
         [
@@ -455,6 +468,7 @@ impl SavedQuery {
             QueryLanguage::SurrealQl,
             QueryLanguage::RedisCommands,
             QueryLanguage::PartiQl,
+            QueryLanguage::S3Cmd,
         ]
         .into_iter()
         .find(|l| ext.is_some_and(|e| e.eq_ignore_ascii_case(l.file_extension())))
@@ -567,6 +581,8 @@ pub struct ConnectionConfig {
     endpoint: Option<String>,
     access_key_id: Option<String>,
     consistent_read: bool,
+    virtual_hosted: bool,
+    buckets: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -616,6 +632,8 @@ struct RawConnection {
     endpoint: Option<String>,
     access_key_id: Option<String>,
     consistent_read: Option<bool>,
+    virtual_hosted: Option<bool>,
+    buckets: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -663,6 +681,31 @@ fn databases(raw: RawDatabases, engine: Engine) -> Result<Databases, String> {
         }
     }
     Ok(Databases::Listed(names))
+}
+
+// An s3 `buckets` list: non-empty, each name non-empty without whitespace, comma or `/`, and
+// no name twice. The server judges anything else when the bucket is listed.
+fn bucket_names(names: &[String]) -> Result<(), String> {
+    if names.is_empty() {
+        return Err(
+            "`buckets` must list at least one bucket; leave it out to list every bucket".to_owned(),
+        );
+    }
+    for (i, name) in names.iter().enumerate() {
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|c| c.is_whitespace() || c == ',' || c == '/')
+        {
+            return Err(
+                "`buckets` names must not be empty or hold a space, comma or `/`".to_owned(),
+            );
+        }
+        if names[..i].contains(name) {
+            return Err(format!("`buckets` lists `{name}` twice"));
+        }
+    }
+    Ok(())
 }
 
 // Its own struct because `deny_unknown_fields` is ignored on an untagged struct variant.
@@ -880,8 +923,8 @@ impl Workspace {
         std::fs::create_dir_all(&queries).map_err(|e| io(&queries, e))
     }
 
-    /// Every `.sql`, `.js`, `.surql`, `.redis` and `.partiql` file under `queries/`, sorted by
-    /// path.
+    /// Every `.sql`, `.js`, `.surql`, `.redis`, `.partiql` and `.s3` file under `queries/`,
+    /// sorted by path.
     pub fn saved_queries(&self) -> Result<Vec<SavedQuery>, OpenError> {
         let root = self.dir.join("queries");
         let mut found = Vec::new();
@@ -1249,11 +1292,13 @@ impl Workspace {
         spec.endpoint = raw.endpoint;
         spec.access_key_id = raw.access_key_id;
         spec.consistent_read = raw.consistent_read;
+        spec.virtual_hosted = raw.virtual_hosted;
+        spec.buckets = raw.buckets;
         Some(spec)
     }
 }
 
-/// Recursively gathers `.sql`, `.js`, `.surql`, `.redis` and `.partiql` files below `dir`,
+/// Recursively gathers `.sql`, `.js`, `.surql`, `.redis`, `.partiql` and `.s3` files below `dir`,
 /// skipping any whose real path leaves `root` (the canonical `queries/`) and dangling links.
 fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
@@ -1268,6 +1313,7 @@ fn collect_queries(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::
                 QueryLanguage::SurrealQl,
                 QueryLanguage::RedisCommands,
                 QueryLanguage::PartiQl,
+                QueryLanguage::S3Cmd,
             ]
             .iter()
             .any(|l| e.eq_ignore_ascii_case(l.file_extension()))
@@ -1437,7 +1483,7 @@ impl ConnectionConfig {
 
         let engine = Engine::parse(&raw.engine).ok_or_else(|| {
             invalid(format!(
-                "unknown engine `{}`; use postgres, mysql, mssql, sqlite, duckdb, mongodb, surrealdb, redis or dynamodb",
+                "unknown engine `{}`; use postgres, mysql, mssql, sqlite, duckdb, mongodb, surrealdb, redis, dynamodb or s3",
                 raw.engine
             ))
         })?;
@@ -1495,6 +1541,8 @@ impl ConnectionConfig {
             endpoint: None,
             access_key_id: None,
             consistent_read: false,
+            virtual_hosted: false,
+            buckets: None,
         };
 
         // Checked ahead of the per-engine rules, whose messages would call it a postgres key.
@@ -1523,16 +1571,34 @@ impl ConnectionConfig {
                 }
             }
         }
-        if engine != Engine::Dynamodb {
+        if !matches!(engine, Engine::Dynamodb | Engine::S3) {
             for (key, present) in [
                 ("region", raw.region.is_some()),
                 ("endpoint", raw.endpoint.is_some()),
                 ("access_key_id", raw.access_key_id.is_some()),
-                ("consistent_read", raw.consistent_read.is_some()),
             ] {
                 if present {
                     return Err(invalid(format!(
-                        "`{key}` is a dynamodb key, not valid for {}",
+                        "`{key}` is a dynamodb and s3 key, not valid for {}",
+                        engine.name()
+                    )));
+                }
+            }
+        }
+        if engine != Engine::Dynamodb && raw.consistent_read.is_some() {
+            return Err(invalid(format!(
+                "`consistent_read` is a dynamodb key, not valid for {}",
+                engine.name()
+            )));
+        }
+        if engine != Engine::S3 {
+            for (key, present) in [
+                ("virtual_hosted", raw.virtual_hosted.is_some()),
+                ("buckets", raw.buckets.is_some()),
+            ] {
+                if present {
+                    return Err(invalid(format!(
+                        "`{key}` is an s3 key, not valid for {}",
                         engine.name()
                     )));
                 }
@@ -1556,7 +1622,8 @@ impl ConnectionConfig {
                 | Engine::Mongodb
                 | Engine::Surrealdb
                 | Engine::Redis
-                | Engine::Dynamodb => {
+                | Engine::Dynamodb
+                | Engine::S3 => {
                     return Err(invalid(format!(
                         "`databases` is a postgres and mssql key, not valid for {}",
                         engine.name()
@@ -1649,7 +1716,8 @@ impl ConnectionConfig {
                     | Engine::Mongodb
                     | Engine::Surrealdb
                     | Engine::Redis
-                    | Engine::Dynamodb => 5432,
+                    | Engine::Dynamodb
+                    | Engine::S3 => 5432,
                 }));
                 config.secret_source = secret_source(raw.secret).map_err(invalid)?;
                 // SQL Server verifies on every host: its `off` is not plaintext, so the
@@ -1830,7 +1898,8 @@ impl ConnectionConfig {
             }
             // The SDK finds the server from the region or `endpoint` and signs with an access
             // key, so the server keys of other engines each name the key that replaces them.
-            Engine::Dynamodb => {
+            Engine::Dynamodb | Engine::S3 => {
+                let ename = engine.name();
                 for (key, present, hint) in [
                     ("host", raw.host.is_some(), "; use `endpoint`"),
                     ("port", raw.port.is_some(), "; use `endpoint`"),
@@ -1844,17 +1913,16 @@ impl ConnectionConfig {
                     ("tls_key", raw.tls_key.is_some(), ""),
                 ] {
                     if present {
-                        return Err(invalid(format!("`{key}` is not valid for dynamodb{hint}")));
+                        return Err(invalid(format!("`{key}` is not valid for {ename}{hint}")));
                     }
                 }
                 // Without an access key every credential comes from the AWS_* variables, so a
                 // secret would have nothing to pair with; with one, an unsigned request is useless.
                 config.secret_source = match (&raw.access_key_id, raw.secret) {
                     (Some(_), Some(RawSecret::Word(w))) if w == "none" => {
-                        return Err(invalid(
-                            "secret \"none\" is not valid for dynamodb: an unsigned request always fails"
-                                .to_owned(),
-                        ));
+                        return Err(invalid(format!(
+                            "secret \"none\" is not valid for {ename}: an unsigned request always fails"
+                        )));
                     }
                     (Some(_), secret) => secret_source(secret).map_err(invalid)?,
                     (None, None) => SecretSource::None,
@@ -1882,7 +1950,20 @@ impl ConnectionConfig {
                 config.region = raw.region;
                 config.endpoint = raw.endpoint;
                 config.access_key_id = raw.access_key_id;
+                // Always false on s3: the guard above refuses the key there.
                 config.consistent_read = raw.consistent_read.unwrap_or(false);
+                // The s3-only keys; the guard above keeps them off dynamodb.
+                if raw.virtual_hosted.is_some() && config.endpoint.is_none() {
+                    return Err(invalid(
+                        "`virtual_hosted` needs `endpoint`: AWS itself is always virtual-hosted"
+                            .to_owned(),
+                    ));
+                }
+                config.virtual_hosted = raw.virtual_hosted.unwrap_or(false);
+                if let Some(names) = &raw.buckets {
+                    bucket_names(names).map_err(invalid)?;
+                }
+                config.buckets = raw.buckets;
             }
         }
         Ok(config)
@@ -2002,6 +2083,8 @@ impl ConnectionConfig {
             databases: _,
             parent: _,
             consistent_read: _,
+            virtual_hosted: _,
+            buckets: _,
             engine,
             host,
             port,
@@ -2060,6 +2143,8 @@ impl ConnectionConfig {
             endpoint,
             access_key_id,
             consistent_read,
+            virtual_hosted,
+            buckets,
         } = self;
         [
             (
@@ -2091,6 +2176,8 @@ impl ConnectionConfig {
             ("endpoint", *endpoint != other.endpoint),
             ("access_key_id", *access_key_id != other.access_key_id),
             ("consistent_read", *consistent_read != other.consistent_read),
+            ("virtual_hosted", *virtual_hosted != other.virtual_hosted),
+            ("buckets", *buckets != other.buckets),
         ]
         .into_iter()
         .filter_map(|(key, differs)| differs.then_some(key))
@@ -2109,7 +2196,7 @@ impl ConnectionConfig {
     /// MySQL and SQL Server, the path as written for SQLite and DuckDB, the URI for MongoDB,
     /// `host:port/namespace/database` after any `user@` for SurrealDB, and
     /// `host:port/<db index>` after any `user@` for Redis, and `<region> at <endpoint>` for
-    /// DynamoDB, with `(region from environment)` for a missing region.
+    /// DynamoDB and S3, with `(region from environment)` for a missing region.
     pub fn display_target(&self) -> String {
         match self.engine {
             Engine::Sqlite | Engine::Duckdb => self.path.clone().unwrap_or_default(),
@@ -2160,7 +2247,7 @@ impl ConnectionConfig {
                 self.port.unwrap_or(6379),
                 self.database.as_deref().unwrap_or("0"),
             ),
-            Engine::Dynamodb => {
+            Engine::Dynamodb | Engine::S3 => {
                 let region = self
                     .region
                     .as_deref()
@@ -2272,8 +2359,9 @@ impl ConnectionConfig {
 
     /// How a read-only session on this connection is enforced, known without connecting.
     pub fn read_only_enforcement(&self) -> ReadOnlyEnforcement {
-        // DynamoDB has no read-only session; only IAM, which Dbento cannot see, enforces it.
-        if self.engine == Engine::Dynamodb
+        // DynamoDB and S3 have no read-only session; only IAM, which Dbento cannot see,
+        // enforces it.
+        if matches!(self.engine, Engine::Dynamodb | Engine::S3)
             || (self.engine == Engine::Mssql && self.read_only_user.is_none())
         {
             ReadOnlyEnforcement::BestEffort
@@ -2292,17 +2380,17 @@ impl ConnectionConfig {
         self.uri.as_deref()
     }
 
-    /// The DynamoDB region; `None` when it comes from the environment.
+    /// The DynamoDB or S3 region; `None` when it comes from the environment.
     pub fn region(&self) -> Option<&str> {
         self.region.as_deref()
     }
 
-    /// The DynamoDB endpoint as written; `None` for the region's AWS endpoint.
+    /// The DynamoDB or S3 endpoint as written; `None` for the region's AWS endpoint.
     pub fn endpoint(&self) -> Option<&str> {
         self.endpoint.as_deref()
     }
 
-    /// The DynamoDB access key id; `None` when credentials come from the environment.
+    /// The DynamoDB or S3 access key id; `None` when credentials come from the environment.
     pub fn access_key_id(&self) -> Option<&str> {
         self.access_key_id.as_deref()
     }
@@ -2310,6 +2398,16 @@ impl ConnectionConfig {
     /// Whether DynamoDB reads are strongly consistent; `false` when absent.
     pub fn consistent_read(&self) -> bool {
         self.consistent_read
+    }
+
+    /// Whether S3 puts the bucket in the host name; `false` when absent, and only with `endpoint`.
+    pub fn virtual_hosted(&self) -> bool {
+        self.virtual_hosted
+    }
+
+    /// The S3 buckets to list instead of calling ListBuckets; `None` when absent.
+    pub fn buckets(&self) -> Option<&[String]> {
+        self.buckets.as_deref()
     }
 }
 
@@ -2340,6 +2438,13 @@ struct SessionKey<'a> {
     endpoint: Option<&'a str>,
     access_key_id: Option<&'a str>,
     consistent_read: bool,
+    // Skipped when false so every binding written before the key existed stays byte-identical.
+    #[serde(skip_serializing_if = "is_false")]
+    virtual_hosted: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 // Where the secret comes from, by kind and variable name only; never the secret.
@@ -2378,7 +2483,7 @@ impl ConnectionConfig {
     fn session_key(&self) -> SessionKey<'_> {
         // Excluded: the name is the caller's key; colour, folder and the derived colour are
         // labels; mariadb is MySQL's driver and target; path resolves into file_path; parent
-        // and databases describe listing, not where a statement runs.
+        // and databases and buckets describe listing, not where a statement runs.
         let ConnectionConfig {
             name: _,
             color: _,
@@ -2388,6 +2493,7 @@ impl ConnectionConfig {
             path: _,
             parent: _,
             databases: _,
+            buckets: _,
             engine,
             read_only,
             statement_timeout,
@@ -2410,6 +2516,7 @@ impl ConnectionConfig {
             endpoint,
             access_key_id,
             consistent_read,
+            virtual_hosted,
         } = self;
         SessionKey {
             b: 1,
@@ -2443,6 +2550,7 @@ impl ConnectionConfig {
             endpoint: endpoint.as_deref(),
             access_key_id: access_key_id.as_deref(),
             consistent_read: *consistent_read,
+            virtual_hosted: *virtual_hosted,
         }
     }
 }

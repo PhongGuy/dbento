@@ -940,7 +940,7 @@ impl ConnectionForm {
                         spec.consistent_read = self.consistent_read.then_some(true);
                     }
                 }
-                FieldKind::Text | FieldKind::Path | FieldKind::Uri | _ => {
+                FieldKind::Text | FieldKind::Path | FieldKind::Uri | FieldKind::Names | _ => {
                     let Some((field, _)) = field_of(f.key) else {
                         continue;
                     };
@@ -1083,6 +1083,7 @@ impl ConnectionForm {
                 | FieldKind::Uri
                 | FieldKind::Flag
                 | FieldKind::Databases
+                | FieldKind::Names
                 | _ => None,
             })
         };
@@ -1288,7 +1289,8 @@ impl ConnectionForm {
             | Engine::Mongodb
             | Engine::Surrealdb
             | Engine::Redis
-            | Engine::Dynamodb => f.help,
+            | Engine::Dynamodb
+            | Engine::S3 => f.help,
         }
     }
 
@@ -1604,7 +1606,8 @@ impl ConnectionForm {
                         | Engine::Mongodb
                         | Engine::Surrealdb
                         | Engine::Redis
-                        | Engine::Dynamodb => "Choose SQLite file",
+                        | Engine::Dynamodb
+                        | Engine::S3 => "Choose SQLite file",
                     };
                     rows.push(self.file_row(f.label, id, field, prompt, cx));
                 }
@@ -2134,6 +2137,7 @@ pub fn engine_hint(engine: Engine) -> &'static str {
         Engine::Mongodb => ":27017",
         Engine::Redis => ":6379",
         Engine::Dynamodb => "region",
+        Engine::S3 => "endpoint",
     }
 }
 
@@ -2201,12 +2205,15 @@ fn fields_owned(f: &FormField) -> Vec<Field> {
         ],
         // A flag is a checkbox and Databases a choice, not inputs, so they own none.
         FieldKind::Flag | FieldKind::Databases => Vec::new(),
-        FieldKind::Text | FieldKind::Port { .. } | FieldKind::Path | FieldKind::Uri | _ => {
-            field_of(f.key)
-                .map(|(field, _)| field)
-                .into_iter()
-                .collect()
-        }
+        FieldKind::Text
+        | FieldKind::Port { .. }
+        | FieldKind::Path
+        | FieldKind::Uri
+        | FieldKind::Names
+        | _ => field_of(f.key)
+            .map(|(field, _)| field)
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -2255,10 +2262,10 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
 }
 
 // Whether the engine takes a client certificate and key: SQL Server and SurrealDB refuse both,
-// and DynamoDB has no TLS key at all.
+// and DynamoDB and S3 have no TLS key at all.
 fn client_cert(engine: Engine) -> bool {
     match engine {
-        Engine::Mssql | Engine::Surrealdb | Engine::Dynamodb => false,
+        Engine::Mssql | Engine::Surrealdb | Engine::Dynamodb | Engine::S3 => false,
         Engine::Postgres
         | Engine::Sqlite
         | Engine::Mysql

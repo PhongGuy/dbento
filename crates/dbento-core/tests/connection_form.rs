@@ -1,7 +1,7 @@
 //! The connection form descriptor agrees with the dbento.toml parser for every engine.
 use dbento_core::{Engine, FieldKind, FormField, Workspace, connection_form};
 
-const ENGINES: [Engine; 9] = [
+const ENGINES: [Engine; 10] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -11,10 +11,11 @@ const ENGINES: [Engine; 9] = [
     Engine::Surrealdb,
     Engine::Redis,
     Engine::Dynamodb,
+    Engine::S3,
 ];
 /// Engine-specific keys the parser knows; the TLS kind's file keys and `settings` are not
 /// form fields of their own.
-const SERVER_KEYS: [&str; 16] = [
+const SERVER_KEYS: [&str; 18] = [
     "path",
     "host",
     "port",
@@ -31,6 +32,8 @@ const SERVER_KEYS: [&str; 16] = [
     "access_key_id",
     "consistent_read",
     "databases",
+    "virtual_hosted",
+    "buckets",
 ];
 
 fn fields(engine: Engine) -> Vec<FormField> {
@@ -44,7 +47,8 @@ fn fields(engine: Engine) -> Vec<FormField> {
 fn line(key: &str, kind: Option<FieldKind>) -> String {
     let value = match (key, kind) {
         (_, Some(FieldKind::Port { default })) => default.to_string(),
-        (_, Some(FieldKind::Flag)) | ("consistent_read", _) => "true".to_owned(),
+        (_, Some(FieldKind::Flag)) | ("consistent_read" | "virtual_hosted", _) => "true".to_owned(),
+        (_, Some(FieldKind::Names)) | ("buckets", _) => "[\"logs\"]".to_owned(),
         ("port", _) => "1".to_owned(),
         // An env secret is valid with a user or an access key, where "none" may not be.
         ("secret", _) => "{ env = \"DBENTO_FORM_SECRET\" }".to_owned(),
@@ -139,6 +143,7 @@ fn a_port_left_out_is_the_descriptor_default() {
             | FieldKind::Uri
             | FieldKind::Flag
             | FieldKind::Databases
+            | FieldKind::Names
             | _ => None,
         });
         assert_eq!(default, Some(want), "{engine:?}");
@@ -369,4 +374,40 @@ fn the_dynamodb_descriptor_pins_its_fields_sections_and_help() {
     assert!(help("region").is_some_and(|h| h.contains("AWS_REGION")));
     assert!(help("endpoint").is_some_and(|h| h.contains("https")));
     assert!(help("access_key_id").is_some_and(|h| h.contains("AWS_ACCESS_KEY_ID")));
+}
+
+#[test]
+fn the_s3_descriptor_pins_its_fields_sections_and_help() {
+    let s3 = fields(Engine::S3);
+    let keys: Vec<(&str, &str, bool, FieldKind)> = s3
+        .iter()
+        .map(|f| (f.key, f.label, f.required, f.kind))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("region", "Region", false, FieldKind::Text),
+            ("endpoint", "Endpoint", false, FieldKind::Text),
+            (
+                "virtual_hosted",
+                "Virtual-hosted addressing",
+                false,
+                FieldKind::Flag
+            ),
+            ("access_key_id", "Access key ID", false, FieldKind::Text),
+            ("secret", "Secret access key", false, FieldKind::Secret),
+            ("buckets", "Buckets", false, FieldKind::Names),
+        ]
+    );
+    let form = connection_form(Engine::S3);
+    let titles: Vec<&str> = form.sections.iter().map(|s| s.title).collect();
+    assert_eq!(titles, ["Connection", "Authentication", "Options"]);
+    let help = |key: &str| s3.iter().find(|f| f.key == key).and_then(|f| f.help);
+    assert!(help("region").is_some_and(|h| h.contains("AWS_REGION") && h.contains("auto")));
+    assert!(help("endpoint").is_some_and(|h| h.contains("https")));
+    assert!(help("virtual_hosted").is_some_and(|h| h.contains("endpoint")));
+    assert!(help("access_key_id").is_some_and(|h| h.contains("AWS_ACCESS_KEY_ID")));
+    assert!(help("buckets").is_some_and(|h| h.contains("ListBuckets") || h.contains("list")));
+    let buckets = s3.iter().find(|f| f.key == "buckets").unwrap();
+    assert_eq!(buckets.placeholder, "e.g. logs, media");
 }

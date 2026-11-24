@@ -6,6 +6,8 @@
 //! to settle under `DRAIN_CAP`. A `Close` cut and the cap stop the statement with `KILL QUERY`
 //! from a side connection; every connection the driver lets go of is severed within the cap.
 
+#[cfg(test)]
+mod bound_tests;
 pub(crate) mod catalog;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,8 +19,8 @@ use futures_util::future::{BoxFuture, Either};
 use mysql_async::consts::{ColumnFlags, ColumnType};
 use mysql_async::prelude::Queryable;
 use mysql_async::{
-    ClientIdentity, Column, Conn, DriverError, IoError, Opts, OptsBuilder, QueryResult, Row,
-    SslOpts, TextProtocol, Value,
+    ClientIdentity, Column, Conn, DriverError, IoError, Opts, OptsBuilder, Params, QueryResult,
+    Row, SslOpts, TextProtocol, Value,
 };
 use pkcs8::der::pem::{self, LineEnding};
 use rustls::pki_types::pem::PemObject as _;
@@ -28,6 +30,7 @@ use crate::Secret;
 use crate::classify::{mysql_changes_settings, mysql_classification, mysql_counts_rows};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::postgres::{TLS_WAYS_OUT, client_auth, tls_error};
+use crate::rowedit::{EditValue, Param};
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError, ExtendError,
     Flavor, Limits, OnTruncate, Outcome, Prepared, ServerInfo, StreamItem, TruncatedBy, refused,
@@ -60,6 +63,8 @@ pub(crate) struct MysqlDriver {
     fold_names: bool,
     /// `DATABASE()` at connect: the configured database, or None without one.
     opened_on: Option<String>,
+    /// The warning count the last bound statement's OK packet reported.
+    last_warnings: u16,
 }
 
 /// One script: the trimmed statement texts not yet prepared and the one prepared last.
@@ -509,8 +514,36 @@ struct Slot {
 /// Never locked across an await.
 type Shared = Arc<Mutex<Slot>>;
 
-/// A catalog query that owns the connection while it runs.
-type CatalogFut = BoxFuture<'static, (Guarded, mysql_async::Result<Vec<Row>>)>;
+/// A catalog query or bound statement that owns the connection while it runs.
+type CatalogFut = BoxFuture<'static, (Guarded, mysql_async::Result<Answer>)>;
+
+/// What one statement left behind: its first result set, then its OK packet's counts.
+struct Answer {
+    rows: Vec<Row>,
+    affected: u64,
+    warnings: u16,
+}
+
+/// Runs `sql` with `params` as strings over the binary protocol, or over the text protocol
+/// when there are none. Matched rows rely on CLIENT_FOUND_ROWS, set at connect.
+async fn answer(conn: &mut Conn, sql: String, params: Vec<Value>) -> mysql_async::Result<Answer> {
+    let rows = if params.is_empty() {
+        conn.query_iter(sql)
+            .await?
+            .collect_and_drop::<Row>()
+            .await?
+    } else {
+        conn.exec_iter(sql, Params::Positional(params))
+            .await?
+            .collect_and_drop::<Row>()
+            .await?
+    };
+    Ok(Answer {
+        rows,
+        affected: conn.affected_rows(),
+        warnings: conn.get_warnings(),
+    })
+}
 
 /// A catalog query in flight as statement `g`. Dropped before it finished, as an MCP cancel
 /// drops it, it parks the query in the slot as a drain and kills it, so the next request's
@@ -567,15 +600,20 @@ impl MysqlDriver {
     /// request does; rows come from the text protocol, so every cell is bytes or NULL. It is a
     /// statement of its own generation, so the timeout and cancel stop it as they stop a query.
     pub(crate) async fn catalog(&mut self, sql: &str) -> Result<Vec<Row>, IntrospectError> {
+        Ok(self.ask(sql.to_owned(), Vec::new()).await?.rows)
+    }
+
+    /// Runs one statement as `catalog` does, binding `params` when there are any.
+    async fn ask(&mut self, sql: String, params: Vec<Value>) -> Result<Answer, ExecuteError> {
         // An earlier statement's drain error stays that statement's; only a lost session counts.
         if let Err(e) = settle(&self.shared, &self.door, &self.cancel).await
             && e.closes_session()
         {
-            return Err(ExecuteError::SessionClosed.into());
+            return Err(ExecuteError::SessionClosed);
         }
         let cancel = &self.cancel;
         let Some(g) = cancel.begin().await else {
-            return Err(ExecuteError::Cancelled.into());
+            return Err(ExecuteError::Cancelled);
         };
         // The watchdog bounds it on both flavors: neither MySQL's max_execution_time nor
         // MariaDB's max_statement_time ends a metadata-lock wait.
@@ -583,34 +621,33 @@ impl MysqlDriver {
             cancel.arm(g, after);
         }
         let mut held = take_idle(&self.shared).inspect_err(|_| cancel.end())?;
-        let sql = sql.to_owned();
         let mut asked = Asked {
             shared: &self.shared,
             cancel,
             g,
             fut: Some(Box::pin(async move {
                 let rows = match held.conn() {
-                    Ok(conn) => conn.query::<Row, _>(sql).await,
+                    Ok(conn) => answer(conn, sql, params).await,
                     Err(e) => Err(e),
                 };
                 (held, rows)
             })),
         };
         let Some(fut) = asked.fut.as_mut() else {
-            return Err(ExecuteError::SessionClosed.into());
+            return Err(ExecuteError::SessionClosed);
         };
         let answered = unless_abandoned(cancel, g, fut).await;
         // Finished or abandoned, the query is no longer the slot's to keep.
         asked.fut = None;
-        let Some((held, rows)) = answered else {
-            return Err(abandoned_error(cancel, g).into());
+        let Some((held, answer)) = answered else {
+            return Err(abandoned_error(cancel, g));
         };
-        match rows {
-            Ok(rows) => {
+        match answer {
+            Ok(answer) => {
                 lock(&self.shared).held = Some(Held::Idle(held));
                 // A stop that raced a query which then finished is still its error.
                 cancel.finish(g)?;
-                Ok(rows)
+                Ok(answer)
             }
             // A server error such as a table dropped meanwhile keeps the session; a fatal one
             // drops the guard, severing the connection and leaving the slot empty.
@@ -618,13 +655,75 @@ impl MysqlDriver {
                 lock(&self.shared).held = Some(Held::Idle(held));
                 let err = execute_error(&e, cancel.stopped(g));
                 cancel.end();
-                Err(err.into())
+                Err(err)
             }
             Err(_) => {
                 cancel.end();
-                Err(ExecuteError::SessionClosed.into())
+                Err(ExecuteError::SessionClosed)
             }
         }
+    }
+
+    /// Runs one bound statement and returns the rows it matched.
+    pub(crate) async fn run_bound(
+        &mut self,
+        sql: &str,
+        params: &[Param],
+    ) -> Result<u64, ExecuteError> {
+        Ok(self.bound(sql, params).await?.affected)
+    }
+
+    /// Runs one bound statement and returns its first result set's cells: NULL as `Null`,
+    /// binary columns as `Bytes`, every other string as `Text`.
+    pub(crate) async fn query_bound(
+        &mut self,
+        sql: &str,
+        params: &[Param],
+    ) -> Result<Vec<Vec<EditValue>>, ExecuteError> {
+        let answer = self.bound(sql, params).await?;
+        answer
+            .rows
+            .iter()
+            .map(|row| (0..row.len()).map(|ix| bound_cell(row, ix)).collect())
+            .collect()
+    }
+
+    /// The `(Level, Message)` rows of `SHOW WARNINGS` after the last bound statement;
+    /// empty without asking the server when its OK packet counted none.
+    pub(crate) async fn bound_warnings(&mut self) -> Result<Vec<(String, String)>, ExecuteError> {
+        if self.last_warnings == 0 {
+            return Ok(Vec::new());
+        }
+        let shown = self.ask("SHOW WARNINGS".to_owned(), Vec::new()).await?;
+        // SHOW WARNINGS reports Level, Code, Message.
+        let text = |row: &Row, ix: usize| {
+            catalog::cell(row, ix)
+                .map(Option::unwrap_or_default)
+                .map_err(|e| ExecuteError::Unsupported {
+                    reason: e.to_string(),
+                })
+        };
+        shown
+            .rows
+            .iter()
+            .map(|row| Ok((text(row, 0)?, text(row, 2)?)))
+            .collect()
+    }
+
+    /// Sends `params` as UTF-8 or raw bytes and keeps the warning count for `bound_warnings`;
+    /// a failed statement leaves no count behind.
+    async fn bound(&mut self, sql: &str, params: &[Param]) -> Result<Answer, ExecuteError> {
+        self.last_warnings = 0;
+        let values = params
+            .iter()
+            .map(|p| match p {
+                Param::Text(t) => Value::Bytes(t.as_bytes().to_vec()),
+                Param::Bytes(b) => Value::Bytes(b.clone()),
+            })
+            .collect();
+        let answer = self.ask(sql.to_owned(), values).await?;
+        self.last_warnings = answer.warnings;
+        Ok(answer)
     }
 
     /// Whether `@@lower_case_table_names` was 1 or 2 at connect.
@@ -718,6 +817,7 @@ impl Driver for MysqlDriver {
             read_only: params.read_only,
             fold_names,
             opened_on,
+            last_warnings: 0,
         })
     }
 
@@ -1526,6 +1626,31 @@ fn outcome(
         extra_results,
         rolled_back: false,
         consumed_capacity: None,
+    }
+}
+
+/// Cell `ix` of a bound statement's row; binary-protocol numbers and temporals are refused,
+/// since the edit path asks for every non-byte value as text.
+fn bound_cell(row: &Row, ix: usize) -> Result<EditValue, ExecuteError> {
+    let refused = |what: &str| ExecuteError::Unsupported {
+        reason: format!("bound result column {ix} {what}"),
+    };
+    let binary = row.columns_ref().get(ix).is_some_and(always_bytes);
+    match row.as_ref(ix) {
+        None => Err(refused("is missing")),
+        Some(Value::NULL) => Ok(EditValue::Null),
+        Some(Value::Bytes(b)) if binary => Ok(EditValue::Bytes(b.clone())),
+        Some(Value::Bytes(b)) => String::from_utf8(b.clone())
+            .map(EditValue::Text)
+            .map_err(|_| refused("is not UTF-8")),
+        Some(
+            Value::Int(_)
+            | Value::UInt(_)
+            | Value::Float(_)
+            | Value::Double(_)
+            | Value::Date(..)
+            | Value::Time(..),
+        ) => Err(refused("is not text")),
     }
 }
 

@@ -517,8 +517,8 @@ fn same_server(dir: &Path, existing: &ConnectionConfig, draft: &ConnectionDraft)
             }
             normalize(have) == normalize(&dir.join(path))
         }
-        // No importer drafts a DynamoDB connection.
-        Engine::Dynamodb => false,
+        // No importer drafts a DynamoDB or S3 connection.
+        Engine::Dynamodb | Engine::S3 => false,
         engine @ (Engine::Postgres
         | Engine::Mysql
         | Engine::Mssql

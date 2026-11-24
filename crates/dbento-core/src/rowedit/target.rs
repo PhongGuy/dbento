@@ -2,6 +2,8 @@
 //! the columns that identify one row.
 
 use crate::introspect::{ColumnMeta, IntrospectError, RelationRef, quote_ident};
+use crate::mysql::MysqlDriver;
+use crate::mysql::catalog::{self as my_catalog, rel_filter};
 use crate::postgres::{PgDriver, cell};
 use crate::session::Driver;
 use crate::sqlite::{SqliteDriver, known_schema};
@@ -47,6 +49,41 @@ impl EditColumn {
     }
 }
 
+/// Why a relation cannot be edited. `Display` reads as the tail of "Read-only: ...".
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotEditable {
+    /// No primary key or usable unique key identifies a row.
+    NoKey,
+    /// The relation is a view.
+    View,
+    /// The relation is a sequence.
+    Sequence,
+    /// The storage engine cannot roll a change back.
+    NonTransactional {
+        /// The engine's name, as the server reports it.
+        engine: String,
+    },
+    /// A MariaDB system-versioned table.
+    SystemVersioned,
+}
+
+impl std::fmt::Display for NotEditable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoKey => f.write_str(
+                "the table has no primary key or NOT NULL unique key that can identify a row",
+            ),
+            Self::View => f.write_str("views are not edited"),
+            Self::Sequence => f.write_str("sequences are not edited"),
+            Self::NonTransactional { engine } => {
+                write!(f, "{engine} tables cannot roll back a change")
+            }
+            Self::SystemVersioned => f.write_str("system-versioned tables are not edited"),
+        }
+    }
+}
+
 /// A relation described for editing: its columns and how one row is identified.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +96,7 @@ pub struct EditTarget {
     only: bool,
     returning: bool,
     pins: Vec<(String, String)>,
+    pub(super) not_editable: Option<NotEditable>,
 }
 
 impl EditTarget {
@@ -79,7 +117,14 @@ impl EditTarget {
             only,
             returning: true,
             pins: Vec::new(),
+            not_editable: None,
         }
+    }
+
+    /// Why a MySQL relation cannot be edited; None on Postgres and SQLite, and on an
+    /// editable MySQL table.
+    pub fn not_editable(&self) -> Option<&NotEditable> {
+        self.not_editable.as_ref()
     }
 
     /// Whether an UPDATE may return the identity; false for a Postgres table whose INSTEAD
@@ -380,4 +425,166 @@ fn missing(rel: &RelationRef) -> IntrospectError {
     IntrospectError::Missing {
         relation: format!("{}.{}", rel.schema(), rel.name()),
     }
+}
+
+/// Describes a MySQL or MariaDB table for editing; a missing relation is `Missing`. A
+/// relation that cannot be edited carries its reason, no identity and only read-only columns.
+pub(crate) async fn mysql_edit_target(
+    d: &mut MysqlDriver,
+    rel: &RelationRef,
+) -> Result<EditTarget, IntrospectError> {
+    let fold = d.fold_names();
+    let filter = rel_filter(rel, "TABLE_SCHEMA", "TABLE_NAME", fold);
+    let tables = d
+        .catalog(&format!(
+            "SELECT t.TABLE_TYPE, t.ENGINE, e.TRANSACTIONS FROM information_schema.TABLES t \
+             LEFT JOIN information_schema.ENGINES e ON e.ENGINE = t.ENGINE WHERE {}",
+            rel_filter(rel, "t.TABLE_SCHEMA", "t.TABLE_NAME", fold)
+        ))
+        .await?;
+    let Some(row) = tables.first() else {
+        return Err(missing(rel));
+    };
+    let kind = my_catalog::text(row, 0)?;
+    let engine = my_catalog::cell(row, 1)?.unwrap_or_default();
+    let transactional = my_catalog::cell(row, 2)?.as_deref() == Some("YES");
+
+    // Invisible columns stay out of `SELECT *`, so only the visible ones are grid columns;
+    // all of them still count when picking the identity.
+    let metas = Driver::columns(d, rel).await?;
+    let extras = d
+        .catalog(&format!(
+            "SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS WHERE {filter} \
+             ORDER BY ORDINAL_POSITION"
+        ))
+        .await?
+        .iter()
+        .map(|r| {
+            Ok((
+                my_catalog::text(r, 0)?,
+                my_catalog::cell(r, 1)?.unwrap_or_default(),
+            ))
+        })
+        .collect::<Result<Vec<_>, IntrospectError>>()?;
+    let invisible = |name: &str| {
+        extras
+            .iter()
+            .any(|(n, extra)| n == name && extra.contains("INVISIBLE"))
+    };
+    let visible: Vec<ColumnMeta> = metas
+        .iter()
+        .filter(|m| !invisible(m.name()))
+        .cloned()
+        .collect();
+    let writable = extras
+        .iter()
+        .filter(|(n, _)| !invisible(n))
+        .map(|(n, extra)| {
+            let cast = visible
+                .iter()
+                .find(|m| m.name() == n)
+                .map_or("", |m| m.type_name());
+            let generated =
+                extra.contains("STORED GENERATED") || extra.contains("VIRTUAL GENERATED");
+            (n.clone(), cast.to_owned(), !generated)
+        })
+        .collect();
+    let mut columns = zip_columns(visible, writable)?;
+
+    let stats = d
+        .catalog(&format!(
+            "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME FROM information_schema.STATISTICS \
+             WHERE {filter} ORDER BY CAST(INDEX_NAME AS BINARY), SEQ_IN_INDEX"
+        ))
+        .await?;
+    let mut indexes: Vec<(String, bool, Vec<Option<String>>)> = Vec::new();
+    for r in &stats {
+        let name = my_catalog::text(r, 0)?;
+        let part = my_catalog::cell(r, 2)?;
+        match indexes.last_mut() {
+            Some((n, _, parts)) if *n == name => parts.push(part),
+            _ => indexes.push((name, my_catalog::text(r, 1)? == "0", vec![part])),
+        }
+    }
+
+    let reason = match kind.as_str() {
+        "VIEW" | "SYSTEM VIEW" => Some(NotEditable::View),
+        "SEQUENCE" => Some(NotEditable::Sequence),
+        "SYSTEM VERSIONED" => Some(NotEditable::SystemVersioned),
+        _ if !transactional => Some(NotEditable::NonTransactional { engine }),
+        _ => None,
+    };
+    let identity = match reason {
+        Some(_) => Vec::new(),
+        None => mysql_identity(&metas, &indexes),
+    };
+    let reason = reason.or_else(|| identity.is_empty().then_some(NotEditable::NoKey));
+    if reason.is_some() {
+        for c in &mut columns {
+            c.editable = false;
+        }
+    }
+    let locators = identity.iter().filter(|n| invisible(n)).cloned().collect();
+
+    let settings = d
+        .catalog("SELECT @@SESSION.time_zone, @@SESSION.sql_mode")
+        .await?;
+    let pins = match settings.first() {
+        Some(row) => vec![
+            ("time_zone".to_owned(), my_catalog::text(row, 0)?),
+            ("sql_mode".to_owned(), my_catalog::text(row, 1)?),
+        ],
+        None => Vec::new(),
+    };
+    let mut target = EditTarget::new(
+        rel.clone(),
+        Engine::Mysql,
+        columns,
+        identity,
+        locators,
+        false,
+    );
+    target.returning = false;
+    target.pins = pins;
+    target.not_editable = reason;
+    Ok(target)
+}
+
+/// Whether a MySQL column is FLOAT or BIT, whose values never match reliably as a literal.
+pub(crate) fn mysql_inexact(meta: &ColumnMeta) -> bool {
+    let base = meta
+        .type_name()
+        .split(['(', ' '])
+        .next()
+        .unwrap_or_default();
+    base.eq_ignore_ascii_case("float") || base.eq_ignore_ascii_case("bit")
+}
+
+/// The identity columns: PRIMARY wherever it sits, else the first given unique index whose
+/// parts are all named (None is a functional part), NOT NULL, and neither FLOAT nor BIT;
+/// empty when none qualifies. A FLOAT or BIT key never matches as a literal.
+pub(super) fn mysql_identity(
+    columns: &[ColumnMeta],
+    indexes: &[(String, bool, Vec<Option<String>>)],
+) -> Vec<String> {
+    let usable = |parts: &[Option<String>]| -> Option<Vec<String>> {
+        if parts.is_empty() {
+            return None;
+        }
+        parts
+            .iter()
+            .map(|part| {
+                let meta = columns.iter().find(|c| Some(c.name()) == part.as_deref())?;
+                (!meta.nullable() && !mysql_inexact(meta)).then(|| meta.name().to_owned())
+            })
+            .collect()
+    };
+    let primary = indexes.iter().filter(|(name, ..)| name == "PRIMARY");
+    let others = indexes
+        .iter()
+        .filter(|(name, unique, _)| *unique && name != "PRIMARY");
+    primary
+        .chain(others)
+        .find_map(|(_, _, parts)| usable(parts))
+        .unwrap_or_default()
 }

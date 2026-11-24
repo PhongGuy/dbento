@@ -1907,14 +1907,20 @@ impl TabModel {
         self.browse.as_ref()
     }
 
-    /// The chip text of a table tab whose engine cannot edit rows yet.
+    /// The chip text of a table tab that cannot be edited: its engine cannot edit rows yet, or
+    /// the table itself says why (a MySQL table without a usable key, a MyISAM table).
     pub fn not_editable(&self) -> Option<&str> {
         self.not_editable.as_deref()
     }
 
-    /// Stores `state`, clears the filter error, emits `BrowseEvent::Run(state.sql())`.
+    /// Stores `state`, sets the chip from its target's `NotEditable` reason, clears the filter
+    /// error, emits `BrowseEvent::Run(state.sql())`.
     pub fn set_browse(&mut self, state: BrowseState, cx: &mut Context<Self>) {
         let sql = state.sql().to_owned();
+        self.not_editable = state
+            .target()
+            .not_editable()
+            .map(|reason| format!("Read-only: {reason}"));
         self.browse = Some(state);
         self.filter_error = None;
         cx.emit(BrowseEvent::Run(sql));

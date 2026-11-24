@@ -7,7 +7,7 @@ LOCKED=${LOCKED:-}
 
 CRATES=(dbento-workspace dbento-rules)
 FORBIDDEN=(tokio rusqlite tokio-postgres mysql_async tiberius duckdb mongodb redis surrealdb
-  aws-sdk-dynamodb toml_edit)
+  aws-sdk-dynamodb aws-sdk-s3 toml_edit)
 
 for crate in "${CRATES[@]}"; do
   # shellcheck disable=SC2086 # LOCKED is empty or one flag.

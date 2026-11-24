@@ -95,6 +95,7 @@ pub(crate) fn map_source(
         Engine::Surrealdb => Err(SkipReason::UnsupportedDriver("surrealdb".to_owned())),
         Engine::Redis => Err(SkipReason::UnsupportedDriver("redis".to_owned())),
         Engine::Dynamodb => Err(SkipReason::UnsupportedDriver("dynamodb".to_owned())),
+        Engine::S3 => Err(SkipReason::UnsupportedDriver("s3".to_owned())),
     }
 }
 

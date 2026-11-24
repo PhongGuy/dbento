@@ -123,11 +123,12 @@ pub fn browse_sql(target: &EditTarget, browse: &Browse) -> Result<String, Browse
         sql.push_str(&ident(locator));
         sql.push_str(", ");
     }
-    sql.push_str(&format!(
-        "*\nFROM {only}{}.{}",
-        ident(rel.schema()),
-        ident(rel.name())
-    ));
+    let qualified = format!("{}.{}", ident(rel.schema()), ident(rel.name()));
+    // MySQL reads a bare `*` after other select items as a syntax error, so it qualifies it.
+    if engine == Engine::Mysql && !target.locators().is_empty() {
+        sql.push_str(&format!("{qualified}."));
+    }
+    sql.push_str(&format!("*\nFROM {only}{qualified}"));
     // The filter goes in untrimmed on its own lines so a trailing `--` comment ends before `)`.
     let filter = browse.filter.as_deref().filter(|f| !f.trim().is_empty());
     if let Some(filter) = filter {
