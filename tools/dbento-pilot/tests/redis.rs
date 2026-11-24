@@ -405,3 +405,113 @@ async fn badges_name_the_acl_level_and_a_flush_asks() {
     assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
     pilot.assert_bus_untouched();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_key_browses_newest_first_follows_and_lists_its_groups() {
+    let db = redis_db().await;
+    assert_eq!(
+        db.index(),
+        0,
+        "the arias below name db0; point DBENTO_REDIS_URL at /0"
+    );
+    let entries: String = (1..=600)
+        .map(|i| format!("XADD ps:x 1-{i} n {i}\n"))
+        .collect();
+    seed(
+        &db,
+        &format!("{entries}XGROUP CREATE ps:x g 0\nXREADGROUP GROUP g c1 COUNT 2 STREAMS ps:x >"),
+    )
+    .await;
+    let pw = db.password(RdUser::Reader).unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let toml = format!(
+        "dbento = 1\n{}",
+        db.connection_toml("rd", RdUser::Reader, "read_only = true")
+    );
+    std::fs::write(ws.path().join("dbento.toml"), toml).unwrap();
+    let pilot = launch(ws.path(), pw).await;
+
+    // Newest first, Older in place of Load more; a 100-row page is the last.
+    click(&pilot, "connection-toggle-rd", json!({})).await;
+    row(&pilot, "rd.db0", "tree-toggle", json!({})).await;
+    load_all(&pilot).await;
+    row(&pilot, "rd.db0/ps:", "tree-toggle", json!({})).await;
+    open_key(&pilot, "rd.db0.ps:x", "stream \u{B7} 600 entries").await;
+    let tree = until(&pilot, "the newest page", |t| {
+        name(t, "cell-0-0") == Some("1-600") && find_node(t, "message-older").is_some()
+    })
+    .await;
+    assert!(find_node(&tree, "key-load-more").is_none());
+    assert_eq!(name(&tree, "message-follow"), Some("Follow"));
+    click(&pilot, "message-older", json!({})).await;
+    until(&pilot, "the stream's start", |t| {
+        find_node(t, "message-older").is_none()
+    })
+    .await;
+
+    // Follow lands a new entry on top.
+    click(&pilot, "message-follow", json!({})).await;
+    until(&pilot, "Following", |t| {
+        name(t, "message-follow") == Some("Following")
+    })
+    .await;
+    let t0 = Instant::now();
+    seed(&db, "XADD ps:x 2-1 k v").await;
+    until(&pilot, "the new entry", |t| {
+        name(t, "cell-0-0") == Some("2-1")
+    })
+    .await;
+    // Generous for a loaded runner; the one-poll bound is measured in the model tests.
+    assert!(
+        t0.elapsed() < Duration::from_secs(20),
+        "follow took {:?}",
+        t0.elapsed()
+    );
+
+    // Pause reads nothing new; Resume picks up what arrived meanwhile.
+    click(&pilot, "message-pause", json!({})).await;
+    until(&pilot, "Resume", |t| {
+        name(t, "message-pause") == Some("Resume")
+    })
+    .await;
+    // The poll sent before Pause still lands (it blocks up to a second), so let it end first.
+    pilot.ok("wait", json!({ "ms": 2_000 })).await;
+    seed(&db, "XADD ps:x 2-2 k v").await;
+    pilot.ok("wait", json!({ "ms": 2_500 })).await;
+    let tree = pilot.ok("tree", json!({})).await;
+    assert_eq!(
+        name(&tree, "cell-0-0"),
+        Some("2-1"),
+        "a paused tab reads nothing new"
+    );
+    click(&pilot, "message-pause", json!({})).await;
+    until(&pilot, "the held entry", |t| {
+        name(t, "cell-0-0") == Some("2-2")
+    })
+    .await;
+
+    // The groups panel lists g; its pending entries open under it; Follow turns off.
+    click(&pilot, "message-groups", json!({})).await;
+    until(&pilot, "the group row", |t| {
+        name(t, "message-group-0")
+            .is_some_and(|g| g.starts_with("g \u{B7} 1 consumer \u{B7} 2 pending"))
+    })
+    .await;
+    click(&pilot, "message-group-0", json!({})).await;
+    let tree = until(&pilot, "the pending rows", |t| {
+        find_node(t, "message-pending-1").is_some()
+    })
+    .await;
+    assert!(
+        name(&tree, "message-pending-0")
+            .is_some_and(|p| p.starts_with("1-1 \u{B7} c1 \u{B7} idle "))
+    );
+    click(&pilot, "message-follow", json!({})).await;
+    let tree = until(&pilot, "Follow off", |t| {
+        name(t, "message-follow") == Some("Follow")
+    })
+    .await;
+    assert!(find_node(&tree, "message-pause").is_none());
+    assert_eq!(pilot.ok("close", json!({})).await["exit_code"], json!(0));
+    pilot.assert_bus_untouched();
+}
