@@ -197,15 +197,37 @@ pub async fn apply_with(
     }
     if started.is_ok() {
         // MySQL reads BEGIN as a block opener in stored programs; START TRANSACTION never is.
-        let begin = if conn.engine() == Engine::Mysql {
-            "START TRANSACTION"
-        } else {
-            "BEGIN"
+        // SQLite takes the write lock up front, so no other writer can slip in between a
+        // guard's read and its write.
+        let begin = match conn.engine() {
+            Engine::Mysql => "START TRANSACTION",
+            Engine::Sqlite => "BEGIN IMMEDIATE",
+            Engine::Postgres
+            | Engine::Mssql
+            | Engine::Duckdb
+            | Engine::Mongodb
+            | Engine::Surrealdb
+            | Engine::Redis
+            | Engine::Dynamodb
+            | Engine::S3 => "BEGIN",
         };
         started = session.run_bound(begin, &[]).await;
     }
     if let Err(e) = started {
         let _ = session.close().await;
+        // SQLite's BEGIN is the only statement before the changes, and the database refuses
+        // it when another writer holds the lock: that fails the first change, as a write would.
+        if conn.engine() == Engine::Sqlite
+            && let ExecuteError::Database { message, .. } = e
+        {
+            let outcomes = std::iter::once(ChangeOutcome::Failed(message))
+                .chain(std::iter::repeat_n(
+                    ChangeOutcome::NotAttempted,
+                    batch.changes().len().saturating_sub(1),
+                ))
+                .collect();
+            return Err(ApplyError::Rejected { outcomes });
+        }
         return Err(ApplyError::Session(e));
     }
     // Conflicts and ambiguities leave the transaction usable, so the run continues to
@@ -220,6 +242,20 @@ pub async fn apply_with(
         if failed {
             outcomes.push(ChangeOutcome::NotAttempted);
             continue;
+        }
+        // The guard reads the row first; a row that no longer holds the loaded values is
+        // reported without sending the write, and the run goes on to the next change.
+        if let Some(guard) = statement.guard.as_deref() {
+            let checked = match session.query_bound(&guard.sql, &guard.params).await {
+                Ok(rows) => guard_outcome(&rows, &statement.expected),
+                Err(e) => Some(ChangeOutcome::Failed(failure_message(e))),
+            };
+            if let Some(outcome) = checked {
+                failed = matches!(outcome, ChangeOutcome::Failed(_));
+                outcomes.push(outcome);
+                keys.push(None);
+                continue;
+            }
         }
         // A statement that returns the identity counts its rows; the one row is the key.
         let ran = if statement.returning {
@@ -307,6 +343,40 @@ pub(crate) fn change_outcome(matched: u64, warnings: &[(String, String)]) -> Cha
         0 => ChangeOutcome::Conflict,
         1 => ChangeOutcome::Applied(1),
         n => ChangeOutcome::Ambiguous(n),
+    }
+}
+
+/// None lets the write run; otherwise the change's outcome, write not sent. No row is a
+/// Conflict, several are Ambiguous, and one row is a Conflict unless every value is the same.
+pub(crate) fn guard_outcome(
+    rows: &[Vec<EditValue>],
+    expected: &[EditValue],
+) -> Option<ChangeOutcome> {
+    match rows {
+        [] => Some(ChangeOutcome::Conflict),
+        [row] => {
+            let held = row.len() == expected.len()
+                && row.iter().zip(expected).all(|(a, b)| same_value(a, b));
+            (!held).then_some(ChangeOutcome::Conflict)
+        }
+        many => Some(ChangeOutcome::Ambiguous(many.len() as u64)),
+    }
+}
+
+/// Both NULL, or both non-null with equal bytes: text compares as its UTF-8 bytes, so a
+/// value loaded as bytes still matches the same value read back as text.
+fn same_value(a: &EditValue, b: &EditValue) -> bool {
+    fn bytes(v: &EditValue) -> Option<&[u8]> {
+        match v {
+            EditValue::Text(s) => Some(s.as_bytes()),
+            EditValue::Bytes(b) => Some(b),
+            EditValue::Null | EditValue::Default => None,
+        }
+    }
+    match (bytes(a), bytes(b)) {
+        (Some(x), Some(y)) => x == y,
+        (None, None) => *a == EditValue::Null && *b == EditValue::Null,
+        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 

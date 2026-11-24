@@ -58,12 +58,17 @@ pub(crate) struct BoundStatement {
     pub(crate) returning: bool,
     /// MySQL: the SELECT that reads back the key an Update wrote; `returning` is true on it.
     pub(crate) reread: Option<Box<BoundStatement>>,
+    /// The read run before the write; None when `expected` is empty or the write reads itself.
+    pub(crate) guard: Option<Box<BoundStatement>>,
+    /// The expected values in the order the guard returns its columns.
+    pub(crate) expected: Vec<EditValue>,
 }
 
 /// One bound statement per change, in batch order. An Update that writes an identity
 /// column, or moves a Postgres row its ctid locates, also returns the identity, so the
 /// caller learns the key the database stored; a target whose rules refuse it never does.
 /// MySQL has no RETURNING, so such an Update carries a re-read of the key instead.
+/// A SQLite Update or Delete with expected values carries a guard that reads them first.
 pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
     let target = batch.target();
     let identity = target.identity();
@@ -87,11 +92,25 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
                 }
                 Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => None,
             };
+            let (guard, expected) = match c {
+                Change::Update { key, expected, .. } | Change::Delete { key, expected }
+                    if batch.dialect() == Dialect::Sqlite && !expected.is_empty() =>
+                {
+                    let guard = Gen::new(batch, true).guard(key, expected);
+                    let values = expected.iter().map(|(_, v)| v.clone()).collect();
+                    (Some(Box::new(guard)), values)
+                }
+                Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => {
+                    (None, Vec::new())
+                }
+            };
             BoundStatement {
                 sql,
                 params: g.params,
                 returning,
                 reread,
+                guard,
+                expected,
             }
         })
         .collect()
@@ -253,7 +272,35 @@ impl<'a> Gen<'a> {
             params: self.params,
             returning: true,
             reread: None,
+            guard: None,
+            expected: Vec::new(),
         })
+    }
+
+    /// The SELECT that reads the `expected` columns, in that order, of the row `key` names,
+    /// so the caller can compare them with the loaded values before writing.
+    fn guard(mut self, key: &RowKey, expected: &[(String, EditValue)]) -> BoundStatement {
+        let cols = expected
+            .iter()
+            .map(|(c, _)| self.read_form(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rel = self.relation(true);
+        let filter = self.key(key);
+        BoundStatement {
+            sql: format!("SELECT {cols} FROM {rel} WHERE {filter}"),
+            params: self.params,
+            returning: false,
+            reread: None,
+            guard: None,
+            expected: Vec::new(),
+        }
+    }
+
+    /// The form a read selects `column` in to get the value a browse shows; on SQLite the
+    /// column itself, since a browse renders its stored value.
+    fn read_form(&self, column: &str) -> String {
+        self.ident(column)
     }
 
     fn key(&mut self, key: &RowKey) -> String {

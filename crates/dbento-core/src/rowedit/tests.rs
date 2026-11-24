@@ -144,6 +144,8 @@ fn stmt(sql: &str, params: Vec<Param>) -> BoundStatement {
         params,
         returning: sql.contains(" RETURNING "),
         reread: None,
+        guard: None,
+        expected: vec![],
     }
 }
 
@@ -917,6 +919,8 @@ fn a_mysql_key_update_re_reads_the_new_key_as_text_and_bytes() {
         params: vec![p("010"), p("01")],
         returning: true,
         reread: None,
+        guard: None,
+        expected: vec![],
     };
     assert_eq!(s[0].reread.as_deref(), Some(&reread));
     assert_eq!(s[1].reread, None, "the key was not written");
@@ -1178,5 +1182,104 @@ fn expected_values_are_validated_and_kept_for_every_column() {
     assert_eq!(
         BatchError::DefaultExpected { change: 2 }.to_string(),
         "change 2: an expected value cannot be DEFAULT"
+    );
+}
+
+#[test]
+fn a_guard_passes_only_one_row_holding_exactly_the_expected_values() {
+    use super::apply::guard_outcome;
+    let exp = vec![t("a"), EditValue::Null, EditValue::Bytes(vec![0xff])];
+    assert_eq!(guard_outcome(&[], &exp), Some(ChangeOutcome::Conflict));
+    assert_eq!(
+        guard_outcome(&[exp.clone(), exp.clone()], &exp),
+        Some(ChangeOutcome::Ambiguous(2))
+    );
+    assert_eq!(guard_outcome(std::slice::from_ref(&exp), &exp), None);
+    let as_bytes = vec![
+        EditValue::Bytes(b"a".to_vec()),
+        EditValue::Null,
+        EditValue::Bytes(vec![0xff]),
+    ];
+    assert_eq!(
+        guard_outcome(&[as_bytes], &exp),
+        None,
+        "text compares as its bytes"
+    );
+    for changed in [
+        vec![t("A"), EditValue::Null, EditValue::Bytes(vec![0xff])],
+        vec![t("a "), EditValue::Null, EditValue::Bytes(vec![0xff])],
+        vec![t("a"), t(""), EditValue::Bytes(vec![0xff])],
+        vec![
+            EditValue::Null,
+            EditValue::Null,
+            EditValue::Bytes(vec![0xff]),
+        ],
+        vec![t("a"), EditValue::Null, EditValue::Bytes(vec![0xfe])],
+    ] {
+        assert_eq!(
+            guard_outcome(std::slice::from_ref(&changed), &exp),
+            Some(ChangeOutcome::Conflict),
+            "{changed:?}"
+        );
+    }
+}
+
+#[test]
+fn a_sqlite_guard_reads_the_expected_columns_by_the_writes_key() {
+    let b = batch(
+        lite(),
+        vec![
+            Change::Update {
+                key: key(&[("id", t("3"))]),
+                set: pairs(&[("title", t("new"))]),
+                expected: pairs(&[("title", t("old")), ("pic", EditValue::Bytes(vec![1]))]),
+            },
+            Change::Delete {
+                key: key(&[("id", t("4"))]),
+                expected: pairs(&[("n", EditValue::Null)]),
+            },
+            Change::Update {
+                key: key(&[("id", t("5"))]),
+                set: pairs(&[("n", t("1"))]),
+                expected: vec![],
+            },
+        ],
+    );
+    let s = bound(&b);
+    let read = |sql: &str, params: Vec<Param>| {
+        Some(Box::new(BoundStatement {
+            sql: sql.to_owned(),
+            params,
+            returning: false,
+            reread: None,
+            guard: None,
+            expected: vec![],
+        }))
+    };
+    assert_eq!(
+        s[0].guard,
+        read(
+            "SELECT title, pic FROM main.\"order items\" WHERE id = ?1",
+            vec![p("3")]
+        )
+    );
+    assert_eq!(s[0].expected, vec![t("old"), EditValue::Bytes(vec![1])]);
+    assert_eq!(
+        s[0].sql,
+        "UPDATE main.\"order items\" SET title = ?1 WHERE id = ?2"
+    );
+    assert_eq!(
+        s[1].guard,
+        read(
+            "SELECT n FROM main.\"order items\" WHERE id = ?1",
+            vec![p("4")]
+        )
+    );
+    assert_eq!(s[1].expected, vec![EditValue::Null]);
+    assert_eq!(s[2].guard, None);
+    assert!(s[2].expected.is_empty());
+    assert!(
+        !render_sql(&b).contains("SELECT"),
+        "the preview shows the writes only"
     );
 }
