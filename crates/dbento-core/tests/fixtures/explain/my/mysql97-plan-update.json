@@ -1,0 +1,24 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "table": {
+      "update": true,
+      "table_name": "ord",
+      "access_type": "range",
+      "possible_keys": [
+        "cust_id"
+      ],
+      "key": "cust_id",
+      "used_key_parts": [
+        "cust_id"
+      ],
+      "key_length": "5",
+      "ref": [
+        "const"
+      ],
+      "rows_examined_per_scan": 5,
+      "filtered": "100.00",
+      "attached_condition": "(`dbento_t_3624377_1`.`ord`.`cust_id` = 5)"
+    }
+  }
+}

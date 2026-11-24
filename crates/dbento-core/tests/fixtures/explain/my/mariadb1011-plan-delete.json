@@ -1,0 +1,16 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "table": {
+      "delete": 1,
+      "table_name": "ord",
+      "access_type": "range",
+      "possible_keys": ["PRIMARY"],
+      "key": "PRIMARY",
+      "key_length": "4",
+      "used_key_parts": ["id"],
+      "rows": 10,
+      "attached_condition": "ord.`id` > 990"
+    }
+  }
+}

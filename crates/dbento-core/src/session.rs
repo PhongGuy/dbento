@@ -13,7 +13,7 @@ use crate::capacity::CapacityUnits;
 use crate::duckdb::{DuckCancel, DuckDriver};
 #[cfg(feature = "dynamodb")]
 use crate::dynamo::{driver::DynamoSession, stream::DynamoCancel};
-use crate::explain::{ExplainOutput, ExplainRequest};
+use crate::explain::{ExplainMode, ExplainOutput, ExplainRequest};
 use crate::fkeys::{FkDirection, ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::message::{GroupInfo, MessageError, MessagePage, MessageRead, Position, SourceRef};
@@ -1373,37 +1373,91 @@ impl Session {
     }
 
     /// Runs `request` and returns its output. On Postgres every block it opens is rolled back,
-    /// also on error, cancel or drop; on SQLite the statement is only planned. A request built
-    /// for the other engine is `ExecuteError::Unsupported`.
+    /// also on error, cancel or drop; on SQLite the statement is only planned. On MySQL a plan
+    /// never runs the statement, while ANALYZE runs a confirmed read for real, on MariaDB
+    /// through `ANALYZE FORMAT=JSON`. A request that fails `explain_sql` is refused unsent,
+    /// as `ExecuteError::Unsupported`.
     pub async fn explain(
         &mut self,
         request: &ExplainRequest,
     ) -> Result<ExplainOutput, ExecuteError> {
-        // `sql` is a public field, so a request edited after its check is checked again here:
-        // one statement, and that statement an EXPLAIN, or nothing reaches the database.
-        if crate::ranges::statement_ranges(request.engine, &request.sql).len() != 1 {
-            return Err(ExecuteError::Unsupported {
-                reason: "an explain runs exactly one statement".to_owned(),
-            });
-        }
-        if !crate::classify::leading_keyword(&request.sql).eq_ignore_ascii_case("EXPLAIN") {
-            return Err(ExecuteError::Unsupported {
-                reason: "an explain request must hold an EXPLAIN".to_owned(),
-            });
-        }
-        match (&mut self.inner, request.engine) {
-            (SessionInner::Postgres(d), Engine::Postgres) => d
-                .explain(&request.sql)
-                .await
-                .map(ExplainOutput::from_postgres),
-            (SessionInner::Sqlite(d), Engine::Sqlite) => {
-                let rows = d.explain(&request.sql).await?;
+        let (sql, form) = self.explain_form(request)?;
+        match (&mut self.inner, form) {
+            (SessionInner::Postgres(d), _) => {
+                d.explain(&sql).await.map(ExplainOutput::from_postgres)
+            }
+            (SessionInner::Sqlite(d), _) => {
+                let rows = d.explain(&sql).await?;
                 Ok(ExplainOutput::from_sqlite(&rows))
             }
-            _ => Err(ExecuteError::Unsupported {
-                reason: "the explain was built for another engine".to_owned(),
-            }),
+            (SessionInner::Mysql(d), form) => {
+                // The parser follows the form matched, never the request's public `mode`.
+                let maria = d.server().flavor == Flavor::Mariadb;
+                // MySQL 9 sessions may print JSON v2, which the plan parser does not read.
+                let pin_v1 = form == ExplainMode::Plan && !maria;
+                let raw = d.explain(&sql, pin_v1).await?;
+                Ok(match (form, maria) {
+                    (_, true) => ExplainOutput::from_mariadb_json(raw),
+                    (ExplainMode::Plan, false) => ExplainOutput::from_mysql_json(raw),
+                    (ExplainMode::Analyze, false) => ExplainOutput::from_mysql_tree(raw),
+                })
+            }
+            _ => Err(another_engine()),
         }
+    }
+
+    /// Re-checks `request` against this session and returns the exact text it sends.
+    pub fn explain_sql(&self, request: &ExplainRequest) -> Result<String, ExecuteError> {
+        self.explain_form(request).map(|(sql, _)| sql)
+    }
+
+    /// The text `explain_sql` returns and the form it matched. The request's fields are
+    /// public, so a request edited after its check must still be one statement, an EXPLAIN,
+    /// and on MySQL exactly one of the two forms built for its statement.
+    fn explain_form(
+        &self,
+        request: &ExplainRequest,
+    ) -> Result<(String, ExplainMode), ExecuteError> {
+        let unsupported = |reason: &str| ExecuteError::Unsupported {
+            reason: reason.to_owned(),
+        };
+        let one = |sql: &str| crate::ranges::statement_ranges(request.engine, sql).len() == 1;
+        if !one(&request.sql) {
+            return Err(unsupported("an explain runs exactly one statement"));
+        }
+        if !crate::classify::leading_keyword(&request.sql).eq_ignore_ascii_case("EXPLAIN") {
+            return Err(unsupported("an explain request must hold an EXPLAIN"));
+        }
+        let (sql, form) = match (&self.inner, request.engine) {
+            (SessionInner::Postgres(_), Engine::Postgres)
+            | (SessionInner::Sqlite(_), Engine::Sqlite) => (request.sql.clone(), request.mode),
+            (SessionInner::Mysql(d), Engine::Mysql) => {
+                let t = request.statement.trim();
+                if request.sql == format!("EXPLAIN FORMAT=JSON {t}") {
+                    (request.sql.clone(), ExplainMode::Plan)
+                } else if request.sql == format!("EXPLAIN ANALYZE FORMAT=TREE {t}") {
+                    // ANALYZE runs the statement with no rollback, so it must be a confirmed read.
+                    if crate::classify::mysql_classification(t).writes != Writes::No {
+                        return Err(unsupported(
+                            "ANALYZE runs only statements confirmed to read",
+                        ));
+                    }
+                    let sql = if d.server().flavor == Flavor::Mariadb {
+                        format!("ANALYZE FORMAT=JSON {t}")
+                    } else {
+                        request.sql.clone()
+                    };
+                    (sql, ExplainMode::Analyze)
+                } else {
+                    return Err(unsupported("the explain does not match its statement"));
+                }
+            }
+            _ => return Err(another_engine()),
+        };
+        if !one(&sql) {
+            return Err(unsupported("an explain runs exactly one statement"));
+        }
+        Ok((sql, form))
     }
 
     /// Runs one statement with bound parameters and returns the rows it changed (matched, on
@@ -1879,6 +1933,13 @@ fn matchable_mysql_keys(keys: Vec<ForeignKey>, columns: &[ColumnMeta]) -> Vec<Fo
                 .any(|c| inexact.iter().any(|i| i.eq_ignore_ascii_case(c)))
         })
         .collect()
+}
+
+/// The refusal of a request built for an engine other than the session's.
+fn another_engine() -> ExecuteError {
+    ExecuteError::Unsupported {
+        reason: "the explain was built for another engine".to_owned(),
+    }
 }
 
 #[cfg(test)]

@@ -179,16 +179,32 @@ async fn a_mysql_error_carries_its_sqlstate_and_error_number() {
 const UNDIALLED: &str = "dbento = 1\n[connections.my]\nengine = \"mysql\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"u\"\nsecret = \"none\"\n";
 
 #[tokio::test]
-async fn explain_on_mysql_is_unsupported_and_names_the_engine() {
-    let server = TestServer::start(UNDIALLED).await;
-    let listed = server.ok("list_connections", json!({})).await;
-    assert_eq!(listed["connections"][0]["engine"], "mysql", "{listed}");
-    let e = server.err("explain", q("SELECT 1")).await;
-    assert_eq!(e["code"], "unsupported", "{e}");
-    assert_eq!(
-        e["message"], "`explain` is not available on mysql connections yet",
-        "{e}"
-    );
+async fn explain_plans_reads_and_the_read_only_session_refuses_writes() {
+    for (label, db) in my_matrix().await {
+        db.scalar("CREATE TABLE t (id INT PRIMARY KEY, a INT)")
+            .await;
+        db.scalar("INSERT INTO t VALUES (1, 10), (2, 20)").await;
+        let server = TestServer::mysql(&db, "").await;
+        let r = server.ok("explain", q("SELECT * FROM t WHERE a = 1")).await;
+        assert_eq!(r["sql"], "EXPLAIN SELECT * FROM t WHERE a = 1", "{label}");
+        assert!(r["rows"].to_string().contains("\"t\""), "{label}: {r}");
+        for sql in [
+            "UPDATE t SET a = 0 WHERE id = 1",
+            "DELETE FROM t WHERE id = 1",
+            "INSERT INTO t VALUES (3, 30)",
+            "REPLACE INTO t VALUES (1, 0)",
+        ] {
+            let e = server.err("explain", q(sql)).await;
+            assert_eq!(e["code"], "read_only", "{label}: {sql}: {e}");
+        }
+        assert_eq!(
+            db.scalar("SELECT CAST(SUM(a) AS CHAR) FROM t")
+                .await
+                .as_deref(),
+            Some("30"),
+            "{label}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -216,7 +232,14 @@ async fn the_tool_descriptions_name_mysql() {
         "{schemas}"
     );
     let explain = description("explain");
-    assert!(explain.contains("not available on MySQL"), "{explain}");
+    assert!(
+        explain.contains("plain EXPLAIN on Postgres, MySQL and MariaDB"),
+        "{explain}"
+    );
+    assert!(
+        explain.contains("On MySQL and MariaDB that read-only session refuses a plan of INSERT, UPDATE, DELETE or REPLACE"),
+        "{explain}"
+    );
 }
 
 #[tokio::test]

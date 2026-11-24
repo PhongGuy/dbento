@@ -1,0 +1,3 @@
+-> Window aggregate with buffering: sum(ord.amount) OVER (PARTITION BY ord.cust_id ORDER BY ord.id )   (cost=0 rows=1000) (actual time=0.272..0.807 rows=1000 loops=1)
+    -> Sort: ord.cust_id, ord.id  (cost=101 rows=1000) (actual time=0.173..0.2 rows=1000 loops=1)
+        -> Table scan on ord  (cost=101 rows=1000) (actual time=0.0187..0.0943 rows=1000 loops=1)

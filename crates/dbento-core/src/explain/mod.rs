@@ -1,13 +1,15 @@
 //! Explain requests: the one statement a shell asks to plan, checked once, and the exact
 //! text each engine is sent for it. The app and the MCP server share these checks.
 
+mod my_json;
+mod my_tree;
 mod plan;
 pub use plan::*;
 
 use crate::Engine;
-use crate::classify::{leading_keyword, pg_classification};
+use crate::classify::{leading_keyword, mysql_classification, pg_classification};
 use crate::ranges::statement_ranges;
-use crate::session::Classification;
+use crate::session::{Classification, Writes};
 
 /// The statements whose plan can be shown. Anything else, `ANALYZE`, an option list in
 /// parentheses or a nested `EXPLAIN` included, is refused before connecting.
@@ -31,15 +33,20 @@ pub enum ExplainMode {
 pub struct ExplainRequest {
     /// The engine the text is built for.
     pub engine: Engine,
-    /// The mode sent; `Analyze` asked on SQLite becomes `Plan`.
+    /// The mode sent; `Analyze` becomes `Plan` on SQLite, and on MySQL unless the statement
+    /// is confirmed to read.
     pub mode: ExplainMode,
-    /// `Analyze` was asked on SQLite, which has no ANALYZE form.
+    /// `Analyze` was asked and fell back to `Plan`: SQLite has no ANALYZE form, and MySQL
+    /// runs ANALYZE for real, so it is kept only for confirmed reads.
     pub analyze_unavailable: bool,
     /// The user's text as given, untrimmed.
     pub statement: String,
-    /// The text sent to the database.
+    /// The canonical EXPLAIN text: JSON EXPLAIN on Postgres and MySQL plans, the tree form
+    /// for MySQL `Analyze`, EXPLAIN QUERY PLAN on SQLite. `Session::explain_sql` gives what
+    /// is actually sent, which differs for MariaDB's `ANALYZE FORMAT=JSON`.
     pub sql: String,
-    /// The inner statement's classification, set for Postgres `Analyze` only.
+    /// The inner statement's classification, set when `Analyze` was asked on Postgres or
+    /// MySQL, even when MySQL fell back to `Plan`.
     pub classification: Option<Classification>,
 }
 
@@ -63,20 +70,29 @@ pub enum ExplainError {
     NotExplainable,
 }
 
-/// Checks `statement` and builds its JSON EXPLAIN on Postgres or EXPLAIN QUERY PLAN on
-/// SQLite; any other engine is `UnsupportedEngine`. Fails with the first check that refuses
-/// it, in the order of `ExplainError`.
+/// Checks `statement` and builds its JSON EXPLAIN on Postgres, its JSON or ANALYZE tree
+/// EXPLAIN on MySQL, or EXPLAIN QUERY PLAN on SQLite; any other engine is
+/// `UnsupportedEngine`. Fails with the first check that refuses it, in the order of
+/// `ExplainError`.
 pub fn explain_request(
     engine: Engine,
     statement: &str,
     mode: ExplainMode,
 ) -> Result<ExplainRequest, ExplainError> {
     let inner = check(engine, statement)?;
-    // SQLite has no ANALYZE form, so it falls back to the plan and says so.
+    let asked = mode == ExplainMode::Analyze;
+    // MySQL's ANALYZE runs the statement with no rollback, so only a statement the classifier
+    // confirms reads keeps it. SQLite has no ANALYZE form. Both fall back to the plan and say so.
+    let mysql_class = (engine == Engine::Mysql && asked).then(|| mysql_classification(inner));
     let (mode, analyze_unavailable) = match engine {
-        Engine::Sqlite => (ExplainMode::Plan, mode == ExplainMode::Analyze),
+        Engine::Sqlite => (ExplainMode::Plan, asked),
         Engine::Postgres => (mode, false),
-        Engine::Mysql | Engine::Mssql => return Err(ExplainError::UnsupportedEngine),
+        Engine::Mysql => match &mysql_class {
+            Some(c) if c.writes == Writes::No => (ExplainMode::Analyze, false),
+            Some(_) => (ExplainMode::Plan, true),
+            None => (ExplainMode::Plan, false),
+        },
+        Engine::Mssql => return Err(ExplainError::UnsupportedEngine),
         Engine::Duckdb => return Err(ExplainError::UnsupportedEngine),
         Engine::Mongodb => return Err(ExplainError::UnsupportedEngine),
         Engine::Surrealdb => return Err(ExplainError::UnsupportedEngine),
@@ -90,7 +106,12 @@ pub fn explain_request(
             ExplainMode::Plan => "EXPLAIN (FORMAT JSON)",
             ExplainMode::Analyze => "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)",
         },
-        Engine::Mysql | Engine::Mssql => return Err(ExplainError::UnsupportedEngine),
+        // The tree form is named so the session's `explain_format` cannot change the output.
+        Engine::Mysql => match mode {
+            ExplainMode::Plan => "EXPLAIN FORMAT=JSON",
+            ExplainMode::Analyze => "EXPLAIN ANALYZE FORMAT=TREE",
+        },
+        Engine::Mssql => return Err(ExplainError::UnsupportedEngine),
         Engine::Duckdb => return Err(ExplainError::UnsupportedEngine),
         Engine::Mongodb => return Err(ExplainError::UnsupportedEngine),
         Engine::Surrealdb => return Err(ExplainError::UnsupportedEngine),
@@ -101,8 +122,20 @@ pub fn explain_request(
     let sql = prefixed(engine, prefix, inner)?;
     // ANALYZE runs the statement, so the caller needs to know what it writes. The classifier
     // reads a top-level EXPLAIN as a read, so it sees only the inner statement.
-    let classification = (engine == Engine::Postgres && mode == ExplainMode::Analyze)
-        .then(|| pg_classification(inner).classification);
+    let classification = match engine {
+        Engine::Postgres => {
+            (mode == ExplainMode::Analyze).then(|| pg_classification(inner).classification)
+        }
+        Engine::Mysql => mysql_class,
+        Engine::Sqlite
+        | Engine::Mssql
+        | Engine::Duckdb
+        | Engine::Mongodb
+        | Engine::Surrealdb
+        | Engine::Redis
+        | Engine::Dynamodb
+        | Engine::S3 => None,
+    };
     Ok(ExplainRequest {
         engine,
         mode,
@@ -113,14 +146,14 @@ pub fn explain_request(
     })
 }
 
-/// The plain text form MCP sends: `EXPLAIN <s>`, or `EXPLAIN QUERY PLAN <s>` on SQLite,
-/// after the same checks as `explain_request`.
+/// The plain text form MCP sends: `EXPLAIN <s>` on Postgres and MySQL, or
+/// `EXPLAIN QUERY PLAN <s>` on SQLite, after the same checks as `explain_request`.
 pub fn explain_text(engine: Engine, statement: &str) -> Result<String, ExplainError> {
     let inner = check(engine, statement)?;
     let prefix = match engine {
         Engine::Sqlite => "EXPLAIN QUERY PLAN",
-        Engine::Postgres => "EXPLAIN",
-        Engine::Mysql | Engine::Mssql => return Err(ExplainError::UnsupportedEngine),
+        Engine::Postgres | Engine::Mysql => "EXPLAIN",
+        Engine::Mssql => return Err(ExplainError::UnsupportedEngine),
         Engine::Duckdb => return Err(ExplainError::UnsupportedEngine),
         Engine::Mongodb => return Err(ExplainError::UnsupportedEngine),
         Engine::Surrealdb => return Err(ExplainError::UnsupportedEngine),

@@ -1,0 +1,75 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.016132631
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.010089369,
+    "r_loops": 1,
+    "r_total_time_ms": 0.008161805,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "loops": 1,
+          "r_loops": 1,
+          "rows": 2,
+          "r_rows": 5,
+          "cost": 0.010089369,
+          "r_table_time_ms": 2.814415e-4,
+          "r_other_time_ms": 6.734494e-4,
+          "filtered": 100,
+          "r_filtered": 100,
+          "materialized": {
+            "query_block": {
+              "recursive_union": {
+                "table_name": "<union2,3>",
+                "access_type": "ALL",
+                "r_loops": 0,
+                "r_rows": null,
+                "query_specifications": [
+                  {
+                    "query_block": {
+                      "select_id": 2,
+                      "table": {
+                        "message": "No tables used"
+                      }
+                    }
+                  },
+                  {
+                    "query_block": {
+                      "select_id": 3,
+                      "operation": "UNION",
+                      "cost": 0.010089369,
+                      "r_loops": 5,
+                      "r_total_time_ms": 0.002532974,
+                      "nested_loop": [
+                        {
+                          "table": {
+                            "table_name": "<derived2>",
+                            "access_type": "ALL",
+                            "loops": 1,
+                            "r_loops": 5,
+                            "rows": 2,
+                            "r_rows": 1,
+                            "cost": 0.010089369,
+                            "r_table_time_ms": 3.518019e-4,
+                            "r_other_time_ms": 0.00237215,
+                            "filtered": 100,
+                            "r_filtered": 80,
+                            "attached_condition": "n.i < 5"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

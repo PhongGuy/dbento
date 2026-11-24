@@ -1,0 +1,1 @@
+-> Covering index skip scan for deduplication on cust using region  (cost=3 rows=11) (actual time=0.00294..0.00712 rows=10 loops=1)

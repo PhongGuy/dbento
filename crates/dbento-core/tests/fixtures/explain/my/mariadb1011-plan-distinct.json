@@ -1,0 +1,19 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "cust",
+          "access_type": "range",
+          "key": "region",
+          "key_length": "5",
+          "used_key_parts": ["region"],
+          "rows": 21,
+          "filtered": 100,
+          "using_index_for_group_by": true
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "rows": 2,
+          "filtered": 100,
+          "materialized": {
+            "query_block": {
+              "recursive_union": {
+                "table_name": "<union2,3>",
+                "access_type": "ALL",
+                "query_specifications": [
+                  {
+                    "query_block": {
+                      "select_id": 2,
+                      "table": {
+                        "message": "No tables used"
+                      }
+                    }
+                  },
+                  {
+                    "query_block": {
+                      "select_id": 3,
+                      "operation": "UNION",
+                      "nested_loop": [
+                        {
+                          "table": {
+                            "table_name": "<derived2>",
+                            "access_type": "ALL",
+                            "rows": 2,
+                            "filtered": 100,
+                            "attached_condition": "n.i < 5"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

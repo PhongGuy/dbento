@@ -1,0 +1,117 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.043687246
+  },
+  "query_block": {
+    "select_id": 1,
+    "r_loops": 1,
+    "r_total_time_ms": 0.296373794,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ALL",
+          "possible_keys": ["PRIMARY"],
+          "r_loops": 1,
+          "rows": 200,
+          "r_rows": 200,
+          "r_table_time_ms": 0.015336263,
+          "r_other_time_ms": 0.009055028,
+          "r_engine_stats": {
+            "pages_accessed": 1
+          },
+          "filtered": 100,
+          "r_filtered": 100
+        }
+      },
+      {
+        "table": {
+          "table_name": "<subquery2>",
+          "access_type": "eq_ref",
+          "possible_keys": ["distinct_key"],
+          "key": "distinct_key",
+          "key_length": "4",
+          "used_key_parts": ["cust_id"],
+          "ref": ["func"],
+          "r_loops": 200,
+          "rows": 1,
+          "r_rows": 1,
+          "r_table_time_ms": 0.032431273,
+          "r_other_time_ms": 0.014734461,
+          "filtered": 100,
+          "r_filtered": 100,
+          "materialized": {
+            "unique": 1,
+            "query_block": {
+              "select_id": 2,
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "ord",
+                    "access_type": "ALL",
+                    "possible_keys": ["cust_id"],
+                    "r_loops": 1,
+                    "rows": 1000,
+                    "r_rows": 1000,
+                    "r_table_time_ms": 0.055740278,
+                    "r_other_time_ms": 0.050476723,
+                    "r_engine_stats": {
+                      "pages_accessed": 4
+                    },
+                    "filtered": 100,
+                    "r_filtered": 50,
+                    "attached_condition": "ord.amount > 500"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "table": {
+          "table_name": "<subquery3>",
+          "access_type": "eq_ref",
+          "possible_keys": ["distinct_key"],
+          "key": "distinct_key",
+          "key_length": "4",
+          "used_key_parts": ["cust_id"],
+          "ref": ["func"],
+          "r_loops": 200,
+          "rows": 1,
+          "r_rows": 0.5,
+          "r_table_time_ms": 0.010683125,
+          "r_other_time_ms": 0.007630085,
+          "filtered": 100,
+          "r_filtered": 100,
+          "materialized": {
+            "unique": 1,
+            "query_block": {
+              "select_id": 3,
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "o",
+                    "access_type": "ALL",
+                    "possible_keys": ["cust_id"],
+                    "r_loops": 1,
+                    "rows": 1000,
+                    "r_rows": 1000,
+                    "r_table_time_ms": 0.05503678,
+                    "r_other_time_ms": 0.043983481,
+                    "r_engine_stats": {
+                      "pages_accessed": 4
+                    },
+                    "filtered": 100,
+                    "r_filtered": 10,
+                    "attached_condition": "o.amount < 100"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

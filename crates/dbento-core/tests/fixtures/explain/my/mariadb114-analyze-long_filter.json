@@ -1,0 +1,32 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.013991665
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.1764192,
+    "r_loops": 1,
+    "r_total_time_ms": 0.363853662,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "ord",
+          "access_type": "ALL",
+          "loops": 1,
+          "r_loops": 1,
+          "rows": 1000,
+          "r_rows": 1000,
+          "cost": 0.1764192,
+          "r_table_time_ms": 0.074863451,
+          "r_other_time_ms": 0.287221149,
+          "r_engine_stats": {
+            "pages_accessed": 4
+          },
+          "filtered": 100,
+          "r_filtered": 99.9,
+          "attached_condition": "ord.amount + 1 > 2 and ord.amount * 2 < 50000 and ord.cust_id + ord.`id` > 3 and ord.cust_id * 7 < 100000 and ord.`id` - ord.cust_id > -1000000 and ord.amount / 3 < 99999 and ord.`id` + ord.cust_id + ord.amount < 123456789"
+        }
+      }
+    ]
+  }
+}

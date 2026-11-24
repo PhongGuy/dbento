@@ -1,0 +1,108 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "330.91"
+    },
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ALL",
+          "possible_keys": [
+            "PRIMARY"
+          ],
+          "rows_examined_per_scan": 200,
+          "rows_produced_per_join": 200,
+          "filtered": "100.00",
+          "cost_info": {
+            "read_cost": "0.25",
+            "eval_cost": "20.00",
+            "prefix_cost": "20.25",
+            "data_read_per_join": "18K"
+          },
+          "used_columns": [
+            "id",
+            "name"
+          ]
+        }
+      },
+      {
+        "table": {
+          "table_name": "<subquery3>",
+          "access_type": "eq_ref",
+          "key": "<auto_distinct_key>",
+          "key_length": "5",
+          "ref": [
+            "dbento_t_3624377_0.c.id"
+          ],
+          "rows_examined_per_scan": 1,
+          "materialized_from_subquery": {
+            "using_temporary_table": true,
+            "query_block": {
+              "table": {
+                "table_name": "o",
+                "access_type": "ALL",
+                "possible_keys": [
+                  "cust_id"
+                ],
+                "rows_examined_per_scan": 1000,
+                "rows_produced_per_join": 333,
+                "filtered": "33.33",
+                "cost_info": {
+                  "read_cost": "67.67",
+                  "eval_cost": "33.33",
+                  "prefix_cost": "101.00",
+                  "data_read_per_join": "5K"
+                },
+                "used_columns": [
+                  "cust_id",
+                  "amount"
+                ],
+                "attached_condition": "(`dbento_t_3624377_0`.`o`.`amount` < 100.00)"
+              }
+            }
+          }
+        }
+      },
+      {
+        "table": {
+          "table_name": "<subquery2>",
+          "access_type": "eq_ref",
+          "key": "<auto_distinct_key>",
+          "key_length": "5",
+          "ref": [
+            "dbento_t_3624377_0.c.id"
+          ],
+          "rows_examined_per_scan": 1,
+          "materialized_from_subquery": {
+            "using_temporary_table": true,
+            "query_block": {
+              "table": {
+                "table_name": "ord",
+                "access_type": "ALL",
+                "possible_keys": [
+                  "cust_id"
+                ],
+                "rows_examined_per_scan": 1000,
+                "rows_produced_per_join": 333,
+                "filtered": "33.33",
+                "cost_info": {
+                  "read_cost": "67.67",
+                  "eval_cost": "33.33",
+                  "prefix_cost": "101.00",
+                  "data_read_per_join": "5K"
+                },
+                "used_columns": [
+                  "cust_id",
+                  "amount"
+                ],
+                "attached_condition": "(`dbento_t_3624377_0`.`ord`.`amount` > 500.00)"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
