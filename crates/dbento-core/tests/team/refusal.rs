@@ -129,6 +129,8 @@ fn rule_text_and_token_redaction() {
         "the workspace's default branch is missing, so push it first"
     );
     assert_eq!(rule_text("branch_delete"), "deletes the default branch");
+    assert_eq!(rule_text("tag_move"), "moves an existing tag");
+    assert_eq!(rule_text("tag_delete"), "deletes an existing tag");
     assert_eq!(
         rule_text("force_push"),
         "rewrites the default branch's history"

@@ -192,6 +192,8 @@ pub fn rule_text(rule: &str) -> &str {
         "default_branch_missing" => "the workspace's default branch is missing, so push it first",
         "branch_delete" => "deletes the default branch",
         "force_push" => "rewrites the default branch's history",
+        "tag_move" => "moves an existing tag",
+        "tag_delete" => "deletes an existing tag",
         "ref_namespace" => "a ref outside branches and tags",
         other => other,
     }
