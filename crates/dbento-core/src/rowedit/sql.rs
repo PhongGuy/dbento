@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use super::target::mysql_bytes;
-use super::{Change, EditBatch, EditValue, RowKey};
+use super::{Change, EditBatch, EditTarget, EditValue, RowKey};
 use crate::introspect::{quote_ident, quote_literal};
 use crate::workspace::Engine;
 
@@ -157,6 +157,33 @@ pub fn render_sql(batch: &EditBatch) -> String {
         .map(|c| Gen::new(batch, false).change(c) + ";")
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The SELECT that reads every target column of the row `key` names, in target order and
+/// in the form a guard reads it, without a lock.
+pub(super) fn read_row(target: &EditTarget, dialect: Dialect, key: &RowKey) -> BoundStatement {
+    let batch = EditBatch {
+        target: target.clone(),
+        changes: Vec::new(),
+        dialect,
+    };
+    let mut g = Gen::new(&batch, true);
+    let cols = target
+        .columns()
+        .iter()
+        .map(|c| g.read_form(c.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rel = g.relation(true);
+    let filter = g.key(key);
+    BoundStatement {
+        sql: format!("SELECT {cols} FROM {rel} WHERE {filter}"),
+        params: g.params,
+        returning: false,
+        reread: None,
+        guard: None,
+        expected: Vec::new(),
+    }
 }
 
 /// Bytes as Postgres `bytea` hex input: `\x` and lowercase hex.

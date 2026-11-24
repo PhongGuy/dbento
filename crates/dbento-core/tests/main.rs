@@ -132,6 +132,7 @@ mod rowedit_my_types;
 mod rowedit_pg_apply;
 mod rowedit_pg_edges;
 mod rowedit_pg_torture;
+mod rowedit_reread;
 mod rowedit_sqlite;
 mod rowedit_target;
 mod s3_crate;

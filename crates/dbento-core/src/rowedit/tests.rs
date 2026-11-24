@@ -1483,3 +1483,35 @@ fn mysql_byte_typed_columns_are_read_raw_and_the_rest_as_char() {
         assert!(sql.starts_with(want), "{ty}: {sql}");
     }
 }
+
+#[tokio::test]
+async fn reread_refuses_an_engine_that_cannot_edit_rows_before_connecting() {
+    // The database file does not exist, so reaching connect would give a different error.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        "dbento = 1\n[connections.lite]\nengine = \"sqlite\"\npath = \"missing.db\"\n",
+    )
+    .unwrap();
+    let ws = crate::workspace::Workspace::open(dir.path()).unwrap();
+    let conn = ws.declared("lite").unwrap();
+    let err = reread(
+        &ws,
+        conn,
+        None,
+        crate::session::SessionOptions::default(),
+        &ms(),
+        &[key(&[("id", t("1"))])],
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            RereadError::UnsupportedEngine {
+                engine: Engine::Mssql
+            }
+        ),
+        "{err:?}"
+    );
+}

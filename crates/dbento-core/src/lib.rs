@@ -159,8 +159,8 @@ mod sqlite;
 mod rowedit;
 pub use rowedit::{
     Applied, ApplyError, BatchError, Browse, BrowseError, Change, ChangeOutcome, EditBatch,
-    EditColumn, EditTarget, EditValue, Keyset, NotEditable, RowKey, Sort, apply, apply_with,
-    browse_sql, key_filter, render_sql,
+    EditColumn, EditTarget, EditValue, Keyset, NotEditable, RereadError, RowKey, Sort, apply,
+    apply_with, browse_sql, key_filter, render_sql, reread,
 };
 
 pub mod import;

@@ -3,10 +3,12 @@
 
 mod apply;
 mod browse;
+mod reread;
 mod sql;
 mod target;
 pub use apply::{Applied, ApplyError, ChangeOutcome, apply, apply_with};
 pub use browse::{Browse, BrowseError, Keyset, Sort, browse_sql, key_filter};
+pub use reread::{RereadError, reread};
 use sql::Dialect;
 pub(crate) use sql::Param;
 pub use sql::render_sql;
