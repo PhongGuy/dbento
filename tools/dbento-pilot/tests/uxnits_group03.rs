@@ -109,6 +109,50 @@ fn text_inset(png_path: &Path, r: Rect) -> f64 {
     left as f64 - r.x
 }
 
+/// The first pixel of box `r`'s text rows that `after` changed: an inked pixel changed at all,
+/// or any other darkened past one level. The text rows run from the first to the last row
+/// inside the border holding a pixel far from the box's fill.
+fn glyph_hit(before: &Path, after: &Path, r: Rect) -> Option<(usize, usize)> {
+    let (a, b) = (pixel_reader(before), pixel_reader(after));
+    let (x0, y0) = (r.x as usize + 2, r.y as usize + 2);
+    let (x1, y1) = ((r.x + r.w) as usize - 2, (r.y + r.h) as usize - 2);
+    let fill = a(x0, y0);
+    let inked = |x: usize, y: usize| {
+        let p = a(x, y);
+        (0..3).map(|i| (p[i] - fill[i]).abs()).sum::<i32>() > 120
+    };
+    let row_inked = |y: usize| (x0..x1).any(|x| inked(x, y));
+    let (Some(top), Some(bottom)) = (
+        (y0..y1).find(|&y| row_inked(y)),
+        (y0..y1).rev().find(|&y| row_inked(y)),
+    ) else {
+        panic!("no text in {r:?} of {}", before.display());
+    };
+    (top..=bottom)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            let (p, q) = (a(x, y), b(x, y));
+            let moved = (0..3).map(|i| (p[i] - q[i]).abs()).max().unwrap_or(0);
+            if inked(x, y) { moved > 0 } else { moved > 1 }
+        })
+}
+
+/// The first pixel of `r` that `after` changed other than as a shadow does: every channel
+/// darkened alike, by at most a faint tail's few levels.
+fn unshadowed(before: &Path, after: &Path, r: Rect) -> Option<(usize, usize)> {
+    let (a, b) = (pixel_reader(before), pixel_reader(after));
+    let (x0, y0) = (r.x as usize, r.y as usize);
+    let (x1, y1) = ((r.x + r.w) as usize, (r.y + r.h) as usize);
+    let shadowed = |p: [i32; 3], q: [i32; 3]| {
+        let dark = [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+        let (lo, hi) = (*dark.iter().min().unwrap(), *dark.iter().max().unwrap());
+        lo >= 0 && hi <= 16 && hi - lo <= 2
+    };
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .find(|&(x, y)| !shadowed(a(x, y), b(x, y)))
+}
+
 /// Whether some pixel of `r` differs from what `before` drew there: a tooltip covering it.
 fn changed(before: &Path, after: &Path, r: Rect) -> bool {
     let (a, b) = (pixel_reader(before), pixel_reader(after));
@@ -263,15 +307,19 @@ async fn editor_menu_explorer_tip_approval_tip_and_preview_inset() {
             changed(&plain, &tipped, beside),
             "no tooltip beside the line"
         );
-        // The tooltip's soft shadow may reach the box's top few pixels; its text may not.
-        let sql_text = Rect {
-            y: sql_box.y + 6.0,
-            h: sql_box.h - 8.0,
-            ..sql_box
-        };
-        assert!(
-            !changed(&plain, &tipped, sql_text),
+        // The SQL's inked pixels stay exactly as drawn; between them, across the glyph rows, at
+        // most the shadow's farthest blur may round one level darker.
+        assert_eq!(
+            glyph_hit(&plain, &tipped, sql_box),
+            None,
             "the tooltip covers the SQL"
+        );
+        // Over the rest of the box, border included, only the tooltip's soft shadow may show:
+        // an even darkening of a few levels, never a lighter or a recoloured pixel.
+        assert_eq!(
+            unshadowed(&plain, &tipped, sql_box),
+            None,
+            "something besides the tooltip's shadow reaches the SQL box"
         );
         // No pixel of the headline's rows darkens across the dialog's width, shadow included,
         // past the one level the shadow's farthest blur rounds to.
