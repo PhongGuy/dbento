@@ -102,6 +102,7 @@ pub(crate) struct Bucket {
 }
 
 /// The head of an object: at most the bytes asked for, and the object's whole size.
+#[derive(Debug)]
 pub(crate) struct RangeRead {
     pub(crate) bytes: Vec<u8>,
     pub(crate) total_size: u64,

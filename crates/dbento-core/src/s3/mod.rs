@@ -6,6 +6,9 @@
 pub(crate) mod browse;
 #[cfg(feature = "s3")]
 pub(crate) mod client;
+pub(crate) mod command;
+#[cfg(feature = "s3")]
+pub(crate) mod errors;
 pub(crate) mod lex;
 pub(crate) mod names;
 pub(crate) mod ops;
