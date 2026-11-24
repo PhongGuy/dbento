@@ -164,13 +164,13 @@ fn the_toolbar_button_explains_too(cx: &mut TestAppContext) {
     assert!(present(cx, o.win, "plan-view"));
 }
 
-/// A MySQL connection that never connects; the tab opens and its preconnect fails quietly.
-const MY_CLOSED: &str = "dbento = 1\n[connections.my]\nengine = \"mysql\"\nhost = \"127.0.0.1\"\nport = 9\nuser = \"u\"\ndatabase = \"d\"\n";
+/// A SQL Server connection that never connects; the tab opens and its preconnect fails quietly.
+const MS_CLOSED: &str = "dbento = 1\n[connections.ms]\nengine = \"mssql\"\nhost = \"127.0.0.1\"\nport = 9\nuser = \"u\"\ndatabase = \"d\"\n";
 
 #[gpui_kit::test]
-fn mysql_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
-    let s = started(cx, MY_CLOSED);
-    open_connection_row(cx, s.win, "my");
+fn sql_server_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
+    let s = started(cx, MS_CLOSED);
+    open_connection_row(cx, s.win, "ms");
     assert!(present(cx, s.win, "format"));
     assert!(!present(cx, s.win, "explain"));
     assert!(!present(cx, s.win, "explain-tip"));
@@ -191,7 +191,8 @@ fn mysql_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
     cx.update_window(s.win, |_, w, cx| w.press("ctrl-e", cx))
         .unwrap();
     wait_real(cx, "the unsupported notice", |cx| {
-        label_of(cx, s.win, "notice").as_deref() == Some("EXPLAIN is not available for MySQL yet.")
+        label_of(cx, s.win, "notice").as_deref()
+            == Some("EXPLAIN is not available for SQL Server yet.")
     });
 
     cx.update_window(s.win, |_, w, cx| w.right_click("editor", cx))
