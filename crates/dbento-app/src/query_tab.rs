@@ -280,8 +280,8 @@ pub fn explain_warning(err: &ExplainError, engine: Engine, title: &str) -> Strin
         ExplainError::NotExplainable => {
             let statements = match engine {
                 Engine::Sqlite => "SELECT, WITH, VALUES, INSERT, UPDATE, DELETE or REPLACE",
+                Engine::Mysql => "SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or REPLACE",
                 Engine::Postgres
-                | Engine::Mysql
                 | Engine::Mssql
                 | Engine::Duckdb
                 | Engine::Mongodb

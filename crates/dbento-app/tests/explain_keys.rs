@@ -2,7 +2,7 @@
 use crate::support::{Opened, label_of, open_connection_row, opened, present, started, wait_real};
 use dbento_app::palette::PaletteCommand;
 use dbento_app::query_tab::{analyze_ask, explain_warning};
-use dbento_core::{Engine, ExplainError, ExplainMode, Unguarded, explain_request};
+use dbento_core::{Engine, ExplainMode, Unguarded, explain_request};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 
@@ -74,6 +74,10 @@ fn explain_warnings_are_sentences_that_list_only_the_engines_statements() {
         let err = explain_request(engine, sql, ExplainMode::Plan).unwrap_err();
         let title = if engine == Engine::Postgres {
             "PostgreSQL"
+        } else if engine == Engine::Mysql {
+            "MySQL"
+        } else if engine == Engine::Mssql {
+            "SQL Server"
         } else {
             "SQLite"
         };
@@ -98,8 +102,13 @@ fn explain_warnings_are_sentences_that_list_only_the_engines_statements() {
         "Select one statement to explain."
     );
     assert_eq!(
-        explain_warning(&ExplainError::UnsupportedEngine, Engine::Mysql, "MySQL"),
-        "EXPLAIN is not available for MySQL yet."
+        warn(Engine::Mysql, "VACUUM"),
+        "Only SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or REPLACE can be explained \
+         on MySQL, and not after a block comment."
+    );
+    assert_eq!(
+        warn(Engine::Mssql, "SELECT 1"),
+        "EXPLAIN is not available for SQL Server yet."
     );
 }
 

@@ -1,5 +1,7 @@
 //! The runner's Explain: asks only where ANALYZE could write, and is read in every wait.
-use crate::support::{MANY, fixture, here, next_event, pg_spec, run_cmd, spec, until_event};
+use crate::support::{
+    MANY, fixture, here, my_spec, next_event, pg_spec, run_cmd, spec, until_event,
+};
 use dbento_app::runner::{Command, Event, StatementEnd, spawn_on};
 use dbento_core::{Engine, ExecuteError, ExplainMode, Unguarded, explain_request};
 
@@ -285,4 +287,97 @@ async fn an_explain_is_read_while_a_result_is_parked_or_a_question_is_open() {
         "{seen:?}"
     );
     assert_eq!(fx.count("SELECT count(*) FROM t WHERE x = 0"), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mysql_analyzes_a_read_unasked_and_only_plans_a_write() {
+    for (label, db) in dbento_testkit::my_matrix().await {
+        db.scalar("CREATE TABLE t (x INT)").await;
+        let maria = db.flavor() == dbento_testkit::MyFlavor::Mariadb;
+        let (_dir, spec) = my_spec(&db, "");
+        let r = spawn_on(&here(), spec);
+        let ev = r.events();
+        r.send(explain(
+            1,
+            Engine::Mysql,
+            "SELECT x FROM t",
+            ExplainMode::Analyze,
+        ));
+        let want = if maria {
+            "ANALYZE FORMAT=JSON SELECT x FROM t"
+        } else {
+            "EXPLAIN ANALYZE FORMAT=TREE SELECT x FROM t"
+        };
+        let (seen, _) = until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 1 })).await;
+        assert!(
+            seen.iter()
+                .any(|e| matches!(e, Event::Executing { run_id: 1, sql, .. } if sql == want)),
+            "{label}: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|e| matches!(e, Event::NeedsConfirm { .. })),
+            "{label}"
+        );
+        assert!(
+            seen.iter().any(
+                |e| matches!(e, Event::Planned { run_id: 1, result: Ok(out), .. }
+                if out.plan.as_ref().is_ok_and(|p| p.analyzed))
+            ),
+            "{label}: {seen:?}"
+        );
+        r.send(explain(
+            2,
+            Engine::Mysql,
+            "UPDATE t SET x = 1 WHERE x = 0",
+            ExplainMode::Analyze,
+        ));
+        let (seen, _) = until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 2 })).await;
+        assert!(
+            seen.iter()
+                .any(|e| matches!(e, Event::Executing { run_id: 2, sql, .. }
+                if sql == "EXPLAIN FORMAT=JSON UPDATE t SET x = 1 WHERE x = 0")),
+            "{label}: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|e| matches!(e, Event::NeedsConfirm { .. })),
+            "{label}"
+        );
+        assert!(
+            seen.iter().any(
+                |e| matches!(e, Event::Planned { run_id: 2, result: Ok(out), .. }
+                if out.plan.as_ref().is_ok_and(|p| !p.analyzed))
+            ),
+            "{label}: {seen:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edited_mysql_request_is_refused_before_anything_is_sent() {
+    for (label, db) in dbento_testkit::my_matrix().await {
+        let (_dir, spec) = my_spec(&db, "");
+        let r = spawn_on(&here(), spec);
+        let ev = r.events();
+        let mut request = explain_request(Engine::Mysql, "SELECT 1", ExplainMode::Analyze).unwrap();
+        request.sql = "ANALYZE TABLE t".to_owned();
+        r.send(Command::Explain { run_id: 1, request });
+        let (seen, _) = until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 1 })).await;
+        assert!(
+            seen.iter().any(|e| matches!(
+                e,
+                Event::Planned {
+                    run_id: 1,
+                    result: Err(ExecuteError::Unsupported { .. }),
+                    ..
+                }
+            )),
+            "{label}: {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|e| matches!(e, Event::Executing { .. } | Event::NeedsConfirm { .. })),
+            "{label}: {seen:?}"
+        );
+    }
 }
