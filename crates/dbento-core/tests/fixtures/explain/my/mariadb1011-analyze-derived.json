@@ -1,0 +1,56 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.02108485
+  },
+  "query_block": {
+    "select_id": 1,
+    "r_loops": 1,
+    "r_total_time_ms": 0.032772972,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "r_loops": 1,
+          "rows": 200,
+          "r_rows": 10,
+          "r_table_time_ms": 0.006714102,
+          "r_other_time_ms": 0.002099727,
+          "filtered": 100,
+          "r_filtered": 100,
+          "attached_condition": "d.n > 1",
+          "materialized": {
+            "query_block": {
+              "select_id": 2,
+              "r_loops": 1,
+              "r_total_time_ms": 0.029014281,
+              "having_condition": "n > 1",
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "cust",
+                    "access_type": "index",
+                    "key": "region",
+                    "key_length": "5",
+                    "used_key_parts": ["region"],
+                    "r_loops": 1,
+                    "rows": 200,
+                    "r_rows": 200,
+                    "r_table_time_ms": 0.014200616,
+                    "r_other_time_ms": 0.006572684,
+                    "r_engine_stats": {
+                      "pages_accessed": 1
+                    },
+                    "filtered": 100,
+                    "r_filtered": 100,
+                    "using_index": true
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

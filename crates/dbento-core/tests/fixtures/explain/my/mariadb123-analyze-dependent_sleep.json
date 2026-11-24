@@ -1,0 +1,73 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.019321663
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.00322689,
+    "r_loops": 1,
+    "r_total_time_ms": 100.5638016,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "range",
+          "possible_keys": ["PRIMARY"],
+          "key": "PRIMARY",
+          "key_length": "4",
+          "used_key_parts": ["id"],
+          "loops": 1,
+          "r_loops": 1,
+          "rows": 5,
+          "r_rows": 5,
+          "cost": 0.00322689,
+          "r_table_time_ms": 0.008043998,
+          "r_other_time_ms": 0.007361112,
+          "r_engine_stats": {
+            "pages_accessed": 2
+          },
+          "filtered": 100,
+          "r_total_filtered": 100,
+          "attached_condition": "c.`id` <= 5",
+          "r_filtered": 100
+        }
+      }
+    ],
+    "subqueries": [
+      {
+        "query_block": {
+          "select_id": 2,
+          "cost": 0.00171364,
+          "r_loops": 5,
+          "r_total_time_ms": 100.5430338,
+          "nested_loop": [
+            {
+              "table": {
+                "table_name": "c2",
+                "access_type": "eq_ref",
+                "possible_keys": ["PRIMARY"],
+                "key": "PRIMARY",
+                "key_length": "4",
+                "used_key_parts": ["id"],
+                "ref": ["dbento_t_3624377_4.c.id"],
+                "loops": 1,
+                "r_loops": 5,
+                "rows": 1,
+                "r_rows": 1,
+                "cost": 0.00171364,
+                "r_table_time_ms": 0.007079923,
+                "r_other_time_ms": 100.5296372,
+                "r_engine_stats": {
+                  "pages_accessed": 5
+                },
+                "filtered": 100,
+                "r_total_filtered": 100,
+                "r_filtered": 100
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

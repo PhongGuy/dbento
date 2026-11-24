@@ -1,0 +1,44 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "range",
+          "possible_keys": ["PRIMARY"],
+          "key": "PRIMARY",
+          "key_length": "4",
+          "used_key_parts": ["id"],
+          "rows": 5,
+          "filtered": 100,
+          "attached_condition": "c.`id` <= 5",
+          "using_index": true
+        }
+      }
+    ],
+    "subqueries": [
+      {
+        "query_block": {
+          "select_id": 2,
+          "nested_loop": [
+            {
+              "table": {
+                "table_name": "c2",
+                "access_type": "eq_ref",
+                "possible_keys": ["PRIMARY"],
+                "key": "PRIMARY",
+                "key_length": "4",
+                "used_key_parts": ["id"],
+                "ref": ["dbento_t_3624377_2.c.id"],
+                "rows": 1,
+                "filtered": 100,
+                "using_index": true
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

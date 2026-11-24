@@ -1,0 +1,75 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "1.26"
+    },
+    "table": {
+      "table_name": "c",
+      "access_type": "range",
+      "possible_keys": [
+        "PRIMARY",
+        "region"
+      ],
+      "key": "PRIMARY",
+      "used_key_parts": [
+        "id"
+      ],
+      "key_length": "4",
+      "rows_examined_per_scan": 5,
+      "rows_produced_per_join": 5,
+      "filtered": "100.00",
+      "using_index": true,
+      "cost_info": {
+        "read_cost": "0.76",
+        "eval_cost": "0.50",
+        "prefix_cost": "1.26",
+        "data_read_per_join": "480"
+      },
+      "used_columns": [
+        "id"
+      ],
+      "attached_condition": "(`dbento_t_3624377_1`.`c`.`id` <= 5)"
+    },
+    "select_list_subqueries": [
+      {
+        "dependent": true,
+        "cacheable": false,
+        "query_block": {
+          "select_id": 2,
+          "cost_info": {
+            "query_cost": "0.35"
+          },
+          "table": {
+            "table_name": "c2",
+            "access_type": "eq_ref",
+            "possible_keys": [
+              "PRIMARY"
+            ],
+            "key": "PRIMARY",
+            "used_key_parts": [
+              "id"
+            ],
+            "key_length": "4",
+            "ref": [
+              "dbento_t_3624377_1.c.id"
+            ],
+            "rows_examined_per_scan": 1,
+            "rows_produced_per_join": 1,
+            "filtered": "100.00",
+            "using_index": true,
+            "cost_info": {
+              "read_cost": "0.25",
+              "eval_cost": "0.10",
+              "prefix_cost": "0.35",
+              "data_read_per_join": "96"
+            },
+            "used_columns": [
+              "id"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

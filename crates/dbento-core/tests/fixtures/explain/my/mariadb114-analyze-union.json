@@ -1,0 +1,79 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.023490318
+  },
+  "query_block": {
+    "union_result": {
+      "table_name": "<union1,2>",
+      "access_type": "ALL",
+      "r_loops": 1,
+      "r_rows": 110,
+      "query_specifications": [
+        {
+          "query_block": {
+            "select_id": 1,
+            "cost": 0.00457962,
+            "r_loops": 1,
+            "r_total_time_ms": 0.009056387,
+            "nested_loop": [
+              {
+                "table": {
+                  "table_name": "cust",
+                  "access_type": "ref",
+                  "possible_keys": ["region"],
+                  "key": "region",
+                  "key_length": "5",
+                  "used_key_parts": ["region"],
+                  "ref": ["const"],
+                  "loops": 1,
+                  "r_loops": 1,
+                  "rows": 20,
+                  "r_rows": 20,
+                  "cost": 0.00457962,
+                  "r_table_time_ms": 0.003980388,
+                  "r_other_time_ms": 0.003960285,
+                  "r_engine_stats": {
+                    "pages_accessed": 2
+                  },
+                  "filtered": 100,
+                  "r_filtered": 100,
+                  "using_index": true
+                }
+              }
+            ]
+          }
+        },
+        {
+          "query_block": {
+            "select_id": 2,
+            "operation": "UNION",
+            "cost": 0.1764192,
+            "r_loops": 1,
+            "r_total_time_ms": 0.100645507,
+            "nested_loop": [
+              {
+                "table": {
+                  "table_name": "ord",
+                  "access_type": "ALL",
+                  "loops": 1,
+                  "r_loops": 1,
+                  "rows": 1000,
+                  "r_rows": 1000,
+                  "cost": 0.1764192,
+                  "r_table_time_ms": 0.05608728,
+                  "r_other_time_ms": 0.043884778,
+                  "r_engine_stats": {
+                    "pages_accessed": 4
+                  },
+                  "filtered": 100,
+                  "r_filtered": 10,
+                  "attached_condition": "ord.amount > 900"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

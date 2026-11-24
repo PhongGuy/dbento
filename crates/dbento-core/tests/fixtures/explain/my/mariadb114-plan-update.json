@@ -1,0 +1,16 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "table": {
+      "update": 1,
+      "table_name": "ord",
+      "access_type": "range",
+      "possible_keys": ["cust_id"],
+      "key": "cust_id",
+      "key_length": "5",
+      "used_key_parts": ["cust_id"],
+      "rows": 5,
+      "attached_condition": "ord.cust_id = 5"
+    }
+  }
+}

@@ -1111,6 +1111,20 @@ async fn run_script(
 /// writable session, since it executes the statement; a read-only one lets the engine refuse.
 async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'_>) -> After {
     let run_id = cx.run_id;
+    // The session re-checks the request first, so a refused one sends nothing and asks
+    // nothing, and Executing reports the text the database actually receives.
+    let sql = match session.explain_sql(request) {
+        Ok(sql) => sql,
+        Err(e) => {
+            cx.send(Event::Planned {
+                run_id,
+                result: Err(e),
+                elapsed: Duration::ZERO,
+            })
+            .await;
+            return After::Idle;
+        }
+    };
     let writes = (request.classification.as_ref())
         .filter(|c| request.mode == ExplainMode::Analyze && c.writes != Writes::No);
     if let Some(c) = writes
@@ -1144,7 +1158,7 @@ async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'
     cx.send(Event::Executing {
         run_id,
         stmt: 0,
-        sql: request.sql.clone(),
+        sql,
     })
     .await;
     // A Stop meanwhile cancels through the CancelHandle, so the explain itself ends early.

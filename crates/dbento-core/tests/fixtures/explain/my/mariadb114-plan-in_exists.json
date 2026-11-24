@@ -1,0 +1,85 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.8510228,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ALL",
+          "possible_keys": ["PRIMARY"],
+          "loops": 1,
+          "rows": 200,
+          "cost": 0.0434548,
+          "filtered": 100
+        }
+      },
+      {
+        "table": {
+          "table_name": "<subquery2>",
+          "access_type": "eq_ref",
+          "possible_keys": ["distinct_key"],
+          "key": "distinct_key",
+          "key_length": "4",
+          "used_key_parts": ["cust_id"],
+          "ref": ["func"],
+          "rows": 1,
+          "filtered": 100,
+          "materialized": {
+            "unique": 1,
+            "query_block": {
+              "select_id": 2,
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "ord",
+                    "access_type": "ALL",
+                    "possible_keys": ["cust_id"],
+                    "loops": 1,
+                    "rows": 1000,
+                    "cost": 0.1764192,
+                    "filtered": 100,
+                    "attached_condition": "ord.amount > 500"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "table": {
+          "table_name": "<subquery3>",
+          "access_type": "eq_ref",
+          "possible_keys": ["distinct_key"],
+          "key": "distinct_key",
+          "key_length": "4",
+          "used_key_parts": ["cust_id"],
+          "ref": ["func"],
+          "rows": 1,
+          "filtered": 100,
+          "materialized": {
+            "unique": 1,
+            "query_block": {
+              "select_id": 3,
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "o",
+                    "access_type": "ALL",
+                    "possible_keys": ["cust_id"],
+                    "loops": 1,
+                    "rows": 1000,
+                    "cost": 0.1764192,
+                    "filtered": 100,
+                    "attached_condition": "o.amount < 100"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

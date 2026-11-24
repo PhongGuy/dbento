@@ -1,0 +1,39 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "filesort": {
+      "sort_key": "c.`name`",
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "c",
+              "access_type": "ref",
+              "possible_keys": ["PRIMARY", "region"],
+              "key": "region",
+              "key_length": "5",
+              "used_key_parts": ["region"],
+              "ref": ["const"],
+              "rows": 20,
+              "filtered": 100,
+              "attached_condition": "c.region <=> 3"
+            }
+          },
+          {
+            "table": {
+              "table_name": "o",
+              "access_type": "ref",
+              "possible_keys": ["cust_id"],
+              "key": "cust_id",
+              "key_length": "5",
+              "used_key_parts": ["cust_id"],
+              "ref": ["dbento_t_3624377_2.c.id"],
+              "rows": 2,
+              "filtered": 100
+            }
+          }
+        ]
+      }
+    }
+  }
+}
