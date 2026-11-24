@@ -14,7 +14,7 @@ workspace = true
 mysql_async.workspace = true
 rusqlite.workspace = true
 sqlite3-parser.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-postgres.workspace = true
 pg_query.workspace = true
 sqlparser.workspace = true

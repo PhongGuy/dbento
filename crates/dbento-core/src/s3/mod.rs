@@ -6,6 +6,8 @@ pub(crate) mod client;
 #[cfg(feature = "s3")]
 pub(crate) mod command;
 #[cfg(feature = "s3")]
+pub(crate) mod download;
+#[cfg(feature = "s3")]
 pub(crate) mod driver;
 #[cfg(feature = "s3")]
 pub(crate) mod errors;
@@ -20,6 +22,7 @@ pub(crate) mod replay;
 pub(crate) mod stream;
 
 pub use browse::{
-    MAX_READ_BYTES, ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList,
-    ObjectMeta, ObjectPage, ObjectRead,
+    DEFAULT_MAX_DOWNLOAD, DownloadError, DownloadOptions, DownloadReport, MAX_READ_BYTES,
+    ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList, ObjectMeta, ObjectPage,
+    ObjectRead,
 };

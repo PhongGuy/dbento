@@ -36,7 +36,8 @@ use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_t
 #[cfg(feature = "s3")]
 use crate::s3::driver::{NO_TABLES as S3_NO_TABLES, S3Session};
 use crate::s3::{
-    ObjectBrowseError, ObjectChunk, ObjectKey, ObjectList, ObjectMeta, ObjectPage, ObjectRead,
+    DownloadError, DownloadOptions, DownloadReport, ObjectBrowseError, ObjectChunk, ObjectKey,
+    ObjectList, ObjectMeta, ObjectPage, ObjectRead,
 };
 use crate::sqlite::{SqliteCancel, SqliteDriver};
 #[cfg(feature = "surrealdb")]
@@ -1364,6 +1365,23 @@ impl Session {
             #[cfg(feature = "s3")]
             SessionInner::S3(d) => d.read_object(req).await,
             _ => Err(no_objects()),
+        }
+    }
+
+    /// Downloads `key` to `dest` through a hidden sibling partial file, renamed into place only
+    /// once complete; the session's cancel handle stops it. S3 only; every other engine is
+    /// `Remote(Unsupported)`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads them
+    pub async fn download_object(
+        &mut self,
+        key: &ObjectKey,
+        dest: &Path,
+        opts: DownloadOptions,
+    ) -> Result<DownloadReport, DownloadError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.download_object(key, dest, &opts).await,
+            _ => Err(DownloadError::Remote(no_objects())),
         }
     }
 

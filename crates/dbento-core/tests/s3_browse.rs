@@ -16,9 +16,26 @@ async fn sqlite_has_no_objects_to_browse() {
         Err(ObjectBrowseError::Unsupported { .. })
     ));
     assert!(matches!(
-        l.read_object(&ObjectRead::new(k, 10)).await,
+        l.read_object(&ObjectRead::new(k.clone(), 10)).await,
         Err(ObjectBrowseError::Unsupported { .. })
     ));
+    let dir = tempfile::tempdir().unwrap();
+    let d = l
+        .download_object(
+            &k,
+            &dir.path().join("o"),
+            dbento_core::DownloadOptions::default(),
+        )
+        .await;
+    assert!(
+        matches!(
+            d,
+            Err(dbento_core::DownloadError::Remote(
+                ObjectBrowseError::Unsupported { .. }
+            ))
+        ),
+        "{d:?}"
+    );
 }
 
 #[cfg(feature = "s3")]
@@ -101,6 +118,45 @@ mod moto {
         assert!(
             matches!(missing, Err(ObjectBrowseError::NotFound { .. })),
             "{missing:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_three_mib_object_downloads_byte_exact_and_a_missing_one_is_remote() {
+        let fx = s3fx("").await;
+        let mut s = fx.session().await;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("big.bin");
+        let r = s
+            .download_object(
+                &ObjectKey::new(fx.s3.bucket(), "big/three-mib.bin"),
+                &dest,
+                dbento_core::DownloadOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.bytes, 3 << 20);
+        let got = std::fs::read(&dest).unwrap();
+        assert!(
+            got.iter()
+                .enumerate()
+                .all(|(i, b)| *b == dbento_testkit::big_byte(i))
+        );
+        let e = s
+            .download_object(
+                &ObjectKey::new(fx.s3.bucket(), "nope"),
+                &dir.path().join("n"),
+                dbento_core::DownloadOptions::default(),
+            )
+            .await;
+        assert!(
+            matches!(
+                e,
+                Err(dbento_core::DownloadError::Remote(
+                    ObjectBrowseError::NotFound { .. }
+                ))
+            ),
+            "{e:?}"
         );
     }
 }

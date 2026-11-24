@@ -1,5 +1,8 @@
 //! The public names for objects the S3 browser lists, reads and downloads.
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 /// One object's address: a bucket and the raw key inside it.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +200,97 @@ pub enum ObjectBrowseError {
         /// Why it ended.
         reason: String,
     },
+}
+
+/// The largest object a download takes unless told otherwise: 1 GiB.
+pub const DEFAULT_MAX_DOWNLOAD: u64 = 1 << 30;
+
+/// How a download behaves: its size cap, whether it replaces an existing file, and how long it
+/// waits for the next bytes before giving up.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct DownloadOptions {
+    /// The largest object accepted, in bytes.
+    pub max_size: u64,
+    /// Replace an existing destination instead of refusing it.
+    pub force: bool,
+    /// The longest wait for any one response or body chunk.
+    pub idle_timeout: Duration,
+}
+
+impl Default for DownloadOptions {
+    fn default() -> Self {
+        DownloadOptions {
+            max_size: DEFAULT_MAX_DOWNLOAD,
+            force: false,
+            idle_timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+impl DownloadOptions {
+    /// Accepts objects up to `n` bytes.
+    #[must_use]
+    pub fn with_max_size(mut self, n: u64) -> Self {
+        self.max_size = n;
+        self
+    }
+
+    /// Replaces an existing destination when `f` is true.
+    #[must_use]
+    pub fn with_force(mut self, f: bool) -> Self {
+        self.force = f;
+        self
+    }
+
+    /// Waits at most `d` for each response or body chunk.
+    #[must_use]
+    pub fn with_idle_timeout(mut self, d: Duration) -> Self {
+        self.idle_timeout = d;
+        self
+    }
+}
+
+/// A finished download: how many bytes landed and where.
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct DownloadReport {
+    /// The bytes written, equal to the object's length.
+    pub bytes: u64,
+    /// The destination file.
+    pub path: PathBuf,
+}
+
+/// Why a download did not land. Every failure leaves no partial file behind.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum DownloadError {
+    /// The object is larger than `max_size`.
+    #[error("the object is {size} bytes, over the {limit}-byte limit")]
+    TooLarge {
+        /// The object's size in bytes.
+        size: u64,
+        /// The limit it broke.
+        limit: u64,
+    },
+    /// The destination already exists, as a file, directory or link.
+    #[error("the destination already exists")]
+    Exists,
+    /// The destination could not be written.
+    #[error("cannot write the destination: {0}")]
+    Destination(std::io::ErrorKind),
+    /// The body ended short of, or ran past, its expected length.
+    #[error("the download was cut short")]
+    Truncated,
+    /// The download was cancelled.
+    #[error("the download was cancelled")]
+    Cancelled,
+    /// The store refused the HEAD or GET.
+    #[error("{0}")]
+    Remote(ObjectBrowseError),
+    /// No response or bytes arrived within the idle timeout.
+    #[error("the download stalled past its idle timeout")]
+    Timeout,
 }
 
 #[cfg(feature = "s3")]

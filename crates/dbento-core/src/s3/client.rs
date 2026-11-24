@@ -15,7 +15,7 @@ use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::operation::list_buckets::ListBucketsError;
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
-use aws_sdk_s3::primitives::{DateTime, DateTimeFormat, SdkBody};
+use aws_sdk_s3::primitives::{ByteStream, DateTime, DateTimeFormat, SdkBody};
 use aws_sdk_s3::types::EncodingType;
 use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use aws_smithy_runtime_api::client::result::ConnectorError;
@@ -106,6 +106,12 @@ pub(crate) struct RangeRead {
     pub(crate) bytes: Vec<u8>,
     pub(crate) total_size: u64,
     pub(crate) content_type: Option<String>,
+}
+
+/// A whole object's body, unread; `length` is the GET Content-Length.
+pub(crate) struct Body {
+    pub(crate) length: Option<u64>,
+    pub(crate) stream: ByteStream,
 }
 
 #[derive(Clone)]
@@ -293,6 +299,25 @@ impl S3Client {
             bytes,
             total_size,
             content_type,
+        })
+    }
+
+    /// `S3Op::GetObject` for the whole object, its body left for the caller to stream.
+    pub(crate) async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Body, Sdk<GetObjectError>> {
+        let out = self
+            .inner
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await?;
+        Ok(Body {
+            length: out.content_length().and_then(|n| u64::try_from(n).ok()),
+            stream: out.body,
         })
     }
 }

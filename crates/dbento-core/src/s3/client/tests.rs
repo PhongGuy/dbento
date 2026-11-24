@@ -111,11 +111,11 @@ async fn checksum_mode_is_sent_only_on_aws() {
     let ok = || Reply::status(200).header("content-length", "2").body("hi");
     let replay = Replay::new(vec![ok(), ok()]);
     client(&replay, None, "eu-west-1", false)
-        .get_range("b", "k", 2)
+        .get_object("b", "k")
         .await
         .unwrap();
     client(&replay, Some("http://replay.test"), "eu-west-1", false)
-        .get_range("b", "k", 2)
+        .get_object("b", "k")
         .await
         .unwrap();
     let seen = replay.seen();

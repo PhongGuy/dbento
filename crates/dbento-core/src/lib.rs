@@ -154,8 +154,9 @@ mod dynamo;
 mod s3;
 pub use s3::names::{display_key, suggested_file_name};
 pub use s3::{
-    MAX_READ_BYTES, ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList,
-    ObjectMeta, ObjectPage, ObjectRead,
+    DEFAULT_MAX_DOWNLOAD, DownloadError, DownloadOptions, DownloadReport, MAX_READ_BYTES,
+    ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList, ObjectMeta, ObjectPage,
+    ObjectRead,
 };
 mod sqlite;
 
