@@ -153,6 +153,7 @@ mod duckdb;
 mod dynamo;
 mod s3;
 pub use s3::names::{display_key, suggested_file_name};
+pub use s3::{ObjectKey, ObjectMeta};
 mod sqlite;
 
 mod rowedit;
