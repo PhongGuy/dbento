@@ -113,7 +113,12 @@ fn a_short_stream_is_one_page_and_an_empty_stream_shows_its_headers(cx: &mut Tes
         assert_eq!(names, ["id", "time", "fields"]);
         assert_eq!(m.results()[0].store.rows(), 0);
         let v = m.message_view().unwrap();
-        assert!(v.newest().is_none() && !v.has_older() && v.error().is_none());
+        // Follow starts from 0-0, the stream's start as this page saw it.
+        assert_eq!(
+            v.newest(),
+            Some(&dbento_core::message::MessageCursor::redis_id("0-0"))
+        );
+        assert!(!v.has_older() && v.error().is_none());
     });
 }
 
@@ -276,6 +281,23 @@ fn follow_lands_new_entries_on_top_even_from_an_empty_stream(cx: &mut TestAppCon
     rt.block_on(seed(&db, "XADD mf:e 2-1 k v"));
     wait_real(cx, "the first entry", |cx| {
         id_at(cx, &e, 0).as_deref() == Some("2-1")
+    });
+}
+
+#[gpui_kit::test]
+fn an_entry_added_to_an_empty_stream_before_follow_starts_lands_on_top(cx: &mut TestAppContext) {
+    let rt = runtime(cx);
+    let _inside = rt.enter();
+    let db = rt.block_on(redis_db());
+    rt.block_on(seed(&db, "XADD mq:e 1-1 a 1\nXDEL mq:e 1-1"));
+    let (_dir, spec) = spec(&db);
+    let m = cx.new(|_| TabModel::new(spec));
+    open_stream(cx, &m, db.index(), "mq:e");
+    // The entry lands after the empty newest page and before the first poll is sent.
+    rt.block_on(seed(&db, "XADD mq:e 2-1 k v"));
+    m.update(cx, |m, cx| m.set_follow(Follow::On, cx));
+    wait_real(cx, "the first entry", |cx| {
+        id_at(cx, &m, 0).as_deref() == Some("2-1")
     });
 }
 
@@ -462,7 +484,9 @@ fn a_stream_page_that_lands_during_a_run_keeps_out_of_its_results(cx: &mut TestA
     wait_real(cx, "the run to end", |cx| {
         m.read_with(cx, |m, _| {
             !m.running() && m.parked_at_cap().is_none() && m.paused().is_none()
-        }) && m.read_with(cx, |m, _| m.results()[0].store.end().is_some())
+        }) && m.read_with(cx, |m, _| {
+            m.results().first().is_some_and(|r| r.store.end().is_some())
+        })
     });
     let ran = rows(cx, &m);
     if m.update(cx, |m, cx| m.older_messages(cx)) {
@@ -549,7 +573,10 @@ fn a_newest_page_sent_before_a_run_and_landing_after_it_ends_is_dropped(cx: &mut
         m.apply(Event::RunDone { run_id });
     });
     wait_real(cx, "the page to land and the run to end", |cx| {
-        view_idle(cx, &m) && m.read_with(cx, |m, _| m.results()[0].store.end().is_some())
+        view_idle(cx, &m)
+            && m.read_with(cx, |m, _| {
+                m.results().first().is_some_and(|r| r.store.end().is_some())
+            })
     });
     settle(cx, 300);
     assert_eq!(
@@ -560,6 +587,8 @@ fn a_newest_page_sent_before_a_run_and_landing_after_it_ends_is_dropped(cx: &mut
     // The stream never took the run's result, so Follow starts over with a newest page.
     m.update(cx, |m, cx| m.set_follow(Follow::On, cx));
     wait_real(cx, "a fresh newest page", |cx| {
-        m.read_with(cx, |m, _| m.results()[0].sql == title)
+        m.read_with(cx, |m, _| {
+            m.results().first().is_some_and(|r| r.sql == title)
+        })
     });
 }

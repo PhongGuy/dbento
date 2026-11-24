@@ -1,0 +1,66 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.035355816
+  },
+  "query_block": {
+    "select_id": 1,
+    "r_loops": 1,
+    "r_total_time_ms": 0.231762498,
+    "filesort": {
+      "sort_key": "c.`name`",
+      "r_loops": 1,
+      "r_total_time_ms": 0.108991991,
+      "r_used_priority_queue": false,
+      "r_output_rows": 20,
+      "r_buffer_size": "1KiB",
+      "r_sort_mode": "sort_key,rowid",
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "c",
+              "access_type": "ref",
+              "possible_keys": ["PRIMARY", "region"],
+              "key": "region",
+              "key_length": "5",
+              "used_key_parts": ["region"],
+              "ref": ["const"],
+              "r_loops": 1,
+              "rows": 20,
+              "r_rows": 20,
+              "r_table_time_ms": 0.011818772,
+              "r_other_time_ms": 0.004834038,
+              "r_engine_stats": {
+                "pages_accessed": 21
+              },
+              "filtered": 100,
+              "r_filtered": 100,
+              "attached_condition": "c.region <=> 3"
+            }
+          },
+          {
+            "table": {
+              "table_name": "o",
+              "access_type": "ref",
+              "possible_keys": ["cust_id"],
+              "key": "cust_id",
+              "key_length": "5",
+              "used_key_parts": ["cust_id"],
+              "ref": ["dbento_t_3624377_2.c.id"],
+              "r_loops": 20,
+              "rows": 2,
+              "r_rows": 5,
+              "r_table_time_ms": 0.057013514,
+              "r_other_time_ms": 0.044189745,
+              "r_engine_stats": {
+                "pages_accessed": 220
+              },
+              "filtered": 100,
+              "r_filtered": 100
+            }
+          }
+        ]
+      }
+    }
+  }
+}

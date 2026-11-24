@@ -1,0 +1,27 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "101.00"
+    },
+    "table": {
+      "table_name": "ord",
+      "access_type": "ALL",
+      "rows_examined_per_scan": 1000,
+      "rows_produced_per_join": 1000,
+      "filtered": "100.00",
+      "cost_info": {
+        "read_cost": "1.00",
+        "eval_cost": "100.00",
+        "prefix_cost": "101.00",
+        "data_read_per_join": "15K"
+      },
+      "used_columns": [
+        "id",
+        "cust_id",
+        "amount"
+      ],
+      "attached_condition": "(((`dbento_t_3624377_1`.`ord`.`amount` + 1) > 2) and ((`dbento_t_3624377_1`.`ord`.`amount` * 2) < 50000) and ((`dbento_t_3624377_1`.`ord`.`cust_id` + `dbento_t_3624377_1`.`ord`.`id`) > 3) and ((`dbento_t_3624377_1`.`ord`.`cust_id` * 7) < 100000) and ((`dbento_t_3624377_1`.`ord`.`id` - `dbento_t_3624377_1`.`ord`.`cust_id`) > <cache>(-(1000000))) and ((`dbento_t_3624377_1`.`ord`.`amount` / 3) < 99999) and (((`dbento_t_3624377_1`.`ord`.`id` + `dbento_t_3624377_1`.`ord`.`cust_id`) + `dbento_t_3624377_1`.`ord`.`amount`) < 123456789))"
+    }
+  }
+}

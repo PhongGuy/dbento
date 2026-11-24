@@ -1,0 +1,6 @@
+-> Table scan on n  (cost=4.45..5.71 rows=2) (actual time=0.00476..0.00517 rows=5 loops=1)
+    -> Materialize recursive CTE n  (cost=3.19..3.19 rows=2) (actual time=0.00451..0.00451 rows=5 loops=1)
+        -> Rows fetched before execution  (cost=0..0 rows=1) (actual time=120e-6..160e-6 rows=1 loops=1)
+        -> Repeat until convergence
+            -> Filter: (n.i < 5)  (cost=2.73 rows=1) (actual time=471e-6..712e-6 rows=2 loops=2)
+                -> Scan new records on n  (cost=2.73 rows=2) (actual time=266e-6..341e-6 rows=2.5 loops=2)

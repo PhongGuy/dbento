@@ -113,9 +113,12 @@ pub struct StatementResult {
 /// An explain's result: the mode it ran in and, once it ended well, the database's output.
 #[derive(Debug, Clone)]
 pub struct PlanResult {
+    /// The engine the plan came from.
+    pub engine: Engine,
     /// The mode sent to the database.
     pub mode: ExplainMode,
-    /// `Analyze` was asked on SQLite, which only plans.
+    /// `Analyze` was asked and fell back to `Plan`: SQLite only plans, and MySQL analyzes
+    /// only statements confirmed to read.
     pub analyze_unavailable: bool,
     /// The output, set by a successful explain.
     pub output: Option<Arc<ExplainOutput>>,
@@ -123,8 +126,9 @@ pub struct PlanResult {
 
 impl PlanResult {
     /// A plan result with no output yet.
-    pub fn new(mode: ExplainMode, analyze_unavailable: bool) -> PlanResult {
+    pub fn new(engine: Engine, mode: ExplainMode, analyze_unavailable: bool) -> PlanResult {
         PlanResult {
+            engine,
             mode,
             analyze_unavailable,
             output: None,
@@ -379,8 +383,8 @@ pub struct TabModel {
     run_text: Option<(Engine, String)>,
     /// The editor offset the current run's text began at, for each statement's `source`.
     run_start: usize,
-    /// The current run is an explain in this mode, with `analyze_unavailable`.
-    explain: Option<(ExplainMode, bool)>,
+    /// The current run is an explain on this engine in this mode, with `analyze_unavailable`.
+    explain: Option<(Engine, ExplainMode, bool)>,
     /// The run start a pending `Discard::Run` or `Discard::Explain` question was asked with.
     discard_start: usize,
     /// Closed for good: a run would open a session nothing waits to close.
@@ -688,7 +692,7 @@ impl TabModel {
         if !self.begin_run(&request.statement, start, cx) {
             return;
         }
-        self.explain = Some((request.mode, request.analyze_unavailable));
+        self.explain = Some((request.engine, request.mode, request.analyze_unavailable));
         if let Some(r) = &self.runner {
             r.send(Command::Explain {
                 run_id: self.run_id,
@@ -3900,7 +3904,7 @@ impl TabModel {
                 let engine = self.run_text.as_ref().map(|(engine, _)| *engine);
                 let plan = self
                     .explain
-                    .map(|(mode, unavailable)| PlanResult::new(mode, unavailable));
+                    .map(|(engine, mode, unavailable)| PlanResult::new(engine, mode, unavailable));
                 let (sql, source) = self
                     .run_text
                     .as_ref()

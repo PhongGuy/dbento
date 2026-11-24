@@ -1,0 +1,73 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.037629039
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.14230832,
+    "r_loops": 1,
+    "r_total_time_ms": 0.120198015,
+    "filesort": {
+      "sort_key": "c.`name`",
+      "r_loops": 1,
+      "r_total_time_ms": 0.009931977,
+      "r_used_priority_queue": false,
+      "r_output_rows": 20,
+      "r_buffer_size": "9KiB",
+      "r_sort_mode": "sort_key,rowid",
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "c",
+              "access_type": "ref",
+              "possible_keys": ["PRIMARY", "region"],
+              "key": "region",
+              "key_length": "5",
+              "used_key_parts": ["region"],
+              "ref": ["const"],
+              "loops": 1,
+              "r_loops": 1,
+              "rows": 20,
+              "r_rows": 20,
+              "cost": 0.02233392,
+              "r_table_time_ms": 0.00990185,
+              "r_other_time_ms": 0.004689821,
+              "r_engine_stats": {
+                "pages_accessed": 22
+              },
+              "filtered": 100,
+              "r_total_filtered": 100,
+              "attached_condition": "c.region <=> 3",
+              "r_filtered": 100
+            }
+          },
+          {
+            "table": {
+              "table_name": "o",
+              "access_type": "ref",
+              "possible_keys": ["cust_id"],
+              "key": "cust_id",
+              "key_length": "5",
+              "used_key_parts": ["cust_id"],
+              "ref": ["dbento_t_3624377_4.c.id"],
+              "loops": 20,
+              "r_loops": 20,
+              "rows": 5,
+              "r_rows": 5,
+              "cost": 0.1199744,
+              "r_table_time_ms": 0.042419285,
+              "r_other_time_ms": 0.048143478,
+              "r_engine_stats": {
+                "pages_accessed": 220
+              },
+              "filtered": 100,
+              "r_total_filtered": 100,
+              "r_filtered": 100
+            }
+          }
+        ]
+      }
+    }
+  }
+}

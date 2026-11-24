@@ -268,7 +268,17 @@ fn page(
             last.or_else(|| empty_next.map(MessageCursor::redis_id)),
             first,
         ),
-        Direction::Backward => (first, last),
+        // The newest page of an empty stream still says where to follow from, so an entry that
+        // lands before the first poll is read rather than skipped by a later end-of-stream start.
+        Direction::Backward => (
+            first.or_else(|| {
+                (r.from == Position::End)
+                    .then_some(empty_next)
+                    .flatten()
+                    .map(MessageCursor::redis_id)
+            }),
+            last,
+        ),
     };
     MessagePage {
         columns: columns(MESSAGE),

@@ -1,0 +1,42 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.01803623
+  },
+  "query_block": {
+    "select_id": 1,
+    "r_loops": 1,
+    "r_total_time_ms": 7.431409e-4,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "cust",
+          "access_type": "const",
+          "possible_keys": ["PRIMARY"],
+          "key": "PRIMARY",
+          "key_length": "4",
+          "used_key_parts": ["id"],
+          "ref": ["const"],
+          "r_loops": 0,
+          "rows": 1,
+          "r_rows": null,
+          "r_engine_stats": {
+            "pages_accessed": 1
+          },
+          "filtered": 100,
+          "r_total_filtered": null,
+          "r_filtered": null
+        }
+      }
+    ],
+    "subqueries": [
+      {
+        "query_block": {
+          "select_id": 2,
+          "table": {
+            "message": "Select tables optimized away"
+          }
+        }
+      }
+    ]
+  }
+}

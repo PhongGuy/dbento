@@ -92,13 +92,13 @@ impl Engine {
                 table_definition: true,
                 ..none
             },
-            // Only what works today: EXPLAIN comes in a later plan.
             Engine::Mysql => Capabilities {
                 schemas: true,
                 server_cancel: true,
                 password: true,
                 tls: true,
                 edit_rows: true,
+                explain: true,
                 table_definition: true,
                 ..none
             },

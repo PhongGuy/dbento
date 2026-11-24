@@ -1,6 +1,6 @@
 [package]
 name = "dbento-rules"
-version = "0.1.0"
+version = "0.1.1"
 description = "Dbento's push rules for a Potluck team server, as a potluck-kind rule set"
 publish = false
 edition.workspace = true
