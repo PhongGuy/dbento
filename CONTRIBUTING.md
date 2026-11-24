@@ -1,6 +1,17 @@
 # Contributing to Dbento
 
-This is the developer guide; the page for people who use Dbento is [README.md](README.md). Issues and pull requests are welcome.
+This is the developer guide; the page for people who use Dbento is [README.md](README.md).
+
+## Sending a change
+
+Dbento is open source under MIT or Apache-2.0, and issues and pull requests from anyone are welcome. A first pull request is fine too, and so is a small one: a typo, a clearer error message, a missing test.
+
+Before I merge, I check that:
+
+- `make check` passes: formatting, clippy with warnings as errors, and the tests (see [Checks and tests](#checks-and-tests)). CI runs it on every pull request, so you can lean on CI if you can't run it all locally.
+- the pull request makes one change, ideally for one issue.
+
+If something is missing, I'll say what and help get the pull request over the line. If you're not sure an idea fits, open an issue first and I'll answer there. The conventions are in [Sending a pull request](#sending-a-pull-request).
 
 ## Requirements
 
