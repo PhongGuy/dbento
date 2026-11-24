@@ -1,0 +1,20 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "read_sorted_file": {
+          "filesort": {
+            "sort_key": "ord.amount desc, ord.`id`",
+            "table": {
+              "table_name": "ord",
+              "access_type": "ALL",
+              "rows": 1000,
+              "filtered": 100
+            }
+          }
+        }
+      }
+    ]
+  }
+}

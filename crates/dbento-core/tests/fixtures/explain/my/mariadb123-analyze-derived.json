@@ -1,0 +1,64 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.025176408
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.010446846,
+    "r_loops": 1,
+    "r_total_time_ms": 0.033903292,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "loops": 1,
+          "r_loops": 1,
+          "rows": 10,
+          "r_rows": 10,
+          "cost": 0.010446846,
+          "r_table_time_ms": 0.007050035,
+          "r_other_time_ms": 0.002028335,
+          "filtered": 100,
+          "r_total_filtered": 100,
+          "attached_condition": "d.n > 1",
+          "r_filtered": 100,
+          "materialized": {
+            "query_block": {
+              "select_id": 2,
+              "cost": 0.165617927,
+              "r_loops": 1,
+              "r_total_time_ms": 0.02978589,
+              "having_condition": "n > 1",
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "cust",
+                    "access_type": "index",
+                    "key": "region",
+                    "key_length": "5",
+                    "used_key_parts": ["region"],
+                    "loops": 1,
+                    "r_loops": 1,
+                    "rows": 200,
+                    "r_rows": 200,
+                    "cost": 0.03598292,
+                    "r_table_time_ms": 0.014611756,
+                    "r_other_time_ms": 0.006537631,
+                    "r_engine_stats": {
+                      "pages_accessed": 1
+                    },
+                    "filtered": 100,
+                    "r_total_filtered": 100,
+                    "r_filtered": 100,
+                    "using_index": true
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

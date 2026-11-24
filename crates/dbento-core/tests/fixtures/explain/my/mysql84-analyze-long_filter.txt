@@ -1,0 +1,2 @@
+-> Filter: (((ord.amount + 1) > 2) and ((ord.amount * 2) < 50000) and ((ord.cust_id + ord.id) > 3) and ((ord.cust_id * 7) < 100000) and ((ord.id - ord.cust_id) > <cache>(-(1000000))) and ((ord.amount / 3) < 99999) and (((ord.id + ord.cust_id) + ord.amount) < 123456789))  (cost=101 rows=1000) (actual time=0.0294..0.403 rows=999 loops=1)
+    -> Table scan on ord  (cost=101 rows=1000) (actual time=0.0201..0.0972 rows=1000 loops=1)

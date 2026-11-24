@@ -1,0 +1,39 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.12455402,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ref",
+          "possible_keys": ["PRIMARY", "region"],
+          "key": "region",
+          "key_length": "5",
+          "used_key_parts": ["region"],
+          "ref": ["const"],
+          "loops": 1,
+          "rows": 20,
+          "cost": 0.00457962,
+          "filtered": 100,
+          "using_index": true
+        }
+      },
+      {
+        "table": {
+          "table_name": "o",
+          "access_type": "ref",
+          "possible_keys": ["cust_id"],
+          "key": "cust_id",
+          "key_length": "5",
+          "used_key_parts": ["cust_id"],
+          "ref": ["dbento_t_3624377_4.c.id"],
+          "loops": 20,
+          "rows": 5,
+          "cost": 0.1199744,
+          "filtered": 100
+        }
+      }
+    ]
+  }
+}

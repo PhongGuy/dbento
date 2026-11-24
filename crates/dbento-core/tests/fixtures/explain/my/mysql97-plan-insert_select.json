@@ -1,0 +1,46 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "2.06"
+    },
+    "table": {
+      "insert": true,
+      "select_id": 1,
+      "table_name": "ord",
+      "access_type": "ALL"
+    },
+    "insert_from": {
+      "buffer_result": {
+        "using_temporary_table": true,
+        "table": {
+          "table_name": "ord",
+          "access_type": "range",
+          "possible_keys": [
+            "PRIMARY"
+          ],
+          "key": "PRIMARY",
+          "used_key_parts": [
+            "id"
+          ],
+          "key_length": "4",
+          "rows_examined_per_scan": 9,
+          "rows_produced_per_join": 9,
+          "filtered": "100.00",
+          "cost_info": {
+            "read_cost": "1.16",
+            "eval_cost": "0.90",
+            "prefix_cost": "2.06",
+            "data_read_per_join": "144"
+          },
+          "used_columns": [
+            "id",
+            "cust_id",
+            "amount"
+          ],
+          "attached_condition": "(`dbento_t_3624377_1`.`ord`.`id` < 10)"
+        }
+      }
+    }
+  }
+}

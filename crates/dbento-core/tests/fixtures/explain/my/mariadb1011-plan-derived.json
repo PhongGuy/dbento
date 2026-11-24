@@ -1,0 +1,36 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "rows": 200,
+          "filtered": 100,
+          "attached_condition": "d.n > 1",
+          "materialized": {
+            "query_block": {
+              "select_id": 2,
+              "having_condition": "n > 1",
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "cust",
+                    "access_type": "index",
+                    "key": "region",
+                    "key_length": "5",
+                    "used_key_parts": ["region"],
+                    "rows": 200,
+                    "filtered": 100,
+                    "using_index": true
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

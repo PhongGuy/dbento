@@ -1,0 +1,48 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 0.009046335
+  },
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.1764192,
+    "r_loops": 1,
+    "r_total_time_ms": 0.415568546,
+    "window_functions_computation": {
+      "sorts": [
+        {
+          "filesort": {
+            "sort_key": "ord.cust_id, ord.`id`",
+            "r_loops": 1,
+            "r_total_time_ms": 0.0426786,
+            "r_used_priority_queue": false,
+            "r_output_rows": 1000,
+            "r_buffer_size": "25KiB",
+            "r_sort_mode": "sort_key,rowid"
+          }
+        }
+      ],
+      "temporary_table": {
+        "nested_loop": [
+          {
+            "table": {
+              "table_name": "ord",
+              "access_type": "ALL",
+              "loops": 1,
+              "r_loops": 1,
+              "rows": 1000,
+              "r_rows": 1000,
+              "cost": 0.1764192,
+              "r_table_time_ms": 0.063826922,
+              "r_other_time_ms": 0.100022315,
+              "r_engine_stats": {
+                "pages_accessed": 4
+              },
+              "filtered": 100,
+              "r_filtered": 100
+            }
+          }
+        ]
+      }
+    }
+  }
+}

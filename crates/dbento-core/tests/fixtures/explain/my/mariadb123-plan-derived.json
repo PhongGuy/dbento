@@ -1,0 +1,42 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.010446846,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 10,
+          "cost": 0.010446846,
+          "filtered": 100,
+          "attached_condition": "d.n > 1",
+          "materialized": {
+            "query_block": {
+              "select_id": 2,
+              "cost": 0.165617927,
+              "having_condition": "n > 1",
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "cust",
+                    "access_type": "index",
+                    "key": "region",
+                    "key_length": "5",
+                    "used_key_parts": ["region"],
+                    "loops": 1,
+                    "rows": 200,
+                    "cost": 0.03598292,
+                    "filtered": 100,
+                    "using_index": true
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

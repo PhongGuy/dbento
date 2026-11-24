@@ -1,0 +1,19 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.1764192,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "ord",
+          "access_type": "ALL",
+          "loops": 1,
+          "rows": 1000,
+          "cost": 0.1764192,
+          "filtered": 100,
+          "attached_condition": "ord.amount + 1 > 2 and ord.amount * 2 < 50000 and ord.cust_id + ord.`id` > 3 and ord.cust_id * 7 < 100000 and ord.`id` - ord.cust_id > -1000000 and ord.amount / 3 < 99999 and ord.`id` + ord.cust_id + ord.amount < 123456789"
+        }
+      }
+    ]
+  }
+}

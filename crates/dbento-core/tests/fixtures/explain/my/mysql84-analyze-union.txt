@@ -1,0 +1,5 @@
+-> Table scan on <union temporary>  (cost=139..145 rows=353) (actual time=0.329..0.337 rows=110 loops=1)
+    -> Union materialize with deduplication  (cost=139..139 rows=353) (actual time=0.329..0.329 rows=110 loops=1)
+        -> Covering index lookup on cust using region (region=1)  (cost=2.26 rows=20) (actual time=0.00492..0.0071 rows=20 loops=1)
+        -> Filter: (ord.amount > 900.00)  (cost=101 rows=333) (actual time=0.183..0.197 rows=100 loops=1)
+            -> Table scan on ord  (cost=101 rows=1000) (actual time=0.0244..0.131 rows=1000 loops=1)
