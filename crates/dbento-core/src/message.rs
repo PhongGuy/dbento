@@ -206,7 +206,7 @@ const MAX_WAIT: Duration = Duration::from_secs(5);
 const WAIT_MARGIN: Duration = Duration::from_millis(250);
 
 /// A read the engine may run, with its `want` clamped.
-#[allow(dead_code)] // the stream reads that use the fields come next
+#[cfg_attr(not(feature = "redis"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReadPlan {
     /// A page from where the read starts, either way.
