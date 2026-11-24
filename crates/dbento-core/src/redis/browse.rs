@@ -214,9 +214,14 @@ pub enum KeyBrowseError {
 use self::server::fields_json;
 #[cfg(feature = "redis")]
 pub(super) use self::server::server_error;
+#[cfg(feature = "redis")]
+pub(in crate::redis) use self::server::{
+    Layout, Row, VALUE_CAP, bulk, columns, fill_within, stream_range, whole_chars, xrange_rows,
+};
 
 #[cfg(feature = "redis")]
 mod server {
+    use std::collections::HashSet;
     use std::time::Duration;
 
     use ::redis::{Pipeline, Value};
@@ -224,8 +229,9 @@ mod server {
     use super::{
         KeyBrowseError, KeyEntry, KeyKind, KeyPage, KeyRead, KeyScan, KeyTtl, KeyValuePage,
     };
-    use crate::redis::driver::{Failure, RedisSession};
-    use crate::redis::shape::{double_text, json, json_key};
+    use crate::message::Direction;
+    use crate::redis::driver::{BracketError, Failure, RedisSession};
+    use crate::redis::shape::{ShapeError, double_text, json, json_key};
     use crate::value::{BatchBuilder, CellRef, ColumnInfo, MAX_BATCH_BYTES, ResultBatch};
 
     /// The most of a string one value page shows.
@@ -248,6 +254,18 @@ mod server {
                 Failure::Cancelled => KeyBrowseError::SessionEnded {
                     reason: "the browse was cancelled; reopen the session".to_owned(),
                 },
+            }
+        }
+    }
+
+    impl From<BracketError> for KeyBrowseError {
+        fn from(e: BracketError) -> Self {
+            match e {
+                BracketError::Refused(refusal) => KeyBrowseError::Unsupported {
+                    reason: refusal.reason().to_owned(),
+                },
+                BracketError::Failed(failure) => failure.into(),
+                BracketError::Reply { code, message } => KeyBrowseError::Database { code, message },
             }
         }
     }
@@ -351,19 +369,7 @@ mod server {
 
     /// A reply, or the server error it carries as `Database`.
     pub(in crate::redis) fn server_error(reply: Value) -> Result<Value, KeyBrowseError> {
-        #[allow(
-            clippy::wildcard_enum_match_arm,
-            reason = "Value has too many variants to list; the rest share one arm"
-        )]
-        match reply {
-            Value::ServerError(e) => {
-                let code = e.code().to_owned();
-                // A bare code has no message, and the code alone then says what failed.
-                let message = e.details().unwrap_or(&code).to_owned();
-                Err(KeyBrowseError::Database { code, message })
-            }
-            other => Ok(other),
-        }
+        BracketError::check(reply).map_err(KeyBrowseError::from)
     }
 
     fn unexpected(what: &str) -> KeyBrowseError {
@@ -433,10 +439,10 @@ mod server {
     }
 
     /// One page row as raw cell bytes; UTF-8 shows as text, anything else as bytes.
-    type Row = Vec<Vec<u8>>;
+    pub(in crate::redis) type Row = Vec<Vec<u8>>;
 
     /// A kind's page columns: name, type name and whether its cells are numbers.
-    type Layout = &'static [(&'static str, &'static str, bool)];
+    pub(in crate::redis) type Layout = &'static [(&'static str, &'static str, bool)];
 
     const STRING: Layout = &[("value", "string", false)];
     const HASH: Layout = &[("field", "string", false), ("value", "string", false)];
@@ -531,17 +537,14 @@ mod server {
                         .arg("WITHSCORES");
                 }
                 KeyKind::Stream => {
-                    let from = match &cursor.last_id {
-                        Some(id) => [b"(".as_slice(), id].concat(),
-                        None => b"-".to_vec(),
-                    };
                     pipe.cmd("XLEN").arg(k);
-                    pipe.cmd("XRANGE")
-                        .arg(k)
-                        .arg(from)
-                        .arg("+")
-                        .arg("COUNT")
-                        .arg(want);
+                    stream_range(
+                        &mut pipe,
+                        k,
+                        Direction::Forward,
+                        cursor.last_id.as_deref(),
+                        want,
+                    );
                 }
                 KeyKind::Other(_) => {
                     pipe.cmd("MEMORY").arg("USAGE").arg(k);
@@ -653,7 +656,7 @@ mod server {
         }
     }
 
-    fn columns(layout: Layout) -> Vec<ColumnInfo> {
+    pub(in crate::redis) fn columns(layout: Layout) -> Vec<ColumnInfo> {
         layout
             .iter()
             .map(|(name, ty, _)| ColumnInfo::new(*name, *ty, None))
@@ -673,15 +676,26 @@ mod server {
         }
     }
 
-    /// Pushes rows until `want` are shown or the next would take the batch past
-    /// `MAX_BATCH_BYTES`, and returns the batch and how many rows it holds. The first row
-    /// always goes in, so one huge row still shows.
+    /// `fill_within` the batch bound.
     fn fill(rows: &[Row], want: usize, layout: Layout) -> (ResultBatch, usize) {
+        fill_within(rows, want, layout, MAX_BATCH_BYTES)
+    }
+
+    /// Pushes rows until `want` are shown or the next would take the batch past `budget` bytes
+    /// (never past `MAX_BATCH_BYTES`), and returns the batch and how many rows it holds. The
+    /// first row always goes in, so one huge row still shows.
+    pub(in crate::redis) fn fill_within(
+        rows: &[Row],
+        want: usize,
+        layout: Layout,
+        budget: usize,
+    ) -> (ResultBatch, usize) {
+        let budget = budget.min(MAX_BATCH_BYTES);
         let mut builder = BatchBuilder::new(layout.len());
         let mut shown = 0;
         for row in rows.iter().take(want) {
             let size: usize = row.iter().map(Vec::len).sum();
-            if shown > 0 && builder.total_bytes() as usize + size > MAX_BATCH_BYTES {
+            if shown > 0 && builder.total_bytes() as usize + size > budget {
                 break;
             }
             let cells: Vec<CellRef<'_>> = row
@@ -698,9 +712,34 @@ mod server {
         (builder.finish(), shown)
     }
 
+    /// Adds the range of up to `want` stream entries past `bound` (exclusive) in `direction`,
+    /// or from the stream's own edge when there is no bound.
+    pub(in crate::redis) fn stream_range(
+        pipe: &mut Pipeline,
+        key: &[u8],
+        direction: Direction,
+        bound: Option<&[u8]>,
+        want: usize,
+    ) {
+        let (cmd, edge, end) = match direction {
+            Direction::Forward => ("XRANGE", "-", "+"),
+            Direction::Backward => ("XREVRANGE", "+", "-"),
+        };
+        let start = bound.map_or_else(
+            || edge.as_bytes().to_vec(),
+            |id| [b"(".as_slice(), id].concat(),
+        );
+        pipe.cmd(cmd)
+            .arg(key)
+            .arg(start)
+            .arg(end)
+            .arg("COUNT")
+            .arg(want);
+    }
+
     /// A capped string cut inside a UTF-8 character drops the partial character, so it still
     /// reads as text.
-    fn whole_chars(mut value: Vec<u8>, truncated: bool) -> Vec<u8> {
+    pub(in crate::redis) fn whole_chars(mut value: Vec<u8>, truncated: bool) -> Vec<u8> {
         if truncated
             && let Err(e) = std::str::from_utf8(&value)
             && e.error_len().is_none()
@@ -710,7 +749,7 @@ mod server {
         value
     }
 
-    fn bulk(reply: Value, what: &str) -> Result<Vec<u8>, KeyBrowseError> {
+    pub(in crate::redis) fn bulk(reply: Value, what: &str) -> Result<Vec<u8>, KeyBrowseError> {
         #[allow(
             clippy::wildcard_enum_match_arm,
             reason = "Value has too many variants to list; the rest share one arm"
@@ -764,7 +803,7 @@ mod server {
     }
 
     /// `XRANGE`: each entry is `[id, [field, value, ...]]`.
-    fn xrange_rows(reply: Value) -> Result<Vec<Row>, KeyBrowseError> {
+    pub(in crate::redis) fn xrange_rows(reply: Value) -> Result<Vec<Row>, KeyBrowseError> {
         array(reply, "XRANGE")?
             .into_iter()
             .map(|entry| {
@@ -782,17 +821,34 @@ mod server {
     /// A stream entry's flat field list as a compact JSON object; a non-UTF-8 string is
     /// {"$bytes": base64}.
     pub(crate) fn fields_json(fields: &[Value]) -> String {
-        let object = fields
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|[k, v]| Ok((json_key(k)?, json(v)?)))
-            .collect::<Result<serde_json::Map<_, _>, crate::redis::shape::ShapeError>>();
-        match object {
-            Ok(object) => serde_json::Value::Object(object).to_string(),
+        match shaped_fields(fields.as_chunks::<2>().0) {
+            Ok(shaped) => shaped.to_string(),
             // Stream fields are always strings; anything else shows as what went wrong.
             Err(e) => e.to_string(),
         }
+    }
+
+    /// An object would keep only the last value of a repeated name, so any repeat turns the
+    /// whole entry into {"$pairs": [[k, v], ...]} in server order.
+    fn shaped_fields(pairs: &[[Value; 2]]) -> Result<serde_json::Value, ShapeError> {
+        let mut seen = HashSet::new();
+        let mut repeated = false;
+        for [k, _] in pairs {
+            repeated |= !seen.insert(json_key(k)?);
+        }
+        Ok(if repeated {
+            let pairs = pairs
+                .iter()
+                .map(|[k, v]| Ok(serde_json::json!([json(k)?, json(v)?])))
+                .collect::<Result<Vec<_>, ShapeError>>()?;
+            serde_json::json!({ "$pairs": pairs })
+        } else {
+            pairs
+                .iter()
+                .map(|[k, v]| Ok((json_key(k)?, json(v)?)))
+                .collect::<Result<serde_json::Map<_, _>, ShapeError>>()?
+                .into()
+        })
     }
 }
 

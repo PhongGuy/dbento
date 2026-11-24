@@ -14,6 +14,8 @@ use crate::runner::StatementEnd;
 pub struct ResultStore {
     columns: Arc<[ColumnInfo]>,
     batches: Vec<Arc<ResultBatch>>,
+    /// Which rows of each batch are shown, so growth at the top and a trimmed bottom never copy rows.
+    windows: Vec<Window>,
     starts: Vec<u64>,
     rows: u64,
     heap_bytes: usize,
@@ -21,6 +23,21 @@ pub struct ResultStore {
     end: Option<StatementEnd>,
     /// While locally sorted: the data column, descending, and the loaded row each shown row reads.
     local: Option<LocalSort>,
+}
+
+/// A batch's shown rows: its first `len` in order, or its last `len` newest first when
+/// `reversed`. Shrinking `len` hides shown rows from the bottom either way.
+#[derive(Clone, Copy)]
+struct Window {
+    len: usize,
+    reversed: bool,
+}
+
+impl Window {
+    /// The batch row that shown row `r` of a batch holding `batch_len` rows reads.
+    fn batch_row(self, batch_len: usize, r: usize) -> usize {
+        if self.reversed { batch_len - 1 - r } else { r }
+    }
 }
 
 struct LocalSort {
@@ -35,6 +52,7 @@ impl ResultStore {
         ResultStore {
             columns,
             batches: Vec::new(),
+            windows: Vec::new(),
             starts: Vec::new(),
             rows: 0,
             heap_bytes: 0,
@@ -49,21 +67,15 @@ impl ResultStore {
         if batch.is_empty() {
             return;
         }
-        // Only the first batch is sampled, once, so column widths never cost a render scan.
-        if self.batches.is_empty() {
-            self.sample_chars = (0..batch.column_count())
-                .map(|col| {
-                    (0..batch.len())
-                        .map(|row| cell_display(batch.cell(row, col)).0.chars().count())
-                        .max()
-                        .unwrap_or(0)
-                })
-                .collect();
-        }
+        self.sample_first(&batch);
         let first = self.rows;
         self.starts.push(self.rows);
         self.rows += batch.len() as u64;
         self.heap_bytes += batch.heap_bytes();
+        self.windows.push(Window {
+            len: batch.len(),
+            reversed: false,
+        });
         self.batches.push(Arc::new(batch));
         // A sorted store merges the new rows into its order: they are sorted alone, then
         // interleaved in one pass, with earlier rows first on a tie.
@@ -88,6 +100,98 @@ impl ResultStore {
             local.order = merged;
             self.local = Some(local);
         }
+    }
+
+    /// Puts `batch`, whose rows run oldest first, above every shown row, newest on top.
+    /// Clears a local sort. An empty batch is ignored.
+    pub fn push_newest(&mut self, batch: ResultBatch) {
+        if batch.is_empty() {
+            return;
+        }
+        self.sample_first(&batch);
+        self.local = None;
+        self.rows += batch.len() as u64;
+        self.heap_bytes += batch.heap_bytes();
+        self.windows.insert(
+            0,
+            Window {
+                len: batch.len(),
+                reversed: true,
+            },
+        );
+        self.batches.insert(0, Arc::new(batch));
+        self.restart();
+    }
+
+    /// Drops shown rows from the bottom until at most `max_rows` remain and the kept batch
+    /// heap is at most `max_bytes`; the top batch is never dropped whole, so the heap may
+    /// stay over `max_bytes` by that one batch. Returns the rows dropped; clears a local sort
+    /// when it drops any.
+    pub fn trim_oldest(&mut self, max_rows: u64, max_bytes: usize) -> u64 {
+        let before = self.rows;
+        // Bytes go first, in whole batches, since a shrunk window keeps its batch's memory.
+        while self.heap_bytes > max_bytes && self.batches.len() > 1 {
+            self.drop_bottom();
+        }
+        // Then rows: a bottom batch that fits inside the excess goes whole, else it is cut.
+        while self.rows > max_rows {
+            let excess = self.rows - max_rows;
+            let Some(last) = self.windows.last_mut() else {
+                break;
+            };
+            if last.len as u64 <= excess && self.batches.len() > 1 {
+                self.drop_bottom();
+            } else {
+                let cut = excess.min(last.len as u64);
+                last.len -= cut as usize;
+                self.rows -= cut;
+                break;
+            }
+        }
+        let dropped = before - self.rows;
+        if dropped > 0 {
+            self.local = None;
+        }
+        dropped
+    }
+
+    /// Forgets the bottom batch and its shown rows.
+    fn drop_bottom(&mut self) {
+        if let (Some(batch), Some(window)) = (self.batches.pop(), self.windows.pop()) {
+            self.starts.pop();
+            self.rows -= window.len as u64;
+            self.heap_bytes -= batch.heap_bytes();
+        }
+    }
+
+    /// Recomputes every batch's first shown row from the windows.
+    fn restart(&mut self) {
+        let mut next = 0;
+        self.starts = self
+            .windows
+            .iter()
+            .map(|w| {
+                let start = next;
+                next += w.len as u64;
+                start
+            })
+            .collect();
+    }
+
+    /// Samples column widths from `batch` when the store is empty: only the first batch is
+    /// sampled, once, so column widths never cost a render scan.
+    fn sample_first(&mut self, batch: &ResultBatch) {
+        if !self.batches.is_empty() {
+            return;
+        }
+        self.sample_chars = (0..batch.column_count())
+            .map(|col| {
+                (0..batch.len())
+                    .map(|row| cell_display(batch.cell(row, col)).0.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
     }
 
     /// Reorders every reader of `cell` by data column `col`: numbers before other text, text
@@ -174,8 +278,9 @@ impl ResultStore {
     pub fn max_chars(&self, col: usize) -> usize {
         self.batches
             .iter()
-            .filter(|b| col < b.column_count())
-            .flat_map(|b| (0..b.len()).map(move |row| b.cell(row, col)))
+            .zip(&self.windows)
+            .filter(|(b, _)| col < b.column_count())
+            .flat_map(|(b, w)| (0..w.len).map(move |r| b.cell(w.batch_row(b.len(), r), col)))
             .map(|cell| cell_display(cell).0.chars().count())
             .max()
             .unwrap_or(0)
@@ -192,9 +297,8 @@ impl ResultStore {
     /// The stored document of shown row `row`, following a local sort; None for SQL engines or
     /// past the loaded rows.
     pub fn document(&self, row: u64) -> Option<DocumentRef<'_>> {
-        let row = self.loaded_row(row)?;
-        let ix = self.starts.partition_point(|&start| start <= row) - 1;
-        self.batches[ix].document((row - self.starts[ix]) as usize)
+        let (ix, r) = self.batch_of(self.loaded_row(row)?)?;
+        self.batches[ix].document(r)
     }
 
     /// Whether the cell at `row`, `col` was stored as a number, as `ResultBatch::is_number` says;
@@ -223,13 +327,26 @@ impl ResultStore {
 
     /// The batch holding loaded row `row` and the row's index in it, when it has column `col`.
     fn locate(&self, row: u64, col: usize) -> Option<(&ResultBatch, usize)> {
-        if row >= self.rows || col >= self.columns.len() {
+        if col >= self.columns.len() {
+            return None;
+        }
+        let (ix, r) = self.batch_of(row)?;
+        let batch: &ResultBatch = &self.batches[ix];
+        (col < batch.column_count()).then_some((batch, r))
+    }
+
+    /// The index of the batch holding loaded row `row` and the batch row it reads.
+    fn batch_of(&self, row: u64) -> Option<(usize, usize)> {
+        if row >= self.rows {
             return None;
         }
         // The batch holding `row` is the last one starting at or before it.
         let ix = self.starts.partition_point(|&start| start <= row) - 1;
-        let batch: &ResultBatch = &self.batches[ix];
-        (col < batch.column_count()).then(|| (batch, (row - self.starts[ix]) as usize))
+        let batch_len = self.batches[ix].len();
+        Some((
+            ix,
+            self.windows[ix].batch_row(batch_len, (row - self.starts[ix]) as usize),
+        ))
     }
 
     /// The rows loaded so far, in the current local order, as a store another thread may own;
@@ -239,6 +356,7 @@ impl ResultStore {
         ResultStore {
             columns: Arc::clone(&self.columns),
             batches: self.batches.clone(),
+            windows: self.windows.clone(),
             starts: self.starts.clone(),
             rows: self.rows,
             heap_bytes: self.heap_bytes,

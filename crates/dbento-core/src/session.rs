@@ -17,6 +17,7 @@ use crate::dynamo::{driver::DynamoSession, stream::DynamoCancel};
 use crate::explain::{ExplainMode, ExplainOutput, ExplainRequest};
 use crate::fkeys::{FkDirection, ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
+use crate::message::{GroupInfo, MessageError, MessagePage, MessageRead, Position, SourceRef};
 #[cfg(feature = "mongodb")]
 use crate::mongo::driver::{MongoCancel, MongoDriver};
 use crate::mssql::{MssqlCancel, MssqlDriver};
@@ -1297,6 +1298,44 @@ impl Session {
         }
     }
 
+    /// One page of messages from `r.source`: browsed either way, or followed forward. Redis
+    /// only; every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn read_messages(&mut self, r: &MessageRead) -> Result<MessagePage, MessageError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.read_messages(r).await,
+            _ => Err(no_streams()),
+        }
+    }
+
+    /// The consumer groups of stream `s`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn stream_groups(&mut self, s: &SourceRef) -> Result<Vec<GroupInfo>, MessageError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.stream_groups(s).await,
+            _ => Err(no_streams()),
+        }
+    }
+
+    /// One page of `group`'s delivered and unacknowledged messages of stream `s`, forward from
+    /// `from`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn pending(
+        &mut self,
+        s: &SourceRef,
+        group: &str,
+        from: Position,
+        want: u32,
+    ) -> Result<MessagePage, MessageError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.pending(s, group, from, want).await,
+            _ => Err(no_streams()),
+        }
+    }
+
     /// For each of `columns`, the column of `rel` it reads, or None when it is computed or
     /// reads another table. SQLite and MySQL answer from the columns alone, Postgres with one
     /// catalog query.
@@ -1861,6 +1900,13 @@ impl CancelHandle {
 fn bound_unsupported() -> ExecuteError {
     ExecuteError::Unsupported {
         reason: "bound statements are not built for this engine yet".to_owned(),
+    }
+}
+
+/// What every engine without streams answers to a message call.
+fn no_streams() -> MessageError {
+    MessageError::Unsupported {
+        reason: "only a Redis session has streams to read".to_owned(),
     }
 }
 

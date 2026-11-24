@@ -309,3 +309,23 @@ fn a_module_command_follows_the_key_spec_it_declares() {
         ["mymod.put", "dbento-probe", "dbento-probe"]
     );
 }
+
+#[test]
+fn the_message_api_commands_are_not_writes() {
+    let t = table();
+    for line in [
+        "TYPE s",
+        "XLEN s",
+        "XRANGE s - + COUNT 10",
+        "XREVRANGE s + - COUNT 1",
+        "XREAD COUNT 10 BLOCK 1000 STREAMS s 0-0",
+        "XINFO GROUPS s",
+        "XPENDING s g",
+        "XPENDING s g - + 10",
+    ] {
+        assert_eq!(writes(&t, line), Writes::No, "{line}");
+    }
+    for line in ["XREADGROUP GROUP g c STREAMS s >", "XACK s g 1-1"] {
+        assert_eq!(writes(&t, line), Writes::Yes, "{line}");
+    }
+}

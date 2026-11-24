@@ -18,7 +18,7 @@ use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject as _;
 use tokio::sync::watch;
 
-use super::browse::{KeyBrowseError, server_error};
+use super::browse::KeyBrowseError;
 use super::classify::redis_classification;
 use super::lex::{RedisStatement, SyntaxError, parse_script};
 use super::probe::{gate, probe};
@@ -92,6 +92,36 @@ impl Unbracketable {
 /// Why the key browser and the catalog refuse inside a transaction.
 pub(crate) const IN_MULTI: &str = "the session is inside MULTI; send EXEC or DISCARD first";
 
+/// Why a bracketed pipeline did not answer.
+#[derive(Debug)]
+pub(crate) enum BracketError {
+    /// The session cannot leave its DB and come back now.
+    Refused(Unbracketable),
+    /// The round trip failed; the session may have ended.
+    Failed(Failure),
+    /// A `SELECT` of the bracket answered an error.
+    Reply { code: String, message: String },
+}
+
+impl BracketError {
+    /// `reply` itself, or its error as a `Reply`.
+    pub(crate) fn check(reply: Value) -> Result<Value, BracketError> {
+        #[allow(
+            clippy::wildcard_enum_match_arm,
+            reason = "Value has too many variants to list; the rest share one arm"
+        )]
+        match reply {
+            Value::ServerError(e) => {
+                let code = e.code().to_owned();
+                // A bare code has no message, and the code alone then says what failed.
+                let message = e.details().unwrap_or(&code).to_owned();
+                Err(BracketError::Reply { code, message })
+            }
+            other => Ok(other),
+        }
+    }
+}
+
 /// Why a round trip did not answer.
 #[derive(Debug)]
 pub(crate) enum Failure {
@@ -144,29 +174,36 @@ impl Shared {
         db: u32,
         pipe: Pipeline,
     ) -> Result<Vec<Value>, KeyBrowseError> {
-        let back = self
-            .bracket_db()
-            .map_err(|refusal| KeyBrowseError::Unsupported {
-                reason: refusal.reason().to_owned(),
-            })?;
+        self.bracket(db, pipe).await.map_err(KeyBrowseError::from)
+    }
+
+    /// `bracketed` with its own error: it fails only on a refused bracket, a failed round trip
+    /// or an error reply to one of its `SELECT`s. The inner commands' error replies come back
+    /// in the replies, for the caller to map.
+    pub(super) async fn bracket(
+        &self,
+        db: u32,
+        pipe: Pipeline,
+    ) -> Result<Vec<Value>, BracketError> {
+        let back = self.bracket_db().map_err(BracketError::Refused)?;
         let mut whole = Pipeline::with_capacity(pipe.len() + 2);
         whole.cmd("SELECT").arg(db);
         for cmd in pipe.cmd_iter() {
             whole.add_command(cmd.clone());
         }
         whole.cmd("SELECT").arg(back);
-        let mut replies = self.many(&whole).await?;
+        let mut replies = self.many(&whole).await.map_err(BracketError::Failed)?;
         if replies.len() != whole.len() {
-            return Err(KeyBrowseError::Database {
+            return Err(BracketError::Reply {
                 code: "ERR".to_owned(),
                 message: format!("{} replies to {} commands", replies.len(), whole.len()),
             });
         }
-        let restored = replies.pop().map(server_error);
+        let restored = replies.pop().map(BracketError::check);
         if !matches!(restored, Some(Ok(_))) {
             self.forget_db();
         }
-        server_error(replies.remove(0))?;
+        BracketError::check(replies.remove(0))?;
         if let Some(Err(e)) = restored {
             return Err(e);
         }
@@ -259,6 +296,11 @@ impl Shared {
             return Err(Unbracketable::InMulti);
         }
         state.db.ok_or(Unbracketable::DbUnknown)
+    }
+
+    /// The statement timeout that bounds each round trip.
+    pub(super) fn timeout(&self) -> Option<Duration> {
+        self.timeout
     }
 
     pub(super) fn in_multi(&self) -> bool {
