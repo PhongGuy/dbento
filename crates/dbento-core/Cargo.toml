@@ -94,7 +94,12 @@ dynamodb = [
     "dbento-testkit/dynamodb",
 ]
 # The S3 object browser: the AWS SDK over ring rustls, without aws-config.
-s3 = ["dep:aws-sdk-s3", "dep:aws-smithy-http-client", "dep:aws-smithy-runtime-api"]
+s3 = [
+    "dep:aws-sdk-s3",
+    "dep:aws-smithy-http-client",
+    "dep:aws-smithy-runtime-api",
+    "dbento-testkit/s3",
+]
 # The platform keychain as a SecretStore.
 keychain = [
     "dep:keyring-core",
