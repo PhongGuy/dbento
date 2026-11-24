@@ -1,7 +1,9 @@
+use aws_sdk_s3::config::{RequestChecksumCalculation, ResponseChecksumValidation};
+
 use crate::aws::replay::{RawReplay as Replay, RawReply as Reply};
 use crate::s3::ObjectKey;
-use crate::s3::client::ListCall;
-use crate::s3::replay::{client, list_page, s3_error};
+use crate::s3::client::{ClientSettings, ListCall, S3Client};
+use crate::s3::replay::{client, list_page, s3_error, settings};
 
 fn call(bucket: &str, prefix: &str) -> ListCall {
     ListCall {
@@ -243,4 +245,57 @@ fn an_s3_url_splits_into_bucket_and_raw_key() {
     assert_eq!(ObjectKey::parse("s3://b/"), Some(ObjectKey::new("b", "")));
     assert_eq!(ObjectKey::parse("s3:///k"), None);
     assert_eq!(ObjectKey::parse("http://b/k"), None);
+}
+
+// A region no other test uses, so the drain cannot reach their retries even if quotas
+// were shared per region.
+#[tokio::test(start_paused = true)]
+async fn draining_one_clients_retry_quota_leaves_another_clients_retries_alone() {
+    let settings = || ClientSettings {
+        max_attempts: 3,
+        ..settings(Some("http://replay.test"), "xx-quota-s3", false)
+    };
+    let throttled = || Reply::status(503).xml(&s3_error("SlowDown", "slow down"));
+
+    // Throttle the first client until a call goes out once with no retry: its quota is empty.
+    let noisy = Replay::new((0..600).map(|_| throttled()).collect());
+    let noisy_client = S3Client::new(settings(), noisy.http());
+    let mut drained = false;
+    for _ in 0..200 {
+        let before = noisy.seen().len();
+        assert!(noisy_client.list_buckets().await.is_err(), "throttled");
+        if noisy.seen().len() - before == 1 {
+            drained = true;
+            break;
+        }
+    }
+    assert!(drained, "the first client's retry quota never ran out");
+
+    // A second client in the same region still retries its throttled read and succeeds.
+    let quiet = Replay::new(vec![
+        throttled(),
+        Reply::status(200).xml(&crate::s3::replay::buckets(&["b"])),
+    ]);
+    let sent = S3Client::new(settings(), quiet.http()).list_buckets().await;
+    assert_eq!(quiet.seen().len(), 2, "the throttled read was retried");
+    assert!(sent.is_ok(), "{sent:?}");
+}
+
+#[test]
+fn checksums_are_only_when_required_on_a_custom_endpoint() {
+    let replay = Replay::default();
+    let custom = client(&replay, Some("http://replay.test"), "eu-west-1", false);
+    let aws = client(&replay, None, "eu-west-1", false);
+    assert_eq!(
+        custom.inner.config().response_checksum_validation(),
+        Some(&ResponseChecksumValidation::WhenRequired)
+    );
+    assert_eq!(
+        custom.inner.config().request_checksum_calculation(),
+        Some(&RequestChecksumCalculation::WhenRequired)
+    );
+    assert_eq!(
+        aws.inner.config().response_checksum_validation(),
+        Some(&ResponseChecksumValidation::WhenSupported)
+    );
 }

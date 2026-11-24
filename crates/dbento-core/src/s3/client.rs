@@ -24,7 +24,9 @@ use aws_smithy_runtime_api::http::StatusCode;
 use percent_encoding::percent_decode_str;
 
 use super::browse::ObjectMeta;
-use crate::aws::{AwsCredentials, endpoint_origin, resolve_credentials, resolve_region};
+use crate::aws::{
+    AwsCredentials, endpoint_origin, own_retry_quota, resolve_credentials, resolve_region,
+};
 use crate::secrets::Secret;
 use crate::session::ConnectError;
 use crate::workspace::ConnectionConfig;
@@ -142,6 +144,7 @@ impl S3Client {
             .build();
         let mut config = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::v2026_11_10())
+            .retry_partition(own_retry_quota("s3", &region))
             .region(Region::new(region))
             .credentials_provider(credentials)
             .retry_config(RetryConfig::standard().with_max_attempts(max_attempts))
