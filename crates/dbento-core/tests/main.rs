@@ -80,6 +80,7 @@ mod mssql_tiberius_types;
 mod mssql_timeout;
 mod mssql_tls;
 mod mssql_values;
+mod my_explain;
 mod my_explain_capture;
 mod mysql_cancel;
 mod mysql_cancel_paths;

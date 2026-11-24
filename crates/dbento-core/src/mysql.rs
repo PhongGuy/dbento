@@ -603,6 +603,21 @@ impl MysqlDriver {
         Ok(self.ask(sql.to_owned(), Vec::new()).await?.rows)
     }
 
+    /// Runs one EXPLAIN as `catalog` does and returns the first cell of the single row it
+    /// prints: the JSON document or the ANALYZE tree. No row, or a NULL, is `Unsupported`.
+    pub(crate) async fn explain(&mut self, sql: &str) -> Result<String, ExecuteError> {
+        let answer = self.ask(sql.to_owned(), Vec::new()).await?;
+        let cell = match answer.rows.first() {
+            Some(row) => catalog::cell(row, 0).map_err(|e| ExecuteError::Unsupported {
+                reason: e.to_string(),
+            })?,
+            None => None,
+        };
+        cell.ok_or_else(|| ExecuteError::Unsupported {
+            reason: "the EXPLAIN printed no plan".to_owned(),
+        })
+    }
+
     /// Runs one statement as `catalog` does, binding `params` when there are any.
     async fn ask(&mut self, sql: String, params: Vec<Value>) -> Result<Answer, ExecuteError> {
         // An earlier statement's drain error stays that statement's; only a lost session counts.
