@@ -6,11 +6,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use super::client::{ListCall, Listed, S3Client};
+use super::errors::{STALE_TOKEN_HINT, classify, execute_error};
 use crate::aws::AwsCancel;
 use crate::session::{
     ExecuteError, ExtendError, Limits, OnTruncate, Outcome, StreamItem, TruncatedBy,
 };
-use crate::value::{BatchBuilder, CellRef};
+use crate::value::{BatchBuilder, CellRef, ColumnInfo};
+
+/// The most keys one listing page asks for.
+pub(crate) const PAGE_KEYS: u32 = 1000;
 
 /// What a session and its streams share.
 pub(crate) struct Shared {
@@ -65,9 +70,60 @@ impl S3Cell {
 
 pub(crate) type Row = Vec<S3Cell>;
 
+/// The columns of an `ls` over a bucket or prefix.
+pub(crate) fn list_columns() -> Vec<ColumnInfo> {
+    vec![
+        ColumnInfo::new("kind", "text", None),
+        ColumnInfo::new("key", "text", None),
+        ColumnInfo::new("size", "integer", None),
+        ColumnInfo::new("last_modified", "timestamp", None),
+        ColumnInfo::new("etag", "text", None),
+        ColumnInfo::new("storage_class", "text", None),
+    ]
+}
+
+/// One page's prefixes and objects as rows in key byte order; on a tie the prefix comes first,
+/// so an `a/` object still lists beside the `a/` prefix.
+fn page_rows(page: Listed) -> Vec<Row> {
+    let prefixes = page.prefixes.into_iter().map(|key| {
+        let row = vec![
+            S3Cell::Text("prefix".to_owned()),
+            S3Cell::Text(key.clone()),
+            S3Cell::Null,
+            S3Cell::Null,
+            S3Cell::Null,
+            S3Cell::Null,
+        ];
+        (key, false, row)
+    });
+    let objects = page.objects.into_iter().map(|object| {
+        let text = |value: Option<String>| value.map_or(S3Cell::Null, S3Cell::Text);
+        let row = vec![
+            S3Cell::Text("object".to_owned()),
+            S3Cell::Text(object.key.clone()),
+            S3Cell::Text(object.size.to_string()),
+            text(object.last_modified),
+            text(object.etag),
+            text(object.storage_class),
+        ];
+        (object.key, true, row)
+    });
+    let mut keyed: Vec<(String, bool, Row)> = prefixes.chain(objects).collect();
+    keyed.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
+    keyed.into_iter().map(|(_, _, row)| row).collect()
+}
+
+/// Where a listing's further pages come from; the token is the stream's.
+struct Lister {
+    client: Arc<S3Client>,
+    call: ListCall,
+}
+
 pub(crate) struct S3Stream {
     builder: BatchBuilder,
     buffer: VecDeque<Row>,
+    /// Set for a listing, which fetches page by page; None for rows fetched up front.
+    lister: Option<Lister>,
     /// The token of the next listing page; None once the server sent the last one.
     next_token: Option<String>,
     limits: Limits,
@@ -89,6 +145,7 @@ impl S3Stream {
         S3Stream {
             builder: BatchBuilder::new(columns),
             buffer: rows.into(),
+            lister: None,
             next_token: None,
             limits,
             delivered: 0,
@@ -98,21 +155,69 @@ impl S3Stream {
         }
     }
 
+    /// A listing of `call`'s bucket and prefix, its first page already fetched.
+    pub(crate) async fn listing(
+        client: Arc<S3Client>,
+        call: ListCall,
+        limits: Limits,
+        shared: Arc<Shared>,
+    ) -> Result<Self, ExecuteError> {
+        let mut stream = S3Stream::buffered(list_columns().len(), Vec::new(), limits, shared);
+        stream.lister = Some(Lister { client, call });
+        stream.fetch().await?;
+        Ok(stream)
+    }
+
+    /// Fetches one page from the held token under the session timeout and cancel handle. A
+    /// refused token most likely means the listing went stale, so the error says to list again.
+    async fn fetch(&mut self) -> Result<(), ExecuteError> {
+        let Some(lister) = self.lister.as_mut() else {
+            return Ok(());
+        };
+        let continued = self.next_token.is_some();
+        lister.call.token = self.next_token.take();
+        let call = async {
+            lister.client.list_objects(&lister.call).await.map_err(|e| {
+                let mut error = execute_error(classify(e));
+                if let ExecuteError::Database { code, hint, .. } = &mut error
+                    && continued
+                    && code == "InvalidArgument"
+                {
+                    *hint = Some(STALE_TOKEN_HINT.to_owned());
+                }
+                error
+            })
+        };
+        let page = self.shared.bounded(call).await?;
+        self.next_token = page.next_token.clone();
+        self.buffer.extend(page_rows(page));
+        Ok(())
+    }
+
+    /// The buffered row, else the first row of further pages while a token remains; a page
+    /// with no rows is followed.
+    async fn next_row(&mut self) -> Result<Option<Row>, ExecuteError> {
+        while self.buffer.is_empty() && self.next_token.is_some() {
+            self.fetch().await?;
+        }
+        Ok(self.buffer.pop_front())
+    }
+
     /// The next batch or the end. A failure drops the buffer and the token.
-    pub(crate) fn next_event(&mut self) -> Result<StreamItem, ExecuteError> {
-        let event = self.read();
+    pub(crate) async fn next_event(&mut self) -> Result<StreamItem, ExecuteError> {
+        let event = self.read().await;
         if event.is_err() {
             self.stop();
         }
         event
     }
 
-    fn read(&mut self) -> Result<StreamItem, ExecuteError> {
+    async fn read(&mut self) -> Result<StreamItem, ExecuteError> {
         let done = loop {
             if let Some(done) = &self.done {
                 break done.clone();
             }
-            let Some(row) = self.buffer.pop_front() else {
+            let Some(row) = self.next_row().await? else {
                 self.done = Some(self.outcome(None));
                 continue;
             };
@@ -176,3 +281,35 @@ impl S3Stream {
         self.parked = false;
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::S3Stream;
+    use crate::session::{Outcome, StreamItem};
+    use crate::value::CellRef;
+
+    /// The `key` column of every row until the stream ends, and how it ended.
+    pub(crate) async fn drain(stream: &mut S3Stream) -> (Vec<String>, Outcome) {
+        let mut keys = Vec::new();
+        loop {
+            match stream.next_event().await {
+                Ok(StreamItem::Batch(batch)) => {
+                    for row in 0..batch.len() {
+                        if let CellRef::Text(key) = batch.cell(row, 1) {
+                            keys.push(key.to_owned());
+                        }
+                    }
+                }
+                Ok(StreamItem::Done(outcome)) => return (keys, outcome),
+                Err(error) => panic!("the listing failed: {error:?}"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test's catch-all arm only prints the unexpected error"
+)]
+mod tests;

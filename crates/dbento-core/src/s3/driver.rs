@@ -12,7 +12,7 @@ use super::client::{Bucket, ClientSettings, ListCall, S3Client};
 use super::command::{self, S3Command};
 use super::errors::{BUCKETS_HINT, S3Failure, classify, execute_error, wrong_region_hint};
 use super::lex::{S3Statement, SyntaxError, parse_script};
-use super::stream::{Row, S3Cell, S3Stream, Shared};
+use super::stream::{PAGE_KEYS, Row, S3Cell, S3Stream, Shared, list_columns};
 use crate::aws::https_client;
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::session::{
@@ -228,16 +228,31 @@ impl Driver for S3Session {
                     S3Stream::buffered(columns.len(), rows, limits, Arc::clone(&script.shared));
                 Ok((columns, stream))
             }
-            S3Command::List { .. } | S3Command::Stat(_) | S3Command::Cat(_) => {
-                Err(ExecuteError::Unsupported {
-                    reason: "not available yet".to_owned(),
-                })
+            S3Command::List { url, recursive } => {
+                let call = ListCall {
+                    bucket: url.bucket,
+                    prefix: url.key,
+                    delimiter: (!recursive).then_some('/'),
+                    token: None,
+                    max_keys: PAGE_KEYS,
+                };
+                let stream = S3Stream::listing(
+                    Arc::clone(&script.client),
+                    call,
+                    limits,
+                    Arc::clone(&script.shared),
+                )
+                .await?;
+                Ok((list_columns(), stream))
             }
+            S3Command::Stat(_) | S3Command::Cat(_) => Err(ExecuteError::Unsupported {
+                reason: "not available yet".to_owned(),
+            }),
         }
     }
 
     async fn next_event(stream: &mut S3Stream) -> Result<StreamItem, ExecuteError> {
-        stream.next_event()
+        stream.next_event().await
     }
 
     fn extend(stream: &mut S3Stream, more: Option<u64>) -> Result<(), ExtendError> {
