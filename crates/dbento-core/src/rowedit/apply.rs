@@ -206,6 +206,20 @@ pub async fn apply_with(
                 continue;
             }
         }
+        // A write with expected values but no guard returns the row it changed, which must
+        // still hold them; a mismatch is reported and the batch rolls the write back.
+        if statement.guard.is_none() && !statement.expected.is_empty() {
+            let outcome = match session.query_bound(&statement.sql, &statement.params).await {
+                Ok(rows) => {
+                    guard_outcome(&rows, &statement.expected).unwrap_or(ChangeOutcome::Applied(1))
+                }
+                Err(e) => ChangeOutcome::Failed(failure_message(e)),
+            };
+            failed = matches!(outcome, ChangeOutcome::Failed(_));
+            outcomes.push(outcome);
+            keys.push(None);
+            continue;
+        }
         // A statement that returns the identity counts its rows; the one row is the key.
         let ran = if statement.returning {
             session

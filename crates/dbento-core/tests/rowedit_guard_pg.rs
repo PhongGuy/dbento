@@ -189,3 +189,131 @@ async fn a_repeatable_read_default_still_reports_a_race_as_a_conflict() {
     assert_eq!(rejected(r), vec![ChangeOutcome::Conflict]);
     assert_eq!(scalar(&fx, "SELECT v FROM t WHERE id = 1").await, "z");
 }
+
+fn delete_t1(was_n: &str) -> Change {
+    Change::Delete {
+        key: row_key(&[("id", val("1"))]),
+        expected: pairs(&[("id", val("1")), ("v", val("a")), ("n", val(was_n))]),
+    }
+}
+
+#[tokio::test]
+async fn a_guarded_delete_of_a_changed_row_conflicts_and_the_row_survives() {
+    let fx = setup().await;
+    let target = fx.target("public", "t").await;
+    fx.db
+        .admin()
+        .await
+        .batch_execute("UPDATE t SET n = 11 WHERE id = 1")
+        .await
+        .unwrap();
+    let r = fx.apply_changes(&target, vec![delete_t1("10")]).await;
+    assert_eq!(rejected(r), vec![ChangeOutcome::Conflict]);
+    assert_eq!(
+        scalar(&fx, "SELECT v || n FROM t WHERE id = 1").await,
+        "a11"
+    );
+}
+
+#[tokio::test]
+async fn the_type_torture_row_deletes_against_its_loaded_text() {
+    let fx = pg_fixture("").await;
+    fx.db.admin().await.batch_execute(TORTURE).await.unwrap();
+    let target = fx.target("public", "tt").await;
+    let row = loaded(&target, &fx.row("SELECT * FROM tt WHERE id = 1").await);
+    let applied = fx
+        .apply_changes(
+            &target,
+            vec![Change::Delete {
+                key: row_key(&[("id", val("1"))]),
+                expected: row,
+            }],
+        )
+        .await
+        .unwrap();
+    applied.commit().await.unwrap();
+    assert_eq!(
+        scalar(&fx, "SELECT count(*) FROM tt WHERE id = 1").await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn an_all_null_composite_deletes_against_its_text() {
+    let fx = pg_fixture("").await;
+    fx.db.admin().await.batch_execute(COMPOSITE).await.unwrap();
+    let target = fx.target("public", "cn").await;
+    let changes = composite_rows(&fx, &target)
+        .await
+        .into_iter()
+        .map(|row| Change::Delete {
+            key: row_key(&[("id", row[0].1.clone())]),
+            expected: row,
+        })
+        .collect();
+    let applied = fx.apply_changes(&target, changes).await.unwrap();
+    applied.commit().await.unwrap();
+    assert_eq!(scalar(&fx, "SELECT count(*) FROM cn").await, "0");
+}
+
+/// Points `fx` at `user`, who has the admin's password.
+fn as_user(fx: &mut PgFixture, user: &str) {
+    let path = fx.dir.path().join("dbento.toml");
+    let toml = std::fs::read_to_string(&path).unwrap();
+    let admin = format!("user = \"{}\"", fx.db.user());
+    assert!(toml.contains(&admin), "{toml}");
+    std::fs::write(&path, toml.replace(&admin, &format!("user = \"{user}\""))).unwrap();
+    fx.ws = dbento_core::Workspace::open(fx.dir.path()).unwrap();
+}
+
+#[tokio::test]
+async fn a_role_with_select_and_delete_but_no_update_deletes_a_guarded_row() {
+    let mut fx = setup().await;
+    let role = format!("del_{}", fx.db.database());
+    fx.db
+        .admin()
+        .await
+        .batch_execute(&format!(
+            "DROP ROLE IF EXISTS \"{role}\"; CREATE ROLE \"{role}\" LOGIN PASSWORD '{}'; \
+             GRANT SELECT, DELETE ON t TO \"{role}\"",
+            fx.db.password()
+        ))
+        .await
+        .unwrap();
+    as_user(&mut fx, &role);
+    let target = fx.target("public", "t").await;
+    let r = fx.apply_changes(&target, vec![delete_t1("10")]).await;
+    let committed = match r {
+        Ok(applied) => applied.commit().await.map_err(|e| e.to_string()),
+        Err(e) => Err(format!("{e:?}")),
+    };
+    let left = scalar(&fx, "SELECT string_agg(id::text, ',' ORDER BY id) FROM t").await;
+    fx.db
+        .admin()
+        .await
+        .batch_execute(&format!(
+            "REVOKE ALL ON t FROM \"{role}\"; DROP ROLE \"{role}\""
+        ))
+        .await
+        .unwrap();
+    committed.unwrap();
+    assert_eq!(left, "2,3");
+}
+
+#[tokio::test]
+async fn a_guarded_delete_on_a_table_with_an_instead_rule_fails_and_rolls_back() {
+    let fx = setup().await;
+    fx.db
+        .admin()
+        .await
+        .batch_execute("CREATE RULE keep AS ON DELETE TO t DO INSTEAD NOTHING")
+        .await
+        .unwrap();
+    let target = fx.target("public", "t").await;
+    let outcomes = rejected(fx.apply_changes(&target, vec![delete_t1("10")]).await);
+    assert!(
+        matches!(outcomes[..], [ChangeOutcome::Failed(_)]),
+        "{outcomes:?}"
+    );
+    assert_eq!(scalar(&fx, "SELECT count(*) FROM t").await, "3");
+}

@@ -69,7 +69,7 @@ pub(crate) struct BoundStatement {
 /// caller learns the key the database stored; a target whose rules refuse it never does.
 /// MySQL has no RETURNING, so such an Update carries a re-read of the key instead.
 /// An Update with expected values carries a guard that reads them first (a locking read
-/// on Postgres), as does a SQLite Delete.
+/// on Postgres), as does a SQLite Delete; a Postgres Delete returns them instead.
 pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
     let target = batch.target();
     let identity = target.identity();
@@ -116,6 +116,15 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
                     let guard = Gen::new(batch, true).guard(key, expected, "");
                     let values = expected.iter().map(|(_, v)| v.clone()).collect();
                     (Some(Box::new(guard)), values)
+                }
+                // A Postgres Delete reads its guarded columns back as it deletes, so a row
+                // lock is never needed; the caller compares the returned row and rolls back.
+                Change::Delete { expected, .. }
+                    if batch.dialect() == Dialect::Postgres && !expected.is_empty() =>
+                {
+                    sql.push_str(&g.returning_read(expected));
+                    let values = expected.iter().map(|(_, v)| v.clone()).collect();
+                    (None, values)
                 }
                 Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => {
                     (None, Vec::new())
@@ -252,6 +261,20 @@ impl<'a> Gen<'a> {
         format!(" RETURNING {cols}")
     }
 
+    /// ` RETURNING` the `expected` columns, in that order, in the form a guard reads them.
+    fn returning_read(&self, expected: &[(String, EditValue)]) -> String {
+        format!(" RETURNING {}", self.read_list(expected))
+    }
+
+    /// The `expected` columns, in that order, each in its read form.
+    fn read_list(&self, expected: &[(String, EditValue)]) -> String {
+        expected
+            .iter()
+            .map(|(c, _)| self.read_form(c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// The SELECT that reads back the key an Update with `set` left on the row `key` named:
     /// each identity column's set value, else its old one. None when the Update writes no
     /// identity column or a new key value is NULL or DEFAULT, which no `=` can match.
@@ -303,11 +326,7 @@ impl<'a> Gen<'a> {
         expected: &[(String, EditValue)],
         lock: &str,
     ) -> BoundStatement {
-        let cols = expected
-            .iter()
-            .map(|(c, _)| self.read_form(c))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let cols = self.read_list(expected);
         let rel = self.relation(true);
         let filter = self.key(key);
         BoundStatement {

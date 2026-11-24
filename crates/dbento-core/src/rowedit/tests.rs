@@ -1341,3 +1341,46 @@ fn a_postgres_update_guard_locks_the_row_and_reads_output_text() {
         )
     );
 }
+
+#[test]
+fn a_postgres_delete_returns_its_guarded_columns_instead_of_locking_first() {
+    let fmt = |c: &str| {
+        format!(
+            "CASE WHEN pg_catalog.num_nonnulls({c}) = 0 THEN NULL ELSE pg_catalog.format('%s', {c}) END"
+        )
+    };
+    let b = batch(
+        pg(),
+        vec![
+            Change::Delete {
+                key: key(&[("id", t("7"))]),
+                expected: pairs(&[("id", t("7")), ("g", EditValue::Null)]),
+            },
+            Change::Delete {
+                key: key(&[("id", t("8"))]),
+                expected: vec![],
+            },
+        ],
+    );
+    let s = bound(&b);
+    assert_eq!(
+        s[0].sql,
+        format!(
+            "DELETE FROM app.\"My T\" WHERE id = $1::text::pg_catalog.int4 RETURNING {}, {}",
+            fmt("id"),
+            fmt("g")
+        )
+    );
+    assert_eq!(s[0].guard, None);
+    assert!(!s[0].returning, "no written key is read back");
+    assert_eq!(s[0].expected, vec![t("7"), EditValue::Null]);
+    assert_eq!(
+        s[1].sql,
+        "DELETE FROM app.\"My T\" WHERE id = $1::text::pg_catalog.int4"
+    );
+    assert!(s[1].expected.is_empty());
+    assert_eq!(
+        render_sql(&b),
+        "DELETE FROM app.\"My T\" WHERE id = 7;\nDELETE FROM app.\"My T\" WHERE id = 8;"
+    );
+}
