@@ -164,8 +164,8 @@ pub async fn apply_with(
     }
     if let Err(e) = started {
         let _ = session.close().await;
-        // SQLite's BEGIN is the only statement before the changes, and the database refuses
-        // it when another writer holds the lock: that fails the first change, as a write would.
+        // SQLite's BEGIN IMMEDIATE is the only statement before the changes; any refusal of it
+        // (a held lock, a read-only file) fails the first change, as the first write once did.
         if conn.engine() == Engine::Sqlite
             && let ExecuteError::Database { message, .. } = e
         {
@@ -374,8 +374,8 @@ pub(crate) fn change_outcome(matched: u64, warnings: &[(String, String)]) -> Cha
     }
 }
 
-/// None lets the write run; otherwise the change's outcome, write not sent. No row is a
-/// Conflict, several are Ambiguous, and one row is a Conflict unless every value is the same.
+/// None means the row still held its expected values; otherwise the change's outcome. No row
+/// is a Conflict, several are Ambiguous, and one row is a Conflict unless every value is the same.
 pub(crate) fn guard_outcome(
     rows: &[Vec<EditValue>],
     expected: &[EditValue],
