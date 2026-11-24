@@ -1,0 +1,79 @@
+{
+  "query_block": {
+    "union_result": {
+      "using_temporary_table": true,
+      "select_id": 3,
+      "table_name": "<union1,2>",
+      "access_type": "ALL",
+      "query_specifications": [
+        {
+          "dependent": false,
+          "cacheable": true,
+          "query_block": {
+            "select_id": 1,
+            "cost_info": {
+              "query_cost": "2.25"
+            },
+            "table": {
+              "table_name": "cust",
+              "access_type": "ref",
+              "possible_keys": [
+                "region"
+              ],
+              "key": "region",
+              "used_key_parts": [
+                "region"
+              ],
+              "key_length": "5",
+              "ref": [
+                "const"
+              ],
+              "rows_examined_per_scan": 20,
+              "rows_produced_per_join": 20,
+              "filtered": "100.00",
+              "using_index": true,
+              "cost_info": {
+                "read_cost": "0.26",
+                "eval_cost": "2.00",
+                "prefix_cost": "2.26",
+                "data_read_per_join": "1K"
+              },
+              "used_columns": [
+                "id",
+                "region"
+              ]
+            }
+          }
+        },
+        {
+          "dependent": false,
+          "cacheable": true,
+          "query_block": {
+            "select_id": 2,
+            "cost_info": {
+              "query_cost": "101.00"
+            },
+            "table": {
+              "table_name": "ord",
+              "access_type": "ALL",
+              "rows_examined_per_scan": 1000,
+              "rows_produced_per_join": 333,
+              "filtered": "33.33",
+              "cost_info": {
+                "read_cost": "67.67",
+                "eval_cost": "33.33",
+                "prefix_cost": "101.00",
+                "data_read_per_join": "5K"
+              },
+              "used_columns": [
+                "cust_id",
+                "amount"
+              ],
+              "attached_condition": "(`dbento_t_3624377_1`.`ord`.`amount` > 900.00)"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

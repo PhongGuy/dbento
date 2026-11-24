@@ -1,0 +1,4 @@
+-> Filter: (c.id <= 5)  (cost=1.26 rows=5) (actual time=0.171..0.175 rows=5 loops=1)
+    -> Covering index range scan on c using PRIMARY over (id <= 5)  (cost=1.26 rows=5) (actual time=0.00292..0.0054 rows=5 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Single-row covering index lookup on c2 using PRIMARY (id = c.id)  (cost=0.35 rows=1) (actual time=0.0028..0.00297 rows=1 loops=5)

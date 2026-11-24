@@ -109,3 +109,41 @@ fn explain_text_is_the_mcp_plain_form() {
         "EXPLAIN QUERY PLAN -- by id\nSELECT 1"
     );
 }
+
+#[test]
+fn mysql_plans_as_json_and_analyzes_only_confirmed_reads() {
+    let plan = explain_request(Engine::Mysql, "  SELECT * FROM t;\n", ExplainMode::Plan).unwrap();
+    assert_eq!(plan.sql, "EXPLAIN FORMAT=JSON SELECT * FROM t;");
+    assert_eq!(
+        (plan.mode, plan.analyze_unavailable),
+        (ExplainMode::Plan, false)
+    );
+    let read = explain_request(Engine::Mysql, "SELECT * FROM t", ExplainMode::Analyze).unwrap();
+    assert_eq!(read.sql, "EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM t");
+    assert_eq!(
+        (read.mode, read.analyze_unavailable),
+        (ExplainMode::Analyze, false)
+    );
+    assert_eq!(read.classification.unwrap().writes, Writes::No);
+    for sql in [
+        "UPDATE t SET a = 1 WHERE id = 2",
+        "DELETE FROM t",
+        "INSERT INTO t VALUES (1)",
+        "REPLACE INTO t VALUES (1)",
+        "TABLE t",
+        "SELECT ((",
+    ] {
+        let r = explain_request(Engine::Mysql, sql, ExplainMode::Analyze).unwrap();
+        assert_eq!(r.sql, format!("EXPLAIN FORMAT=JSON {sql}"), "{sql}");
+        assert_eq!(
+            (r.mode, r.analyze_unavailable),
+            (ExplainMode::Plan, true),
+            "{sql}"
+        );
+        assert_ne!(r.classification.unwrap().writes, Writes::No, "{sql}");
+    }
+    assert_eq!(
+        explain_text(Engine::Mysql, " SELECT 1 ").unwrap(),
+        "EXPLAIN SELECT 1"
+    );
+}
