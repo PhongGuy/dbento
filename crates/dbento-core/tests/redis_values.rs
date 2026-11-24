@@ -183,3 +183,18 @@ async fn a_missing_key_is_gone_and_multi_refuses() {
     assert!(matches!(e, KeyBrowseError::Unsupported { .. }), "{e:?}");
     read(&mut s, "DISCARD").await;
 }
+
+#[tokio::test]
+async fn a_repeated_field_name_reads_as_pairs() {
+    let fx = rd("").await;
+    let mut s = fx.session(Reader, forced()).await;
+    let p = first(&mut s, fx.db.index(), b"stream:dup").await;
+    assert_eq!(names(&p), vec!["id", "fields"]);
+    assert_eq!(
+        cells(&p),
+        vec![vec![
+            text("1-1"),
+            text(r#"{"$pairs":[["f","a"],["f","b"],["g","c"]]}"#)
+        ]]
+    );
+}

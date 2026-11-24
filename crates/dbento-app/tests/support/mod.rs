@@ -470,6 +470,40 @@ pub fn ms_spec(db: &dbento_testkit::MsDb, extra: &str) -> (tempfile::TempDir, Ru
     (dir, spec)
 }
 
+/// A runner spec on connection `rd` from `conn_toml`, its secret the reader's password.
+#[cfg(feature = "redis")]
+pub fn redis_spec(
+    db: &dbento_testkit::RedisDb,
+    conn_toml: String,
+) -> (tempfile::TempDir, RunnerSpec) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("dbento.toml"),
+        format!("dbento = 1\n{conn_toml}"),
+    )
+    .unwrap();
+    let password = db
+        .password(dbento_testkit::RdUser::Reader)
+        .map(str::to_owned);
+    let var = dbento_testkit::RD_SECRET_VAR;
+    let spec = RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir.path()).unwrap()),
+        connection: "rd".into(),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(move |v| (v == var).then(|| password.clone()).flatten()),
+    };
+    (dir, spec)
+}
+
+/// Runs each line of `text` as the admin, split on spaces; a server error fails the test.
+#[cfg(feature = "redis")]
+pub async fn redis_seed(db: &dbento_testkit::RedisDb, text: &str) {
+    for line in text.lines() {
+        let v = db.cmd(&line.split(' ').collect::<Vec<_>>()).await;
+        assert!(!format!("{v:?}").contains("ServerError"), "{line}: {v:?}");
+    }
+}
+
 /// Rewrites the fixture's dbento.toml: `lite` with `lite_extra`, then `nopg`, then `more`.
 pub fn rewrite(fx: &Fx, lite_extra: &str, more: &str) {
     std::fs::write(

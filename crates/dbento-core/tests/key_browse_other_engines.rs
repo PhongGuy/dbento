@@ -25,3 +25,18 @@ async fn sqlite_has_no_command_docs() {
         Err(KeyBrowseError::Unsupported { .. })
     ));
 }
+
+#[tokio::test]
+async fn sqlite_has_no_messages_to_read() {
+    use dbento_core::message::{Direction, MessageError, MessageRead, Position, SourceRef};
+    let lite = sqlite_fixture("CREATE TABLE t (a)", "");
+    let mut l = lite.session(SessionOptions::default()).await;
+    let src = SourceRef::redis(0, b"s".to_vec());
+    let r = MessageRead::browse(src.clone(), Position::Start, Direction::Forward);
+    let e = l.read_messages(&r).await.unwrap_err();
+    assert!(matches!(e, MessageError::Unsupported { .. }), "{e:?}");
+    let e = l.stream_groups(&src).await.unwrap_err();
+    assert!(matches!(e, MessageError::Unsupported { .. }), "{e:?}");
+    let e = l.pending(&src, "g", Position::Start, 10).await.unwrap_err();
+    assert!(matches!(e, MessageError::Unsupported { .. }), "{e:?}");
+}

@@ -120,6 +120,7 @@ pub use objects::{
     IndexInfo, ObjectRef, RelationObjects, RoutineInfo, RoutineKind, SchemaObjects, TriggerInfo,
     TriggerState, TypeInfo, TypeKind,
 };
+pub mod message;
 mod mongo;
 mod mssql;
 mod mysql;
