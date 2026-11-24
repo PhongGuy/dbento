@@ -39,6 +39,7 @@ mod edit;
 mod edit_apply;
 mod edit_folders;
 mod error_fields;
+mod explain_my_json;
 mod explain_plan;
 mod explain_request;
 mod fkeys_my;

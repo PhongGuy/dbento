@@ -1,6 +1,7 @@
 //! Explain requests: the one statement a shell asks to plan, checked once, and the exact
 //! text each engine is sent for it. The app and the MCP server share these checks.
 
+mod my_json;
 mod plan;
 pub use plan::*;
 

@@ -1,4 +1,4 @@
-//! Plans as a pre-order node list, parsed from Postgres `FORMAT JSON` output or from the
+//! Plans as a pre-order node list, parsed from Postgres or MySQL JSON output or from the
 //! rows of SQLite's `EXPLAIN QUERY PLAN`.
 
 use std::collections::HashMap;
@@ -7,6 +7,8 @@ use std::fmt;
 use serde::Deserialize;
 use serde::de::{MapAccess, Visitor};
 use serde_json::Value;
+
+use super::my_json::{JsonFlavor, parse as parse_json};
 
 /// What the database printed for an explain, and the plan read from it when it parses.
 #[non_exhaustive]
@@ -41,6 +43,12 @@ impl ExplainOutput {
             raw,
             plan: Ok(Plan::from_sqlite_rows(&tree)),
         }
+    }
+
+    /// Keeps MySQL's `EXPLAIN FORMAT=JSON` text (format version 1) and parses it.
+    pub fn from_mysql_json(raw: String) -> ExplainOutput {
+        let plan = parse_json(&raw, JsonFlavor::Mysql);
+        ExplainOutput { raw, plan }
     }
 }
 
@@ -177,7 +185,7 @@ impl Plan {
 }
 
 impl PlanNode {
-    fn bare(parent: Option<usize>, depth: usize, node_type: String) -> PlanNode {
+    pub(super) fn bare(parent: Option<usize>, depth: usize, node_type: String) -> PlanNode {
         PlanNode {
             parent,
             depth,
@@ -296,7 +304,7 @@ fn flatten(
 }
 
 /// Sets each node's self time: its time over all loops less its children's, at least 0.
-fn settle_self_time(nodes: &mut [PlanNode]) {
+pub(super) fn settle_self_time(nodes: &mut [PlanNode]) {
     let spent = |n: &PlanNode| n.actual.map_or(0.0, |a| a.total_ms * a.loops as f64);
     let mut own: Vec<f64> = nodes.iter().map(spent).collect();
     for n in nodes.iter() {
@@ -312,7 +320,7 @@ fn settle_self_time(nodes: &mut [PlanNode]) {
 }
 
 /// A detail value as shown: strings as themselves, string lists joined, the rest as JSON.
-fn detail_text(v: Value) -> String {
+pub(super) fn detail_text(v: Value) -> String {
     match v {
         Value::String(s) => s,
         Value::Array(items) if items.iter().all(Value::is_string) => items

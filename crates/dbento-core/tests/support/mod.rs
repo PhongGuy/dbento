@@ -913,3 +913,61 @@ pub async fn sr_targets(
         .collect();
     (present, info[1]["databases"].clone())
 }
+
+/// Each fixture in tests/fixtures/explain/my whose name starts with one of `prefixes` and ends
+/// with `suffix`, as (name, contents) sorted by name; `.error.txt` files never match.
+pub fn my_explain_fixtures(prefixes: &[&str], suffix: &str) -> Vec<(String, String)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/explain/my");
+    let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| {
+            prefixes.iter().any(|p| n.starts_with(p))
+                && n.ends_with(suffix)
+                && !n.ends_with(".error.txt")
+        })
+        .map(|n| {
+            let body = std::fs::read_to_string(dir.join(&n)).unwrap();
+            (n, body)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Asserts a JSON plan kept every table and every select of `raw`: as many nodes with a relation
+/// as `"table_name"` keys, and each `select_id` value in some node's detail.
+pub fn assert_covers(name: &str, raw: &str, plan: &dbento_core::Plan) {
+    fn ids(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, v) in m {
+                    if k == "select_id" {
+                        out.push(v.to_string());
+                    }
+                    ids(v, out);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| ids(v, out)),
+            serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_) => {}
+        }
+    }
+    let related = plan.nodes.iter().filter(|n| n.relation.is_some()).count();
+    assert_eq!(
+        raw.matches("\"table_name\"").count(),
+        related,
+        "{name}: tables"
+    );
+    let mut want = Vec::new();
+    ids(&serde_json::from_str(raw).unwrap(), &mut want);
+    for id in want {
+        let kept = plan
+            .nodes
+            .iter()
+            .any(|n| n.detail.iter().any(|(k, v)| k == "select_id" && *v == id));
+        assert!(kept, "{name}: select_id {id} lost");
+    }
+}
