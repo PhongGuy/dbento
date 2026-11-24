@@ -288,7 +288,7 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 
 ## Contributing
 
-Issues and pull requests are welcome. Building from source, the layout, the tests and checks, CI, the conventions for issues and pull requests, and the gpui-pilot QA setup are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues and pull requests from anyone are welcome, first ones included, and I'll help get a pull request over the line. What I check before merging is in [Sending a change](CONTRIBUTING.md#sending-a-change). Building from source, the layout, the tests and checks, CI, the conventions for issues and pull requests, and the gpui-pilot QA setup are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
