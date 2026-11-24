@@ -509,6 +509,9 @@ struct Slot {
     stop_reported: bool,
     /// A read-only statement's transaction is open; settle ends it once nothing is unread.
     owed_rollback: bool,
+    /// The value a pinned EXPLAIN still owes the session's `explain_json_format_version`;
+    /// settle sets it back once nothing is unread.
+    owed_json_version: Option<u32>,
 }
 
 /// Never locked across an await.
@@ -605,17 +608,74 @@ impl MysqlDriver {
 
     /// Runs one EXPLAIN as `catalog` does and returns the first cell of the single row it
     /// prints: the JSON document or the ANALYZE tree. No row, or a NULL, is `Unsupported`.
-    pub(crate) async fn explain(&mut self, sql: &str) -> Result<String, ExecuteError> {
-        let answer = self.ask(sql.to_owned(), Vec::new()).await?;
-        let cell = match answer.rows.first() {
-            Some(row) => catalog::cell(row, 0).map_err(|e| ExecuteError::Unsupported {
-                reason: e.to_string(),
-            })?,
-            None => None,
+    /// With `pin_v1` it runs under `explain_json_format_version` 1, and the session's own value
+    /// is set back afterwards, also on error, cancel or drop; a failed restore is reported
+    /// unless the EXPLAIN itself failed.
+    pub(crate) async fn explain(
+        &mut self,
+        sql: &str,
+        pin_v1: bool,
+    ) -> Result<String, ExecuteError> {
+        let owed = if pin_v1 {
+            self.pin_json_v1().await?
+        } else {
+            None
         };
-        cell.ok_or_else(|| ExecuteError::Unsupported {
-            reason: "the EXPLAIN printed no plan".to_owned(),
-        })
+        if owed.is_none() {
+            return first_cell(self.ask(sql.to_owned(), Vec::new()).await?);
+        }
+        let explained = self.ask_settled(sql.to_owned(), Vec::new()).await;
+        // Isolate the restore's own outcome from any earlier drain error still waiting.
+        let earlier = lock(&self.shared).unreported.take();
+        let settled = settle(&self.shared, &self.door, &self.cancel).await;
+        let restore = {
+            let mut slot = lock(&self.shared);
+            let restore = std::mem::replace(&mut slot.unreported, earlier);
+            if explained.is_err()
+                && let Some(e) = restore
+            {
+                slot.unreported.get_or_insert(e);
+                None
+            } else {
+                restore
+            }
+        };
+        let answer = explained?;
+        settled?;
+        restore.map_or(Ok(()), Err)?;
+        first_cell(answer)
+    }
+
+    /// Switches the session to JSON v1 when it is on another version and returns the value now
+    /// owed; `None` when nothing needs restoring, also on a server without the variable.
+    async fn pin_json_v1(&mut self) -> Result<Option<u32>, ExecuteError> {
+        let read = "SELECT @@session.explain_json_format_version".to_owned();
+        let answer = match self.ask(read, Vec::new()).await {
+            Ok(answer) => answer,
+            Err(ExecuteError::Database { code, .. }) if code == "1193" => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let text = first_cell(answer)?;
+        let version = text
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| ExecuteError::Unsupported {
+                reason: format!("explain_json_format_version reads {text:?}, not a number"),
+            })?;
+        if version == 1 {
+            return Ok(None);
+        }
+        // Owed before the SET is sent, so a dropped SET is still undone at the next settle.
+        lock(&self.shared).owed_json_version = Some(version);
+        let set = "SET SESSION explain_json_format_version = 1".to_owned();
+        if let Err(e) = self.ask_settled(set, Vec::new()).await {
+            // A SET the server refused changed nothing, so nothing is owed.
+            if matches!(e, ExecuteError::Database { .. }) {
+                lock(&self.shared).owed_json_version = None;
+            }
+            return Err(e);
+        }
+        Ok(Some(version))
     }
 
     /// Runs one statement as `catalog` does, binding `params` when there are any.
@@ -626,6 +686,15 @@ impl MysqlDriver {
         {
             return Err(ExecuteError::SessionClosed);
         }
+        self.ask_settled(sql, params).await
+    }
+
+    /// The body of `ask` on a connection already settled, so no owed work runs before it.
+    async fn ask_settled(
+        &mut self,
+        sql: String,
+        params: Vec<Value>,
+    ) -> Result<Answer, ExecuteError> {
         let cancel = &self.cancel;
         let Some(g) = cancel.begin().await else {
             return Err(ExecuteError::Cancelled);
@@ -1315,15 +1384,27 @@ async fn settle_lent(
         let step = match lent.held.as_mut() {
             None => return Err(ExecuteError::SessionClosed),
             Some(Held::Idle(_)) if !lent.unread => {
-                // The read-only transaction ends once nothing is unread, as a drain the cap
-                // bounds, so a settle cut short leaves it in flight for the next one.
-                if !std::mem::take(&mut lock(shared).owed_rollback) {
+                // The read-only transaction ends, then a pinned EXPLAIN's version is restored,
+                // once nothing is unread, each as a drain the cap bounds, so a settle cut short
+                // leaves it in flight for the next one.
+                let owed = {
+                    let mut slot = lock(shared);
+                    if std::mem::take(&mut slot.owed_rollback) {
+                        Some(None)
+                    } else {
+                        slot.owed_json_version.take().map(Some)
+                    }
+                };
+                let Some(version) = owed else {
                     return Ok(());
-                }
-                // Nothing runs now, so a deadline passing cannot KILL the ROLLBACK.
+                };
+                // Nothing runs now, so a deadline passing cannot KILL the ROLLBACK or the SET.
                 cancel.end();
                 if let Some(Held::Idle(conn)) = lent.held.take() {
-                    lent.held = Some(Held::Draining(rollback(conn)));
+                    lent.held = Some(Held::Draining(match version {
+                        None => rollback(conn),
+                        Some(v) => restore_json_version(conn, v),
+                    }));
                 }
                 continue;
             }
@@ -1478,6 +1559,49 @@ fn rollback(mut held: Guarded) -> DrainFut {
             Err(e) => Some(Err(e)),
         };
         (held, ended)
+    })
+}
+
+/// Sets the session's `explain_json_format_version` back to `value` under DRAIN_CAP, shaped as
+/// a drain that read no result sets; a server error's message names the variable and value.
+fn restore_json_version(mut held: Guarded, value: u32) -> DrainFut {
+    Box::pin(async move {
+        let sql = format!("SET SESSION explain_json_format_version = {value}");
+        let ended = match held.conn() {
+            Ok(conn) => tokio::time::timeout(DRAIN_CAP, conn.query_drop(sql))
+                .await
+                .ok()
+                .map(|r| {
+                    r.map(|()| 0).map_err(|e| match e {
+                        mysql_async::Error::Server(mut s) => {
+                            s.message = format!(
+                                "cannot restore explain_json_format_version to {value}: {}",
+                                s.message
+                            );
+                            mysql_async::Error::Server(s)
+                        }
+                        other @ (mysql_async::Error::Driver(_)
+                        | mysql_async::Error::Io(_)
+                        | mysql_async::Error::Other(_)
+                        | mysql_async::Error::Url(_)) => other,
+                    })
+                }),
+            Err(e) => Some(Err(e)),
+        };
+        (held, ended)
+    })
+}
+
+/// The first cell of an EXPLAIN's single row; no row, or a NULL, is `Unsupported`.
+fn first_cell(answer: Answer) -> Result<String, ExecuteError> {
+    let cell = match answer.rows.first() {
+        Some(row) => catalog::cell(row, 0).map_err(|e| ExecuteError::Unsupported {
+            reason: e.to_string(),
+        })?,
+        None => None,
+    };
+    cell.ok_or_else(|| ExecuteError::Unsupported {
+        reason: "the EXPLAIN printed no plan".to_owned(),
     })
 }
 

@@ -1349,7 +1349,9 @@ impl Session {
             (SessionInner::Mysql(d), form) => {
                 // The parser follows the form matched, never the request's public `mode`.
                 let maria = d.server().flavor == Flavor::Mariadb;
-                let raw = d.explain(&sql).await?;
+                // MySQL 9 sessions may print JSON v2, which the plan parser does not read.
+                let pin_v1 = form == ExplainMode::Plan && !maria;
+                let raw = d.explain(&sql, pin_v1).await?;
                 Ok(match (form, maria) {
                     (_, true) => ExplainOutput::from_mariadb_json(raw),
                     (ExplainMode::Plan, false) => ExplainOutput::from_mysql_json(raw),

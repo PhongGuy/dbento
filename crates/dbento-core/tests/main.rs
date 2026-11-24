@@ -82,6 +82,7 @@ mod mssql_tls;
 mod mssql_values;
 mod my_explain;
 mod my_explain_capture;
+mod my_explain_pin;
 mod mysql_cancel;
 mod mysql_cancel_paths;
 mod mysql_catalog;
