@@ -7,3 +7,5 @@ mod http;
 
 pub(crate) use creds::{AwsCredentials, resolve_credentials, resolve_region};
 pub(crate) use http::{endpoint_origin, https_client};
+#[cfg(test)]
+pub(crate) mod replay;
