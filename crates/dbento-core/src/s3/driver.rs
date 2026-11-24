@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use aws_sdk_s3::config::SharedHttpClient;
 
+use super::ObjectKey;
 use super::client::{Bucket, ClientSettings, ListCall, S3Client};
 use super::command::{self, S3Command};
 use super::errors::{BUCKETS_HINT, S3Failure, classify, execute_error, wrong_region_hint};
@@ -245,9 +246,26 @@ impl Driver for S3Session {
                 .await?;
                 Ok((list_columns(), stream))
             }
-            S3Command::Stat(_) | S3Command::Cat(_) => Err(ExecuteError::Unsupported {
-                reason: "not available yet".to_owned(),
-            }),
+            S3Command::Stat(url) => {
+                let (columns, row) = stat(script, url).await?;
+                let stream = S3Stream::buffered(
+                    columns.len(),
+                    vec![row],
+                    limits,
+                    Arc::clone(&script.shared),
+                );
+                Ok((columns, stream))
+            }
+            S3Command::Cat(url) => {
+                let (columns, row) = cat(script, url, &limits).await?;
+                let stream = S3Stream::buffered(
+                    columns.len(),
+                    vec![row],
+                    limits,
+                    Arc::clone(&script.shared),
+                );
+                Ok((columns, stream))
+            }
         }
     }
 
@@ -293,6 +311,129 @@ impl Driver for S3Session {
 
     fn read_only_level(&self, requested: bool) -> Option<ReadOnlyEnforcement> {
         requested.then_some(ReadOnlyEnforcement::BestEffort)
+    }
+}
+
+/// The most bytes `cat` reads, whatever the byte limit.
+const CAT_CAP: u64 = 1 << 20;
+/// Room left under a byte limit for `cat`'s `size` and `truncated` cells, so its one row fits.
+const CAT_RESERVE: u64 = 64;
+
+/// The object's head as one `stat` row.
+async fn stat(script: &S3Script, url: ObjectKey) -> Result<(Vec<ColumnInfo>, Row), ExecuteError> {
+    let call = async {
+        script
+            .client
+            .head_object(&url.bucket, &url.key)
+            .await
+            .map_err(|e| execute_error(missing_key(classify(e))))
+    };
+    let meta = script.shared.bounded(call).await?;
+    let text = |value: Option<String>| value.map_or(S3Cell::Null, S3Cell::Text);
+    let row = vec![
+        S3Cell::Text(meta.key),
+        S3Cell::Text(meta.size.to_string()),
+        text(meta.last_modified),
+        text(meta.etag),
+        text(meta.storage_class),
+        text(meta.content_type),
+    ];
+    let columns = vec![
+        ColumnInfo::new("key", "text", None),
+        ColumnInfo::new("size", "integer", None),
+        ColumnInfo::new("last_modified", "timestamp", None),
+        ColumnInfo::new("etag", "text", None),
+        ColumnInfo::new("storage_class", "text", None),
+        ColumnInfo::new("content_type", "text", None),
+    ];
+    Ok((columns, row))
+}
+
+/// The object's first bytes as one `cat` row, read with a range capped at 1 MiB and under the
+/// byte limit. An empty object answers a range with `InvalidRange`, so that reads as empty.
+async fn cat(
+    script: &S3Script,
+    url: ObjectKey,
+    limits: &Limits,
+) -> Result<(Vec<ColumnInfo>, Row), ExecuteError> {
+    let cap = limits
+        .max_bytes
+        .map_or(CAT_CAP, |b| b.saturating_sub(CAT_RESERVE).clamp(1, CAT_CAP));
+    let call = async {
+        match script
+            .client
+            .get_range(
+                &url.bucket,
+                &url.key,
+                u32::try_from(cap).unwrap_or(u32::MAX),
+            )
+            .await
+        {
+            Ok(read) => Ok((read.bytes, read.total_size)),
+            Err(e) => match missing_key(classify(e)) {
+                S3Failure::InvalidRange => Ok((Vec::new(), 0)),
+                failure @ (S3Failure::NotFound { .. }
+                | S3Failure::AccessDenied { .. }
+                | S3Failure::WrongRegion { .. }
+                | S3Failure::Auth { .. }
+                | S3Failure::Service { .. }
+                | S3Failure::Timeout
+                | S3Failure::Transport { .. }) => Err(execute_error(failure)),
+            },
+        }
+    };
+    let (bytes, total) = script.shared.bounded(call).await?;
+    let truncated = (bytes.len() as u64) < total;
+    let (content, kind) = match text_or_bytes(bytes, truncated) {
+        Ok(text) => (S3Cell::Text(text), "text"),
+        Err(bytes) => (S3Cell::Bytes(bytes), "bytes"),
+    };
+    let row = vec![
+        content,
+        S3Cell::Text(total.to_string()),
+        S3Cell::Text(truncated.to_string()),
+    ];
+    let columns = vec![
+        ColumnInfo::new("content", kind, None),
+        ColumnInfo::new("size", "integer", None),
+        ColumnInfo::new("truncated", "text", None),
+    ];
+    Ok((columns, row))
+}
+
+/// A bodiless 404 names no code; on an object call it means the key is missing.
+fn missing_key(failure: S3Failure) -> S3Failure {
+    match failure {
+        S3Failure::NotFound { code, message } if code == "NotFound" => S3Failure::NotFound {
+            code: "NoSuchKey".to_owned(),
+            message,
+        },
+        other @ (S3Failure::NotFound { .. }
+        | S3Failure::AccessDenied { .. }
+        | S3Failure::WrongRegion { .. }
+        | S3Failure::Auth { .. }
+        | S3Failure::InvalidRange
+        | S3Failure::Service { .. }
+        | S3Failure::Timeout
+        | S3Failure::Transport { .. }) => other,
+    }
+}
+
+/// `bytes` as text when they are UTF-8. When the range cut a character in half, only that
+/// incomplete tail is dropped; any other invalid sequence keeps the bytes as they are.
+pub(crate) fn text_or_bytes(bytes: Vec<u8>, truncated: bool) -> Result<String, Vec<u8>> {
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(text),
+        Err(error) => {
+            let utf8 = error.utf8_error();
+            let mut bytes = error.into_bytes();
+            if truncated && utf8.error_len().is_none() {
+                bytes.truncate(utf8.valid_up_to());
+                String::from_utf8(bytes).map_err(std::string::FromUtf8Error::into_bytes)
+            } else {
+                Err(bytes)
+            }
+        }
     }
 }
 

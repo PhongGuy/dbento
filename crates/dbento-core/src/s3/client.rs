@@ -35,7 +35,7 @@ use crate::workspace::ConnectionConfig;
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The most keys one ListObjectsV2 page may ask for; AWS caps there, some stores do not.
-const MAX_KEYS: i32 = 1000;
+pub(crate) const MAX_KEYS: i32 = 1000;
 
 /// Everything a client is built from; `endpoint` is already an origin (see [`endpoint_origin`]).
 pub(crate) struct ClientSettings {

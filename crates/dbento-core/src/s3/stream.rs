@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use super::client::{ListCall, Listed, S3Client};
+use super::client::{ListCall, Listed, MAX_KEYS, S3Client};
 use super::errors::{STALE_TOKEN_HINT, classify, execute_error};
 use crate::aws::AwsCancel;
 use crate::session::{
@@ -15,7 +15,7 @@ use crate::session::{
 use crate::value::{BatchBuilder, CellRef, ColumnInfo};
 
 /// The most keys one listing page asks for.
-pub(crate) const PAGE_KEYS: u32 = 1000;
+pub(crate) const PAGE_KEYS: u32 = MAX_KEYS.unsigned_abs();
 
 /// What a session and its streams share.
 pub(crate) struct Shared {

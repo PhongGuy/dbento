@@ -155,3 +155,84 @@ async fn a_new_statement_ends_a_parked_listing() {
         "the bucket listing after the parked one"
     );
 }
+
+fn b(fx: &S3Fixture, key: &str) -> String {
+    format!("'s3://{}/{}'", fx.s3.bucket(), key)
+}
+
+#[tokio::test]
+async fn stat_reads_the_head_metadata() {
+    let fx = s3fx("").await;
+    let mut s = fx.session().await;
+    let got = read(&mut s, &format!("stat {}", b(&fx, "json/doc.json"))).await;
+    let names: Vec<&str> = got.columns.iter().map(|c| c.0.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "key",
+            "size",
+            "last_modified",
+            "etag",
+            "storage_class",
+            "content_type"
+        ]
+    );
+    assert_eq!(got.rows[0][0], text("json/doc.json"));
+    assert_eq!(got.rows[0][1], text("26"));
+    assert_eq!(got.rows[0][5], text("application/json"));
+}
+
+#[tokio::test]
+async fn cat_is_text_for_utf8_bytes_for_binary_and_empty_for_a_zero_object() {
+    let fx = s3fx("").await;
+    let mut s = fx.session().await;
+    let t = read(&mut s, &format!("cat {}", b(&fx, "text/hello.txt"))).await;
+    assert_eq!(
+        t.rows[0],
+        [text("hello, bento\n"), text("13"), text("false")]
+    );
+    let bin = read(&mut s, &format!("cat {}", b(&fx, "bin/blob.bin"))).await;
+    assert_eq!(bin.rows[0][0], Cell::Bytes((0..=255u8).collect()));
+    let empty = read(&mut s, &format!("cat {}", b(&fx, "empty/zero"))).await;
+    assert_eq!(empty.rows[0], [text(""), text("0"), text("false")]);
+}
+
+#[tokio::test]
+async fn cat_caps_at_one_mib_and_under_the_byte_limit() {
+    let fx = s3fx("").await;
+    let mut s = fx.session().await;
+    let big = read(&mut s, &format!("cat {}", b(&fx, "big/three-mib.bin"))).await;
+    let Cell::Bytes(bytes) = &big.rows[0][0] else {
+        panic!("{:?}", big.rows[0][0])
+    };
+    assert_eq!(bytes.len(), 1 << 20);
+    assert!(
+        bytes
+            .iter()
+            .enumerate()
+            .all(|(i, x)| *x == dbento_testkit::big_byte(i))
+    );
+    assert_eq!(&big.rows[0][1..], [text("3145728"), text("true")]);
+    let mut l = dbento_core::Limits::default();
+    l.max_bytes = Some(1_000);
+    let small =
+        crate::support::one(&mut s, &format!("cat {}", b(&fx, "big/three-mib.bin")), l).await;
+    let Cell::Bytes(bytes) = &small.rows[0][0] else {
+        panic!()
+    };
+    assert_eq!((bytes.len(), small.rows.len()), (936, 1));
+}
+
+#[tokio::test]
+async fn a_missing_key_is_no_such_key_and_keys_need_quotes_only_for_specials() {
+    let fx = s3fx("").await;
+    let mut s = fx.session().await;
+    let e = crate::support::failure(&mut s, &format!("stat {}", b(&fx, "nope"))).await;
+    assert_eq!(crate::support::code_of(e), "NoSuchKey");
+    let quoted = dbento_core::quote_literal(
+        dbento_core::Engine::S3,
+        &format!("s3://{}/hostile/quote'and;semi", fx.s3.bucket()),
+    );
+    let got = read(&mut s, &format!("cat {quoted}")).await;
+    assert_eq!(got.rows[0][0], text("x"));
+}
