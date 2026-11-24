@@ -8,7 +8,6 @@ pub(crate) mod classify;
 pub(crate) mod client;
 #[cfg(feature = "dynamodb")]
 pub(crate) mod columns;
-pub(crate) mod creds;
 #[cfg(feature = "dynamodb")]
 pub(crate) mod driver;
 #[cfg(feature = "dynamodb")]

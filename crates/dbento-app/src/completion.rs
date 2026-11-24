@@ -532,6 +532,7 @@ fn keywords(engine: Engine, prefix: &str) -> Vec<Candidate> {
     let list = match engine {
         Engine::Surrealdb => SURREAL_KEYWORDS,
         Engine::Dynamodb => PARTIQL_KEYWORDS,
+        Engine::S3 => &[],
         Engine::Postgres
         | Engine::Sqlite
         | Engine::Mysql

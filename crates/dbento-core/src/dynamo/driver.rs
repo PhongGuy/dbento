@@ -10,11 +10,12 @@ use aws_sdk_dynamodb::config::SharedHttpClient;
 
 use super::catalog::{self, TableKeys};
 use super::classify::partiql_classification;
-use super::client::{ClientSettings, DynamoClient, https_client};
+use super::client::{ClientSettings, DynamoClient};
 use super::errors::connect_error;
 use super::lex::SyntaxError;
 use super::statement::{Kind, PartiqlStatement, parse_script};
 use super::stream::{DynamoStream, Request, Shape, Shared};
+use crate::aws::https_client;
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::objects::RelationObjects;
 use crate::session::{

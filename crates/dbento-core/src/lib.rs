@@ -150,16 +150,20 @@ mod source;
 mod sources;
 pub use source::single_source;
 pub use sources::named_source_columns;
+#[cfg(any(feature = "dynamodb", feature = "s3"))]
+mod aws;
 #[cfg(feature = "duckdb")]
 mod duckdb;
 mod dynamo;
+mod s3;
+pub use s3::names::{display_key, suggested_file_name};
 mod sqlite;
 
 mod rowedit;
 pub use rowedit::{
     Applied, ApplyError, BatchError, Browse, BrowseError, Change, ChangeOutcome, EditBatch,
-    EditColumn, EditTarget, EditValue, Keyset, RowKey, Sort, apply, apply_with, browse_sql,
-    key_filter, render_sql,
+    EditColumn, EditTarget, EditValue, Keyset, NotEditable, RowKey, Sort, apply, apply_with,
+    browse_sql, key_filter, render_sql,
 };
 
 pub mod import;

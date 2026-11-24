@@ -77,8 +77,8 @@ enum Command {
     },
     /// Run a saved query file; its connection is its `queries/<conn>/` folder unless `--conn` is given.
     Run {
-        /// The query file (.sql, .js, .surql, .redis or .partiql (DynamoDB), matching the
-        /// connection's language).
+        /// The query file (.sql, .js, .surql, .redis, .partiql (DynamoDB) or .s3 (S3), matching
+        /// the connection's language).
         file: PathBuf,
         /// The connection to run on.
         #[arg(long)]

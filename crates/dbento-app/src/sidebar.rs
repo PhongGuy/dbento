@@ -2279,6 +2279,7 @@ pub fn engine_icon(engine: Engine) -> IconName {
         Engine::Mongodb => Icons::FileCode,
         Engine::Redis => Icons::Zap,
         Engine::Dynamodb => Icons::Shapes,
+        Engine::S3 => Icons::FolderOpen,
     }
 }
 
@@ -2315,6 +2316,7 @@ pub fn engine_title(c: &ConnectionConfig) -> &'static str {
         (_, Engine::Surrealdb) => "SurrealDB",
         (_, Engine::Redis) => "Redis",
         (_, Engine::Dynamodb) => "DynamoDB",
+        (_, Engine::S3) => "S3",
     }
 }
 

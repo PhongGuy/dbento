@@ -47,16 +47,20 @@ pub struct ConnectionSpec {
     pub namespace: Option<String>,
     /// `auth_level` (SurrealDB).
     pub auth_level: Option<AuthLevel>,
-    /// `region` (DynamoDB).
+    /// `region` (DynamoDB, S3).
     pub region: Option<String>,
-    /// `endpoint` (DynamoDB).
+    /// `endpoint` (DynamoDB, S3).
     pub endpoint: Option<String>,
-    /// `access_key_id` (DynamoDB).
+    /// `access_key_id` (DynamoDB, S3).
     pub access_key_id: Option<String>,
     /// `consistent_read` (DynamoDB).
     pub consistent_read: Option<bool>,
     /// The `[connections.<name>.ssh]` sub-table.
     pub ssh: Option<SshSpec>,
+    /// `virtual_hosted` (S3).
+    pub virtual_hosted: Option<bool>,
+    /// `buckets` (S3).
+    pub buckets: Option<Vec<String>>,
 }
 
 /// A connection's `[connections.<name>.ssh]` keys as written; `None` means the key is absent.
@@ -120,6 +124,8 @@ impl ConnectionSpec {
             access_key_id: None,
             consistent_read: None,
             ssh: None,
+            virtual_hosted: None,
+            buckets: None,
         }
     }
 }

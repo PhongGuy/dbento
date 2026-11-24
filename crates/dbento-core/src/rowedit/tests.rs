@@ -1,4 +1,5 @@
-use super::sql::{BoundStatement, Param, bound};
+use super::sql::{BoundStatement, Dialect, Param, bound};
+use super::target::mysql_identity;
 use super::*;
 use crate::{ColumnMeta, Engine, RelationRef};
 
@@ -77,6 +78,17 @@ fn my() -> EditTarget {
     )
 }
 
+fn ms() -> EditTarget {
+    EditTarget::new(
+        RelationRef::new("dbo", "t"),
+        Engine::Mssql,
+        vec![col("id", "int", true, None)],
+        strings(&["id"]),
+        vec![],
+        false,
+    )
+}
+
 #[test]
 fn a_batch_needs_an_engine_that_edits_rows() {
     let insert = || {
@@ -85,19 +97,19 @@ fn a_batch_needs_an_engine_that_edits_rows() {
         }]
     };
     let refused = BatchError::UnsupportedEngine {
-        engine: Engine::Mysql,
+        engine: Engine::Mssql,
     };
-    assert_eq!(EditBatch::new(my(), insert()).unwrap_err(), refused);
+    assert_eq!(EditBatch::new(ms(), insert()).unwrap_err(), refused);
     assert_eq!(
-        EditBatch::new(my(), vec![]).unwrap_err(),
+        EditBatch::new(ms(), vec![]).unwrap_err(),
         refused,
         "the engine is checked before anything else"
     );
     assert_eq!(
         refused.to_string(),
-        "editing rows is not available on mysql yet"
+        "editing rows is not available on mssql yet"
     );
-    for target in [pg(), lite(), my()] {
+    for target in [pg(), lite(), my(), ms()] {
         let engine = target.engine();
         assert_eq!(
             EditBatch::new(target, insert()).is_ok(),
@@ -105,6 +117,7 @@ fn a_batch_needs_an_engine_that_edits_rows() {
             "{engine:?}"
         );
     }
+    assert!(Engine::Mysql.capabilities().edit_rows, "MySQL edits rows");
 }
 
 fn t(s: &str) -> EditValue {
@@ -130,6 +143,7 @@ fn stmt(sql: &str, params: Vec<Param>) -> BoundStatement {
         sql: sql.to_owned(),
         params,
         returning: sql.contains(" RETURNING "),
+        reread: None,
     }
 }
 
@@ -718,5 +732,334 @@ fn the_executed_statement_keeps_its_qualified_casts() {
         render_sql(&b),
         "UPDATE ONLY public.t SET s = 'a'::pg_catalog.text \
          WHERE ctid = '(0,2)'::pg_catalog.tid AND xmin = '750'::pg_catalog.xid;"
+    );
+}
+
+fn my_full() -> EditTarget {
+    EditTarget::new(
+        RelationRef::new("shop", "t`x"),
+        Engine::Mysql,
+        vec![
+            col("id", "int", true, None),
+            col("title", "varchar(10)", true, None),
+            col("pic", "varbinary(16)", true, None),
+            col("g", "int", false, None),
+        ],
+        strings(&["id"]),
+        vec![],
+        false,
+    )
+}
+
+fn my_pair() -> EditTarget {
+    EditTarget::new(
+        RelationRef::new("shop", "p"),
+        Engine::Mysql,
+        vec![
+            col("a", "int", true, None),
+            col("b", "varbinary(4)", true, None),
+            col("n", "int", true, None),
+        ],
+        strings(&["a", "b"]),
+        vec![],
+        false,
+    )
+}
+
+/// A MySQL batch built directly, so these generator tests do not depend on the capability flag.
+fn my_batch(target: EditTarget, changes: Vec<Change>) -> EditBatch {
+    EditBatch {
+        target,
+        changes,
+        dialect: Dialect::Mysql,
+    }
+}
+
+#[test]
+fn mysql_binds_question_marks_with_bytes_through_unhex_and_renders_literals() {
+    let b = my_batch(
+        my_full(),
+        vec![Change::Update {
+            key: key(&[("id", t("7"))]),
+            set: pairs(&[
+                ("title", t("it's \\ ok")),
+                ("pic", EditValue::Bytes(vec![0x00, 0xff])),
+            ]),
+        }],
+    );
+    assert_eq!(
+        bound(&b),
+        vec![stmt(
+            "UPDATE `shop`.`t``x` SET `title` = ?, `pic` = UNHEX(?) WHERE `id` = ?",
+            vec![p("it's \\ ok"), p("00ff"), p("7")],
+        )]
+    );
+    assert_eq!(
+        render_sql(&b),
+        "UPDATE `shop`.`t``x` SET `title` = CONVERT(X'69742773205c206f6b' USING utf8mb4), `pic` = X'00ff' WHERE `id` = '7';"
+    );
+}
+
+#[test]
+fn mysql_inserts_name_given_columns_and_an_all_default_row_is_two_empty_lists() {
+    let b = my_batch(
+        my_full(),
+        vec![
+            Change::Insert {
+                values: pairs(&[
+                    ("id", t("1")),
+                    ("title", EditValue::Default),
+                    ("pic", EditValue::Null),
+                ]),
+            },
+            Change::Insert {
+                values: pairs(&[("title", EditValue::Default)]),
+            },
+            Change::Update {
+                key: key(&[("id", t("3"))]),
+                set: pairs(&[("title", EditValue::Default)]),
+            },
+            Change::Delete {
+                key: key(&[("id", t("2"))]),
+            },
+        ],
+    );
+    assert_eq!(
+        bound(&b),
+        vec![
+            stmt(
+                "INSERT INTO `shop`.`t``x` (`id`, `pic`) VALUES (?, NULL)",
+                vec![p("1")]
+            ),
+            stmt("INSERT INTO `shop`.`t``x` () VALUES ()", vec![]),
+            stmt(
+                "UPDATE `shop`.`t``x` SET `title` = DEFAULT WHERE `id` = ?",
+                vec![p("3")]
+            ),
+            stmt("DELETE FROM `shop`.`t``x` WHERE `id` = ?", vec![p("2")]),
+        ]
+    );
+    assert_eq!(
+        render_sql(&b),
+        "INSERT INTO `shop`.`t``x` (`id`, `pic`) VALUES ('1', NULL);\n\
+         INSERT INTO `shop`.`t``x` () VALUES ();\n\
+         UPDATE `shop`.`t``x` SET `title` = DEFAULT WHERE `id` = '3';\n\
+         DELETE FROM `shop`.`t``x` WHERE `id` = '2';"
+    );
+}
+
+#[test]
+fn a_mysql_key_update_re_reads_the_new_key_as_text_and_bytes() {
+    let b = my_batch(
+        my_pair(),
+        vec![
+            Change::Update {
+                key: key(&[("a", t("1")), ("b", EditValue::Bytes(vec![1]))]),
+                set: pairs(&[("a", t("010"))]),
+            },
+            Change::Update {
+                key: key(&[("a", t("2")), ("b", EditValue::Bytes(vec![2]))]),
+                set: pairs(&[("n", t("5"))]),
+            },
+            Change::Update {
+                key: key(&[("a", t("3")), ("b", EditValue::Bytes(vec![3]))]),
+                set: pairs(&[("a", EditValue::Default)]),
+            },
+        ],
+    );
+    let s = bound(&b);
+    assert_eq!(
+        s[0].sql,
+        "UPDATE `shop`.`p` SET `a` = ? WHERE `a` = ? AND `b` = UNHEX(?)"
+    );
+    assert_eq!(s[0].params, vec![p("010"), p("1"), p("01")]);
+    assert!(!s[0].returning, "MySQL has no RETURNING");
+    let reread = BoundStatement {
+        sql: "SELECT CAST(`a` AS CHAR), `b` FROM `shop`.`p` WHERE `a` = ? AND `b` = UNHEX(?)"
+            .to_owned(),
+        params: vec![p("010"), p("01")],
+        returning: true,
+        reread: None,
+    };
+    assert_eq!(s[0].reread.as_deref(), Some(&reread));
+    assert_eq!(s[1].reread, None, "the key was not written");
+    assert_eq!(s[2].reread, None, "a DEFAULT key cannot be matched");
+}
+
+#[test]
+fn a_mysql_browse_names_its_locators_before_the_qualified_star() {
+    let located = EditTarget::new(
+        RelationRef::new("shop", "g"),
+        Engine::Mysql,
+        vec![col("a", "int", true, None)],
+        strings(&["my_row_id"]),
+        strings(&["my_row_id"]),
+        false,
+    );
+    assert_eq!(
+        browse_sql(&located, &Browse::default()).unwrap(),
+        "SELECT `my_row_id`, `shop`.`g`.*\nFROM `shop`.`g`\nORDER BY `my_row_id` ASC"
+    );
+    assert_eq!(
+        browse_sql(&my_full(), &Browse::default()).unwrap(),
+        "SELECT *\nFROM `shop`.`t``x`\nORDER BY `id` ASC"
+    );
+}
+
+fn meta(name: &str, ty: &str, nullable: bool) -> ColumnMeta {
+    ColumnMeta::new(name, ty, nullable, None, None)
+}
+
+fn ix(name: &str, unique: bool, parts: &[Option<&str>]) -> (String, bool, Vec<Option<String>>) {
+    (
+        name.to_owned(),
+        unique,
+        parts.iter().map(|p| p.map(str::to_owned)).collect(),
+    )
+}
+
+#[test]
+fn mysql_identity_takes_the_primary_key_then_the_first_usable_unique_key() {
+    let cols = [
+        meta("id", "int", false),
+        meta("f", "float", false),
+        meta("b", "bit(8)", false),
+        meta("u", "int", false),
+        meta("v", "varchar(5)", false),
+        meta("n", "int", true),
+        meta("d", "double", false),
+    ];
+    let pk = ix("PRIMARY", true, &[Some("id")]);
+    assert_eq!(
+        mysql_identity(&cols, &[ix("a", true, &[Some("u")]), pk]),
+        ["id"]
+    );
+    let skipped = vec![
+        ix("a_plain", false, &[Some("u")]),
+        ix("b_null", true, &[Some("n")]),
+        ix("c_fn", true, &[None]),
+        ix("d_float", true, &[Some("u"), Some("f")]),
+        ix("e_bit", true, &[Some("b")]),
+    ];
+    assert!(
+        mysql_identity(&cols, &skipped).is_empty(),
+        "every candidate is unusable"
+    );
+    let mut with_last = skipped.clone();
+    with_last.push(ix("f_ok", true, &[Some("v"), Some("u")]));
+    assert_eq!(mysql_identity(&cols, &with_last), ["v", "u"]);
+    let float_pk = [
+        ix("PRIMARY", true, &[Some("f")]),
+        ix("z", true, &[Some("d")]),
+    ];
+    assert_eq!(
+        mysql_identity(&cols, &float_pk),
+        ["d"],
+        "a FLOAT key falls through; DOUBLE is kept"
+    );
+    assert!(mysql_identity(&cols, &[]).is_empty(), "no index");
+}
+
+#[test]
+fn not_editable_reasons_read_as_the_tail_of_a_sentence() {
+    let says = |r: NotEditable| r.to_string();
+    assert_eq!(
+        says(NotEditable::NoKey),
+        "the table has no primary key or NOT NULL unique key that can identify a row"
+    );
+    assert_eq!(says(NotEditable::View), "views are not edited");
+    assert_eq!(says(NotEditable::Sequence), "sequences are not edited");
+    assert_eq!(
+        says(NotEditable::NonTransactional {
+            engine: "MyISAM".to_owned()
+        }),
+        "MyISAM tables cannot roll back a change"
+    );
+    assert_eq!(
+        says(NotEditable::SystemVersioned),
+        "system-versioned tables are not edited"
+    );
+    assert_eq!(
+        pg().not_editable(),
+        None,
+        "only MySQL targets carry a reason"
+    );
+}
+
+#[test]
+fn a_target_with_a_not_editable_reason_refuses_every_change() {
+    let mut refused = my();
+    refused.not_editable = Some(NotEditable::NonTransactional {
+        engine: "MyISAM".to_owned(),
+    });
+    let insert = Change::Insert {
+        values: pairs(&[("id", t("1"))]),
+    };
+    let update = Change::Update {
+        key: key(&[("id", t("1"))]),
+        set: pairs(&[("id", t("2"))]),
+    };
+    let expected = BatchError::NotEditable {
+        reason: NotEditable::NonTransactional {
+            engine: "MyISAM".to_owned(),
+        },
+    };
+    for change in [insert, update] {
+        assert_eq!(
+            EditBatch::new(refused.clone(), vec![change]).unwrap_err(),
+            expected,
+            "an all-default insert must not reach a table that cannot roll back"
+        );
+    }
+    assert_eq!(
+        expected.to_string(),
+        "the table cannot be edited: MyISAM tables cannot roll back a change"
+    );
+}
+
+#[test]
+fn the_apply_session_is_always_strict() {
+    use super::apply::strict_sql_mode;
+    assert_eq!(strict_sql_mode(""), "STRICT_TRANS_TABLES");
+    assert_eq!(
+        strict_sql_mode("ANSI_QUOTES"),
+        "ANSI_QUOTES,STRICT_TRANS_TABLES"
+    );
+    assert_eq!(
+        strict_sql_mode("STRICT_ALL_TABLES"),
+        "STRICT_ALL_TABLES,STRICT_TRANS_TABLES"
+    );
+    assert_eq!(
+        strict_sql_mode("XSTRICT_TRANS_TABLES"),
+        "XSTRICT_TRANS_TABLES,STRICT_TRANS_TABLES",
+        "whole modes only"
+    );
+    let mysql = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_DATE";
+    assert_eq!(strict_sql_mode(mysql), mysql, "already strict");
+}
+
+#[test]
+fn a_warning_fails_a_change_before_its_rows_count_and_a_note_does_not() {
+    use super::apply::change_outcome;
+    let w = |level: &str, message: &str| (level.to_owned(), message.to_owned());
+    assert_eq!(change_outcome(1, &[]), ChangeOutcome::Applied(1));
+    assert_eq!(change_outcome(0, &[]), ChangeOutcome::Conflict);
+    assert_eq!(change_outcome(2, &[]), ChangeOutcome::Ambiguous(2));
+    let note = [w("Note", "Data truncated for column 'dc' at row 1")];
+    assert_eq!(
+        change_outcome(1, &note),
+        ChangeOutcome::Applied(1),
+        "a note is not a failure"
+    );
+    let mixed = [w("Warning", "a"), w("Note", "n"), w("Error", "b")];
+    assert_eq!(
+        change_outcome(1, &mixed),
+        ChangeOutcome::Failed("a; b".to_owned()),
+        "no re-read follows"
+    );
+    assert_eq!(
+        change_outcome(0, &[w("Warning", "a")]),
+        ChangeOutcome::Failed("a".to_owned()),
+        "a warning outranks a miss"
     );
 }

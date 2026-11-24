@@ -42,7 +42,7 @@ test_a_clean_tree_passes_for_both_crates_with_normal_edges_on_every_target() {
 
 test_each_forbidden_crate_fails_and_is_named() {
   local c out
-  for c in tokio rusqlite tokio-postgres mysql_async tiberius duckdb mongodb redis surrealdb aws-sdk-dynamodb toml_edit; do
+  for c in tokio rusqlite tokio-postgres mysql_async tiberius duckdb mongodb redis surrealdb aws-sdk-dynamodb aws-sdk-s3 toml_edit; do
     if out=$(run "${CLEAN}$c v9.9.9 (*)"$'\n'); then fail "$c passed"; fi
     [[ $out == *"$c"* ]] || fail "$c not named: $out"
   done
