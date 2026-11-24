@@ -68,7 +68,8 @@ pub(crate) struct BoundStatement {
 /// column, or moves a Postgres row its ctid locates, also returns the identity, so the
 /// caller learns the key the database stored; a target whose rules refuse it never does.
 /// MySQL has no RETURNING, so such an Update carries a re-read of the key instead.
-/// A SQLite Update or Delete with expected values carries a guard that reads them first.
+/// An Update with expected values carries a guard that reads them first (a locking read
+/// on Postgres), as does a SQLite Delete.
 pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
     let target = batch.target();
     let identity = target.identity();
@@ -92,11 +93,27 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
                 }
                 Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => None,
             };
+            // A Postgres guard locks the row it reads, so no other writer can change it before
+            // the write; an Update that rewrites the identity takes the key-share-blocking lock.
             let (guard, expected) = match c {
-                Change::Update { key, expected, .. } | Change::Delete { key, expected }
+                Change::Update { key, set, expected }
+                    if batch.dialect() != Dialect::Mysql && !expected.is_empty() =>
+                {
+                    let lock = match batch.dialect() {
+                        Dialect::Postgres if set.iter().any(|(col, _)| identity.contains(col)) => {
+                            " FOR UPDATE"
+                        }
+                        Dialect::Postgres => " FOR NO KEY UPDATE",
+                        Dialect::Sqlite | Dialect::Mysql => "",
+                    };
+                    let guard = Gen::new(batch, true).guard(key, expected, lock);
+                    let values = expected.iter().map(|(_, v)| v.clone()).collect();
+                    (Some(Box::new(guard)), values)
+                }
+                Change::Delete { key, expected }
                     if batch.dialect() == Dialect::Sqlite && !expected.is_empty() =>
                 {
-                    let guard = Gen::new(batch, true).guard(key, expected);
+                    let guard = Gen::new(batch, true).guard(key, expected, "");
                     let values = expected.iter().map(|(_, v)| v.clone()).collect();
                     (Some(Box::new(guard)), values)
                 }
@@ -278,8 +295,14 @@ impl<'a> Gen<'a> {
     }
 
     /// The SELECT that reads the `expected` columns, in that order, of the row `key` names,
-    /// so the caller can compare them with the loaded values before writing.
-    fn guard(mut self, key: &RowKey, expected: &[(String, EditValue)]) -> BoundStatement {
+    /// so the caller can compare them with the loaded values before writing; `lock` is the
+    /// row-locking clause it ends with, if any.
+    fn guard(
+        mut self,
+        key: &RowKey,
+        expected: &[(String, EditValue)],
+        lock: &str,
+    ) -> BoundStatement {
         let cols = expected
             .iter()
             .map(|(c, _)| self.read_form(c))
@@ -288,7 +311,7 @@ impl<'a> Gen<'a> {
         let rel = self.relation(true);
         let filter = self.key(key);
         BoundStatement {
-            sql: format!("SELECT {cols} FROM {rel} WHERE {filter}"),
+            sql: format!("SELECT {cols} FROM {rel} WHERE {filter}{lock}"),
             params: self.params,
             returning: false,
             reread: None,
@@ -297,10 +320,17 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// The form a read selects `column` in to get the value a browse shows; on SQLite the
-    /// column itself, since a browse renders its stored value.
+    /// The form a read selects `column` in to get the value a browse shows: on SQLite the
+    /// column itself, on Postgres its output text. The Postgres NULL test is on the datum, as
+    /// `IS NULL` also holds for a composite whose fields are all NULL, which browses as `(,)`.
     fn read_form(&self, column: &str) -> String {
-        self.ident(column)
+        let c = self.ident(column);
+        match self.dialect() {
+            Dialect::Sqlite | Dialect::Mysql => c,
+            Dialect::Postgres => format!(
+                "CASE WHEN pg_catalog.num_nonnulls({c}) = 0 THEN NULL ELSE pg_catalog.format('%s', {c}) END"
+            ),
+        }
     }
 
     fn key(&mut self, key: &RowKey) -> String {

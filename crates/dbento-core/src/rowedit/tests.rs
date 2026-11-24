@@ -1283,3 +1283,61 @@ fn a_sqlite_guard_reads_the_expected_columns_by_the_writes_key() {
         "the preview shows the writes only"
     );
 }
+
+#[test]
+fn a_postgres_update_guard_locks_the_row_and_reads_output_text() {
+    let fmt = |c: &str| {
+        format!(
+            "CASE WHEN pg_catalog.num_nonnulls({c}) = 0 THEN NULL ELSE pg_catalog.format('%s', {c}) END"
+        )
+    };
+    let b = batch(
+        pg(),
+        vec![
+            Change::Update {
+                key: key(&[("id", t("7"))]),
+                set: pairs(&[("title", t("new"))]),
+                expected: pairs(&[("title", t("old")), ("pic", t("\\x01"))]),
+            },
+            Change::Update {
+                key: key(&[("id", t("7"))]),
+                set: pairs(&[("id", t("8"))]),
+                expected: pairs(&[("id", t("7"))]),
+            },
+        ],
+    );
+    let s = bound(&b);
+    let g0 = s[0].guard.as_deref().unwrap();
+    assert_eq!(
+        g0.sql,
+        format!(
+            "SELECT {}, {} FROM app.\"My T\" WHERE id = $1::text::pg_catalog.int4 FOR NO KEY UPDATE",
+            fmt("title"),
+            fmt("pic")
+        )
+    );
+    assert_eq!(g0.params, vec![p("7")]);
+    assert_eq!(s[0].expected, vec![t("old"), t("\\x01")]);
+    assert_eq!(
+        s[1].guard.as_deref().unwrap().sql,
+        format!(
+            "SELECT {} FROM app.\"My T\" WHERE id = $1::text::pg_catalog.int4 FOR UPDATE",
+            fmt("id")
+        )
+    );
+    let located = batch(
+        pg_locator(),
+        vec![Change::Update {
+            key: key(&[("ctid", t("(0,1)")), ("xmin", t("750"))]),
+            set: pairs(&[("a", t("5"))]),
+            expected: pairs(&[("a", t("4"))]),
+        }],
+    );
+    assert_eq!(
+        bound(&located)[0].guard.as_deref().unwrap().sql,
+        format!(
+            "SELECT {} FROM ONLY public.t WHERE ctid = $1::text::pg_catalog.tid AND xmin = $2::text::pg_catalog.xid FOR NO KEY UPDATE",
+            fmt("a")
+        )
+    );
+}

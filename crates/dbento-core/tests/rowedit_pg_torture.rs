@@ -5,7 +5,7 @@ async fn scalar(fx: &PgFixture, sql: &str) -> String {
     fx.db.scalar(sql).await.unwrap()
 }
 
-const TORTURE: &str = r#"
+pub(crate) const TORTURE: &str = r#"
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE SCHEMA "My S";
 CREATE TYPE "My S"."Mood" AS ENUM ('ok', 'sad');

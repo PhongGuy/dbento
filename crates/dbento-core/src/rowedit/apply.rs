@@ -142,68 +142,17 @@ pub async fn apply_with(
         return Err(ApplyError::ReadOnly);
     }
     let mut session = connect(ws, conn, secret, options).await?;
-    // On Postgres a row locked elsewhere fails the change after five seconds instead of
-    // hanging; the session is private to this apply, so a session-level SET is enough.
-    // SQLite waits on the 5000 ms busy timeout its connection already has.
-    let mut started = Ok(0);
-    if conn.engine() == Engine::Postgres {
-        started = session.run_bound("SET lock_timeout = '5s'", &[]).await;
-    }
-    // MySQL waits five seconds on row and metadata locks alike, and takes the browse
-    // session's time zone and SQL mode over the text protocol, the mode made strict so a
-    // value too long or out of range errors instead of being silently cut.
-    let pins = batch.target().pins();
-    if conn.engine() == Engine::Mysql {
-        started = session
-            .run_bound(
-                "SET SESSION innodb_lock_wait_timeout = 5, lock_wait_timeout = 5",
-                &[],
-            )
-            .await;
-        if started.is_ok() && !pins.is_empty() {
-            let sets = pins
-                .iter()
-                .map(|(name, value)| {
-                    let value = if name == "sql_mode" {
-                        strict_sql_mode(value)
-                    } else {
-                        value.clone()
-                    };
-                    format!("{name} = {}", quote_literal(Engine::Mysql, &value))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            started = session.run_bound(&format!("SET SESSION {sets}"), &[]).await;
-        }
-    }
-    // Key text is the browse session's output text, so the apply session takes on that
-    // session's DateStyle, TimeZone and the like to parse it and to return written keys.
-    if conn.engine() == Engine::Postgres && started.is_ok() && !pins.is_empty() {
-        let calls = (0..pins.len())
-            .map(|i| {
-                format!(
-                    "pg_catalog.set_config(${}, ${}, false)",
-                    2 * i + 1,
-                    2 * i + 2
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let params: Vec<Param> = pins
-            .iter()
-            .flat_map(|(name, value)| [Param::Text(name.clone()), Param::Text(value.clone())])
-            .collect();
-        started = session.run_bound(&format!("SELECT {calls}"), &params).await;
-    }
+    let mut started = pin_session(&mut session, conn.engine(), batch.target().pins()).await;
     if started.is_ok() {
         // MySQL reads BEGIN as a block opener in stored programs; START TRANSACTION never is.
         // SQLite takes the write lock up front, so no other writer can slip in between a
-        // guard's read and its write.
+        // guard's read and its write. Postgres reads committed rows whatever the database
+        // default, so a guard that waited on a row lock sees the row its holder committed.
         let begin = match conn.engine() {
             Engine::Mysql => "START TRANSACTION",
             Engine::Sqlite => "BEGIN IMMEDIATE",
-            Engine::Postgres
-            | Engine::Mssql
+            Engine::Postgres => "BEGIN ISOLATION LEVEL READ COMMITTED",
+            Engine::Mssql
             | Engine::Duckdb
             | Engine::Mongodb
             | Engine::Surrealdb
@@ -211,7 +160,7 @@ pub async fn apply_with(
             | Engine::Dynamodb
             | Engine::S3 => "BEGIN",
         };
-        started = session.run_bound(begin, &[]).await;
+        started = session.run_bound(begin, &[]).await.map(drop);
     }
     if let Err(e) = started {
         let _ = session.close().await;
@@ -315,6 +264,71 @@ pub async fn apply_with(
     let _ = session.run_bound("ROLLBACK", &[]).await;
     let _ = session.close().await;
     Err(ApplyError::Rejected { outcomes })
+}
+
+/// Sets everything an apply session needs before BEGIN: the lock timeouts and the target's
+/// pins, the browse session's settings that shape the text of keys and values.
+pub(super) async fn pin_session(
+    session: &mut Session,
+    engine: Engine,
+    pins: &[(String, String)],
+) -> Result<(), ExecuteError> {
+    // On Postgres a row locked elsewhere fails the change after five seconds instead of
+    // hanging; the session is private to this apply, so a session-level SET is enough.
+    // SQLite waits on the 5000 ms busy timeout its connection already has.
+    if engine == Engine::Postgres {
+        session.run_bound("SET lock_timeout = '5s'", &[]).await?;
+    }
+    // MySQL waits five seconds on row and metadata locks alike, and takes the browse
+    // session's time zone and SQL mode over the text protocol, the mode made strict so a
+    // value too long or out of range errors instead of being silently cut.
+    if engine == Engine::Mysql {
+        session
+            .run_bound(
+                "SET SESSION innodb_lock_wait_timeout = 5, lock_wait_timeout = 5",
+                &[],
+            )
+            .await?;
+        if !pins.is_empty() {
+            let sets = pins
+                .iter()
+                .map(|(name, value)| {
+                    let value = if name == "sql_mode" {
+                        strict_sql_mode(value)
+                    } else {
+                        value.clone()
+                    };
+                    format!("{name} = {}", quote_literal(Engine::Mysql, &value))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            session
+                .run_bound(&format!("SET SESSION {sets}"), &[])
+                .await?;
+        }
+    }
+    // Key text is the browse session's output text, so the apply session takes on that
+    // session's DateStyle, TimeZone and the like to parse it and to return written keys.
+    if engine == Engine::Postgres && !pins.is_empty() {
+        let calls = (0..pins.len())
+            .map(|i| {
+                format!(
+                    "pg_catalog.set_config(${}, ${}, false)",
+                    2 * i + 1,
+                    2 * i + 2
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let params: Vec<Param> = pins
+            .iter()
+            .flat_map(|(name, value)| [Param::Text(name.clone()), Param::Text(value.clone())])
+            .collect();
+        session
+            .run_bound(&format!("SELECT {calls}"), &params)
+            .await?;
+    }
+    Ok(())
 }
 
 /// `mode` with STRICT_TRANS_TABLES appended unless it is already one of the comma-separated modes.
