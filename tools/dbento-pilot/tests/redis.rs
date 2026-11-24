@@ -475,7 +475,10 @@ async fn a_stream_key_browses_newest_first_follows_and_lists_its_groups() {
     })
     .await;
     // The poll sent before Pause still lands (it blocks up to a second), so let it end first.
-    pilot.ok("wait", json!({ "ms": 2_000 })).await;
+    until(&pilot, "the in-flight poll to land", |t| {
+        name(t, "message-bar") == Some("messages")
+    })
+    .await;
     seed(&db, "XADD ps:x 2-2 k v").await;
     pilot.ok("wait", json!({ "ms": 2_500 })).await;
     let tree = pilot.ok("tree", json!({})).await;

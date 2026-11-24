@@ -1789,9 +1789,6 @@ impl Render for QueryTab {
             )
                 .hash(&mut h);
             (&badge_text, &limit).hash(&mut h);
-            if let Some(bar) = &messages {
-                bar.digest(&mut h);
-            }
             h.finish()
         };
         if contents != self.toolbar_contents {
@@ -2164,6 +2161,7 @@ impl Render for QueryTab {
 // the pane never reads it.
 struct MessageBar {
     follow: Follow,
+    polling: bool,
     older: bool,
     dropped: u64,
     error: Option<String>,
@@ -2175,30 +2173,13 @@ impl MessageBar {
     fn of(view: &MessageView) -> Self {
         Self {
             follow: view.follow(),
+            polling: view.polling(),
             older: view.has_older(),
             dropped: view.dropped(),
             error: view.error().map(str::to_owned),
             groups: view.groups().cloned(),
             pending: view.pending().map(|(g, p)| (g.to_owned(), p.clone())),
         }
-    }
-
-    // Feeds the toolbar's contents hash with what changes the bar's buttons, so a Follow or
-    // panel change measures the toolbar again.
-    fn digest(&self, h: &mut DefaultHasher) {
-        let follow = match self.follow {
-            Follow::Off => 0u8,
-            Follow::On => 1,
-            Follow::Paused => 2,
-        };
-        (
-            follow,
-            self.older,
-            self.dropped,
-            &self.error,
-            self.groups.is_some(),
-        )
-            .hash(h);
     }
 }
 
@@ -2240,12 +2221,12 @@ fn key_pane(
             .child(text)
     };
     let (bar, groups) = match messages {
-        Some(m) => {
+        Some(mut m) => {
             let panel = m
                 .groups
-                .clone()
-                .map(|g| groups_panel(g, m.pending.clone(), cx));
-            (Some(message_bar(m, cx)), panel)
+                .take()
+                .map(|g| groups_panel(g, m.pending.take(), cx));
+            (Some(message_bar(m, panel.is_some(), cx)), panel)
         }
         None => (None, None),
     };
@@ -2291,7 +2272,11 @@ fn key_pane(
 
 // A stream's bar: Follow toggles polling, Pause holds it, Older pages back, Groups opens the
 // panel; the dropped count and the last read's error follow on the right.
-fn message_bar(bar: MessageBar, cx: &mut Context<QueryTab>) -> impl IntoElement + use<> {
+fn message_bar(
+    bar: MessageBar,
+    groups_open: bool,
+    cx: &mut Context<QueryTab>,
+) -> impl IntoElement + use<> {
     let dim = theme::dim(cx);
     let theme = cx.theme();
     let (danger, border) = (theme.danger, theme.border);
@@ -2302,15 +2287,22 @@ fn message_bar(bar: MessageBar, cx: &mut Context<QueryTab>) -> impl IntoElement 
     } else {
         "Pause"
     };
-    let groups_open = bar.groups.is_some();
     let follow_next = if following { Follow::Off } else { Follow::On };
     let pause_next = if bar.follow == Follow::Paused {
         Follow::On
     } else {
         Follow::Paused
     };
+    // The bar's name says whether a poll is in flight, so a scenario can wait for it to land.
+    let name = if bar.polling {
+        "messages, polling"
+    } else {
+        "messages"
+    };
     h_flex()
         .id("message-bar")
+        .aria_label(name)
+        .test_support()
         .flex_none()
         .gap_1()
         .p_1()
