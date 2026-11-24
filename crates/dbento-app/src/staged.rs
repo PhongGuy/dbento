@@ -403,6 +403,16 @@ pub fn edit_value(cell: CellRef<'_>) -> Option<EditValue> {
     }
 }
 
+/// The cell an edit value stands for, the inverse of `edit_value`; None for DEFAULT.
+pub fn cell_of(value: &EditValue) -> Option<CellRef<'_>> {
+    match value {
+        EditValue::Null => Some(CellRef::Null),
+        EditValue::Text(s) => Some(CellRef::Text(s)),
+        EditValue::Bytes(b) => Some(CellRef::Bytes(b)),
+        EditValue::Default | _ => None,
+    }
+}
+
 /// "Was: " and the loaded value as `record::original_text` writes it, capped at `ORIGINAL_CAP`.
 pub fn was_text(original: CellRef<'_>) -> String {
     format!("Was: {}", original_text(original, ORIGINAL_CAP))

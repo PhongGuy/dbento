@@ -1,8 +1,8 @@
 //! The staged edit set and the words the save flow shows.
 use crate::support::{edit_target, fixture};
 use dbento_app::staged::{
-    GridRow, PREVIEW_LINES, RowEdit, StagedEdits, commit_error_text, edit_value, outcome_text,
-    pending_label, preview, prompt_detail, prompt_title, rejection_text, row_key,
+    GridRow, PREVIEW_LINES, RowEdit, StagedEdits, cell_of, commit_error_text, edit_value,
+    outcome_text, pending_label, preview, prompt_detail, prompt_title, rejection_text, row_key,
 };
 use dbento_core::{
     ApplyError, CellRef, Change, ChangeOutcome, EditBatch, EditValue, ExecuteError, RelationRef,
@@ -390,4 +390,17 @@ fn a_baseline_outlives_reverts_but_not_clear() {
     s.clear();
     assert_eq!(s.baseline(0), None);
     assert_eq!(s, StagedEdits::default());
+}
+
+#[test]
+fn an_edit_value_reads_back_as_the_cell_it_came_from() {
+    for cell in [
+        CellRef::Null,
+        CellRef::Text("q"),
+        CellRef::Bytes(b"\x00\xff"),
+    ] {
+        let value = edit_value(cell).unwrap();
+        assert_eq!(cell_of(&value), Some(cell));
+    }
+    assert_eq!(cell_of(&EditValue::Default), None);
 }
