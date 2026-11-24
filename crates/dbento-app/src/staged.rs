@@ -58,11 +58,15 @@ pub enum RowEdit {
         key: RowKey,
         /// The edited cells.
         cells: Cells,
+        /// The loaded value of each edited cell, keyed as `cells`.
+        originals: Cells,
     },
     /// The row is marked deleted.
     Delete {
         /// The row's identity at staging time.
         key: RowKey,
+        /// The loaded columns the delete is guarded by: (column name, loaded value).
+        expected: Vec<(String, EditValue)>,
     },
 }
 
@@ -75,6 +79,8 @@ pub struct StagedEdits {
     new_rows: Vec<Cells>,
     /// Marks of inserted rows, keyed by insert index.
     new_marks: BTreeMap<usize, String>,
+    /// Values a conflict reload read per loaded row; they replace the staged guard values.
+    baseline: BTreeMap<u64, Vec<(String, EditValue)>>,
 }
 
 impl StagedEdits {
@@ -151,12 +157,16 @@ impl StagedEdits {
     /// Unstages one cell; drops the row edit and its mark once its last cell goes. False when
     /// not staged.
     pub fn revert_cell(&mut self, row: u64, col: usize) -> bool {
-        let Some(RowEdit::Update { cells, .. }) = self.rows.get_mut(&row) else {
+        let Some(RowEdit::Update {
+            cells, originals, ..
+        }) = self.rows.get_mut(&row)
+        else {
             return false;
         };
         if cells.remove(&col).is_none() {
             return false;
         }
+        originals.remove(&col);
         if cells.is_empty() {
             self.revert_row(row);
         }
@@ -180,8 +190,12 @@ impl StagedEdits {
         value: EditValue,
     ) -> bool {
         if value == *original {
-            if let Some(RowEdit::Update { cells, .. }) = self.rows.get_mut(&row) {
+            if let Some(RowEdit::Update {
+                cells, originals, ..
+            }) = self.rows.get_mut(&row)
+            {
                 cells.remove(&col);
+                originals.remove(&col);
                 if cells.is_empty() {
                     self.revert_row(row);
                 }
@@ -191,18 +205,52 @@ impl StagedEdits {
         match self.rows.entry(row).or_insert_with(|| RowEdit::Update {
             key,
             cells: BTreeMap::new(),
+            originals: BTreeMap::new(),
         }) {
-            RowEdit::Update { cells, .. } => {
+            RowEdit::Update {
+                cells, originals, ..
+            } => {
                 cells.insert(col, (column.to_owned(), value));
+                originals.insert(col, (column.to_owned(), original.clone()));
                 true
             }
             RowEdit::Delete { .. } => false,
         }
     }
 
-    /// Marks `row` deleted, replacing any cell edits.
-    pub fn delete(&mut self, row: u64, key: RowKey) {
-        self.rows.insert(row, RowEdit::Delete { key });
+    /// Marks `row` deleted, replacing any cell edits; `expected` holds the loaded columns
+    /// the delete is guarded by.
+    pub fn delete(&mut self, row: u64, key: RowKey, expected: Vec<(String, EditValue)>) {
+        self.rows.insert(row, RowEdit::Delete { key, expected });
+    }
+
+    /// Replaces row `row`'s guard values with what a reload read; kept until `clear`.
+    pub fn rebaseline(&mut self, row: u64, values: Vec<(String, EditValue)>) {
+        self.baseline.insert(row, values);
+    }
+
+    /// The values a reload read for row `row`, if any.
+    pub fn baseline(&self, row: u64) -> Option<&[(String, EditValue)]> {
+        self.baseline.get(&row).map(Vec::as_slice)
+    }
+
+    // Each guarded (column, loaded value) of `row`, with the reload's value for that column
+    // name in place of the staged one when a baseline holds it.
+    fn guarded<'a>(
+        &self,
+        row: u64,
+        loaded: impl Iterator<Item = &'a (String, EditValue)>,
+    ) -> Vec<(String, EditValue)> {
+        let baseline = self.baseline(row).unwrap_or_default();
+        loaded
+            .map(|(name, value)| {
+                let value = baseline
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map_or(value, |(_, v)| v);
+                (name.clone(), value.clone())
+            })
+            .collect()
     }
 
     /// The staged value of a cell, if any.
@@ -228,19 +276,23 @@ impl StagedEdits {
         self.marks.get(&row).map(String::as_str)
     }
 
-    /// One change per staged row and the rows: loaded rows in row order (SET columns in
-    /// column order), then inserts in the order added (values in column order).
+    /// One change per staged row and the rows: loaded rows in row order (SET and expected
+    /// columns in column order), then inserts in the order added (values in column order).
     pub fn changes(&self) -> (Vec<Change>, Vec<GridRow>) {
         let loaded = self.rows.iter().map(|(&row, edit)| {
             let change = match edit {
-                RowEdit::Update { key, cells } => Change::Update {
+                RowEdit::Update {
+                    key,
+                    cells,
+                    originals,
+                } => Change::Update {
                     key: key.clone(),
                     set: cells.values().cloned().collect(),
-                    expected: vec![],
+                    expected: self.guarded(row, originals.values()),
                 },
-                RowEdit::Delete { key } => Change::Delete {
+                RowEdit::Delete { key, expected } => Change::Delete {
                     key: key.clone(),
-                    expected: vec![],
+                    expected: self.guarded(row, expected.iter()),
                 },
             };
             (change, GridRow::Loaded(row))
@@ -272,10 +324,11 @@ impl StagedEdits {
         self.new_marks.clear();
     }
 
-    /// Drops every edit, inserted row and mark.
+    /// Drops every edit, inserted row, mark and baseline.
     pub fn clear(&mut self) {
         self.rows.clear();
         self.new_rows.clear();
+        self.baseline.clear();
         self.clear_marks();
     }
 }

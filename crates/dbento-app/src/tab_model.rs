@@ -2348,7 +2348,7 @@ impl TabModel {
                 let Some(key) = self.row_key(row) else {
                     return false;
                 };
-                self.track(|edits| edits.delete(row, key));
+                self.track(|edits| edits.delete(row, key, Vec::new()));
                 true
             }
         };
@@ -2686,18 +2686,17 @@ impl TabModel {
             return false;
         };
         // Each conflict by the key it was staged under, so the read finds what holds it now.
-        let keys: Vec<(u64, RowKey)> = self
-            .conflicts
-            .iter()
-            .filter_map(|at| match at {
-                GridRow::Loaded(row) => match self.edits.row(*row)? {
-                    staged::RowEdit::Update { key, .. } | staged::RowEdit::Delete { key } => {
-                        Some((*row, key.clone()))
-                    }
-                },
-                GridRow::Inserted(_) => None,
-            })
-            .collect();
+        let keys: Vec<(u64, RowKey)> =
+            self.conflicts
+                .iter()
+                .filter_map(|at| match at {
+                    GridRow::Loaded(row) => match self.edits.row(*row)? {
+                        staged::RowEdit::Update { key, .. }
+                        | staged::RowEdit::Delete { key, .. } => Some((*row, key.clone())),
+                    },
+                    GridRow::Inserted(_) => None,
+                })
+                .collect();
         if keys.is_empty() {
             return false;
         }
@@ -2850,7 +2849,7 @@ impl TabModel {
             .enumerate()
             .filter_map(|(change, at)| match at {
                 GridRow::Loaded(row) => match self.edits.row(*row)? {
-                    staged::RowEdit::Update { key, cells } => {
+                    staged::RowEdit::Update { key, cells, .. } => {
                         let changed: Vec<_> = cells.values().cloned().collect();
                         // The re-run loads the row under the key the database wrote, which
                         // differs from the staged text for "010", NULL or DEFAULT.
