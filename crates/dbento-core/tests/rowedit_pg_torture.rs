@@ -67,6 +67,7 @@ async fn the_type_torture_row_round_trips_through_update_insert_null_default_and
                 Change::Update {
                     key: row_key(&[("id", val("2"))]),
                     set: copy,
+                    expected: vec![],
                 },
                 Change::Insert { values: insert },
             ],
@@ -99,13 +100,16 @@ async fn the_type_torture_row_round_trips_through_update_insert_null_default_and
                 Change::Update {
                     key: row_key(&[("id", val("2"))]),
                     set: nulls,
+                    expected: vec![],
                 },
                 Change::Update {
                     key: row_key(&[("id", val("1"))]),
                     set: defaults,
+                    expected: vec![],
                 },
                 Change::Delete {
                     key: row_key(&[("id", val("3"))]),
+                    expected: vec![],
                 },
             ],
         )
@@ -141,16 +145,19 @@ async fn render_sql_run_directly_matches_apply() {
                 ("by", EditValue::Bytes(vec![0, 255])),
                 ("ar", val(r#"{"a,b",NULL}"#)),
             ]),
+            expected: vec![],
         },
         Change::Update {
             key: row_key(&[("id", val("2"))]),
             set: pairs(&[("d", EditValue::Default), ("v", EditValue::Null)]),
+            expected: vec![],
         },
         Change::Insert {
             values: pairs(&[("id", val("3")), ("v", val("é"))]),
         },
         Change::Delete {
             key: row_key(&[("id", val("4"))]),
+            expected: vec![],
         },
     ];
     let batch = EditBatch::new(target, changes).unwrap();
@@ -195,10 +202,12 @@ async fn typed_literals_run_directly_match_apply() {
                 ("ok", val("t")),
                 ("s", val("4")),
             ]),
+            expected: vec![],
         },
         Change::Update {
             key: row_key(&[("id", val("2"))]),
             set: pairs(&[("ok", val("FALSE"))]),
+            expected: vec![],
         },
         Change::Insert {
             values: pairs(&[("id", val("3")), ("ok", val("yes"))]),

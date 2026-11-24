@@ -82,7 +82,7 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
                 sql.push_str(&g.returning());
             }
             let reread = match c {
-                Change::Update { key, set } if batch.dialect() == Dialect::Mysql => {
+                Change::Update { key, set, .. } if batch.dialect() == Dialect::Mysql => {
                     Gen::new(batch, true).reread(key, set).map(Box::new)
                 }
                 Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => None,
@@ -151,7 +151,7 @@ impl<'a> Gen<'a> {
     /// SET or VALUES are rendered before the key so parameters number in that order.
     fn change(&mut self, change: &Change) -> String {
         match change {
-            Change::Update { key, set } => {
+            Change::Update { key, set, .. } => {
                 let rel = self.relation(true);
                 let set = set
                     .iter()
@@ -186,7 +186,7 @@ impl<'a> Gen<'a> {
                     .join(", ");
                 format!("INSERT INTO {rel} ({cols}) VALUES ({vals})")
             }
-            Change::Delete { key } => {
+            Change::Delete { key, .. } => {
                 let rel = self.relation(true);
                 format!("DELETE FROM {rel} WHERE {}", self.key(key))
             }

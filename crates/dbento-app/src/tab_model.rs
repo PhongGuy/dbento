@@ -2449,8 +2449,12 @@ impl TabModel {
             CopyKind::Update => Change::Update {
                 key: key()?,
                 set: values,
+                expected: vec![],
             },
-            CopyKind::Delete => Change::Delete { key: key()? },
+            CopyKind::Delete => Change::Delete {
+                key: key()?,
+                expected: vec![],
+            },
         };
         let batch = EditBatch::new(target.clone(), vec![change]).ok()?;
         Some(render_sql(&batch))

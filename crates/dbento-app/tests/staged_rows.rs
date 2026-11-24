@@ -63,10 +63,14 @@ fn inserts_follow_the_loaded_changes_in_the_order_added() {
     assert_eq!(
         changes,
         vec![
-            Change::Delete { key: key("1") },
+            Change::Delete {
+                key: key("1"),
+                expected: vec![]
+            },
             Change::Update {
                 key: key("3"),
                 set: vec![("name".into(), text("x"))],
+                expected: vec![],
             },
             Change::Insert {
                 values: vec![("name".into(), text("first"))],

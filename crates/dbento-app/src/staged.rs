@@ -236,8 +236,12 @@ impl StagedEdits {
                 RowEdit::Update { key, cells } => Change::Update {
                     key: key.clone(),
                     set: cells.values().cloned().collect(),
+                    expected: vec![],
                 },
-                RowEdit::Delete { key } => Change::Delete { key: key.clone() },
+                RowEdit::Delete { key } => Change::Delete {
+                    key: key.clone(),
+                    expected: vec![],
+                },
             };
             (change, GridRow::Loaded(row))
         });

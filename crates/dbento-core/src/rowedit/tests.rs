@@ -161,6 +161,7 @@ fn postgres_update_binds_text_through_the_catalog_cast_and_renders_literals() {
                 ("title", t("it's")),
                 ("pic", EditValue::Bytes(vec![0x01, 0xff])),
             ]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -187,6 +188,7 @@ fn postgres_null_and_default_are_keywords_and_non_editable_columns_are_dropped()
                 ("pic", EditValue::Null),
                 ("g", t("9")),
             ]),
+            expected: vec![],
         }],
     );
     match &b.changes()[0] {
@@ -253,8 +255,12 @@ fn postgres_locator_keys_cast_to_tid_and_xid_under_only() {
             Change::Update {
                 key: k(),
                 set: pairs(&[("a", t("5"))]),
+                expected: vec![],
             },
-            Change::Delete { key: k() },
+            Change::Delete {
+                key: k(),
+                expected: vec![],
+            },
             Change::Insert {
                 values: pairs(&[("a", t("1"))]),
             },
@@ -293,6 +299,7 @@ fn sqlite_default_is_the_declared_expression_or_null_and_blobs_stay_blobs() {
                     ("n", EditValue::Default),
                     ("pic", EditValue::Bytes(vec![0x0a])),
                 ]),
+                expected: vec![],
             },
             Change::Insert {
                 values: pairs(&[("title", EditValue::Default), ("n", t("it's"))]),
@@ -300,6 +307,7 @@ fn sqlite_default_is_the_declared_expression_or_null_and_blobs_stay_blobs() {
             Change::Insert { values: vec![] },
             Change::Delete {
                 key: key(&[("id", t("3"))]),
+                expected: vec![],
             },
         ],
     );
@@ -333,6 +341,7 @@ fn null_keys_match_with_is_null() {
         lite(),
         vec![Change::Delete {
             key: key(&[("id", EditValue::Null)]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -351,6 +360,7 @@ fn null_keys_match_with_is_null() {
         vec![Change::Update {
             key: key(&[("id", EditValue::Null)]),
             set: pairs(&[("title", t("x"))]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -381,6 +391,7 @@ fn sqlite_untyped_keys_also_match_stored_numbers() {
         vec![Change::Update {
             key: key(&[("id", t("5")), ("tag", t("abc"))]),
             set: pairs(&[("x", t("y"))]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -401,6 +412,7 @@ fn sqlite_untyped_keys_also_match_stored_numbers() {
                 ("id", EditValue::Bytes(vec![0x0a])),
                 ("tag", EditValue::Null),
             ]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -414,6 +426,7 @@ fn sqlite_untyped_keys_also_match_stored_numbers() {
         lite(),
         vec![Change::Delete {
             key: key(&[("id", t("3"))]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -429,6 +442,7 @@ fn sqlite_untyped_keys_also_match_stored_numbers() {
 fn batches_with_bad_changes_are_refused() {
     let ok_delete = || Change::Delete {
         key: key(&[("id", t("1"))]),
+        expected: vec![],
     };
     let cases: Vec<(EditTarget, Vec<Change>, BatchError)> = vec![
         // Nothing to apply would still open a transaction that `Applied` leaves waiting.
@@ -437,6 +451,7 @@ fn batches_with_bad_changes_are_refused() {
             pg_no_identity(),
             vec![Change::Delete {
                 key: key(&[("a", t("1"))]),
+                expected: vec![],
             }],
             BatchError::NoIdentity { change: 0 },
         ),
@@ -445,6 +460,7 @@ fn batches_with_bad_changes_are_refused() {
             vec![Change::Update {
                 key: key(&[("title", t("x"))]),
                 set: pairs(&[("title", t("y"))]),
+                expected: vec![],
             }],
             BatchError::KeyMismatch {
                 change: 0,
@@ -455,6 +471,7 @@ fn batches_with_bad_changes_are_refused() {
             pg_locator(),
             vec![Change::Delete {
                 key: key(&[("xmin", t("1")), ("ctid", t("(0,1)"))]),
+                expected: vec![],
             }],
             BatchError::KeyMismatch {
                 change: 0,
@@ -465,6 +482,7 @@ fn batches_with_bad_changes_are_refused() {
             pg(),
             vec![Change::Delete {
                 key: key(&[("id", EditValue::Default)]),
+                expected: vec![],
             }],
             BatchError::DefaultInKey { change: 0 },
         ),
@@ -473,6 +491,7 @@ fn batches_with_bad_changes_are_refused() {
             vec![Change::Update {
                 key: key(&[("id", t("1"))]),
                 set: pairs(&[("nope", t("x"))]),
+                expected: vec![],
             }],
             BatchError::UnknownColumn {
                 change: 0,
@@ -494,6 +513,7 @@ fn batches_with_bad_changes_are_refused() {
             vec![Change::Update {
                 key: key(&[("id", t("1"))]),
                 set: pairs(&[("title", t("a")), ("title", t("b"))]),
+                expected: vec![],
             }],
             BatchError::DuplicateColumn {
                 change: 0,
@@ -507,6 +527,7 @@ fn batches_with_bad_changes_are_refused() {
                 Change::Update {
                     key: key(&[("id", t("1"))]),
                     set: pairs(&[("g", t("1"))]),
+                    expected: vec![],
                 },
             ],
             BatchError::EmptyUpdate { change: 1 },
@@ -516,6 +537,7 @@ fn batches_with_bad_changes_are_refused() {
             vec![Change::Update {
                 key: key(&[("id", t("1"))]),
                 set: vec![],
+                expected: vec![],
             }],
             BatchError::EmptyUpdate { change: 0 },
         ),
@@ -566,10 +588,12 @@ fn postgres_renders_integers_numerics_and_booleans_bare_and_keeps_the_rest_cast(
                     ("ok", t("t")),
                     ("s", t("4")),
                 ]),
+                expected: vec![],
             },
             Change::Update {
                 key: key(&[("id", t("2"))]),
                 set: pairs(&[("a", t("1.5")), ("n", t("1e3")), ("ok", t("No"))]),
+                expected: vec![],
             },
             Change::Insert {
                 values: pairs(&[("id", t("3")), ("ok", t("maybe"))]),
@@ -596,6 +620,7 @@ fn postgres_keeps_an_integer_minimum_cast_so_it_compares_as_the_column_type() {
         vec![Change::Update {
             key: key(&[("id", t("-9223372036854775808"))]),
             set: pairs(&[("a", t("-32768"))]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -607,6 +632,7 @@ fn postgres_keeps_an_integer_minimum_cast_so_it_compares_as_the_column_type() {
         vec![Change::Update {
             key: key(&[("id", t("-9223372036854775807"))]),
             set: pairs(&[("a", t("-32767"))]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -645,6 +671,7 @@ fn sqlite_renders_numbers_bare_only_where_the_column_has_numeric_affinity() {
                 ("s", t("4")),
                 ("u", t("5")),
             ]),
+            expected: vec![],
         }],
     );
     // FLOATING POINT contains INT, so it has INTEGER affinity and 2.5 stays text.
@@ -661,6 +688,7 @@ fn an_update_that_writes_a_key_column_returns_the_identity_but_its_preview_does_
         vec![Change::Update {
             key: key(&[("id", t("7"))]),
             set: pairs(&[("id", t("010"))]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -680,6 +708,7 @@ fn an_update_that_writes_a_key_column_returns_the_identity_but_its_preview_does_
         vec![Change::Update {
             key: key(&[("id", t("7"))]),
             set: pairs(&[("id", EditValue::Null)]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -694,6 +723,7 @@ fn an_update_that_writes_a_key_column_returns_the_identity_but_its_preview_does_
         vec![Change::Update {
             key: key(&[("id", t("7"))]),
             set: pairs(&[("title", t("x"))]),
+            expected: vec![],
         }],
     );
     assert!(!bound(&no_key)[0].returning);
@@ -717,6 +747,7 @@ fn the_executed_statement_keeps_its_qualified_casts() {
         vec![Change::Update {
             key: k,
             set: pairs(&[("s", t("a"))]),
+            expected: vec![],
         }],
     );
     let run = &bound(&b)[0];
@@ -785,6 +816,7 @@ fn mysql_binds_question_marks_with_bytes_through_unhex_and_renders_literals() {
                 ("title", t("it's \\ ok")),
                 ("pic", EditValue::Bytes(vec![0x00, 0xff])),
             ]),
+            expected: vec![],
         }],
     );
     assert_eq!(
@@ -818,9 +850,11 @@ fn mysql_inserts_name_given_columns_and_an_all_default_row_is_two_empty_lists() 
             Change::Update {
                 key: key(&[("id", t("3"))]),
                 set: pairs(&[("title", EditValue::Default)]),
+                expected: vec![],
             },
             Change::Delete {
                 key: key(&[("id", t("2"))]),
+                expected: vec![],
             },
         ],
     );
@@ -856,14 +890,17 @@ fn a_mysql_key_update_re_reads_the_new_key_as_text_and_bytes() {
             Change::Update {
                 key: key(&[("a", t("1")), ("b", EditValue::Bytes(vec![1]))]),
                 set: pairs(&[("a", t("010"))]),
+                expected: vec![],
             },
             Change::Update {
                 key: key(&[("a", t("2")), ("b", EditValue::Bytes(vec![2]))]),
                 set: pairs(&[("n", t("5"))]),
+                expected: vec![],
             },
             Change::Update {
                 key: key(&[("a", t("3")), ("b", EditValue::Bytes(vec![3]))]),
                 set: pairs(&[("a", EditValue::Default)]),
+                expected: vec![],
             },
         ],
     );
@@ -998,6 +1035,7 @@ fn a_target_with_a_not_editable_reason_refuses_every_change() {
     let update = Change::Update {
         key: key(&[("id", t("1"))]),
         set: pairs(&[("id", t("2"))]),
+        expected: vec![],
     };
     let expected = BatchError::NotEditable {
         reason: NotEditable::NonTransactional {
@@ -1061,5 +1099,84 @@ fn a_warning_fails_a_change_before_its_rows_count_and_a_note_does_not() {
         change_outcome(0, &[w("Warning", "a")]),
         ChangeOutcome::Failed("a".to_owned()),
         "a warning outranks a miss"
+    );
+}
+
+#[test]
+fn expected_values_are_validated_and_kept_for_every_column() {
+    let update = |expected: Vec<(String, EditValue)>| Change::Update {
+        key: key(&[("id", t("1"))]),
+        set: pairs(&[("title", t("new"))]),
+        expected,
+    };
+    let delete = |expected: Vec<(String, EditValue)>| Change::Delete {
+        key: key(&[("id", t("1"))]),
+        expected,
+    };
+    // A generated column is dropped from `set` but kept in `expected`.
+    let b = batch(
+        pg(),
+        vec![
+            update(pairs(&[("title", t("old")), ("g", t("2"))])),
+            delete(pairs(&[
+                ("id", t("1")),
+                ("title", EditValue::Null),
+                ("pic", EditValue::Bytes(vec![1])),
+                ("g", t("2")),
+            ])),
+            update(vec![]),
+        ],
+    );
+    assert_eq!(
+        b.changes()[0],
+        Change::Update {
+            key: key(&[("id", t("1"))]),
+            set: pairs(&[("title", t("new"))]),
+            expected: pairs(&[("title", t("old")), ("g", t("2"))]),
+        }
+    );
+    match &b.changes()[1] {
+        Change::Delete { expected, .. } => assert_eq!(expected.len(), 4),
+        other @ (Change::Insert { .. } | Change::Update { .. }) => panic!("{other:?}"),
+    }
+    assert_eq!(
+        EditBatch::new(pg(), vec![update(pairs(&[("nope", t("x"))]))]).unwrap_err(),
+        BatchError::UnknownColumn {
+            change: 0,
+            column: "nope".to_owned()
+        }
+    );
+    let located = Change::Delete {
+        key: key(&[("ctid", t("(0,1)")), ("xmin", t("750"))]),
+        expected: pairs(&[("ctid", t("(0,1)"))]),
+    };
+    assert_eq!(
+        EditBatch::new(pg_locator(), vec![located]).unwrap_err(),
+        BatchError::UnknownColumn {
+            change: 0,
+            column: "ctid".to_owned()
+        }
+    );
+    assert_eq!(
+        EditBatch::new(
+            pg(),
+            vec![
+                update(vec![]),
+                delete(pairs(&[("title", t("a")), ("title", t("b"))]))
+            ]
+        )
+        .unwrap_err(),
+        BatchError::DuplicateColumn {
+            change: 1,
+            column: "title".to_owned()
+        }
+    );
+    assert_eq!(
+        EditBatch::new(pg(), vec![update(pairs(&[("title", EditValue::Default)]))]).unwrap_err(),
+        BatchError::DefaultExpected { change: 0 }
+    );
+    assert_eq!(
+        BatchError::DefaultExpected { change: 2 }.to_string(),
+        "change 2: an expected value cannot be DEFAULT"
     );
 }

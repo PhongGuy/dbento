@@ -43,10 +43,12 @@ fn one_change_per_row_with_set_columns_in_grid_order() {
             Change::Update {
                 key: key("1"),
                 set: vec![("name".into(), text("y"))],
+                expected: vec![],
             },
             Change::Update {
                 key: key("3"),
                 set: vec![("name".into(), text("x")), ("note".into(), text("n"))],
+                expected: vec![],
             },
         ]
     );
@@ -61,7 +63,13 @@ fn a_delete_replaces_the_rows_cell_edits_and_refuses_later_ones() {
     assert!(s.is_deleted(1));
     assert_eq!(s.cell(1, 1), None);
     assert!(!s.stage(1, key("2"), 1, "name", &text("a"), text("r")));
-    assert_eq!(s.changes().0, vec![Change::Delete { key: key("2") }]);
+    assert_eq!(
+        s.changes().0,
+        vec![Change::Delete {
+            key: key("2"),
+            expected: vec![]
+        }]
+    );
     assert_eq!(s.len(), 1);
 }
 

@@ -16,7 +16,8 @@ use crate::workspace::{ConnectionConfig, Engine, Workspace};
 pub enum ChangeOutcome {
     /// The change touched this many rows (one, for a batch that can commit).
     Applied(u64),
-    /// The row was not found: it was changed or removed by someone else.
+    /// The row was not found or no longer holds the loaded values: someone else changed or
+    /// removed it.
     Conflict,
     /// The key matched this many rows, more than one.
     Ambiguous(u64),
