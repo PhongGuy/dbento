@@ -207,7 +207,7 @@ fn a_changed_key_in_another_file_points_at_ssh_keygen() {
     assert_eq!(
         ssh_hint("tun", &e, &ctx(dir.path())).as_deref(),
         Some(
-            "The SSH server's host key changed in /home/u/.ssh/known_hosts. If it was rotated on purpose, remove the old entry with `ssh-keygen -R '[jump]:2222' -f /home/u/.ssh/known_hosts`, then connect again."
+            "The SSH server's host key changed in /home/u/.ssh/known_hosts. If it was rotated on purpose, remove the old entry with `ssh-keygen -R '[jump]:2222' -f '/home/u/.ssh/known_hosts'`, then connect again."
         )
     );
 }
@@ -661,5 +661,20 @@ fn apply_follow_moves_then_stores_the_typed_password() {
     assert!(
         !held(&pw("a", "ops@jump:22")),
         "nothing left at the old password entry"
+    );
+}
+
+#[test]
+fn the_ssh_keygen_path_is_quoted_for_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = changed(
+        PathBuf::from("/home/u/it's here/known_hosts"),
+        22,
+        HostKeyProblem::Changed,
+    );
+    let hint = ssh_hint("tun", &e, &ctx(dir.path())).unwrap();
+    assert!(
+        hint.contains(r"`ssh-keygen -R jump -f '/home/u/it'\''s here/known_hosts'`"),
+        "{hint}"
     );
 }

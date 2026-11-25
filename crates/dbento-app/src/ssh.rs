@@ -139,6 +139,8 @@ fn changed_hint(
 ) -> Option<String> {
     let path = file.display();
     if problem == HostKeyProblem::Changed {
+        // The command is pasted into a POSIX shell: single quotes, each `'` closed and escaped.
+        let quoted = format!("'{}'", path.to_string().replace('\'', r"'\''"));
         let ours = ctx.state.as_ref().map(|s| s.ssh_known_hosts.as_path()) == Some(file);
         // ssh-keygen names a non-default port in OpenSSH's bracketed form, quoted for the shell.
         let ident = if port == 22 {
@@ -152,7 +154,7 @@ fn changed_hint(
             )
         } else {
             format!(
-                "The SSH server's host key changed in {path}. If it was rotated on purpose, remove the old entry with `ssh-keygen -R {ident} -f {path}`, then connect again."
+                "The SSH server's host key changed in {path}. If it was rotated on purpose, remove the old entry with `ssh-keygen -R {ident} -f {quoted}`, then connect again."
             )
         })
     } else if problem == HostKeyProblem::Revoked {

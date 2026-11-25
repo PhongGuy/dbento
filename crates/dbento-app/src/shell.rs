@@ -80,7 +80,8 @@ use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
 use crate::rename_secret::{
-    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, stays_line, still_renamed,
+    adopt_held, env_lines, env_notice, move_ask, not_moved_text, probe, rename_keys, stays_line,
+    still_renamed,
 };
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
@@ -3065,7 +3066,7 @@ impl Shell {
                     && let Some(p) = previous.filter(|p| Some(p) != self.seen.as_ref())
                     && let Some(old) = seen_workspace(&p, &opened)
                 {
-                    self.carry_renamed_secrets(&old, window, cx);
+                    self.carry_renamed_secrets(Arc::new(old), window, cx);
                 }
             }
             Err(e) => {
@@ -3514,33 +3515,26 @@ impl Shell {
     // rename asks first, and variables that cannot be renamed are listed once at the end.
     fn carry_renamed_secrets(
         &mut self,
-        old: &Workspace,
+        old: Arc<Workspace>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(new) = self.workspace.clone() else {
             return;
         };
-        let jobs: Vec<_> = secret_renames(old, &new)
-            .into_iter()
-            .map(|r| {
-                // Resolving the SSH login reads ~/.ssh/config here, once per tunnelled rename.
-                let keys = rename_keys(old, &new, &r, self.services.ssh.home());
-                let asked = new.declared(&r.to).cloned();
-                (r, keys, asked)
-            })
-            .collect();
-        if jobs.is_empty() {
-            return;
-        }
         let dir = new.dir().to_path_buf();
+        let home = self.services.ssh.home().cloned();
         let store = Arc::clone(&self.services.store);
         let env = Arc::clone(&self.services.env);
+        // Resolving an SSH login reads ~/.ssh/config, so pairing the keys runs here too.
         let probed = cx.background_spawn({
             let store = Arc::clone(&store);
             async move {
-                jobs.into_iter()
-                    .map(|(r, keys, asked)| {
+                secret_renames(&old, &new)
+                    .into_iter()
+                    .map(|r| {
+                        let keys = rename_keys(&old, &new, &r, home.as_ref());
+                        let asked = new.declared(&r.to).cloned();
                         let held = probe(&*store, &keys);
                         (r, keys, asked, held)
                     })
@@ -3548,14 +3542,16 @@ impl Shell {
             }
         });
         cx.spawn_in(window, async move |this, cx| {
+            let jobs = probed.await;
+            if jobs.is_empty() {
+                return;
+            }
             let mut lines = Vec::new();
-            for (r, keys, asked, held) in probed.await {
-                let not_moved =
-                    |e: SecretError| format!("{e}. Enter the password again for {}.", r.to);
+            for (r, keys, asked, held) in jobs {
                 let held = match held {
                     Ok(held) => held,
                     Err(e) => {
-                        let detail = not_moved(e);
+                        let detail = not_moved_text(&e, &r.to, None);
                         let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
                         continue;
                     }
@@ -3595,7 +3591,7 @@ impl Shell {
                     .spawn(async move { adopt_held(&*store, &keys, held) })
                     .await;
                 if let Err(e) = moved {
-                    let detail = not_moved(e);
+                    let detail = not_moved_text(&e, &r.to, Some(held));
                     let _ = cx.update(|w, cx| show_error("Password not moved", detail, w, cx));
                 }
             }
@@ -3639,7 +3635,7 @@ impl Shell {
                     Ok(ws) => {
                         self.toml_problem = None;
                         self.install_workspace(ws, window, cx);
-                        self.carry_renamed_secrets(&current, window, cx);
+                        self.carry_renamed_secrets(Arc::clone(&current), window, cx);
                         None
                     }
                     Err(e) => Some(open_problem(e)),
@@ -4518,6 +4514,8 @@ impl Shell {
         let f = form.read(cx);
         let typed = f.password(cx);
         let typed_passphrase = f.key_passphrase(cx);
+        let (typed_ssh_password, typed_ssh_passphrase) =
+            (f.ssh_password(cx), f.ssh_key_passphrase(cx));
         let previous = f.previous().map(str::to_owned);
         let planned = f.test_edit(cx).and_then(|(name, mut spec)| {
             // A Test needs no name: an unnamed edit keeps its old name, so stored secrets
@@ -4621,7 +4619,7 @@ impl Shell {
                 }
             };
             // SSH secrets are read under the name as typed, never a rename's old name.
-            let ssh_secrets = {
+            let mut ssh_secrets = {
                 let (plan, name, ssh) = (Arc::clone(&plan), name.clone(), ssh.clone());
                 tokio::task::spawn_blocking(move || {
                     let ws = plan.workspace();
@@ -4631,14 +4629,31 @@ impl Shell {
                 .await
                 .map_err(|e| e.to_string())??
             };
+            // What the form holds now beats what is stored, so a Test checks the typed login.
+            if typed_ssh_password.is_some() {
+                ssh_secrets.password = typed_ssh_password;
+            }
+            if typed_ssh_passphrase.is_some() {
+                ssh_secrets.key_passphrase = typed_ssh_passphrase;
+            }
             let ws = plan.workspace();
             let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
             let mut options = SessionOptions::default();
             options.key_passphrase = key_passphrase;
             ssh.apply(&mut options, ssh_secrets);
-            let mut session = connect(ws, &conn, secret, options)
+            // An unknown host key asks the user, as a tab's connect does, then tries once more.
+            let attempt = || connect(ws, &conn, secret.clone(), options.clone());
+            let unknown = |e: &dbento_core::ConnectError| crate::ssh::unknown_key(&name, e);
+            let mut session = crate::host_keys::with_trust(&ssh.gate, unknown, attempt)
                 .await
-                .map_err(|e| crate::ssh::connect_message(&name, &e, &ssh))?;
+                .map_err(|g| match g {
+                    crate::host_keys::Gated::Failed(e) => {
+                        crate::ssh::connect_message(&name, &e, &ssh)
+                    }
+                    crate::host_keys::Gated::NotTrusted { host, port, answer } => {
+                        crate::ssh::not_trusted_text(&name, &host, port, answer)
+                    }
+                })?;
             // The server's databases fill Database's suggestions. The session connected, so a
             // list the engine lacks, the login may not read or the server stalls on leaves the
             // test passed.

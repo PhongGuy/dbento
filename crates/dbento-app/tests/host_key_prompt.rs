@@ -3,6 +3,7 @@
 use crate::support::{self, click_id, label_of, present, wait_idle, wait_prompt, wait_real};
 use dbento_app::app::start;
 use dbento_app::browse::BrowseEvent;
+use dbento_app::connection_dialog::Field;
 use dbento_app::host_keys::HostKeyAnswer;
 use dbento_app::host_keys::host_key_ask;
 use dbento_app::link::{ConnectFailure, LinkState};
@@ -303,4 +304,47 @@ fn a_save_that_meets_an_unknown_key_asks_then_applies(cx: &mut TestAppContext) {
     wait_prompt(cx, &m);
     m.update(cx, |m, cx| m.rollback(cx));
     wait_idle(cx, &m);
+}
+
+#[gpui_kit::test]
+fn test_connection_asks_about_the_host_key_and_uses_the_typed_ssh_password(
+    cx: &mut TestAppContext,
+) {
+    let rt = runtime(cx);
+    let _enter = rt.enter();
+    let f = rt.block_on(dbento_testkit::ssh_net());
+    // `bad`'s SSH password variable holds `x`, which the server refuses: only the typed one works.
+    let r = run(cx, &f, &tunnelled(&f, "bad", f.db_host()), "");
+    support::gear(cx, r.win, "bad");
+    wait_real(cx, "the dialog", |cx| present(cx, r.win, "conn-name"));
+    let form = r
+        .shell
+        .read_with(cx, |s, _| s.connection_form().cloned().unwrap());
+    let input = form.read_with(cx, |f, _| f.input(Field::SshPassword).clone());
+    cx.update_window(r.win, |_, w, cx| {
+        input.update(cx, |s, cx| s.set_value(SSH_PASSWORD.to_owned(), w, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    click_id(cx, r.win, "conn-test");
+    let failed = |cx: &mut TestAppContext| {
+        label_of(cx, r.win, "conn-test-result").filter(|l| l.starts_with("Failed: "))
+    };
+    wait_real(cx, "the question or a failure", |cx| {
+        present(cx, r.win, "host-key-trust") || failed(cx).is_some()
+    });
+    assert!(
+        present(cx, r.win, "host-key-trust"),
+        "Test asks first: {:?}",
+        failed(cx)
+    );
+    click_id(cx, r.win, "host-key-trust");
+    wait_real(cx, "the test result", |cx| {
+        label_of(cx, r.win, "conn-test-result")
+            .is_some_and(|l| l == "Connected" || l.starts_with("Failed: "))
+    });
+    assert_eq!(
+        label_of(cx, r.win, "conn-test-result").as_deref(),
+        Some("Connected")
+    );
 }

@@ -354,3 +354,23 @@ pub fn env_notice(lines: &[String]) -> Ask {
         cancel: 0,
     }
 }
+
+/// Why an outside rename's secrets did not move, and what to enter again for `to`: the slots
+/// `held` would have moved ("password" alone keeps today's "Enter the password again for
+/// {to}."); None (the probe failed) reads as the password alone.
+pub fn not_moved_text(e: &SecretError, to: &str, held: Option<Held>) -> String {
+    let names: Vec<&str> = held
+        .map(|h| {
+            h.moves()
+                .into_iter()
+                .filter_map(|(moves, name)| moves.then_some(name))
+                .collect()
+        })
+        .unwrap_or_default();
+    let named = match names.as_slice() {
+        [] | ["password"] => return format!("{e}. Enter the password again for {to}."),
+        [only] => (*only).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!("{e}. Enter the {named} for {to} again in Edit connection.")
+}
