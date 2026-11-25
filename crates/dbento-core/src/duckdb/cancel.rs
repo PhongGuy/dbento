@@ -91,7 +91,7 @@ impl DuckCancel {
         Ok(guard)
     }
 
-    /// Takes the generation of the statement about to be sent to the worker.
+    /// Takes a new generation; a cancel from then on aims at its statement.
     pub(crate) fn next_generation(&self) -> u64 {
         let mut st = self.lock();
         st.generation += 1;

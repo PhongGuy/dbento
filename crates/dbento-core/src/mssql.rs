@@ -583,7 +583,13 @@ mod tests {
                 | ConnectError::Open { .. }
                 | ConnectError::InvalidTimeout { .. }
                 | ConnectError::Refused { .. }
-                | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
+                | ConnectError::Unsupported { .. }
+                | ConnectError::SshConnect { .. }
+                | ConnectError::SshAuth { .. }
+                | ConnectError::SshUnsupported { .. }
+                | ConnectError::SshHostKeyUnknown { .. }
+                | ConnectError::SshHostKeyChanged { .. }
+                | ConnectError::SshTunnel { .. }) => panic!("{other:?}"),
             }
         }
     }
@@ -600,7 +606,13 @@ mod tests {
             | ConnectError::Open { .. }
             | ConnectError::InvalidTimeout { .. }
             | ConnectError::Refused { .. }
-            | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
+            | ConnectError::Unsupported { .. }
+            | ConnectError::SshConnect { .. }
+            | ConnectError::SshAuth { .. }
+            | ConnectError::SshUnsupported { .. }
+            | ConnectError::SshHostKeyUnknown { .. }
+            | ConnectError::SshHostKeyChanged { .. }
+            | ConnectError::SshTunnel { .. }) => panic!("{other:?}"),
         }
         assert_eq!(
             crate::postgres::TLS_WAYS_OUT,
@@ -665,7 +677,13 @@ mod tests {
             | ConnectError::Tls { .. }
             | ConnectError::InvalidTimeout { .. }
             | ConnectError::Refused { .. }
-            | ConnectError::Unsupported { .. }) => panic!("{other:?}"),
+            | ConnectError::Unsupported { .. }
+            | ConnectError::SshConnect { .. }
+            | ConnectError::SshAuth { .. }
+            | ConnectError::SshUnsupported { .. }
+            | ConnectError::SshHostKeyUnknown { .. }
+            | ConnectError::SshHostKeyChanged { .. }
+            | ConnectError::SshTunnel { .. }) => panic!("{other:?}"),
         }
     }
 }
