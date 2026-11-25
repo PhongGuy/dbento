@@ -265,3 +265,86 @@ fn secret_set_and_delete_refuse_a_child_before_reading_input() {
         );
     }
 }
+
+const TUNNELLED: &str = "dbento = 1\n[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.tun.ssh]\nhost = \"bastion\"\n[connections.kc]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n";
+
+/// Runs `dbento` in a workspace holding `toml`, with no keychain and an empty SSH home.
+fn run_in(toml: &str, args: &[&str]) -> std::process::Output {
+    let ws = common::write_tree(&[("dbento.toml", toml)]);
+    let home = tempfile::tempdir().unwrap();
+    dbento()
+        .current_dir(ws.path())
+        .env("DBENTO_TEST_NO_KEYCHAIN", "1")
+        .env("DBENTO_TEST_SSH_HOME", home.path())
+        .args(args)
+        .write_stdin("pw\n")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn the_ssh_flags_reach_the_keychain_before_or_after_the_name() {
+    for args in [
+        &["secret", "set", "--ssh-password", "tun"][..],
+        &["secret", "set", "tun", "--ssh-password"],
+        &["secret", "set", "--ssh-key-passphrase", "tun"],
+        &["secret", "set", "tun", "--ssh-key-passphrase"],
+        &["secret", "delete", "--ssh-password", "tun"],
+        &["secret", "delete", "--ssh-key-passphrase", "tun"],
+    ] {
+        let out = run_in(TUNNELLED, args);
+        assert_eq!(out.status.code(), Some(3), "{args:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("disabled by DBENTO_TEST_NO_KEYCHAIN"),
+            "{args:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn an_ssh_flag_on_a_connection_without_ssh_is_refused() {
+    for action in ["set", "delete"] {
+        let out = run_in(TUNNELLED, &["secret", action, "kc", "--ssh-password"]);
+        assert_eq!(out.status.code(), Some(3), "{action}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("has no ssh table"), "{action}: {err}");
+    }
+}
+
+#[test]
+fn two_secret_flags_at_once_are_refused() {
+    for args in [
+        &["secret", "set", "--tls-key", "--ssh-password", "tun"][..],
+        &[
+            "secret",
+            "set",
+            "--ssh-password",
+            "--ssh-key-passphrase",
+            "tun",
+        ],
+        &["secret", "set", "--ssh-password", "tun", "--tls-key"],
+    ] {
+        let out = run_in(TUNNELLED, args);
+        assert!(!out.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&out.stderr).contains("disabled by DBENTO_TEST_NO_KEYCHAIN"),
+            "{args:?} reached the keychain"
+        );
+    }
+}
+
+#[test]
+fn an_absolute_identity_file_outside_the_home_warns() {
+    let toml = TUNNELLED.replace(
+        "host = \"bastion\"\n",
+        "host = \"bastion\"\nidentity_file = \"/opt/keys/id\"\n",
+    );
+    let out = run_in(&toml, &["connections"]);
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("warning: ") && err.contains("/opt/keys/id"),
+        "{err}"
+    );
+}
