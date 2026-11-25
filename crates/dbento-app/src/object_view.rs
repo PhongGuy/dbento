@@ -150,6 +150,38 @@ pub fn hex_line(chunk: &[u8], offset: u64) -> String {
     line
 }
 
+/// An upper bound on the length of `pretty_json(text)`, found in one pass without building
+/// it: each structural character outside strings may start a line indented to its depth.
+pub fn pretty_bound(text: &str) -> usize {
+    let (mut depth, mut in_str, mut esc) = (0usize, false, false);
+    let mut bound = text.len();
+    for b in text.bytes() {
+        if in_str {
+            match b {
+                _ if esc => esc = false,
+                b'\\' => esc = true,
+                b'"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' | b'[' => {
+                depth += 1;
+                bound = bound.saturating_add(1 + 2 * depth);
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                bound = bound.saturating_add(1 + 2 * depth);
+            }
+            b',' | b':' => bound = bound.saturating_add(1 + 2 * depth),
+            _ => {}
+        }
+    }
+    bound
+}
+
 /// One object tab: which object, what its HEAD said, the preview and how it shows.
 #[derive(Debug, Clone)]
 pub struct ObjectView {
@@ -158,6 +190,8 @@ pub struct ObjectView {
     meta: Option<ObjectItem>,
     preview: Option<Preview>,
     mode: Option<PreviewMode>,
+    /// The modes the bytes allow, found once when the read lands.
+    modes: Vec<PreviewMode>,
     /// The text the current mode shows, built once per mode change.
     shown: Option<String>,
     reading: bool,
@@ -173,6 +207,7 @@ impl ObjectView {
             meta: None,
             preview: None,
             mode: None,
+            modes: Vec::new(),
             shown: None,
             reading: false,
             error: None,
@@ -213,6 +248,7 @@ impl ObjectView {
         self.reading = false;
         self.error = None;
         self.meta = Some(meta);
+        self.modes = allowed_modes(&preview);
         self.preview = Some(preview);
         self.show(mode);
     }
@@ -224,6 +260,7 @@ impl ObjectView {
         self.meta = None;
         self.preview = None;
         self.mode = None;
+        self.modes.clear();
         self.shown = None;
     }
 
@@ -270,23 +307,12 @@ impl ObjectView {
 
     /// The modes the bytes allow: Text when UTF-8, Json when it parses, always Hex.
     pub fn modes(&self) -> Vec<PreviewMode> {
-        let Some(p) = &self.preview else {
-            return Vec::new();
-        };
-        let mut modes = Vec::with_capacity(3);
-        if let Some(text) = decode(&p.bytes, p.truncated) {
-            modes.push(PreviewMode::Text);
-            if is_json(text, p.truncated, p.content_type.as_deref()) {
-                modes.push(PreviewMode::Json);
-            }
-        }
-        modes.push(PreviewMode::Hex);
-        modes
+        self.modes.clone()
     }
 
     /// Switches to `mode`; false when the bytes do not allow it.
     pub fn set_mode(&mut self, mode: PreviewMode) -> bool {
-        if !self.modes().contains(&mode) {
+        if !self.modes.contains(&mode) {
             return false;
         }
         if self.mode != Some(mode) {
@@ -296,8 +322,8 @@ impl ObjectView {
     }
 
     /// The text shown: safe text in Text, indented safe JSON in Json, None in Hex.
-    pub fn text(&self) -> Option<String> {
-        self.shown.clone()
+    pub fn text(&self) -> Option<&str> {
+        self.shown.as_deref()
     }
 
     /// How many hex rows the preview has, at most [`MAX_HEX_ROWS`].
@@ -326,13 +352,28 @@ impl ObjectView {
             .and_then(|p| decode(&p.bytes, p.truncated));
         self.shown = match (mode, text) {
             (PreviewMode::Text, Some(t)) => Some(safe_text(t)),
-            // Serde leaves bidi characters in strings, so the pretty text is made safe too.
+            // Serde leaves bidi characters in strings, so the pretty text is made safe too. A
+            // document whose indent would grow past the cap is never pretty-printed at all.
             (PreviewMode::Json, Some(t)) => Some(safe_text(
-                &pretty_json(t)
-                    .filter(|p| p.len() <= MAX_PRETTY_BYTES)
+                &Some(t)
+                    .filter(|t| pretty_bound(t) <= MAX_PRETTY_BYTES)
+                    .and_then(pretty_json)
                     .unwrap_or_else(|| t.to_owned()),
             )),
             (PreviewMode::Hex, _) | (PreviewMode::Text | PreviewMode::Json, None) => None,
         };
     }
+}
+
+/// The modes `p`'s bytes allow: Text when UTF-8, Json when it parses, always Hex.
+fn allowed_modes(p: &Preview) -> Vec<PreviewMode> {
+    let mut modes = Vec::with_capacity(3);
+    if let Some(text) = decode(&p.bytes, p.truncated) {
+        modes.push(PreviewMode::Text);
+        if is_json(text, p.truncated, p.content_type.as_deref()) {
+            modes.push(PreviewMode::Json);
+        }
+    }
+    modes.push(PreviewMode::Hex);
+    modes
 }

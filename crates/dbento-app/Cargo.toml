@@ -50,6 +50,8 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "gi
 tempfile.workspace = true
 # Line diffs for comparing a saved query with its changed file.
 similar.workspace = true
+# The save dialog for downloads opens in the user's downloads folder.
+dirs = { workspace = true }
 # Unused directly: turns on `debug-embed` for the kit's icon set, so debug builds carry
 # their SVGs instead of reading them from the cargo registry at runtime.
 rust-embed.workspace = true

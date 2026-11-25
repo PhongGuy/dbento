@@ -2,9 +2,10 @@
 //! header and note, and the S3 grid cells.
 use dbento_app::grid::{cell_display, s3_cell_display};
 use dbento_app::object_view::{
-    ObjectView, Preview, PreviewMode, hex_line, preview_mode, safe_text,
+    ObjectView, Preview, PreviewMode, hex_line, pretty_bound, preview_mode, safe_text,
 };
 use dbento_app::objects::ObjectItem;
+use dbento_app::record::pretty_json;
 use dbento_core::{CellRef, ObjectKey};
 
 fn meta(key: &str, size: u64) -> ObjectItem {
@@ -124,7 +125,7 @@ fn a_view_reads_once_and_words_its_header() {
         )
     );
     assert_eq!(
-        (v.mode(), v.text().as_deref(), v.note()),
+        (v.mode(), v.text(), v.note()),
         (Some(PreviewMode::Text), Some("hello, bento\n"), None)
     );
 }
@@ -144,13 +145,13 @@ fn json_starts_pretty_and_switches_to_text_or_hex() {
         [PreviewMode::Text, PreviewMode::Json, PreviewMode::Hex]
     );
     assert_eq!(
-        v.text().as_deref(),
+        v.text(),
         Some("{\n  \"name\": \"bento\",\n  \"tiers\": 3\n}")
     );
     assert!(v.set_mode(PreviewMode::Hex));
     assert_eq!((v.text(), v.hex_rows()), (None, 2));
     assert!(v.set_mode(PreviewMode::Text));
-    assert_eq!(v.text().as_deref(), Some(r#"{"name":"bento","tiers":3}"#));
+    assert_eq!(v.text(), Some(r#"{"name":"bento","tiers":3}"#));
 }
 
 #[test]
@@ -217,4 +218,33 @@ fn s3_cells_escape_a_bounded_prefix() {
         s3_cell_display(CellRef::Bytes(b"ab")),
         cell_display(CellRef::Bytes(b"ab"))
     );
+}
+
+#[test]
+fn pretty_bound_never_undercounts_the_pretty_text() {
+    for doc in [
+        r#"{"name":"bento","tiers":3}"#,
+        r#"[ [], {}, [1, [2, {"a": [3]}]], "x,[{" ]"#,
+        r#"{"a":{"b":{"c":{"d":[1,2,3,{"e":"f"}]}}}}"#,
+    ] {
+        let pretty = pretty_json(doc).unwrap();
+        assert!(pretty_bound(doc) >= pretty.len(), "{doc}");
+    }
+}
+
+#[test]
+fn deeply_nested_json_shows_as_raw_text_without_being_pretty_printed() {
+    // 127 levels hold half a million elements: pretty, each would carry 254 spaces of indent.
+    let inner = "1,".repeat(500_000);
+    let doc = format!("{}{inner}1{}", "[".repeat(127), "]".repeat(127));
+    assert!(
+        pretty_bound(&doc) > 4 << 20,
+        "the bound sees the indent growth"
+    );
+    let mut v = ObjectView::new("logs", "deep.json");
+    v.begin();
+    let size = doc.len() as u64;
+    v.apply(meta("deep.json", size), preview(doc.as_bytes(), size, None));
+    assert_eq!(v.mode(), Some(PreviewMode::Json));
+    assert_eq!(v.text(), Some(doc.as_str()), "the raw text, made safe");
 }

@@ -413,12 +413,14 @@ impl ResultsDelegate {
         }
     }
 
-    /// Whether the tab's connection is S3, whose cells are store keys shown escaped.
+    /// Whether this statement ran on S3, whose cells are store keys shown escaped; the result
+    /// records its engine, so no connection is looked up per cell.
     fn is_s3(&self, cx: &App) -> bool {
-        let spec = self.model.read(cx).spec();
-        spec.workspace
-            .connection(&spec.connection)
-            .is_some_and(|c| c.engine() == Engine::S3)
+        self.model
+            .read(cx)
+            .results()
+            .get(self.stmt)
+            .is_some_and(|r| r.engine == Some(Engine::S3))
     }
 
     /// A staged cell shows its staged value, and an inserted row's unset cell a dimmed DEFAULT.
