@@ -56,5 +56,8 @@ fn server(workspace: Option<&Path>, args: &McpArgs) -> anyhow::Result<DbentoServ
     if let Some(path) = dbento_core::paths::approvals_dir() {
         options = options.approvals_dir(path);
     }
+    if let Some(env) = crate::ssh::ssh_env() {
+        options = options.ssh_env(env);
+    }
     Ok(DbentoServer::new(options, Arc::new(secret::store()))?)
 }

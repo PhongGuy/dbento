@@ -13,6 +13,7 @@ mod mcp;
 mod run;
 mod secret;
 mod self_update;
+mod ssh;
 mod table;
 #[cfg(feature = "team")]
 mod team;
@@ -101,6 +102,11 @@ enum Command {
         #[command(subcommand)]
         action: SecretAction,
     },
+    /// Trust or forget the SSH host key of a connection's tunnel server.
+    Ssh {
+        #[command(subcommand)]
+        action: SshAction,
+    },
     /// Serve the workspace's databases to an AI client over stdio (MCP); writes need approval in the app.
     Mcp(mcp::McpArgs),
     /// Check for a newer dbento and install it when this copy is a standalone download.
@@ -153,6 +159,23 @@ enum SecretAction {
         /// Remove the stored SSH `identity_file` passphrase instead.
         #[arg(long)]
         ssh_key_passphrase: bool,
+        /// The connection name from dbento.toml.
+        conn: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SshAction {
+    /// Check the SSH server's host key and store it in Dbento's known_hosts.
+    Trust {
+        /// The connection name from dbento.toml.
+        conn: String,
+        /// The key's expected `SHA256:...` fingerprint, required without a terminal.
+        #[arg(long)]
+        fingerprint: Option<String>,
+    },
+    /// Remove the SSH server's stored host keys from Dbento's known_hosts.
+    Forget {
         /// The connection name from dbento.toml.
         conn: String,
     },
@@ -371,6 +394,15 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
         Command::Import {
             source: ImportSource::Beekeeper(args),
         } => return import::beekeeper(cli.workspace.as_deref(), &args),
+        Command::Ssh { action } => {
+            let ws = open_workspace(cli.workspace.as_deref())?;
+            return match action {
+                SshAction::Trust { conn, fingerprint } => {
+                    ssh::trust(&ws, &conn, fingerprint.as_deref()).await
+                }
+                SshAction::Forget { conn } => ssh::forget(&ws, &conn),
+            };
+        }
         Command::Mcp(args) => return mcp::serve(cli.workspace.as_deref(), &args).await,
         Command::SelfUpdate(args) => return Ok(self_update::run(&args).await),
         #[cfg(feature = "team")]

@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use dbento_core::{
     ColumnMeta, ConnectionConfig, Databases, RelationKind, RelationRef, SecretStore,
-    SessionOptions, Workspace, connect, resolve_key_passphrase, resolve_secret,
+    SessionOptions, SshEnv, SshSecrets, StatePaths, Workspace, connect, resolve_key_passphrase,
+    resolve_secret, ssh_secrets_for,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{ToolCallContext, schema_for_output};
@@ -311,23 +312,36 @@ impl DbentoServer {
     }
 
     async fn open_with(&self, found: &Found, force_read_only: bool) -> Result<Opened, ToolError> {
-        // A keychain lookup blocks, up to its timeout.
+        // A keychain lookup blocks, up to its timeout. MCP never prompts: an SSH secret comes
+        // from the store or the environment, or connect reports what is missing.
         let (ws, conn) = (Arc::clone(&found.ws), found.conn.clone());
         let (store, env) = (
             Arc::clone(&self.store),
             Arc::clone(&self.options.env_lookup),
         );
-        let (secret, key_passphrase) = tokio::task::spawn_blocking(move || {
+        let ssh_env = self
+            .options
+            .ssh_env
+            .clone()
+            .or_else(|| StatePaths::from_env().and_then(|paths| SshEnv::from_env(&paths)));
+        let ssh_env_for_secrets = ssh_env.clone();
+        let (secret, key_passphrase, ssh_secrets) = tokio::task::spawn_blocking(move || {
             let secret = resolve_secret(&ws, &conn, &*store, &*env);
             let key_passphrase = resolve_key_passphrase(&ws, &conn, &*store, &*env);
+            let ssh_secrets = match &ssh_env_for_secrets {
+                Some(ssh_env) => ssh_secrets_for(&ws, &conn, ssh_env, &*store, &*env),
+                None => Ok(SshSecrets::default()),
+            };
             secret
-                .and_then(|s| Ok((s, key_passphrase?)))
+                .and_then(|s| Ok((s, key_passphrase?, ssh_secrets?)))
                 .map_err(|e| ToolError::from_secret(&e))
         })
         .await
         .map_err(|_| ToolError::new("internal", "resolving the secret failed".to_owned()))??;
         let mut options = SessionOptions::default();
         options.key_passphrase = key_passphrase;
+        options.ssh_env = ssh_env;
+        options.ssh_secrets = ssh_secrets;
         options.force_read_only = force_read_only;
         options.statement_timeout = Some(effective_timeout(
             self.options.timeout,
