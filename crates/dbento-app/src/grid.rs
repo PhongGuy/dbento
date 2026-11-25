@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use dbento_core::{CellRef, ColumnInfo, EditValue, FkDirection};
+use dbento_core::{CellRef, ColumnInfo, EditValue, Engine, FkDirection, display_key};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::table::{Column, TableDelegate, TableSelection, TableState};
@@ -63,6 +63,19 @@ pub fn cell_display(cell: CellRef<'_>) -> (SharedString, bool) {
         }
         // A kind core adds later is flagged, never passed off as NULL.
         _ => ("(unsupported value)".into(), true),
+    }
+}
+
+/// The text an S3 listing cell shows: the first 256 characters with hidden ones escaped, cut
+/// to 256, since keys are store text. NULL and bytes show as [`cell_display`] shows them.
+pub fn s3_cell_display(cell: CellRef<'_>) -> (SharedString, bool) {
+    match cell {
+        CellRef::Text(s) => {
+            let head: String = s.chars().take(MAX_TEXT_CHARS).collect();
+            let shown: String = display_key(&head).chars().take(MAX_TEXT_CHARS).collect();
+            (shown.into(), false)
+        }
+        CellRef::Null | CellRef::Bytes(_) | _ => cell_display(cell),
     }
 }
 
@@ -400,6 +413,14 @@ impl ResultsDelegate {
         }
     }
 
+    /// Whether the tab's connection is S3, whose cells are store keys shown escaped.
+    fn is_s3(&self, cx: &App) -> bool {
+        let spec = self.model.read(cx).spec();
+        spec.workspace
+            .connection(&spec.connection)
+            .is_some_and(|c| c.engine() == Engine::S3)
+    }
+
     /// A staged cell shows its staged value, and an inserted row's unset cell a dimmed DEFAULT.
     fn display(&self, row: usize, ix: usize, cx: &App) -> Option<(SharedString, bool)> {
         let data = self.data(ix, cx)?;
@@ -416,7 +437,14 @@ impl ResultsDelegate {
             }
             GridRow::Loaded(r) => match edits.cell(r, data).filter(|_| self.stmt == 0) {
                 Some(value) => Some(staged_display(value)),
-                None => store.cell(r, data).map(cell_display),
+                None => {
+                    let shown = if self.is_s3(cx) {
+                        s3_cell_display
+                    } else {
+                        cell_display
+                    };
+                    store.cell(r, data).map(shown)
+                }
             },
         }
     }

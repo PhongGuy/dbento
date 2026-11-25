@@ -146,6 +146,7 @@ mod new_tab_pick;
 mod new_tab_rule;
 mod not_editable;
 mod notice;
+mod object_preview;
 mod object_tree;
 mod objects;
 mod open;

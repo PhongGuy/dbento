@@ -14,15 +14,18 @@ use dbento_core::message::{
 use dbento_core::{
     CancelHandle, ColumnInfo, ConnectionConfig, EditTarget, Engine, ExecuteError, ExplainMode,
     ExplainOutput, ExplainRequest, ForeignKey, KeyBrowseError, KeyRead, KeyValuePage, Limits,
-    OnTruncate, Outcome, ReadOnlyEnforcement, RelationRef, ResultBatch, ResultStream, Secret,
-    SecretError, SecretStore, Session, SessionOptions, TruncatedBy, Unguarded, ValueCursor,
-    Workspace, Writes, connect, resolve_key_passphrase, resolve_secret, secret_hint,
+    ObjectKey, ObjectRead, OnTruncate, Outcome, ReadOnlyEnforcement, RelationRef, ResultBatch,
+    ResultStream, Secret, SecretError, SecretStore, Session, SessionOptions, TruncatedBy,
+    Unguarded, ValueCursor, Workspace, Writes, connect, resolve_key_passphrase, resolve_secret,
+    secret_hint,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
 use crate::app::EnvLookup;
 use crate::link::{ConnectCause, ConnectFailure, fix_hint};
+use crate::object_view::{PREVIEW_BYTES, Preview};
+use crate::objects::{ObjectItem, object_error_text};
 use crate::parks::{self, Parked};
 
 /// The answer to `Command::SourceColumns`: per column, the relation's column it reads.
@@ -30,6 +33,10 @@ pub type SourceColumns = Result<Vec<Option<String>>, String>;
 
 /// The answer to `Command::ReadKey`: one page of the key's value, or why there is none.
 pub type KeyValueAnswer = Result<KeyValuePage, String>;
+
+/// The answer to `Command::ReadObject`: the object's metadata and first bytes, or why not,
+/// with keys escaped.
+pub type ObjectAnswer = Result<(ObjectItem, Preview), String>;
 
 /// One stream call on the tab's session.
 #[derive(Debug)]
@@ -107,6 +114,12 @@ pub enum Command {
     Messages {
         call: MessageCall,
         reply: Sender<MessageAnswer>,
+    },
+    /// Read an S3 object's HEAD and its first `PREVIEW_BYTES` and send them on `reply`,
+    /// connecting first. Sent only while no run is active; a run in progress drops it.
+    ReadObject {
+        key: ObjectKey,
+        reply: Sender<ObjectAnswer>,
     },
 }
 
@@ -460,6 +473,16 @@ async fn run(
             next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
+        if let Command::ReadObject { key, reply } = command {
+            ensure_open(&spec, &mut session, &events).await;
+            let result = match session.as_mut() {
+                Some(s) => read_preview(s, key).await,
+                None => Err("not connected".to_owned()),
+            };
+            let _ = reply.try_send(result);
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
+            continue;
+        }
         if let Command::Messages { call, reply } = command {
             ensure_open(&spec, &mut session, &events).await;
             let result = match session.as_mut() {
@@ -487,7 +510,8 @@ async fn run(
             | Command::Target { .. }
             | Command::SourceColumns { .. }
             | Command::ReadKey { .. }
-            | Command::Messages { .. } => {
+            | Command::Messages { .. }
+            | Command::ReadObject { .. } => {
                 next = idle(&inbox, &mut session, &mut lost_settings, &events).await; // a Confirm, Skip, Pull or Fetch nobody waits for
                 continue;
             }
@@ -555,6 +579,19 @@ async fn run(
     {
         log::warn!("closing the session: {e}");
     }
+}
+
+/// The object's HEAD, then its first `PREVIEW_BYTES`, errors as the app shows them.
+async fn read_preview(s: &mut Session, key: ObjectKey) -> ObjectAnswer {
+    let meta = s
+        .stat_object(&key)
+        .await
+        .map_err(|e| object_error_text(&e))?;
+    let chunk = s
+        .read_object(&ObjectRead::new(key, PREVIEW_BYTES))
+        .await
+        .map_err(|e| object_error_text(&e))?;
+    Ok((meta.into(), chunk.into()))
 }
 
 /// One page of `read`; a key whose kind changed since the read began answers WRONGTYPE, and
@@ -905,7 +942,8 @@ impl Ctx<'_> {
                 | Command::Target { .. }
                 | Command::SourceColumns { .. }
                 | Command::ReadKey { .. }
-                | Command::Messages { .. } => {}
+                | Command::Messages { .. }
+                | Command::ReadObject { .. } => {}
             }
         }
     }
@@ -1197,7 +1235,8 @@ fn cut_by(command: Command, run_id: u64) -> Option<Flow> {
         | Command::Target { .. }
         | Command::SourceColumns { .. }
         | Command::ReadKey { .. }
-        | Command::Messages { .. } => None,
+        | Command::Messages { .. }
+        | Command::ReadObject { .. } => None,
     }
 }
 
@@ -1432,7 +1471,8 @@ async fn at_cap(
         | Command::Target { .. }
         | Command::SourceColumns { .. }
         | Command::ReadKey { .. }
-        | Command::Messages { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
+        | Command::Messages { .. }
+        | Command::ReadObject { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
     }
 }
 
