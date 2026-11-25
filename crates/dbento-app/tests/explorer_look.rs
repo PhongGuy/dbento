@@ -147,7 +147,7 @@ fn object_groups_and_their_objects_share_a_glyph() {
     ];
     for (group, icon) in cases {
         assert_eq!(node_icon(&RowKind::Group(group)), Some(icon), "{group:?}");
-        let object = RowKind::Object {
+        let object = RowKind::SchemaObject {
             group,
             object: ObjectRef::relation(RelationRef::new("main", "t")),
             detail: String::new(),

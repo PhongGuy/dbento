@@ -36,7 +36,7 @@ fn a_dynamodb_index_row_opens_and_a_table_keeps_no_sql_items(cx: &mut TestAppCon
             false,
             Some("GSI".into()),
         );
-        let row = RowKind::Object {
+        let row = RowKind::SchemaObject {
             group: ObjectGroup::Indexes,
             object: index.object_ref(),
             detail: "GSI".into(),

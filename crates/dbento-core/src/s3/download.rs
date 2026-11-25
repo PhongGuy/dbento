@@ -64,6 +64,9 @@ pub(crate) async fn download(
         let meta = idle(opts.idle_timeout, client.head_object(&key.bucket, &key.key))
             .await?
             .map_err(|e| remote(classify(e)))?;
+        if let Some(p) = &opts.progress {
+            p.set_total(meta.size);
+        }
         if meta.size > opts.max_size {
             return Err(DownloadError::TooLarge {
                 size: meta.size,
@@ -99,6 +102,9 @@ pub(crate) async fn download(
                 return Err(DownloadError::Truncated);
             }
             out.write_all(&chunk).await.map_err(place)?;
+            if let Some(p) = &opts.progress {
+                p.add(chunk.len() as u64);
+            }
         }
         if written != expected {
             return Err(DownloadError::Truncated);

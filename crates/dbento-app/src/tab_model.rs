@@ -26,6 +26,7 @@ use crate::message_view::{
     Follow, GroupRow, MESSAGE_PAGE, MessageView, Panel, RING_BYTES, RING_ROWS, group_text,
     pending_text,
 };
+use crate::object_view::{ObjectView, PreviewMode};
 use crate::parks;
 use crate::results::ResultStore;
 use crate::runner::{
@@ -460,6 +461,8 @@ pub struct TabModel {
     key_view: Option<KeyView>,
     /// The value page in flight; dropping it drops its answer.
     key_task: Option<Task<()>>,
+    /// The S3 object this tab previews instead of running SQL.
+    object_view: Option<ObjectView>,
     /// The stream view, once the key's first page showed it is a stream.
     message_view: Option<MessageView>,
     /// The run that was current when result 0 became the stream's rows.
@@ -619,6 +622,7 @@ impl TabModel {
             announce_fresh: false,
             key_view: None,
             key_task: None,
+            object_view: None,
             message_view: None,
             message_run: 0,
             message_task: None,
@@ -1409,6 +1413,61 @@ impl TabModel {
     /// The key whose value this tab shows, if any.
     pub fn key_view(&self) -> Option<&KeyView> {
         self.key_view.as_ref()
+    }
+
+    /// Shows S3 object `key` in `bucket`: its HEAD and a preview of its first bytes, read now.
+    /// False while the tab is closed, fenced or running, which leaves it as it was, and false
+    /// when no runner starts, after the old results are cleared.
+    pub fn open_object(&mut self, bucket: String, key: String, cx: &mut Context<Self>) -> bool {
+        if self.closed || self.fence.is_some() || self.running {
+            return false;
+        }
+        self.key_task = None;
+        self.results.clear();
+        let mut view = ObjectView::new(bucket, key);
+        if self.runner.is_none() {
+            self.start_runner(cx);
+        }
+        let Some(runner) = &self.runner else {
+            return false;
+        };
+        let (reply, answer) = async_channel::bounded(1);
+        runner.send(Command::ReadObject {
+            key: view.object_key(),
+            reply,
+        });
+        view.begin();
+        self.object_view = Some(view);
+        self.key_task = Some(cx.spawn(async move |this, cx| {
+            // The runner drops a read that meets a run, and a retired runner drops it too.
+            let answer = (answer.recv().await).unwrap_or_else(|_| Err(SESSION_STOPPED.into()));
+            let _ = this.update(cx, |m, cx| {
+                m.key_task = None;
+                if let Some(view) = &mut m.object_view {
+                    match answer {
+                        Ok((meta, preview)) => view.apply(meta, preview),
+                        Err(e) => view.fail(e),
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+        true
+    }
+
+    /// The S3 object this tab shows, if any.
+    pub fn object_view(&self) -> Option<&ObjectView> {
+        self.object_view.as_ref()
+    }
+
+    /// Shows the object's preview in `mode`; false when its bytes do not allow that mode.
+    pub fn set_preview_mode(&mut self, mode: PreviewMode, cx: &mut Context<Self>) -> bool {
+        let switched = self.object_view.as_mut().is_some_and(|v| v.set_mode(mode));
+        if switched {
+            cx.notify();
+        }
+        switched
     }
 
     // Sends the key view's next read to the runner and lands its answer in result 0.

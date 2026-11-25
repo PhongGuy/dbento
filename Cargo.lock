@@ -2667,6 +2667,7 @@ dependencies = [
  "dbento-bench",
  "dbento-core",
  "dbento-testkit",
+ "dirs 7.0.0",
  "futures-util",
  "gpui-kit",
  "image",

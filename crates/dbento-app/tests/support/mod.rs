@@ -40,6 +40,14 @@ pub fn services(dir: &Path) -> Services {
         secrets_in_memory: false,
     }
 }
+/// Points the window's first save dialog at `dir`, so no test reads a user folder.
+pub fn quiet_downloads(
+    cx: &mut TestAppContext,
+    shell: &gpui_kit::Entity<dbento_app::shell::Shell>,
+    dir: &Path,
+) {
+    shell.update(cx, |sh, _| sh.set_download_folder(dir.to_path_buf()));
+}
 pub fn present(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) -> bool {
     let id = id.into();
     cx.run_until_parked();
@@ -221,6 +229,7 @@ pub fn opened(cx: &mut TestAppContext, setup: &str, extra: &str, ix: usize) -> O
         .update(|cx| dbento_app::app::start(services(files.path()), Some(fx.dir.path().into()), cx))
         .unwrap();
     present(cx, win, "connection-list");
+    quiet_downloads(cx, &shell, files.path());
     let name = fx.ws.connections()[ix].name().to_owned();
     open_connection_row(cx, win, &name);
     Opened {
@@ -263,6 +272,7 @@ pub fn launched(cx: &mut TestAppContext, setup: &str, extra: &str) -> Opened {
         .update(|cx| dbento_app::app::start(services(files.path()), Some(fx.dir.path().into()), cx))
         .unwrap();
     present(cx, win, "connection-list");
+    quiet_downloads(cx, &shell, files.path());
     Opened {
         fx,
         files,
@@ -346,6 +356,7 @@ pub fn started_custom(
         .update(|cx| dbento_app::app::start(services, Some(dir.path().into()), cx))
         .unwrap();
     present(cx, win, "connection-list");
+    quiet_downloads(cx, &shell, files.path());
     Started {
         dir,
         files,
@@ -874,4 +885,22 @@ pub fn approval_target(ws: &Path, conn: &str) -> dbento_core::ApprovalTarget {
         .clone()
     });
     dbento_core::ApprovalTarget::of(&config)
+}
+
+/// A runner spec on connection `s3`: `s3`'s bucket on Moto with `extra` keys, its secret
+/// from the environment the spec carries.
+#[cfg(feature = "s3")]
+pub fn s3_spec(s3: &dbento_testkit::S3Moto, extra: &str) -> (tempfile::TempDir, RunnerSpec) {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!("dbento = 1\n{}", s3.connection_toml("s3", extra));
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let spec = RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir.path()).unwrap()),
+        connection: "s3".into(),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(|v| {
+            (v == dbento_testkit::S3_SECRET_VAR).then(|| dbento_testkit::S3_SECRET.to_owned())
+        }),
+    };
+    (dir, spec)
 }

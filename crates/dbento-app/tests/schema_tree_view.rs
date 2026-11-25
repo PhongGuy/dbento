@@ -699,13 +699,13 @@ fn index_ref(cx: &mut TestAppContext, shell: &Entity<Shell>) -> ObjectRef {
                 .rows("lite", 1, "")
                 .into_iter()
                 .find_map(|r| match r.kind {
-                    RowKind::Object { object, .. } if r.aria == INDEX_ROW => Some(object),
+                    RowKind::SchemaObject { object, .. } if r.aria == INDEX_ROW => Some(object),
                     RowKind::Schema
                     | RowKind::Kind(_)
                     | RowKind::Relation(_)
                     | RowKind::Column { .. }
                     | RowKind::Group(_)
-                    | RowKind::Object { .. }
+                    | RowKind::SchemaObject { .. }
                     | RowKind::Loading
                     | RowKind::Failed { .. }
                     | RowKind::Truncated
@@ -713,6 +713,8 @@ fn index_ref(cx: &mut TestAppContext, shell: &Entity<Shell>) -> ObjectRef {
                     | RowKind::KeyFolder { .. }
                     | RowKind::Key(_)
                     | RowKind::LoadMore
+                    | RowKind::Prefix { .. }
+                    | RowKind::Object(_)
                     | RowKind::Database { .. } => None,
                 })
         })
@@ -754,7 +756,7 @@ fn a_tables_objects_sit_in_collapsed_groups_after_its_columns(cx: &mut TestAppCo
     });
     assert_eq!(index.label, "album_title");
     assert!(
-        matches!(&index.kind, RowKind::Object { group: ObjectGroup::Indexes, detail, .. } if detail.is_empty()),
+        matches!(&index.kind, RowKind::SchemaObject { group: ObjectGroup::Indexes, detail, .. } if detail.is_empty()),
         "{:?}",
         index.kind
     );

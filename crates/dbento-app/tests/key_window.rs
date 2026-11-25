@@ -32,13 +32,15 @@ fn folder_keys(cx: &mut TestAppContext, s: &Started, aria: &str) -> Option<usize
             | RowKind::Relation(_)
             | RowKind::Column { .. }
             | RowKind::Group(_)
-            | RowKind::Object { .. }
+            | RowKind::SchemaObject { .. }
             | RowKind::Loading
             | RowKind::Failed { .. }
             | RowKind::Truncated
             | RowKind::Empty
             | RowKind::Key(_)
             | RowKind::LoadMore
+            | RowKind::Prefix { .. }
+            | RowKind::Object(_)
             | RowKind::Database { .. } => None,
         })
 }

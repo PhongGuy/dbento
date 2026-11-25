@@ -23,7 +23,7 @@ serde_json = "1"
 toml = "1"
 tempfile = "3"
 png = "0.18"
-dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb"] }
+dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb", "s3"] }
 minisign = "=0.10.0"
 base64 = "0.23"
 
