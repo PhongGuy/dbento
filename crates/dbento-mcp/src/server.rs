@@ -56,18 +56,20 @@ pub(crate) struct Found {
     pub conn: ConnectionConfig,
 }
 
-/// Refuses the table tools on a connection that keeps keys, before connecting, pointing at the
-/// commands that walk a keyspace instead.
-fn keyspace_has_no_tables(found: &Found) -> Result<(), ToolError> {
-    if !found.conn.engine().capabilities().key_browser {
-        return Ok(());
-    }
-    Err(ToolError::new(
-        "unsupported",
+/// Refuses the table tools on a connection that keeps keys or objects, before connecting,
+/// pointing at the commands that walk its keyspace or buckets instead.
+fn has_no_tables(found: &Found) -> Result<(), ToolError> {
+    let capabilities = found.conn.engine().capabilities();
+    let message = if capabilities.key_browser {
         "this connection keeps keys, not tables: list them with `query` and \
          `SCAN 0 MATCH <pattern> COUNT 100`, then `TYPE <key>`"
-            .to_owned(),
-    ))
+    } else if capabilities.object_browser {
+        "this connection keeps objects, not tables: list buckets with `list_schemas` or `ls`, \
+         then `ls 's3://bucket/prefix'`"
+    } else {
+        return Ok(());
+    };
+    Err(ToolError::new("unsupported", message.to_owned()))
 }
 
 /// Serves one workspace to one MCP client.
@@ -451,7 +453,7 @@ impl DbentoServer {
         context: RequestContext<RoleServer>,
     ) -> Result<Fenced<TableList>, ToolError> {
         let found = self.find(&args.connection).await?;
-        keyspace_has_no_tables(&found)?;
+        has_no_tables(&found)?;
         let mut opened = self.open(&found).await?;
         let engine = opened.session.engine();
         let cancel = opened.session.cancel_handle();
@@ -491,7 +493,7 @@ impl DbentoServer {
         context: RequestContext<RoleServer>,
     ) -> Result<Fenced<ColumnList>, ToolError> {
         let found = self.find(&args.connection).await?;
-        keyspace_has_no_tables(&found)?;
+        has_no_tables(&found)?;
         let mut opened = self.open(&found).await?;
         let rel = RelationRef::new(args.schema, args.table);
         let engine = opened.session.engine();
