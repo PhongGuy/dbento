@@ -666,7 +666,7 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
         w.render_frame(cx);
         let name = w.find("conn-name").bounds();
         let body = w.find("conn-body").bounds();
-        let cards: Vec<_> = (0..9usize)
+        let cards: Vec<_> = (0..10usize)
             .map(|ix| w.within("conn-engine").find(ix).bounds())
             .collect();
         for (ix, card) in cards.iter().enumerate() {
@@ -684,10 +684,10 @@ fn new_duckdb_connection_is_written_and_the_engine_choice_fits(cx: &mut TestAppC
             );
         }
         // Three cards a row, rows stacked: same top within a row, the next row below.
-        for ix in 0..9usize {
+        for ix in 0..10usize {
             let lead = cards[ix - ix % 3];
             assert_eq!(cards[ix].top(), lead.top(), "{ix} shares its row's top");
-            if ix + 3 < 9 {
+            if ix + 3 < 10 {
                 assert!(
                     cards[ix + 3].top() >= cards[ix].bottom(),
                     "{} sits under {ix}",
@@ -766,7 +766,7 @@ fn a_squeezed_dialog_shows_the_engine_cards_two_to_a_row(cx: &mut TestAppContext
         assert!(dialog.size.width < px(560.), "squeezed: {dialog:?}");
         let name = w.find("conn-name").bounds();
         let body = w.find("conn-body").bounds();
-        let cards: Vec<_> = (0..9usize)
+        let cards: Vec<_> = (0..10usize)
             .map(|ix| w.within("conn-engine").find(ix).bounds())
             .collect();
         for (ix, card) in cards.iter().enumerate() {

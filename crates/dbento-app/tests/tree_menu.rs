@@ -228,7 +228,7 @@ fn view_definition_shows_on_objects_views_and_sqlite_tables(cx: &mut TestAppCont
             RowKind::Relation(RelationKind::ForeignTable),
             Engine::Postgres
         ));
-        let object = RowKind::Object {
+        let object = RowKind::SchemaObject {
             group: ObjectGroup::Indexes,
             object: IndexInfo::new(
                 RelationRef::new("main", "t"),
@@ -696,7 +696,7 @@ fn view_definition_shows_only_where_the_engine_answers(cx: &mut TestAppContext) 
         assert!(has(&view, Engine::Surrealdb));
         assert!(!has(&view, Engine::Mongodb));
         let rel = RelationRef::new("app", "t");
-        let row = |group, object| RowKind::Object {
+        let row = |group, object| RowKind::SchemaObject {
             group,
             object,
             detail: String::new(),

@@ -10,8 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dbento_core::{
-    ConnectionConfig, Engine, ExplainError, ExplainMode, QueryLanguage, ReadOnlyEnforcement,
-    RelationRef, Unguarded, Workspace, explain_request, read_only_residual,
+    ConnectionConfig, Engine, ExplainError, ExplainMode, ObjectKey, QueryLanguage,
+    ReadOnlyEnforcement, RelationRef, Unguarded, Workspace, display_key, explain_request,
+    read_only_residual,
 };
 use gpui_kit::base::ElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -25,10 +26,10 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, EntityId, EventEmitter, Hsla,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, EntityId, EventEmitter, Hsla,
     InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
-    div, px,
+    div, px, uniform_list,
 };
 
 use crate::browse::{BrowseEvent, unavailable_text};
@@ -46,6 +47,8 @@ use crate::keymap::{
 };
 use crate::message_view::{Follow, GroupRow, MessageView, Panel, dropped_text};
 use crate::nav::NavHistory;
+use crate::object_view::{ObjectView, PreviewMode};
+use crate::objects::s3_url;
 use crate::pick_row::{ConnectionPick, pick_row, pickable_connections};
 use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, skip_notice};
 use crate::run_target::run_range;
@@ -555,6 +558,8 @@ pub enum QueryTabEvent {
     DiskCompare,
     /// The disk banner asked to close the tab whose file is gone.
     DiskClose,
+    /// The object tab asked to download its object to a file the user picks.
+    DownloadObject(ObjectKey),
 }
 
 /// One query tab over a connection.
@@ -602,6 +607,8 @@ pub struct QueryTab {
     label: Option<String>,
     // A Redis value tab's title, `<key> · db N`; set, the tab shows the value, not the editor.
     key_title: Option<String>,
+    // The object preview's read-only editor and the mode whose text it holds.
+    object_editor: Option<(PreviewMode, Entity<EditorState>)>,
     // The toolbar's collapse level, the widths each lower level needed, and the contents
     // they were measured with: new contents measure again from the top.
     toolbar_level: usize,
@@ -756,6 +763,7 @@ impl QueryTab {
             origin: None,
             label: None,
             key_title: None,
+            object_editor: None,
             toolbar_level: 0,
             toolbar_needed: [None; TOOLBAR_LEVELS],
             toolbar_contents: 0,
@@ -1023,6 +1031,24 @@ impl QueryTab {
             // Only between `push_tab` and its caller numbering the tab; no frame paints it.
             (None, None) => "Query".to_owned(),
         }
+    }
+
+    /// Turns this tab into S3 object `key`'s view in `bucket`: the editor gives way to the
+    /// object's header and preview, and the tab keeps no draft. A tab whose model refuses
+    /// the object (running, fenced or closed) stays as it was.
+    pub fn open_object(&mut self, bucket: String, key: String, cx: &mut Context<Self>) {
+        let title = ObjectView::new(bucket.clone(), key.clone()).title();
+        if !self
+            .model
+            .update(cx, |m, cx| m.open_object(bucket, key, cx))
+        {
+            return;
+        }
+        self.key_title = Some(title);
+        self.object_editor = None;
+        self.draft = None;
+        self.draft_task = None;
+        cx.notify();
     }
 
     /// Turns this tab into Redis key `key`'s value view in DB `db`: the editor gives way to
@@ -1745,6 +1771,7 @@ impl Render for QueryTab {
         let (primary, primary_fg) = (theme.primary, theme.primary_foreground);
         let muted = theme.muted_foreground;
         let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+        self.sync_object_editor(window, cx);
         // Cancel also stops a parked result, interrupts a drain and stops a table's load.
         let m = self.model.read(cx);
         let cancellable = m.running()
@@ -1764,7 +1791,8 @@ impl Render for QueryTab {
         // A key tab shows its value's header, last error and whether pages remain; a stream's
         // tab pages through its message bar instead of Load more.
         let messages = m.message_view().map(MessageBar::of);
-        let key = self.key_title.is_some().then(|| {
+        let object = m.object_view().map(ObjectPane::of);
+        let key = (self.key_title.is_some() && object.is_none()).then(|| {
             let view = m.key_view();
             (
                 view.and_then(KeyView::header).map(str::to_owned),
@@ -2120,6 +2148,10 @@ impl Render for QueryTab {
             .relative()
             .child(toolbar)
             .children(self.disk_row(cx))
+            .when_some(object, |d, pane| {
+                let editor = self.object_editor.as_ref().map(|(_, e)| e.clone());
+                d.child(object_pane(pane, self.model.clone(), editor, window, cx))
+            })
             .when_some(key, |d, (header, error, more)| {
                 d.child(key_pane(
                     KeyPane {
@@ -2162,6 +2194,234 @@ impl Render for QueryTab {
                 )
             })
     }
+}
+
+impl QueryTab {
+    // Keeps the preview editor holding the text of the mode shown: built when the mode
+    // changes, dropped in Hex, so the text reaches the editor once per switch, not per frame.
+    fn sync_object_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let m = self.model.read(cx);
+        let Some(view) = m.object_view() else {
+            return;
+        };
+        let (mode, text) = match (view.mode(), view.text()) {
+            (Some(mode), Some(text)) => (mode, text),
+            _ => {
+                self.object_editor = None;
+                return;
+            }
+        };
+        if self.object_editor.as_ref().is_some_and(|(m, _)| *m == mode) {
+            return;
+        }
+        let text = text.to_owned();
+        let editor = cx.new(|cx| {
+            let mut state = EditorState::new(window, cx)
+                .line_number(false)
+                .folding(false)
+                .soft_wrap(false)
+                .default_value(text);
+            state.set_readonly(true, cx);
+            state
+        });
+        self.object_editor = Some((mode, editor));
+    }
+
+    // The hex rows `range` of the preview, each a mono line with its own id.
+    fn hex_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let (mono, mono_size) = (
+            cx.theme().mono_font_family.clone(),
+            cx.theme().mono_font_size,
+        );
+        let Some(view) = self.model.read(cx).object_view() else {
+            return Vec::new();
+        };
+        range
+            .filter_map(|i| {
+                let line = view.hex_row(i)?;
+                Some(
+                    div()
+                        .id(("object-hex-row", i))
+                        .test_support()
+                        .px_2()
+                        .h(px(20.))
+                        .font_family(mono.clone())
+                        .text_size(mono_size)
+                        .whitespace_nowrap()
+                        .child(line)
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+}
+
+// What an object tab shows, copied out of the model in render.
+struct ObjectPane {
+    key: ObjectKey,
+    header: Option<String>,
+    note: Option<String>,
+    error: Option<String>,
+    modes: Vec<PreviewMode>,
+    mode: Option<PreviewMode>,
+    hex_rows: usize,
+}
+
+impl ObjectPane {
+    fn of(view: &ObjectView) -> Self {
+        Self {
+            key: view.object_key(),
+            header: view.header(),
+            note: view.note(),
+            error: view.error().map(str::to_owned),
+            modes: view.modes(),
+            mode: view.mode(),
+            hex_rows: view.hex_rows(),
+        }
+    }
+}
+
+// An object tab's body: the metadata line with its actions, the mode switch and note, then
+// the text or JSON in a read-only editor or the hex rows; a failed read shows only why.
+fn object_pane(
+    pane: ObjectPane,
+    model: Entity<TabModel>,
+    editor: Option<Entity<EditorState>>,
+    window: &mut Window,
+    cx: &mut Context<QueryTab>,
+) -> impl IntoElement + use<> {
+    let dim = theme::dim(cx);
+    let theme = cx.theme();
+    let (danger, border) = (theme.danger, theme.border);
+    let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+    let line = |id: &'static str, text: String| {
+        div()
+            .id(id)
+            .aria_label(text.clone())
+            .test_support()
+            .px_2()
+            .py_1()
+            .child(text)
+    };
+    let ObjectPane {
+        key,
+        header,
+        note,
+        error,
+        modes,
+        mode,
+        hex_rows,
+    } = pane;
+    let action = |id: &'static str, label: &'static str| {
+        Button::new(id)
+            .ghost()
+            .xsmall()
+            .label(label)
+            .accessibility_label(label)
+    };
+    let (shown_key, url) = (display_key(&key.key), s3_url(&key.bucket, &key.key));
+    let download = key.clone();
+    let actions = h_flex()
+        .flex_none()
+        .gap_1()
+        .child(
+            action("object-download", "Download").on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(QueryTabEvent::DownloadObject(download.clone()));
+            })),
+        )
+        .child(
+            action("object-copy-key", "Copy key").on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(shown_key.clone()));
+            }),
+        )
+        .child(
+            action("object-copy-url", "Copy URL").on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+            }),
+        );
+    let head = h_flex()
+        .flex_none()
+        .justify_between()
+        .gap_2()
+        .pr_2()
+        .border_b_1()
+        .border_color(border)
+        .children(header.map(|h| {
+            line("object-header", h)
+                .min_w_0()
+                .font_family(mono.clone())
+                .text_size(mono_size)
+                .text_color(dim)
+        }))
+        .when(error.is_none(), |d| d.child(actions));
+    // Only the modes the bytes allow are offered, each under its own id.
+    let options: Vec<(&'static str, &'static str)> = modes
+        .iter()
+        .map(|m| match m {
+            PreviewMode::Text => ("object-mode-text", "Text"),
+            PreviewMode::Json => ("object-mode-json", "JSON"),
+            PreviewMode::Hex => ("object-mode-hex", "Hex"),
+        })
+        .collect();
+    let switch = (!options.is_empty()).then(|| {
+        let selected = mode
+            .and_then(|m| modes.iter().position(|&o| o == m))
+            .unwrap_or_default();
+        let modes = modes.clone();
+        ui::segmented_ids(
+            "object-mode",
+            &options,
+            selected,
+            move |ix, _, cx| {
+                if let Some(&to) = modes.get(*ix) {
+                    model.update(cx, |m, cx| m.set_preview_mode(to, cx));
+                }
+            },
+            window,
+            cx,
+        )
+    });
+    let bar = h_flex()
+        .flex_none()
+        .gap_3()
+        .px_2()
+        .py_1()
+        .children(switch)
+        .children(note.map(|n| line("object-note", n).text_color(dim)));
+    let body = match mode {
+        Some(PreviewMode::Hex) => uniform_list(
+            "object-hex",
+            hex_rows,
+            cx.processor(|this, range: Range<usize>, _, cx| this.hex_rows(range, cx)),
+        )
+        .test_support()
+        .flex_1()
+        .min_h_0()
+        .into_any_element(),
+        Some(PreviewMode::Text | PreviewMode::Json) => match editor {
+            Some(editor) => div()
+                .id("object-text")
+                .role(Role::Group)
+                .test_support()
+                .flex_1()
+                .min_h_0()
+                .child(Editor::new(&editor).readonly(true).bordered(false).h_full())
+                .into_any_element(),
+            None => div().flex_1().into_any_element(),
+        },
+        None => div().flex_1().into_any_element(),
+    };
+    div()
+        .id("object-view")
+        .test_support()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .child(head)
+        .children(error.map(|e| line("object-error", e).text_color(danger)))
+        .child(bar)
+        .child(body)
 }
 
 // What a stream tab's message bar and groups panel show, copied out of the model in render so

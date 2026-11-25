@@ -1,6 +1,6 @@
 # <img src="assets/icon/dbento-32.svg" alt="" width="40" height="40" align="top"> Dbento
 
-**A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client read-only access to your databases by default. It speaks SQL to Postgres, SQLite, MySQL, SQL Server and DuckDB, and each NoSQL store's own language to MongoDB, SurrealDB, Redis and DynamoDB. The name is db + bento: data in neat compartments.
+**A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client read-only access to your databases by default. It speaks SQL to Postgres, SQLite, MySQL, SQL Server and DuckDB, and each NoSQL store's own language to MongoDB, SurrealDB, Redis and DynamoDB, and it browses Amazon S3 and S3-compatible object stores read-only. The name is db + bento: data in neat compartments.
 
 ![Dbento with the demo shop open: the explorer on the left, a saved query in the editor and its result in the grid](assets/screenshots/hero.png)
 
@@ -24,6 +24,7 @@
 | SurrealDB | `surrealdb` (or `surreal`) | SurrealQL, over WebSocket | `.surql` |
 | Redis and Valkey | `redis` (or `valkey`) | Redis commands, one per line | `.redis` |
 | Amazon DynamoDB | `dynamodb` (or `dynamo`) | PartiQL | `.partiql` |
+| Amazon S3 and S3-compatible stores | `s3` | S3 browse commands, one per line or `;`: `ls`, `ls [-r] s3://bucket[/prefix]`, `stat s3://bucket/key` and `cat s3://bucket/key` | `.s3` |
 
 Other engines are tracked in the [issue tracker](https://github.com/PhongGuy/dbento/issues).
 
@@ -45,14 +46,15 @@ The schema tree shows tables, views, materialized views and foreign tables, and 
 
 ![The orders table expanded in the explorer, with its index's CREATE INDEX statement in the definition dock](assets/screenshots/explorer.png)
 
-### Documents, keys and items
+### Documents, keys, items and objects
 
-The NoSQL stores share the same explorer, editor and grid, each in its own language.
+The NoSQL stores and S3 share the same explorer, editor and grid, each in its own language.
 
 - **MongoDB:** databases and collections, with fields inferred from a sample of documents, and indexes. Opening a collection runs its `find()`. Columns come from the first documents, and fields that appear later land in a `(more fields)` column.
 - **Redis and Valkey:** each DB index with its key count, and the keys grouped into folders by `:`. Keys are listed with a `SCAN` walk that shows each key's type and TTL, and the filter takes a pattern plus `type:<kind>`. Opening a string, hash, list, set, sorted set or stream shows its value in a paged grid, with its type, length and TTL. Command completion comes from the server's `COMMAND DOCS`.
 - **DynamoDB:** one schema per region, with tables, their key attributes, indexes, and attributes sampled from items. Opening a table or an index runs a PartiQL `SELECT`, and attributes beyond the first items land in a `(more attributes)` column.
 - **SurrealDB:** the namespace's databases and their tables, read from `INFO` and sampled rows, with fields, indexes and triggers. Opening a table runs `SELECT * FROM` it.
+- **S3:** buckets, then prefixes and objects one level at a time, 500 entries per page with a Load more row. A bucket or prefix opens its `ls` listing in a query tab, and a prefix or object copies its key or `s3://` URL. Opening an object gives it its own tab: a metadata line with its URL, size, last write, etag, storage class and content type, and a preview of its first MiB as text, pretty-printed JSON or a `hexdump -C` style hex view, whichever its bytes allow. Download saves an object to a file you choose, with its progress in a strip above the status bar and a button to cancel it.
 
 ### Editing you review before it lands
 
@@ -64,9 +66,10 @@ Edit cells, add rows and delete rows in a browsed Postgres or SQLite table. Chan
 
 `dbento mcp` serves a workspace to an AI client over MCP on stdio, with ten tools: `list_connections`, `list_databases`, `list_schemas`, `list_tables`, `describe_table`, `query`, `explain`, `list_saved_queries`, `read_saved_query` and `execute`.
 
-- `query` always runs read-only, one statement in the connection's own language: SQL, a mongosh statement, SurrealQL, one Redis command, or PartiQL. Redis commands in the `@dangerous`, `@blocking`, `@scripting` and `@pubsub` categories are refused. It returns 100 rows by default and at most 1,000, about 64 KiB, under a statement timeout of 30 seconds by default.
+- `query` always runs read-only, one statement in the connection's own language: SQL, a mongosh statement, SurrealQL, one Redis command, PartiQL, or one S3 command. Redis commands in the `@dangerous`, `@blocking`, `@scripting` and `@pubsub` categories are refused. It returns 100 rows by default and at most 1,000, about 64 KiB, under a statement timeout of 30 seconds by default.
+- On S3, `list_schemas` lists the buckets (the connection's `buckets`, else every bucket `ListBuckets` returns), and `query` takes `ls`, `ls [-r] 's3://bucket/prefix'`, `stat 's3://bucket/key'` or `cat 's3://bucket/key'`, with keys in single quotes. `cat` returns an object's first bytes: text whole up to about 64 KiB, other bytes as hex cut at 2 KiB, with the object's size and whether it was cut. `list_tables` and `describe_table` are refused with a pointer to `ls`, there is no download, and `execute` answers `not_a_write` to every S3 command, since none of them writes.
 - `explain` shows the plan of one statement on Postgres, SQLite, MySQL and MariaDB in the same read-only session, so an AI can preview an `UPDATE` or `DELETE` without running it. On MySQL and MariaDB the read-only session refuses a plan of `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, so only reads can be explained there. `ANALYZE` is refused.
-- `list_saved_queries` and `read_saved_query` read the saved query files (`.sql`, `.js`, `.surql`, `.redis`, `.partiql`) under the workspace's `queries/` folder and nothing outside it, not even through a symlink.
+- `list_saved_queries` and `read_saved_query` read the saved query files (`.sql`, `.js`, `.surql`, `.redis`, `.partiql`, `.s3`) under the workspace's `queries/` folder and nothing outside it, not even through a symlink.
 - `execute` never runs a write on its own. The first call files a request and answers `approval_required`; you approve or deny that exact call in the desktop app, and the AI's retry of the same call then runs it once or gets the denial. When you deny a call you can type a reason, and the AI gets it back with the denial. If the connection's target or session settings change after you approve, the old approval never runs against the changed connection; the AI gets `connection_changed` with a new request to approve.
 
 Query results are passed to the AI as untrusted data. The app's approvals panel shows the command to connect your AI client.
@@ -83,6 +86,7 @@ Query results are passed to the AI as untrusted data. The app's approvals panel 
 - On SurrealDB each statement runs in a transaction that is cancelled, and a VIEWER login is enforced by the server. At either level, stored logic reached from a `SELECT` can still advance sequences, call `http::*` functions or write files, and a root OWNER or anonymous login can run `ALTER SYSTEM`.
 - On Redis and Valkey, Dbento checks the user's ACL against the server's command table when it connects. A user whose ACL refuses every write is enforced by the server; otherwise Dbento refuses writes and commands it cannot classify. The check runs once, so a later `ACL SETUSER` can widen the user.
 - DynamoDB has no read-only session. A read-only connection sends only `ListTables`, `DescribeTable`, `Scan` and PartiQL `SELECT`, but only IAM stops someone with the same keys from writing, so give a production connection keys that can only read.
+- S3 browsing is read-only by design: Dbento sends only `ListBuckets`, `ListObjectsV2`, `HeadObject` and `GetObject`, and has no command that writes or deletes. IAM still decides what the keys may do, so give a production connection keys granted only `s3:ListAllMyBuckets`, `s3:ListBucket` and `s3:GetObject`.
 - A connection tagged red, or in a red folder, is marked as production in its query tab's toolbar and the status bar.
 - `UPDATE` or `DELETE` without `WHERE`, `DROP` (and MongoDB's `drop` or SurrealDB's `REMOVE`), `TRUNCATE`, `updateMany` or `deleteMany` with an empty filter, and `FLUSHDB` or `FLUSHALL` ask before they run. DynamoDB statements never ask.
 - Write detection follows each engine: `pg_query` for Postgres and DuckDB, so a write hidden in a CTE is still caught; SQLite's own read-only check; sqlparser for MySQL and SQL Server; an allowlist of read methods for MongoDB; the server's command table for Redis; a keyword scan for SurrealDB; and the first keyword of a PartiQL statement for DynamoDB. Outside a read-only session, a statement the parser cannot handle is never blocked for that reason alone.
@@ -128,7 +132,7 @@ engine = "sqlite"
 path = "data/app.db"
 ```
 
-The NoSQL stores take their own keys:
+The NoSQL stores and S3 take their own keys:
 
 ```toml
 [connections.docs]
@@ -147,6 +151,12 @@ region = "eu-north-1"
 access_key_id = "AKIAEXAMPLEKEYID"
 consistent_read = true
 
+[connections.assets]
+engine = "s3"
+region = "eu-north-1"
+access_key_id = "AKIAEXAMPLEKEYID"
+buckets = ["app-assets", "app-exports"]
+
 [connections.graph]
 engine = "surrealdb"
 host = "localhost"
@@ -159,6 +169,7 @@ auth_level = "database"
 - **MongoDB** takes everything in `uri`, options such as `authSource` and `tls=true` included. A password in `uri` is refused; the secret is stored like any other.
 - **Redis and Valkey** take `host` (default `127.0.0.1`), `port` (6379), `user`, and `database` as a DB index (0 when left out).
 - **DynamoDB** takes `region`, else `AWS_REGION` or `AWS_DEFAULT_REGION`, and an `endpoint` for a local server; plain `http` is allowed only on this machine. With `access_key_id` the secret access key is the connection's secret; without it the credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. `consistent_read = true` makes reads strongly consistent.
+- **S3** takes `region` and its credentials the same way as DynamoDB, and an `endpoint` for an S3-compatible store such as MinIO, with the same rule for plain `http`. With an `endpoint` requests use path-style URLs, unless `virtual_hosted = true` puts the bucket in the host name; without one they go to AWS. `secret` is allowed only with `access_key_id`, and never as `"none"`. `buckets` lists the buckets to show, for keys that may not call `ListBuckets`; without it the explorer and `ls` list every bucket the keys can see.
 - **SurrealDB** takes `host`, `port` (8000), `namespace`, `database`, and with a `user` an `auth_level` of `root`, `namespace` or `database`. Without a user the session is anonymous.
 - **SQL Server** can take a `read_only_user`, a user that can only read, for its read-only work (see [Safety the database enforces](#safety-the-database-enforces)).
 
@@ -255,9 +266,11 @@ dbento run queries/app-dev/recent-orders.sql
 dbento run report.sql --conn app-dev --format csv > report.csv
 ```
 
-On a MongoDB, SurrealDB, Redis or DynamoDB connection, `dbento query` takes that engine's language instead of SQL, and `dbento run` refuses a file whose extension belongs to another language.
+On a MongoDB, SurrealDB, Redis, DynamoDB or S3 connection, `dbento query` takes that engine's language instead of SQL (`dbento query assets "ls s3://app-assets/images/"`), and `dbento run` refuses a file whose extension belongs to another language.
 
-Both commands take `--format table|json|csv`, `--max-rows N`, `--read-only`, `--timeout 30s`, and `--yes` to run an `UPDATE` or `DELETE` without `WHERE`, a `DROP` or a `TRUNCATE` without asking. Every command finds the nearest `dbento.toml` above the working directory, or takes `--workspace <dir>`.
+Both commands take `--format table|json|csv`, `--max-rows N`, `--read-only`, `--timeout 30s`, and `--yes` to run an `UPDATE` or `DELETE` without `WHERE`, a `DROP` or a `TRUNCATE` without asking. `dbento download <conn> s3://bucket/key -o <file>` saves one S3 object; it refuses to replace an existing file without `--force`, and an object larger than `--max-size` (1GiB by default).
+
+Every command finds the nearest `dbento.toml` above the working directory, or takes `--workspace <dir>`.
 
 ### The desktop app
 
