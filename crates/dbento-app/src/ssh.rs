@@ -276,24 +276,31 @@ pub fn ssh_follow(
             })
     };
     // The old password entry is only reachable through the login it was pinned to.
-    let old_password = was
-        .and_then(|c| login(base, c).ok())
-        .and_then(|l| base.ssh_password_target(old_name, &l));
+    let old_login = was.and_then(|c| login(base, c).ok());
+    let old_password = old_login
+        .as_deref()
+        .and_then(|l| base.ssh_password_target(old_name, l));
     let old_passphrase = was.and_then(|_| base.ssh_key_passphrase_target(old_name));
     let Some(is) = is else {
         follow.drops.extend(old_password);
         follow.drops.extend(old_passphrase);
         return follow;
     };
-    match login(now, is) {
-        Ok(l) => follow.password_to = now.ssh_password_target(name, &l),
-        Err(problem) => follow.problem = Some(problem),
-    }
+    let new_login = match login(now, is) {
+        Ok(l) => Some(l),
+        Err(problem) => {
+            follow.problem = Some(problem);
+            None
+        }
+    };
+    follow.password_to = new_login
+        .as_deref()
+        .and_then(|l| now.ssh_password_target(name, l));
     follow.passphrase_to = now.ssh_key_passphrase_target(name);
     // Another login drops the old pinned password; the same one moves it on a rename. An
     // unresolvable new login leaves the old entry where it is.
     if let (Some(from), Some(to)) = (old_password, follow.password_to.clone()) {
-        if from.ssh_login() != to.ssh_login() {
+        if old_login != new_login {
             follow.drops.push(from);
         } else if from != to {
             follow.moves.push((from, to));

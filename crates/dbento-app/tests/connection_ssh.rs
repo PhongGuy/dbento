@@ -191,6 +191,8 @@ fn a_typed_ssh_password_goes_to_its_pinned_entry_only(cx: &mut TestAppContext) {
     fill(cx, &o, Field::SshUser, "ops");
     segment(cx, &o, "conn-ssh-auth", 3);
     fill(cx, &o, Field::SshPassword, "x");
+    // The fixture already holds "x" as other connections' values; saving must add none.
+    let before = toml(&o).matches("\"x\"").count();
     click_id(cx, o.win, "conn-save");
     let (st, dir) = store_and_dir(cx, &o);
     let k = SecretKey::ssh_password(&dir, "pg", "ops@bastion:22");
@@ -205,9 +207,11 @@ fn a_typed_ssh_password_goes_to_its_pinned_entry_only(cx: &mut TestAppContext) {
         ),
         "{text}"
     );
-    // The fixture's other connections use "x" as a database and user; only pg's entry counts.
-    let entry = &text[text.find("[connections.pg]").unwrap()..];
-    assert!(!entry.contains("\"x\""), "never in the file: {text}");
+    assert_eq!(
+        text.matches("\"x\"").count(),
+        before,
+        "never in the file: {text}"
+    );
 }
 
 #[gpui_kit::test]
