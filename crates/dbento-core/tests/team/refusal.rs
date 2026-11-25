@@ -125,6 +125,21 @@ fn rule_text_and_token_redaction() {
     assert_eq!(rule_text("database_file"), "a database file");
     assert_eq!(rule_text("brand_new_rule"), "brand_new_rule");
     assert_eq!(
+        rule_text("default_branch_missing"),
+        "the workspace's default branch is missing, so push it first"
+    );
+    assert_eq!(rule_text("branch_delete"), "deletes the default branch");
+    assert_eq!(rule_text("tag_move"), "moves an existing tag");
+    assert_eq!(rule_text("tag_delete"), "deletes an existing tag");
+    assert_eq!(
+        rule_text("force_push"),
+        "rewrites the default branch's history"
+    );
+    assert_eq!(
+        rule_text("ref_namespace"),
+        "a ref outside branches and tags"
+    );
+    assert_eq!(
         redact_token("Bearer plk_AbC-123_x done"),
         "Bearer plk_[redacted] done"
     );
