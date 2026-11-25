@@ -772,14 +772,15 @@ pub async fn connect(
     if let Some(link) = &ssh {
         params.dialer = Dialer::Ssh(Arc::clone(link));
     }
-    match conn.engine() {
+    // Every engine's session holds the link, so dropping the session closes the tunnel.
+    let mut session = match conn.engine() {
         Engine::Postgres => {
             let d = PgDriver::connect(params).await?;
             let level = d.read_only_level(read_only);
             Ok(Session {
                 inner: SessionInner::Postgres(d),
                 read_only: level,
-                ssh,
+                ssh: None,
             })
         }
         Engine::Mysql => {
@@ -893,7 +894,9 @@ pub async fn connect(
         Engine::S3 => Err(ConnectError::Unsupported {
             reason: "S3 is not available in this build".to_owned(),
         }),
-    }
+    }?;
+    session.ssh = ssh;
+    Ok(session)
 }
 
 /// What a read-only session on `engine` does not undo, in words for a user; None where the
@@ -938,10 +941,6 @@ pub struct Session {
     read_only: Option<ReadOnlyEnforcement>,
     /// The SSH link the driver's connection runs through; declared after `inner` so the
     /// driver closes before the link, and dropping the session ends SSH.
-    #[expect(
-        dead_code,
-        reason = "held only so the link lives as long as the session"
-    )]
     ssh: Option<Arc<SshLink>>,
 }
 

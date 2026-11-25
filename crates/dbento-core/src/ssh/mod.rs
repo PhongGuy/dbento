@@ -7,6 +7,14 @@ mod auth;
 mod known_hosts;
 mod link;
 mod resolve;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the tunnelled SQL Server and SurrealDB drivers dial through it"
+    )
+)]
+pub(crate) mod stream;
 pub use known_hosts::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,
     trust_host_key, user_known_hosts_lists,
