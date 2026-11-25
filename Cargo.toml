@@ -62,6 +62,8 @@ sqlparser = { version = "=0.63.0", default-features = false, features = ["std"] 
 tokio-postgres-rustls = "0.14.0"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "0.7.1"
+tokio-rustls = { version = "0.26.6", default-features = false }
+rustls-native-certs = "0.8.5"
 futures-util = "0.3.34"
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "mysql", "mariadb", "mssql_server", "mongo", "valkey"] }
 mysql_async = { version = "=0.37.1", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }

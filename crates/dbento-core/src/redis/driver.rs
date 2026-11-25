@@ -14,9 +14,12 @@ use ::redis::{
     TlsCertificates, Value,
 };
 use pkcs8::der::pem::{self, LineEnding};
-use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject as _;
+use rustls::pki_types::{CertificateDer, ServerName};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 use super::browse::KeyBrowseError;
 use super::classify::redis_classification;
@@ -766,20 +769,7 @@ fn tls_certificates(
     if conn.tls() != Some(TlsMode::Verify) {
         return Ok(None);
     }
-    let root_cert = match conn.tls_ca() {
-        Some(path) => {
-            let fail = |e: String| tls_error(conn, format!("{}: {e}", path.display()));
-            let bytes = std::fs::read(path).map_err(|e| fail(e.to_string()))?;
-            let certs = CertificateDer::pem_slice_iter(&bytes)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| fail(e.to_string()))?;
-            if certs.is_empty() {
-                return Err(fail("no certificates".to_owned()));
-            }
-            Some(bytes)
-        }
-        None => None,
-    };
+    let root_cert = tls_ca(conn)?.map(|(bytes, _)| bytes);
     // client_auth answers Some only when both paths are set.
     let client_tls = match (
         client_auth(conn, passphrase)?,
@@ -812,6 +802,95 @@ fn tls_certificates(
         client_tls,
         root_cert,
     }))
+}
+
+/// A `tls_ca` file's PEM bytes and the certificates parsed from them.
+type CaFile = (Vec<u8>, Vec<CertificateDer<'static>>);
+
+/// The `tls_ca` file, `None` when it is unset; an unreadable or empty file is a `Tls` error
+/// naming it.
+fn tls_ca(conn: &ConnectionConfig) -> Result<Option<CaFile>, ConnectError> {
+    let Some(path) = conn.tls_ca() else {
+        return Ok(None);
+    };
+    let fail = |e: String| tls_error(conn, format!("{}: {e}", path.display()));
+    let bytes = std::fs::read(path).map_err(|e| fail(e.to_string()))?;
+    let certs = CertificateDer::pem_slice_iter(&bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| fail(e.to_string()))?;
+    if certs.is_empty() {
+        return Err(fail("no certificates".to_owned()));
+    }
+    Ok(Some((bytes, certs)))
+}
+
+/// The rustls client config redis-rs would build for `conn` under `tls = "verify"`: the
+/// `tls_ca` certificates alone when set, else the OS roots, plus the client pair when given.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the SSH dial is its first caller")
+)]
+fn tls_config(
+    conn: &ConnectionConfig,
+    passphrase: Option<&Secret>,
+) -> Result<rustls::ClientConfig, ConnectError> {
+    let fail = |e: String| tls_error(conn, e);
+    let mut roots = rustls::RootCertStore::empty();
+    let certs = match tls_ca(conn)? {
+        Some((_, certs)) => certs,
+        // Like redis-rs, any certificate the OS store fails to load fails the connect.
+        None => {
+            let native = rustls_native_certs::load_native_certs();
+            if let Some(e) = native.errors.first() {
+                return Err(fail(format!("the system root certificates: {e}")));
+            }
+            native.certs
+        }
+    };
+    for cert in certs {
+        roots
+            .add(cert)
+            .map_err(|e| fail(format!("a trusted root certificate: {e}")))?;
+    }
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| fail(e.to_string()))?
+    .with_root_certificates(roots);
+    match client_auth(conn, passphrase)? {
+        Some((chain, key)) => builder
+            .with_client_auth_cert(chain, key)
+            .map_err(|e| fail(e.to_string())),
+        None => Ok(builder.with_no_client_auth()),
+    }
+}
+
+/// TLS over `stream` under the configured host; a failed handshake is `Tls` naming both ways out.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the SSH dial is its first caller")
+)]
+pub(super) async fn tls_wrap<S: AsyncRead + AsyncWrite + Unpin>(
+    conn: &ConnectionConfig,
+    passphrase: Option<&Secret>,
+    stream: S,
+) -> Result<TlsStream<S>, ConnectError> {
+    let config = tls_config(conn, passphrase)?;
+    let target = conn.display_target();
+    let host = conn.host().unwrap_or("127.0.0.1").to_owned();
+    let name = ServerName::try_from(host)
+        .map_err(|e| tls_error(conn, format!("{target}: {e}; {TLS_WAYS_OUT}")))?;
+    TlsConnector::from(Arc::new(config))
+        .connect(name, stream)
+        .await
+        .map_err(|e| {
+            let cause = e
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                .map_or_else(|| e.to_string(), ToString::to_string);
+            tls_error(conn, format!("{target}: {cause}; {TLS_WAYS_OUT}"))
+        })
 }
 
 /// `f`, or a failed connect when it has not finished within `CONNECT_TIMEOUT`.
