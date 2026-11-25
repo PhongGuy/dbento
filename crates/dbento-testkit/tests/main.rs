@@ -16,3 +16,4 @@ mod mysql_wire;
 mod potluck_stub;
 mod redis_harness;
 mod s3_harness;
+mod ssh_harness;

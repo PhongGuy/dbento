@@ -149,6 +149,30 @@ async fn a_cancel_right_after_execute_is_not_lost() {
     assert!(matches!(result, Err(ExecuteError::Cancelled)));
 }
 
+/// The runner reports a statement as executing after `next` and before `execute`; a cancel
+/// in that gap aims at that statement, not the one before it.
+#[tokio::test]
+async fn a_cancel_after_next_reaches_the_statement_it_prepared() {
+    let fx = sqlite_fixture("", "");
+    let mut s = fx.session(SessionOptions::default()).await;
+    let handle = s.cancel_handle();
+    let mut script = s.script(&format!("SELECT 1; {LONG}"));
+    let first = script.next().await.unwrap().unwrap();
+    let mut stream = first.execute(Limits::default()).await.unwrap();
+    while stream.next_batch().await.unwrap().is_some() {}
+    drop(stream);
+    let mut pending = script.next().await.unwrap().unwrap();
+    assert!(pending.is_last().await);
+    handle.cancel();
+    let end = bounded(async {
+        let mut stream = pending.execute(Limits::default()).await?;
+        while stream.next_batch().await?.is_some() {}
+        Ok(())
+    })
+    .await;
+    assert!(matches!(end, Err(ExecuteError::Cancelled)), "{end:?}");
+}
+
 #[tokio::test]
 async fn a_cancel_between_statements_does_not_hit_the_next_one() {
     let fx = sqlite_fixture("", "");

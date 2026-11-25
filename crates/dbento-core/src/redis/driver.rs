@@ -467,7 +467,13 @@ impl Driver for RedisSession {
                     | ConnectError::Tls { .. }
                     | ConnectError::InvalidTimeout { .. }
                     | ConnectError::Refused { .. }
-                    | ConnectError::Unsupported { .. }) => other,
+                    | ConnectError::Unsupported { .. }
+                    | ConnectError::SshConnect { .. }
+                    | ConnectError::SshAuth { .. }
+                    | ConnectError::SshUnsupported { .. }
+                    | ConnectError::SshHostKeyUnknown { .. }
+                    | ConnectError::SshHostKeyChanged { .. }
+                    | ConnectError::SshTunnel { .. }) => other,
                 })?;
             (Some(found.level), found.unprobeable)
         } else {

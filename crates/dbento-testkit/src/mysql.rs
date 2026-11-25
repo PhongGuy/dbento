@@ -247,7 +247,7 @@ fn slots(flavor: MyFlavor) -> Arc<Semaphore> {
 /// certificate from a fresh CA. The `MyDb` is on host "localhost", and [`CERT_USER`] logs in
 /// only with the returned client certificate, holding every privilege on the database.
 pub async fn my_tls(flavor: MyFlavor) -> (MyDb, ClientCert) {
-    let tls = server_tls();
+    let tls = server_tls(&["localhost"]);
     let client = client_cert(&tls);
     let db = container(flavor, Some(&tls)).await;
     let mut admin = db.admin().await;
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn a_mysql_start_waits_on_no_log_line() {
-        let tls = server_tls();
+        let tls = server_tls(&["localhost"]);
         let mysql = |tls| serve_tls(my_request::<Mysql>(MYSQL_TAG, "mysql"), tls);
         let mariadb = |tls| serve_tls(my_request::<Mariadb>(MARIADB_TAG, "mariadb"), tls);
         for (name, conditions) in [
