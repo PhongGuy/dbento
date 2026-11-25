@@ -743,11 +743,13 @@ pub async fn connect(
         ws_dir: ws.dir(),
     };
     // A connection with an ssh table never connects directly: the link opens first, and an
-    // engine without a tunnelled driver yet is refused before anything is dialled. Only engines
-    // compiled into every build are listed, so the link never opens for one this build lacks.
+    // engine without a tunnelled driver yet is refused before anything is dialled. A gated engine
+    // is admitted only when its feature is on, so the link never opens for one this build lacks.
+    let tunnelled = [Engine::Postgres, Engine::Mssql, Engine::Mysql].contains(&conn.engine())
+        || (cfg!(feature = "redis") && conn.engine() == Engine::Redis);
     let ssh = match conn.ssh() {
         None => None,
-        Some(_) if ![Engine::Postgres, Engine::Mssql, Engine::Mysql].contains(&conn.engine()) => {
+        Some(_) if !tunnelled => {
             return Err(ConnectError::SshUnsupported {
                 message: format!(
                     "SSH tunnels for {} are not available yet",

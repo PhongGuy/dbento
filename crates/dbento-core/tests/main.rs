@@ -169,6 +169,7 @@ mod ssh_link;
 mod ssh_mssql;
 mod ssh_mysql;
 mod ssh_postgres;
+mod ssh_redis;
 mod ssh_resolve;
 mod ssh_secrets;
 mod ssh_support;
