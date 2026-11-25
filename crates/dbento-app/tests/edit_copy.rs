@@ -53,12 +53,20 @@ fn each_kind_renders_the_row_through_render_sql(cx: &mut TestAppContext) {
                         ("name".into(), text("b")),
                         ("note".into(), EditValue::Null),
                     ],
+                    expected: vec![],
                 },
             ))
         );
         assert_eq!(
             m.copy_query(Loaded(0), CopyKind::Delete),
-            Some(sql(&fx, "t", Change::Delete { key: key("1") }))
+            Some(sql(
+                &fx,
+                "t",
+                Change::Delete {
+                    key: key("1"),
+                    expected: vec![]
+                }
+            ))
         );
         assert!(
             !m.copy_query(Loaded(0), CopyKind::Insert)
@@ -92,6 +100,7 @@ fn the_copy_shows_staged_values_keyed_by_the_loaded_identity(cx: &mut TestAppCon
                         ("name".into(), text("z")),
                         ("note".into(), EditValue::Null),
                     ],
+                    expected: vec![],
                 },
             ))
         );
@@ -134,7 +143,14 @@ fn a_read_only_connection_still_copies(cx: &mut TestAppContext) {
         assert!(!m.editable());
         assert_eq!(
             m.copy_query(Loaded(0), CopyKind::Delete),
-            Some(sql(&fx, "t", Change::Delete { key: key("1") }))
+            Some(sql(
+                &fx,
+                "t",
+                Change::Delete {
+                    key: key("1"),
+                    expected: vec![]
+                }
+            ))
         );
     });
 }

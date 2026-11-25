@@ -71,6 +71,7 @@ mod edit_cells;
 mod edit_copy;
 mod edit_discard;
 mod edit_discard_shell;
+mod edit_expected;
 mod edit_history;
 mod edit_insert_view;
 mod edit_look;

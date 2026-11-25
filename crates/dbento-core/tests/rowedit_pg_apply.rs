@@ -23,6 +23,7 @@ fn update(id: &str, set: &[(&str, EditValue)]) -> Change {
     Change::Update {
         key: row_key(&[("id", val(id))]),
         set: pairs(set),
+        expected: vec![],
     }
 }
 
@@ -233,6 +234,7 @@ async fn inserts_and_deletes_commit() {
                 },
                 Change::Delete {
                     key: row_key(&[("id", val("2"))]),
+                    expected: vec![],
                 },
             ],
         )
@@ -273,6 +275,7 @@ async fn an_update_of_the_key_reports_each_type_in_its_output_text() {
     let change = Change::Update {
         key: row_key(&[("c", val("x")), ("b", val("false"))]),
         set: pairs(&[("c", val("a")), ("b", val("yes"))]),
+        expected: vec![],
     };
     let applied = fx.apply_changes(&target, vec![change]).await.unwrap();
     // A browse reads the padded char and `t`, where `::text` would give `a` and `true`.
@@ -501,6 +504,7 @@ async fn a_key_edit_reads_and_writes_key_text_as_the_browse_session_does() {
             ("at", val("2026-11-05 08:00:00+00")),
             ("d", val("2026-11-05")),
         ]),
+        expected: vec![],
     };
     let applied = fx.apply_changes(&target, vec![change]).await.unwrap();
     assert_eq!(
@@ -536,6 +540,7 @@ async fn a_ctid_row_edited_twice_without_a_reload_is_found_again() {
     let edit = |key: &dbento_core::RowKey, n: &str| Change::Update {
         key: key.clone(),
         set: pairs(&[("n", val(n))]),
+        expected: vec![],
     };
     let first = fx
         .apply_changes(&target, vec![edit(&key, "10")])
@@ -576,6 +581,7 @@ async fn a_ctid_edit_of_a_table_with_an_instead_rule_commits_without_returning()
     let change = Change::Update {
         key,
         set: pairs(&[("v", val("b"))]),
+        expected: vec![],
     };
     // The rule's UPDATE counts as the one row, and no key comes back.
     let applied = fx.apply_changes(&target, vec![change]).await.unwrap();

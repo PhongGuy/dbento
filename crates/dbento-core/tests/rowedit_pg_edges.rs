@@ -41,6 +41,7 @@ async fn a_table_without_a_primary_key_is_edited_by_ctid_and_xmin() {
             vec![Change::Update {
                 key: k(),
                 set: pairs(&[("b", val("z"))]),
+                expected: vec![],
             }],
         )
         .await
@@ -52,8 +53,14 @@ async fn a_table_without_a_primary_key_is_edited_by_ctid_and_xmin() {
     );
     // The update made a new row version, so the old locator matches nothing.
     let outcomes = rejected(
-        fx.apply_changes(&target, vec![Change::Delete { key: k() }])
-            .await,
+        fx.apply_changes(
+            &target,
+            vec![Change::Delete {
+                key: k(),
+                expected: vec![],
+            }],
+        )
+        .await,
     );
     assert_eq!(outcomes, vec![ChangeOutcome::Conflict]);
 }
@@ -76,6 +83,7 @@ async fn an_inheritance_parent_is_edited_with_only() {
             vec![Change::Update {
                 key: row_key(&[("ctid", val(&ctid)), ("xmin", val(&xmin))]),
                 set: pairs(&[("b", val("q"))]),
+                expected: vec![],
             }],
         )
         .await
@@ -108,6 +116,7 @@ async fn generated_and_always_identity_columns_are_left_out() {
                 Change::Update {
                     key: row_key(&[("id", val("1"))]),
                     set: pairs(&[("a", val("6")), ("g", val("0"))]),
+                    expected: vec![],
                 },
             ],
         )
@@ -125,6 +134,7 @@ async fn generated_and_always_identity_columns_are_left_out() {
     let only_generated = Change::Update {
         key: row_key(&[("id", val("1"))]),
         set: pairs(&[("g", val("1"))]),
+        expected: vec![],
     };
     assert_eq!(
         EditBatch::new(target, vec![only_generated]).unwrap_err(),
@@ -143,6 +153,7 @@ async fn default_in_updates_and_all_default_inserts() {
                 Change::Update {
                     key: row_key(&[("id", val("1"))]),
                     set: pairs(&[("s", EditValue::Default), ("n", EditValue::Null)]),
+                    expected: vec![],
                 },
                 Change::Insert { values: vec![] },
                 Change::Insert {
@@ -177,6 +188,7 @@ async fn a_row_locked_elsewhere_fails_after_the_lock_wait() {
     let change = Change::Update {
         key: row_key(&[("id", val("1"))]),
         set: pairs(&[("n", val("9"))]),
+        expected: vec![],
     };
     let result = tokio::time::timeout(
         Duration::from_secs(20),
@@ -212,6 +224,7 @@ async fn a_composite_key_of_text_typed_values_matches_its_own_text() {
             vec![Change::Update {
                 key: RowKey::new(key),
                 set: pairs(&[("v", val("1"))]),
+                expected: vec![],
             }],
         )
         .await

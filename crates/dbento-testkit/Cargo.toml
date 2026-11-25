@@ -28,6 +28,7 @@ mongodb = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 aws-sdk-dynamodb = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
 aws-smithy-http-client = { workspace = true, optional = true }
 
 # The watchdog removes containers on Ctrl-C through Unix signal handling, which does not build on
@@ -52,6 +53,7 @@ duckdb = ["dep:duckdb"]
 mongodb = ["dep:mongodb", "dep:bson"]
 redis = ["dep:redis"]
 dynamodb = ["dep:aws-sdk-dynamodb", "dep:aws-smithy-http-client"]
+s3 = ["dep:aws-sdk-s3", "dep:aws-smithy-http-client"]
 
 [[test]]
 name = "integration"
