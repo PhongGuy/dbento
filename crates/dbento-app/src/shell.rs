@@ -12,12 +12,12 @@ use std::time::Duration;
 
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
-    EditError, EditPlan, Engine, FolderPath, GrantState, LogoutError, ObjectKey, ObjectRef,
-    OpenError, RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey,
-    SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem,
-    WorkspaceWatcher, WriteError, connect, display_key, move_secret, plan_edit,
+    EditError, EditPlan, Engine, FolderPath, GrantState, HostKey, LogoutError, ObjectKey,
+    ObjectRef, OpenError, RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError,
+    SecretKey, SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace,
+    WorkspaceItem, WorkspaceWatcher, WriteError, connect, display_key, move_secret, plan_edit,
     resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames, seen_text,
-    seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted,
+    seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted, trust_host_key,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -62,6 +62,7 @@ use crate::downloads::{
 use crate::drafts::{DraftSlot, Drafts};
 use crate::history::HistoryLog;
 use crate::history_panel::{HistoryPanel, HistoryPanelEvent};
+use crate::host_keys::{HostKeyAnswer, HostKeyPrompt, host_key_ask, serve_prompts};
 use crate::inspector::{Inspector, InspectorEvent};
 use crate::keymap::{
     CheckForUpdates, CloseTab, CloseWorkspace, GoToLastTab, GoToTab1, GoToTab2, GoToTab3, GoToTab4,
@@ -88,6 +89,7 @@ use crate::schema_tree::{NodeKey, select_text};
 use crate::settings_dialog::{SettingsView, SettingsViewEvent};
 use crate::settings_store::{self, SettingsEvent, SettingsStore};
 use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
+use crate::ssh::SshContext;
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
@@ -264,6 +266,44 @@ fn ask_approvals(dir: PathBuf, window: &mut Window, cx: &mut Context<Shell>) -> 
             }
             cx.background_executor().timer(APPROVAL_POLL).await;
         }
+    })
+}
+
+// Shows each unknown SSH host key the gate asks about, one dialog at a time, and writes a
+// trusted key off the UI thread. Without a state folder it declines unasked; a gone window
+// ends the loop, which unregisters the handler.
+fn serve_host_keys(ssh: &SshContext, window: &mut Window, cx: &mut Context<Shell>) -> Task<()> {
+    let prompts = ssh.gate.prompts();
+    let (gate, state) = (Arc::clone(&ssh.gate), ssh.state.clone());
+    cx.spawn_in(window, async move |this, cx| {
+        serve_prompts(prompts, gate, async |p: &HostKeyPrompt<HostKey>| {
+            let Some(state) = state.clone() else {
+                return Some(HostKeyAnswer::Declined);
+            };
+            let spec = host_key_ask(&p.connection, &p.host, p.port, &p.fingerprint);
+            let reply = this
+                .update_in(cx, |_, window, cx| ask(spec, window, cx))
+                .ok()?;
+            if reply.recv().await != Ok(1) {
+                return Some(HostKeyAnswer::Declined);
+            }
+            // The key written is the one whose fingerprint the dialog showed.
+            let key = p.key.clone();
+            let written = cx
+                .background_executor()
+                .spawn(async move { trust_host_key(&state, &key) })
+                .await;
+            match written {
+                Ok(()) => Some(HostKeyAnswer::Trusted),
+                Err(e) => {
+                    let _ = this.update_in(cx, |_, window, cx| {
+                        show_error("Host key not saved", e.to_string(), window, cx)
+                    });
+                    Some(HostKeyAnswer::Declined)
+                }
+            }
+        })
+        .await
     })
 }
 
@@ -472,6 +512,8 @@ pub struct Shell {
     // The approvals poll, alive as long as the window.
     _approvals: Task<()>,
     _approval_asks: Task<()>,
+    // The host-key prompt loop; it owns the gate's handler, so it unregisters with the shell.
+    _host_keys: Task<()>,
     // The open workspace's watcher and the task that hands its events to the shell; each
     // workspace opened bumps the generation, so a previous watcher's late events are dropped.
     watch: Option<(WorkspaceWatcher, Task<()>)>,
@@ -547,6 +589,7 @@ impl Shell {
         let state_file = Arc::new(ChangeQueue::new(services.paths.state.clone()));
         let approvals = poll_approvals(services.paths.approvals.clone(), window, cx);
         let approval_asks = ask_approvals(services.paths.approvals.clone(), window, cx);
+        let host_keys = serve_host_keys(&services.ssh, window, cx);
         let inspector = cx.new(|cx| Inspector::new(window, cx));
         let inspector_events =
             cx.subscribe_in(
@@ -666,6 +709,7 @@ impl Shell {
             _definition_events: definition_events,
             _approvals: approvals,
             _approval_asks: approval_asks,
+            _host_keys: host_keys,
             watch: None,
             watch_generation: 0,
             watch_problem: None,
