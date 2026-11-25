@@ -152,6 +152,107 @@ test_the_old_form_still_prints_the_draft_body() {
   bash "$ROOT/scripts/tests/release-notes-test.sh" >/dev/null 2>&1 || fail "the markdown tests no longer pass"
 }
 
+# many <from> <to> <items> <width>: published releases v0.0.<from>..v0.0.<to>, each with <items> items of <width> chars.
+many() {
+  local i n body
+  for ((i = $1; i <= $2; i++)); do
+    body="## What's Changed"$'\n'"### Fixes"$'\n'
+    for ((n = 1; n <= $3; n++)); do body+="* $(printf "r$i-n$n-%0$4d" 0) by @a in https://github.com/PhongGuy/dbento/pull/$n"$'\n'; done
+    body+=$'\n## Downloads\n'
+    rel "v0.0.$i" "2026-01-$(printf %02d $(((i % 28) + 1)))" "$body"
+  done
+}
+generated_items() { # <count> <width>
+  local n out="## What's Changed"$'\n'"### New features"$'\n'
+  for ((n = 1; n <= $1; n++)); do out+="* $(printf "new$n-%0$2d" 0) by @a in https://github.com/PhongGuy/dbento/pull/$n"$'\n'; done
+  printf '%s' "$out"
+}
+
+test_only_published_stable_older_releases_are_listed_once() {
+  { rel v0.2.0 2026-11-20 "$BODY_020"; rel v0.1.0 2026-11-01 "$BODY_010"
+    rel v0.2.5 2026-11-21 "$BODY_020" true; rel v0.2.6-rc.1 2026-11-22 "$BODY_020" false true
+    rel nightly 2026-11-23 "$BODY_020"; rel v0.4.0 2026-11-24 "$BODY_020"; rel v0.3.0 2026-11-25 "$BODY_020" true; } | listing
+  local out
+  out=$(run_json v0.3.0 "$GENERATED") || { fail "json failed"; return 0; }
+  [[ $(jq -c '[.releases[].version]' <<<"$out") == '["0.3.0","0.2.0","0.1.0"]' ]] || fail "versions: $(jq -c '[.releases[].version]' <<<"$out")"
+  [[ $(cat "$WORK/gh-log") == "api --paginate --slurp repos/{owner}/{repo}/releases" ]] || fail "gh calls: $(cat "$WORK/gh-log")"
+}
+
+test_versions_sort_by_semver_not_by_listing_order() {
+  { rel v0.9.0 2026-10-01 "$BODY_010"; rel v0.10.0 2026-10-02 "$BODY_010"; rel v0.2.0 2026-09-01 "$BODY_010"; } | listing
+  local out
+  out=$(run_json v0.11.0 "$GENERATED") || { fail "json failed"; return 0; }
+  [[ $(jq -c '[.releases[] | [.version, .previous]]' <<<"$out") == '[["0.11.0","0.10.0"],["0.10.0","0.9.0"],["0.9.0","0.2.0"],["0.2.0",null]]' ]] \
+    || fail "order: $(jq -c '[.releases[] | [.version, .previous]]' <<<"$out")"
+}
+
+test_at_most_twenty_versions_and_previous_reaches_past_the_list() {
+  many 1 25 1 10 | listing
+  local out
+  out=$(run_json v0.1.0 "$GENERATED") || { fail "json failed"; return 0; }
+  [[ $(jq '.releases | length' <<<"$out") == 20 ]] || fail "count: $(jq '.releases | length' <<<"$out")"
+  [[ $(jq -c '.releases[-1] | [.version, .previous]' <<<"$out") == '["0.0.7","0.0.6"]' ]] || fail "oldest: $(jq -c '.releases[-1]' <<<"$out")"
+}
+
+test_oversize_history_drops_the_oldest_first() {
+  many 1 19 40 100 | listing
+  run_json v0.1.0 "$GENERATED" >"$WORK/out.json" || { fail "json failed"; return 0; }
+  local size n last
+  size=$(wc -c <"$WORK/out.json")
+  ((size <= 49152)) || fail "notes.json is $size bytes"
+  n=$(jq '.releases | length' "$WORK/out.json")
+  ((n > 1 && n < 20)) || fail "kept $n releases"
+  [[ $(jq -r '.releases[0].version' "$WORK/out.json") == 0.1.0 ]] || fail "the newest was dropped"
+  [[ $(jq '[.releases[0].groups[].items[]] | length' "$WORK/out.json") == 4 ]] || fail "the newest lost items"
+  last=$(jq -r '.releases[-1].version' "$WORK/out.json")
+  [[ $(jq -r '.releases[-1].previous' "$WORK/out.json") == "0.0.$((${last##*.} - 1))" ]] || fail "previous rewritten on $last"
+}
+
+test_an_oversize_newest_release_is_cut_with_a_count() {
+  rm -f "$WORK/releases"
+  run_json v0.1.0 "$(generated_items 1000 80)" >"$WORK/out.json" || { fail "json failed"; return 0; }
+  local size last kept more
+  size=$(wc -c <"$WORK/out.json")
+  ((size <= 49152)) || fail "notes.json is $size bytes"
+  last=$(jq -c '.releases[0].groups[-1].items[-1]' "$WORK/out.json")
+  [[ $(jq -r .text <<<"$last") =~ ^\.\.\.and\ ([0-9]+)\ more$ ]] || { fail "last item: $last"; return 0; }
+  more=${BASH_REMATCH[1]}
+  [[ $(jq 'has("pr")' <<<"$last") == false ]] || fail "the count item has a pr"
+  kept=$(jq '[.releases[0].groups[].items[]] | length - 1' "$WORK/out.json")
+  ((kept + more == 1000)) || fail "kept $kept plus $more is not 1000"
+}
+
+test_a_newest_release_that_cannot_fit_fails() {
+  rm -f "$WORK/releases"
+  local out status=0
+  out=$(NOTES_CAP=100 run_json v0.1.0 "$GENERATED" 2>/dev/null) || status=$?
+  [[ $status != 0 ]] || fail "an unfittable release shipped"
+  [[ -z $out ]] || fail "printed: $out"
+}
+
+test_files_writes_the_body_and_the_json_from_one_generate_call() {
+  local d=$WORK/repo out=$WORK/notes-out
+  git init -q "$d"; git -C "$d" config core.hooksPath /dev/null
+  git -C "$d" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m one
+  git -C "$d" -c tag.gpgsign=false tag v0.3.0
+  two_published
+  printf '%s' "$GENERATED" >"$WORK/generated"
+  : >"$WORK/gh-log"
+  (cd "$d" && PATH=$WORK/bin:$PATH FAKE_GH_LOG=$WORK/gh-log FAKE_GH_RELEASES=$WORK/releases FAKE_GH_BODY=$WORK/generated \
+    NOTES_DATE=2026-12-01 bash "$SCRIPT" files v0.3.0 "$out") || { fail "files failed"; return 0; }
+  [[ $(command ls "$out" </dev/null | tr '\n' ' ') == "notes.json notes.md " ]] || fail "files wrote: $(command ls "$out" </dev/null)"
+  grep -qxF "## What's Changed" "$out/notes.md" || fail "notes.md is not the draft body"
+  [[ $(jq -r '.releases[0].version' "$out/notes.json") == 0.3.0 ]] || fail "notes.json: $(cat "$out/notes.json")"
+  [[ $(grep -c generate-notes "$WORK/gh-log") == 1 ]] || fail "generate-notes called $(grep -c generate-notes "$WORK/gh-log") times"
+}
+
+test_a_window_with_only_new_contributors_has_no_groups_and_does_not_fail() {
+  { rel v0.2.0 2026-11-20 $'## What\'s Changed\n### New Contributors\n* @someone made their first contribution in https://github.com/PhongGuy/dbento/pull/9\n\n## Downloads\n'; } | listing
+  local out
+  out=$(run_json v0.3.0 "$GENERATED") || { fail "json failed on a New Contributors-only window"; return 0; }
+  [[ $(jq -c '.releases[1] | [.version, .groups]' <<<"$out") == '["0.2.0",[]]' ]] || fail "v0.2.0: $(jq -c '.releases[1]' <<<"$out")"
+}
+
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do "$t"; done
 if ((FAILS > 0)); then echo "$FAILS failure(s)" >&2; exit 1; fi
 echo "release notes json tests passed"

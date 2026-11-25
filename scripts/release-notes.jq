@@ -23,7 +23,8 @@ def bullet: capture("^[*+-] (?<b>.*)$").b;
 def sentinel: . == "- No pull requests were merged for this release.";
 
 # The grouped items between "## What's Changed" and the next "## Downloads"; [] when either is missing.
-# Fails when the window has real bullets but none survives stripping, so empty notes never ship.
+# Fails when the window has real bullets outside New Contributors but none survives stripping, so empty notes
+# never ship.
 def groups($lines):
   [$lines | to_entries[] | select(.value | test("^## What.s Changed\\s*$")) | .key][0] as $start
   | ($start // -1) as $s
@@ -31,8 +32,7 @@ def groups($lines):
   | if $start == null or $end == null then []
     else
       $lines[$start + 1:$end] as $window
-      | ($window | map(select(test("^[*+-] ") and (sentinel | not))) | length) as $bullets
-      | (reduce $window[] as $line ({groups: [], drop: false};
+      | (reduce $window[] as $line ({groups: [], drop: false, bullets: 0};
           if $line | test("^### ") then
             ($line | sub("^### "; "") | sub("\\s+$"; "")) as $title
             | if $title == "New Contributors" then .drop = true
@@ -40,12 +40,14 @@ def groups($lines):
           elif .drop or ($line | sentinel) or ($line | test("^\\*\\*Full Changelog\\*\\*")) then .
           elif $line | test("^[*+-] ") then
             ($line | bullet | strip_item) as $item
+            | .bullets += 1
             | if $item.text == "" then .
               elif .groups == [] then .groups = [{kind: "other", title: "Other changes", items: [$item]}]
               else .groups[-1].items += [$item] end
           else . end)
-        | .groups | map(select(.items != []))) as $groups
-      | if $bullets > 0 and $groups == [] then error("release-notes: a What's Changed section has bullets but no items")
+        | {bullets, groups: (.groups | map(select(.items != [])))}) as $parsed
+      | $parsed.groups as $groups
+      | if $parsed.bullets > 0 and $groups == [] then error("release-notes: a What's Changed section has bullets but no items")
         else $groups end
     end;
 
@@ -69,15 +71,31 @@ def published($tag):
   | map(select($top == null or .key < $top))
   | sort_by(.key) | reverse;
 
-# The whole document: the newest entry from $body, then every earlier published release, each entry's
-# previous pointing at the next older one. Input is gh's --slurp listing, an array of pages.
+# The whole document: the newest entry from $body, then at most 19 earlier published releases. Each entry's
+# previous is the next older release in the full list, so the cut at 20 never rewrites it.
+# Input is gh's --slurp listing, an array of pages.
 def notes($tag; $date; $body):
   (add // [] | published($tag)) as $older
   | ([{tag_name: $tag, date: $date, body: $body}]
      + ($older | map({tag_name, date: (.published_at // "" | .[0:10]), body: (.body // "")}))) as $all
   | {schema: 1,
-     releases: [range(0; $all | length) as $i
+     releases: [range(0; [$all | length, 20] | min) as $i
        | $all[$i] as $r
        | entry($r.tag_name | ltrimstr("v");
                ($all[$i + 1].tag_name // null | if . == null then null else ltrimstr("v") end);
                $r.date; $r.body)]};
+
+# A size candidate of a whole document: keep the newest $keep entries, then remove the newest entry's last $cut
+# items (dropping groups left empty) and end its last group with a count of them.
+def shrink($keep; $cut):
+  .releases |= .[:$keep]
+  | if $cut == 0 then .
+    else .releases[0] |= (
+      [.groups | to_entries[] | .key as $g | .value.items[] | {g: $g, item: .}] as $flat
+      | $flat[:([($flat | length) - $cut, 0] | max)] as $kept
+      | {text: "...and \($cut) more"} as $more
+      | .groups = [.groups | to_entries[] | .key as $g
+          | .value + {items: [$kept[] | select(.g == $g) | .item]} | select(.items != [])]
+      | if .groups == [] then .groups = [{kind: "other", title: "Other changes", items: [$more]}]
+        else .groups[-1].items += [$more] end)
+    end;
