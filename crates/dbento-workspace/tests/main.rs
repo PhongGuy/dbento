@@ -12,6 +12,7 @@ mod folder_path;
 mod same_login;
 mod secret_errors;
 mod session_binding;
+mod ssh;
 mod workspace;
 mod workspace_extra;
 mod workspace_files;

@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Secret;
+#[cfg(feature = "s3")]
+use crate::aws::AwsCancel;
 use crate::capacity::CapacityUnits;
 #[cfg(feature = "duckdb")]
 use crate::duckdb::{DuckCancel, DuckDriver};
@@ -34,11 +35,18 @@ use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
 use crate::rowedit::{
     EditTarget, EditValue, Param, mysql_edit_target, pg_edit_target, sqlite_edit_target,
 };
+#[cfg(feature = "s3")]
+use crate::s3::driver::{NO_TABLES as S3_NO_TABLES, S3Session};
+use crate::s3::{
+    DownloadError, DownloadOptions, DownloadReport, ObjectBrowseError, ObjectChunk, ObjectKey,
+    ObjectList, ObjectMeta, ObjectPage, ObjectRead,
+};
 use crate::sqlite::{SqliteCancel, SqliteDriver};
 #[cfg(feature = "surrealdb")]
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
 use crate::value::{ColumnInfo, ResultBatch};
 use crate::workspace::{ConnectionConfig, Engine, Workspace};
+use crate::{Secret, SshSecrets};
 
 /// Per-session overrides of the connection's configuration.
 #[non_exhaustive]
@@ -50,6 +58,8 @@ pub struct SessionOptions {
     pub statement_timeout: Option<Duration>,
     /// Decrypts an encrypted `tls_key`; see [`crate::resolve_key_passphrase`].
     pub key_passphrase: Option<Secret>,
+    /// The SSH password and key passphrase; see [`crate::resolve_ssh_secrets`].
+    pub ssh_secrets: SshSecrets,
     /// The session runs only SQL that Dbento generated, so a database may enforce read-only
     /// by transaction alone. Other engines ignore it.
     pub trusted_sql: bool,
@@ -522,6 +532,8 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) conn: &'a ConnectionConfig,
     pub(crate) secret: Option<&'a Secret>,
     pub(crate) key_passphrase: Option<&'a Secret>,
+    #[allow(dead_code)] // the SSH connect in session.rs reads it
+    pub(crate) ssh_secrets: SshSecrets,
     pub(crate) read_only: bool,
     pub(crate) timeout: Option<Duration>,
     /// See [`SessionOptions::trusted_sql`]. Only DuckDB reads it.
@@ -579,6 +591,8 @@ enum SessionInner {
     Redis(RedisSession),
     #[cfg(feature = "dynamodb")]
     Dynamodb(DynamoSession),
+    #[cfg(feature = "s3")]
+    S3(S3Session),
 }
 
 enum ScriptInner {
@@ -597,6 +611,8 @@ enum ScriptInner {
     Redis(Box<<RedisSession as Driver>::Script>),
     #[cfg(feature = "dynamodb")]
     Dynamodb(Box<<DynamoSession as Driver>::Script>),
+    #[cfg(feature = "s3")]
+    S3(Box<<S3Session as Driver>::Script>),
 }
 
 enum StreamInner {
@@ -615,6 +631,8 @@ enum StreamInner {
     Redis(Box<<RedisSession as Driver>::Stream>),
     #[cfg(feature = "dynamodb")]
     Dynamodb(Box<<DynamoSession as Driver>::Stream>),
+    #[cfg(feature = "s3")]
+    S3(Box<<S3Session as Driver>::Stream>),
 }
 
 /// Opens a session on `conn`. `secret` is the resolved password, if the engine needs one.
@@ -634,6 +652,7 @@ pub async fn connect(
         conn,
         secret: secret.as_ref(),
         key_passphrase: opts.key_passphrase.as_ref(),
+        ssh_secrets: opts.ssh_secrets,
         read_only,
         timeout,
         #[cfg(feature = "duckdb")]
@@ -740,8 +759,18 @@ pub async fn connect(
         Engine::Dynamodb => Err(ConnectError::Unsupported {
             reason: "DynamoDB is not available in this build".to_owned(),
         }),
+        #[cfg(feature = "s3")]
+        Engine::S3 => {
+            let d = Box::pin(S3Session::connect(params)).await?;
+            let level = d.read_only_level(read_only);
+            Ok(Session {
+                inner: SessionInner::S3(d),
+                read_only: level,
+            })
+        }
+        #[cfg(not(feature = "s3"))]
         Engine::S3 => Err(ConnectError::Unsupported {
-            reason: "S3 is not available in this build yet".to_owned(),
+            reason: "S3 is not available in this build".to_owned(),
         }),
     }
 }
@@ -806,6 +835,8 @@ impl Session {
             SessionInner::Redis(_) => Engine::Redis,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Engine::Dynamodb,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Engine::S3,
         }
     }
 
@@ -826,6 +857,8 @@ impl Session {
             SessionInner::Redis(d) => Some(d.server()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => Some(d.server()),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => None,
         }
     }
 
@@ -868,6 +901,8 @@ impl Session {
             SessionInner::Redis(d) => d.settings_changed(),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => false,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => false,
         }
     }
 
@@ -894,6 +929,8 @@ impl Session {
             SessionInner::Redis(_) => None,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => None,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => None,
         }
     }
 
@@ -919,6 +956,8 @@ impl Session {
             SessionInner::Redis(d) => ScriptInner::Redis(Box::new(d.start_script(sql))),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => ScriptInner::Dynamodb(Box::new(d.start_script(sql))),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => ScriptInner::S3(Box::new(d.start_script(sql))),
         };
         Script {
             inner,
@@ -943,6 +982,8 @@ impl Session {
             SessionInner::Redis(d) => d.cancel_handle(),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => d.cancel_handle(),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.cancel_handle(),
         }
     }
 
@@ -969,6 +1010,8 @@ impl Session {
             SessionInner::Redis(d) => d.settle().await,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => d.settle().await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.settle().await,
         }
     }
 
@@ -992,6 +1035,8 @@ impl Session {
             SessionInner::Redis(d) => d.closed().await,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => std::future::pending().await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => std::future::pending().await,
         }
     }
 
@@ -1012,6 +1057,8 @@ impl Session {
             SessionInner::Redis(d) => d.schemas().await,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => d.schemas().await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => Box::pin(d.schemas()).await,
         }
     }
 
@@ -1036,6 +1083,8 @@ impl Session {
             SessionInner::Redis(_) => Err(unsupported()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Err(unsupported()),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Err(unsupported()),
         }
     }
 
@@ -1056,6 +1105,8 @@ impl Session {
             SessionInner::Redis(d) => d.relations(schema).await,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => Box::pin(d.relations(schema)).await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => Box::pin(d.relations(schema)).await,
         }
     }
 
@@ -1076,6 +1127,8 @@ impl Session {
             SessionInner::Redis(d) => d.columns(rel).await,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => Box::pin(d.columns(rel)).await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => Box::pin(d.columns(rel)).await,
         }
     }
 
@@ -1105,6 +1158,8 @@ impl Session {
             SessionInner::Redis(_) => unsupported,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => Box::pin(d.key_columns(rel)).await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => unsupported,
         }
     }
 
@@ -1136,6 +1191,10 @@ impl Session {
             }),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Err(IntrospectError::Unsupported {
+                what: "edit targets",
+            }),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
         }
@@ -1179,6 +1238,12 @@ impl Session {
             }
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Vec::new(),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => {
+                return Err(IntrospectError::Unsupported {
+                    what: "foreign keys",
+                });
+            }
         };
         sort_keys(&mut keys);
         Ok(keys)
@@ -1205,6 +1270,8 @@ impl Session {
             SessionInner::Redis(_) => Err(IntrospectError::Unsupported { what: NO_TABLES }),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => Box::pin(d.relation_objects(rel)).await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Err(IntrospectError::Unsupported { what: S3_NO_TABLES }),
         }
     }
 
@@ -1228,6 +1295,8 @@ impl Session {
             SessionInner::Redis(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Ok(SchemaObjects::new(Vec::new(), Vec::new(), false)),
         }
     }
 
@@ -1256,6 +1325,10 @@ impl Session {
             SessionInner::Dynamodb(_) => Err(DefinitionError::Unsupported {
                 what: object.label(),
             }),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Err(DefinitionError::Unsupported {
+                what: object.label(),
+            }),
         }
     }
 
@@ -1269,6 +1342,60 @@ impl Session {
             _ => Err(KeyBrowseError::Unsupported {
                 reason: "only a Redis session has keys to browse".to_owned(),
             }),
+        }
+    }
+
+    /// One page of a bucket listing. S3 only; every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads it
+    pub async fn list_objects(
+        &mut self,
+        req: &ObjectList,
+    ) -> Result<ObjectPage, ObjectBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.list_objects(req).await,
+            _ => Err(no_objects()),
+        }
+    }
+
+    /// What a HEAD says about one object. S3 only; every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads it
+    pub async fn stat_object(&mut self, key: &ObjectKey) -> Result<ObjectMeta, ObjectBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.stat_object(key).await,
+            _ => Err(no_objects()),
+        }
+    }
+
+    /// An object's first bytes, at most [`crate::MAX_READ_BYTES`]. S3 only; every other engine
+    /// is `Unsupported`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads it
+    pub async fn read_object(
+        &mut self,
+        req: &ObjectRead,
+    ) -> Result<ObjectChunk, ObjectBrowseError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.read_object(req).await,
+            _ => Err(no_objects()),
+        }
+    }
+
+    /// Downloads `key` to `dest` through a hidden sibling partial file, renamed into place only
+    /// once complete; the session's cancel handle stops it. S3 only; every other engine is
+    /// `Remote(Unsupported)`.
+    #[cfg_attr(not(feature = "s3"), allow(unused_variables))] // only S3 reads them
+    pub async fn download_object(
+        &mut self,
+        key: &ObjectKey,
+        dest: &Path,
+        opts: DownloadOptions,
+    ) -> Result<DownloadReport, DownloadError> {
+        match &mut self.inner {
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.download_object(key, dest, &opts).await,
+            _ => Err(DownloadError::Remote(no_objects())),
         }
     }
 
@@ -1364,6 +1491,8 @@ impl Session {
             SessionInner::Redis(_) => Ok(vec![None; columns.len()]),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Ok(vec![None; columns.len()]),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Ok(vec![None; columns.len()]),
         }
     }
 
@@ -1477,6 +1606,8 @@ impl Session {
             SessionInner::Redis(_) => Err(bound_unsupported()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Err(bound_unsupported()),
         }
     }
 
@@ -1511,6 +1642,8 @@ impl Session {
             SessionInner::Redis(_) => Err(bound_unsupported()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Err(bound_unsupported()),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Err(bound_unsupported()),
         }
     }
 
@@ -1532,6 +1665,8 @@ impl Session {
             SessionInner::Redis(_) => Ok(Vec::new()),
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(_) => Ok(Vec::new()),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Ok(Vec::new()),
         }
     }
 
@@ -1557,6 +1692,8 @@ impl Session {
             SessionInner::Redis(d) => d.close().await,
             #[cfg(feature = "dynamodb")]
             SessionInner::Dynamodb(d) => d.close().await,
+            #[cfg(feature = "s3")]
+            SessionInner::S3(d) => d.close().await,
         }
     }
 }
@@ -1586,6 +1723,8 @@ impl Script<'_> {
             ScriptInner::Redis(s) => RedisSession::prepare_next(s).await?,
             #[cfg(feature = "dynamodb")]
             ScriptInner::Dynamodb(s) => DynamoSession::prepare_next(s).await?,
+            #[cfg(feature = "s3")]
+            ScriptInner::S3(s) => S3Session::prepare_next(s).await?,
         };
         Some(prepared.map(|prepared| Pending {
             script: &mut self.inner,
@@ -1629,6 +1768,8 @@ impl<'a> Pending<'a> {
             ScriptInner::Redis(s) => RedisSession::is_last(s).await,
             #[cfg(feature = "dynamodb")]
             ScriptInner::Dynamodb(s) => DynamoSession::is_last(s).await,
+            #[cfg(feature = "s3")]
+            ScriptInner::S3(s) => S3Session::is_last(s).await,
         }
     }
 
@@ -1678,6 +1819,11 @@ impl<'a> Pending<'a> {
             ScriptInner::Dynamodb(s) => {
                 let (columns, stream) = Box::pin(DynamoSession::execute(s, limits)).await?;
                 (columns, StreamInner::Dynamodb(Box::new(stream)))
+            }
+            #[cfg(feature = "s3")]
+            ScriptInner::S3(s) => {
+                let (columns, stream) = Box::pin(S3Session::execute(s, limits)).await?;
+                (columns, StreamInner::S3(Box::new(stream)))
             }
         };
         Ok(ResultStream {
@@ -1731,6 +1877,8 @@ impl ResultStream<'_> {
             // layout query depth of any caller that holds this future inline.
             #[cfg(feature = "dynamodb")]
             StreamInner::Dynamodb(s) => Box::pin(DynamoSession::next_event(s)).await,
+            #[cfg(feature = "s3")]
+            StreamInner::S3(s) => Box::pin(S3Session::next_event(s)).await,
         };
         let item = match item {
             Ok(i) => i,
@@ -1780,6 +1928,8 @@ impl ResultStream<'_> {
             StreamInner::Redis(s) => RedisSession::extend(s, more)?,
             #[cfg(feature = "dynamodb")]
             StreamInner::Dynamodb(s) => DynamoSession::extend(s, more)?,
+            #[cfg(feature = "s3")]
+            StreamInner::S3(s) => S3Session::extend(s, more)?,
         }
         self.outcome = None;
         Ok(())
@@ -1811,6 +1961,8 @@ enum CancelInner {
     Redis(Arc<RedisCancel>),
     #[cfg(feature = "dynamodb")]
     Dynamodb(Arc<DynamoCancel>),
+    #[cfg(feature = "s3")]
+    S3(Arc<AwsCancel>),
 }
 
 impl CancelHandle {
@@ -1873,6 +2025,13 @@ impl CancelHandle {
         }
     }
 
+    #[cfg(feature = "s3")]
+    pub(crate) fn s3(cancel: Arc<AwsCancel>) -> Self {
+        CancelHandle {
+            inner: CancelInner::S3(cancel),
+        }
+    }
+
     /// Best effort; never blocks. A Postgres cancel runs on the runtime that opened the
     /// session, so once that runtime has shut down this does nothing.
     pub fn cancel(&self) {
@@ -1891,6 +2050,8 @@ impl CancelHandle {
             CancelInner::Redis(c) => c.cancel(),
             #[cfg(feature = "dynamodb")]
             CancelInner::Dynamodb(c) => c.cancel(),
+            #[cfg(feature = "s3")]
+            CancelInner::S3(c) => c.cancel(),
         }
     }
 }
@@ -1900,6 +2061,12 @@ impl CancelHandle {
 fn bound_unsupported() -> ExecuteError {
     ExecuteError::Unsupported {
         reason: "bound statements are not built for this engine yet".to_owned(),
+    }
+}
+
+fn no_objects() -> ObjectBrowseError {
+    ObjectBrowseError::Unsupported {
+        reason: "only an S3 session has objects to browse".to_owned(),
     }
 }
 

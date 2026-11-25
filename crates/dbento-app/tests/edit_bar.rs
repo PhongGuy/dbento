@@ -96,6 +96,7 @@ fn save_asks_and_commit_applies_and_reloads(cx: &mut TestAppContext) {
         vec![Change::Update {
             key: RowKey::new(vec![("id".into(), EditValue::Text("1".into()))]),
             set: vec![("name".into(), EditValue::Text("z".into()))],
+            expected: vec![],
         }],
     )
     .unwrap();

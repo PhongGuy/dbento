@@ -264,20 +264,56 @@ fn cancel_drops_a_loading_target_and_interrupts_its_read(cx: &mut TestAppContext
     assert!(ev.borrow().is_empty(), "{:?}", ev.borrow());
 }
 
+/// A connected tab whose session has already read `t`, so the next statement on `t` prepares
+/// from its cached schema and waits on the file lock only once it executes.
+fn warmed(cx: &mut TestAppContext, fx: &support::Fx) -> Entity<TabModel> {
+    let m = model(cx, fx);
+    run_to_end(cx, &m, "SELECT count(*) FROM t");
+    m
+}
+
+/// Holds an exclusive lock on the fixture's file until dropped. The runner thread can run
+/// ahead of the test between two calls, so a script that reads `t` is held at that read
+/// until the test has said everything it means to say first.
+fn gate(fx: &support::Fx) -> rusqlite::Connection {
+    let c = rusqlite::Connection::open(fx.dir.path().join("data/app.db")).unwrap();
+    c.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    c
+}
+
+const SCRIPT: &str = "SELECT count(*) FROM t; INSERT INTO t VALUES (9, 'z')";
+
 #[gpui_kit::test]
 fn a_target_that_stops_a_script_starts_none_of_its_later_statements(cx: &mut TestAppContext) {
     let fx = fixture(T, "");
-    let m = model(cx, &fx);
-    m.update(cx, |m, cx| m.connect(cx));
-    wait_real(cx, "the session", |cx| {
-        m.read_with(cx, |m, _| m.read_only().is_some())
-    });
-    // Both land before the runner looks: a cancel fired this early is spent by the first
-    // statement's settle, so only a Stop keeps the INSERT from running.
+    let m = warmed(cx, &fx);
+    // Both land before the script's first statement can finish: a cancel fired this early
+    // is spent before that statement executes, so only a Stop keeps the INSERT from running.
+    let held = gate(&fx);
     m.update(cx, |m, cx| {
-        m.run("SELECT 1; INSERT INTO t VALUES (9, 'z')".into(), cx);
+        m.run(SCRIPT.into(), cx);
         m.load_target(RelationRef::new("main", "t"), cx);
     });
+    drop(held);
+    wait_real(cx, "the browse", |cx| {
+        m.read_with(cx, |m, _| m.browse().is_some())
+    });
+    assert_eq!(fx.count("SELECT count(*) FROM t"), 3);
+}
+
+#[gpui_kit::test]
+fn a_target_landing_while_a_script_executes_starts_none_of_its_later_statements(
+    cx: &mut TestAppContext,
+) {
+    let fx = fixture(T, "");
+    let m = warmed(cx, &fx);
+    let held = gate(&fx);
+    m.update(cx, |m, cx| m.run(SCRIPT.into(), cx));
+    wait_real(cx, "the first statement to execute", |cx| {
+        m.read_with(cx, |m, _| !m.results().is_empty())
+    });
+    m.update(cx, |m, cx| m.load_target(RelationRef::new("main", "t"), cx));
+    drop(held);
     wait_real(cx, "the browse", |cx| {
         m.read_with(cx, |m, _| m.browse().is_some())
     });

@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, bail};
 use dbento_core::{
     ConnectError, ConnectionConfig, KeychainStore, Secret, SecretError, SecretKey, SecretSource,
-    SecretStore, TimedStore, Workspace,
+    SecretStore, SshHome, TimedStore, Workspace, resolve_ssh,
 };
 
 /// The platform keychain, opened on first use so a SQLite run never touches it.
@@ -44,6 +44,17 @@ impl SecretStore for LazyKeychain {
     fn delete(&self, key: &SecretKey) -> Result<(), SecretError> {
         self.store()?.delete(key)
     }
+}
+
+/// The home whose `~/.ssh` resolves tunnels. Debug builds take `DBENTO_TEST_SSH_HOME` (user
+/// "tester") instead, so a subprocess test never reads the real `~/.ssh`.
+pub(crate) fn ssh_home() -> Option<SshHome> {
+    if cfg!(debug_assertions)
+        && let Some(dir) = std::env::var_os("DBENTO_TEST_SSH_HOME")
+    {
+        return Some(SshHome::new(dir, "tester"));
+    }
+    SshHome::from_env()
 }
 
 /// The keychain with a time limit, so a locked keychain cannot hang the command.
@@ -107,6 +118,101 @@ pub(crate) fn delete_key_passphrase(
 ) -> anyhow::Result<()> {
     store.delete(&key_passphrase_target(ws, name)?)?;
     Ok(())
+}
+
+/// The connection `name` when it has an `ssh` table, whose secrets can then be stored.
+pub(crate) fn ssh_connection<'w>(
+    ws: &'w Workspace,
+    name: &str,
+) -> anyhow::Result<&'w ConnectionConfig> {
+    let conn = ws.declared(name).ok_or_else(|| {
+        anyhow::anyhow!("no such connection in dbento.toml; see `dbento connections`")
+    })?;
+    if conn.ssh().is_none() {
+        bail!("connection {name:?} has no ssh table, so there is no SSH secret");
+    }
+    Ok(conn)
+}
+
+/// The `user@host:port` the SSH password of `name` is pinned to, resolved through `home`'s
+/// `~/.ssh/config`; a construct dbento cannot honour refuses, so nothing is stored blind.
+pub(crate) fn ssh_login(ws: &Workspace, name: &str, home: &SshHome) -> anyhow::Result<String> {
+    Ok(resolve_ssh(ssh_connection(ws, name)?, ws.dir(), home)?.login())
+}
+
+/// Stores `secret` as the SSH password of connection `name`, pinned to its resolved login.
+pub(crate) fn set_ssh_password(
+    ws: &Workspace,
+    name: &str,
+    home: &SshHome,
+    store: &dyn SecretStore,
+    secret: &Secret,
+) -> anyhow::Result<()> {
+    let login = ssh_login(ws, name, home)?;
+    store.set(&ssh_password_target(ws, name, &login)?, secret)?;
+    Ok(())
+}
+
+/// Removes the SSH password of connection `name`. When `~/.ssh/config` cannot be resolved, a
+/// dbento.toml that writes both `user` and `port` still names the login; otherwise nothing is
+/// touched and the error names the entry's account shape so it can be removed by hand.
+pub(crate) fn delete_ssh_password(
+    ws: &Workspace,
+    name: &str,
+    home: &SshHome,
+    store: &dyn SecretStore,
+) -> anyhow::Result<()> {
+    let conn = ssh_connection(ws, name)?;
+    let login = match resolve_ssh(conn, ws.dir(), home) {
+        Ok(resolved) => resolved.login(),
+        Err(e) => {
+            let ssh = conn.ssh().context("the connection has no ssh table")?;
+            match (ssh.user(), ssh.port()) {
+                (Some(user), Some(port)) => format!("{user}@{}:{port}", ssh.host()),
+                _ => bail!(
+                    "cannot locate the SSH password of {name:?}: {e}\nIts keychain entry is service `dbento`, account [{:?}, {:?}, \"ssh_password\", \"<user>@<host>:<port>\"]; set user and port in the connection's ssh table so dbento can find it",
+                    ws.dir().display().to_string(),
+                    conn.secret_owner()
+                ),
+            }
+        }
+    };
+    store.delete(&ssh_password_target(ws, name, &login)?)?;
+    Ok(())
+}
+
+/// Stores `secret` as the passphrase of the SSH `identity_file` of connection `name`.
+pub(crate) fn set_ssh_key_passphrase(
+    ws: &Workspace,
+    name: &str,
+    store: &dyn SecretStore,
+    secret: &Secret,
+) -> anyhow::Result<()> {
+    store.set(&ssh_key_passphrase_target(ws, name)?, secret)?;
+    Ok(())
+}
+
+/// Removes the stored SSH `identity_file` passphrase of connection `name`.
+pub(crate) fn delete_ssh_key_passphrase(
+    ws: &Workspace,
+    name: &str,
+    store: &dyn SecretStore,
+) -> anyhow::Result<()> {
+    store.delete(&ssh_key_passphrase_target(ws, name)?)?;
+    Ok(())
+}
+
+/// The SSH password key of connection `name` logging in as `login`.
+fn ssh_password_target(ws: &Workspace, name: &str, login: &str) -> anyhow::Result<SecretKey> {
+    ws.ssh_password_target(name, login)
+        .context("no such connection in dbento.toml; see `dbento connections`")
+}
+
+/// The SSH key passphrase key of connection `name`, refused without an `ssh` table.
+fn ssh_key_passphrase_target(ws: &Workspace, name: &str) -> anyhow::Result<SecretKey> {
+    ssh_connection(ws, name)?;
+    ws.ssh_key_passphrase_target(name)
+        .context("no such connection in dbento.toml; see `dbento connections`")
 }
 
 /// The password key of keychain connection `name`, from the declared-only target.
@@ -328,5 +434,133 @@ mod tests {
         }
         assert!(keychain_connection(&ws, "kc").is_ok());
         assert!(key_connection(&ws, "kc").is_ok());
+    }
+
+    const TUN: &str = "[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = \"none\"\n[connections.tun.ssh]\nhost = \"bastion\"\nuser = \"ops\"\n";
+
+    #[test]
+    fn ssh_secrets_have_their_own_slots_and_need_an_ssh_table() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dbento.toml"), format!("{TOML}{TUN}")).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        let home_dir = tempfile::tempdir().unwrap();
+        let home = dbento_core::SshHome::new(home_dir.path(), "tester");
+        let store = MemoryStore::new();
+        let pw = read_secret(&mut "sshpw\n".as_bytes()).unwrap();
+        let pp = read_secret(&mut "sshpp\n".as_bytes()).unwrap();
+        set_ssh_password(&ws, "tun", &home, &store, &pw).unwrap();
+        set_ssh_key_passphrase(&ws, "tun", &store, &pp).unwrap();
+        let conn = ws.declared("tun").unwrap();
+        let pw_key = SecretKey::ssh_password_for(&ws, conn, "ops@bastion:22");
+        let pp_key = SecretKey::ssh_key_passphrase_for(&ws, conn);
+        assert_eq!(store.get(&pw_key).unwrap().unwrap().expose(), "sshpw");
+        assert_eq!(store.get(&pp_key).unwrap().unwrap().expose(), "sshpp");
+        assert!(
+            store
+                .get(&SecretKey::for_connection(&ws, conn))
+                .unwrap()
+                .is_none()
+        );
+        delete_ssh_password(&ws, "tun", &home, &store).unwrap();
+        delete_ssh_key_passphrase(&ws, "tun", &store).unwrap();
+        assert!(store.get(&pw_key).unwrap().is_none());
+        assert!(store.get(&pp_key).unwrap().is_none());
+        // `Locked` panics on set and delete, so each refusal provably never touched the store.
+        for name in ["kc", "lite", "missing"] {
+            assert!(ssh_connection(&ws, name).is_err(), "{name}");
+            assert!(
+                set_ssh_password(&ws, name, &home, &Locked, &pw).is_err(),
+                "{name}"
+            );
+            assert!(
+                set_ssh_key_passphrase(&ws, name, &Locked, &pp).is_err(),
+                "{name}"
+            );
+            assert!(
+                delete_ssh_password(&ws, name, &home, &Locked).is_err(),
+                "{name}"
+            );
+            assert!(
+                delete_ssh_key_passphrase(&ws, name, &Locked).is_err(),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            ssh_connection(&ws, "kc").unwrap_err().to_string(),
+            "connection \"kc\" has no ssh table, so there is no SSH secret"
+        );
+        assert_eq!(
+            ssh_connection(&ws, "missing").unwrap_err().to_string(),
+            "no such connection in dbento.toml; see `dbento connections`"
+        );
+    }
+
+    /// A workspace holding `TOML` plus `tun_ssh` as tun's ssh table, and a home whose
+    /// `.ssh/config` sends `bastion` through a ProxyJump, so resolution always fails.
+    fn unresolvable(
+        tun_ssh: &str,
+    ) -> (
+        tempfile::TempDir,
+        Workspace,
+        tempfile::TempDir,
+        dbento_core::SshHome,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let tun = format!(
+            "[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.tun.ssh]\n{tun_ssh}"
+        );
+        std::fs::write(dir.path().join("dbento.toml"), format!("{TOML}{tun}")).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        let home_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home_dir.path().join(".ssh")).unwrap();
+        std::fs::write(
+            home_dir.path().join(".ssh/config"),
+            "Host bastion\n  ProxyJump hop\n",
+        )
+        .unwrap();
+        let home = dbento_core::SshHome::new(home_dir.path(), "tester");
+        (dir, ws, home_dir, home)
+    }
+
+    #[test]
+    fn delete_falls_back_to_a_complete_dbento_toml_login() {
+        let (_d, ws, _h, home) = unresolvable("host = \"bastion\"\nport = 2222\nuser = \"ops\"\n");
+        let store = MemoryStore::new();
+        let conn = ws.declared("tun").unwrap();
+        let key = SecretKey::ssh_password_for(&ws, conn, "ops@bastion:2222");
+        store.set(&key, &Secret::new("pw")).unwrap();
+        delete_ssh_password(&ws, "tun", &home, &store).unwrap();
+        assert!(store.get(&key).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_without_a_complete_login_names_the_entry_it_cannot_find() {
+        let (_d, ws, _h, home) = unresolvable("host = \"bastion\"\n");
+        let e = delete_ssh_password(&ws, "tun", &home, &Locked)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("ProxyJump"), "{e}");
+        assert!(
+            e.contains("\"ssh_password\""),
+            "the account shape is named: {e}"
+        );
+    }
+
+    #[test]
+    fn an_ssh_config_refusal_stops_the_password_before_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dbento.toml"), format!("{TOML}{TUN}")).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        let home_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home_dir.path().join(".ssh")).unwrap();
+        std::fs::write(
+            home_dir.path().join(".ssh/config"),
+            "Host bastion\n  ProxyJump hop\n",
+        )
+        .unwrap();
+        let home = dbento_core::SshHome::new(home_dir.path(), "tester");
+        let pw = read_secret(&mut "sshpw\n".as_bytes()).unwrap();
+        let e = set_ssh_password(&ws, "tun", &home, &Locked, &pw).unwrap_err();
+        assert!(e.to_string().contains("ProxyJump"), "{e}");
     }
 }

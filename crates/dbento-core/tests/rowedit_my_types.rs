@@ -99,6 +99,7 @@ async fn every_type_reads_back_and_writes_back_unchanged() {
         let back = Change::Update {
             key: row_key(&[("id", val("1"))]),
             set,
+            expected: vec![],
         };
         let applied = fx.apply_changes(&target, vec![back]).await.unwrap();
         assert_eq!(applied.affected(), 1, "{label}");
@@ -141,6 +142,7 @@ async fn each_key_type_matches_its_own_browse_text() {
             let change = Change::Update {
                 key: row_key(&[("k", edit_value(&cell))]),
                 set: pairs(&[("n", val("2"))]),
+                expected: vec![],
             };
             let applied = fx.apply_changes(&target, vec![change]).await;
             assert!(applied.is_ok(), "{label} {ty}: {cell:?} {applied:?}");
@@ -160,6 +162,7 @@ async fn a_zero_date_is_refused_by_mysql_and_kept_by_mariadb() {
         let change = Change::Update {
             key: row_key(&[("k", val("1"))]),
             set: pairs(&[("d", val("0000-00-00"))]),
+            expected: vec![],
         };
         let r = fx.apply_changes(&target, vec![change]).await;
         match fx.db.flavor() {

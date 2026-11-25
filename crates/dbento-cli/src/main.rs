@@ -3,6 +3,8 @@
 mod cell;
 mod confirm;
 mod csv;
+#[cfg(feature = "s3")]
+mod download;
 mod exec;
 mod import;
 mod interrupt;
@@ -21,6 +23,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use dbento_core::{Color, ConnectionConfig, Databases, Workspace};
 use serde::Serialize;
@@ -85,6 +88,9 @@ enum Command {
         #[command(flatten)]
         exec: exec::ExecArgs,
     },
+    /// Download one S3 object to a file, refusing to overwrite it unless `--force` is given.
+    #[cfg(feature = "s3")]
+    Download(download::DownloadArgs),
     /// Import connections and saved queries from another tool.
     Import {
         #[command(subcommand)]
@@ -124,6 +130,12 @@ enum SecretAction {
         /// Store the passphrase of the connection's encrypted `tls_key` instead of its password.
         #[arg(long)]
         tls_key: bool,
+        /// Store the password of the connection's SSH tunnel instead.
+        #[arg(long)]
+        ssh_password: bool,
+        /// Store the passphrase of the SSH tunnel's `identity_file` instead.
+        #[arg(long)]
+        ssh_key_passphrase: bool,
         /// The connection name from dbento.toml.
         conn: String,
         /// Caught only to refuse it: a secret is never taken from the command line.
@@ -135,6 +147,12 @@ enum SecretAction {
         /// Remove the stored `tls_key` passphrase instead of the password.
         #[arg(long)]
         tls_key: bool,
+        /// Remove the stored SSH tunnel password instead.
+        #[arg(long)]
+        ssh_password: bool,
+        /// Remove the stored SSH `identity_file` passphrase instead.
+        #[arg(long)]
+        ssh_key_passphrase: bool,
         /// The connection name from dbento.toml.
         conn: String,
     },
@@ -146,12 +164,73 @@ enum ListFormat {
     Json,
 }
 
-/// Opens exactly `flag` when given, else the nearest workspace above the working directory.
+/// Opens exactly `flag` when given, else the nearest workspace above the working directory,
+/// printing a warning for each ssh setting that will not travel to another machine.
 fn open_workspace(flag: Option<&Path>) -> anyhow::Result<Workspace> {
-    Ok(match flag {
+    let ws = match flag {
         Some(dir) => Workspace::open(dir)?,
         None => Workspace::discover(std::env::current_dir()?)?,
-    })
+    };
+    if let Some(home) = secret::ssh_home() {
+        for line in dbento_core::ssh_warnings(&ws, &home) {
+            eprintln!("warning: {line}");
+        }
+    }
+    Ok(ws)
+}
+
+/// Which of a connection's secrets `dbento secret` acts on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SecretSlot {
+    Password,
+    TlsKey,
+    SshPassword,
+    SshKeyPassphrase,
+}
+
+impl SecretSlot {
+    /// The slot the flags name, whether they lead or trail the connection name. At most one
+    /// flag is allowed, and any other trailing text is refused, since it may be a pasted secret.
+    fn from_flags(
+        tls_key: bool,
+        ssh_password: bool,
+        ssh_key_passphrase: bool,
+        extra: &[String],
+    ) -> anyhow::Result<SecretSlot> {
+        let mut named = Vec::new();
+        for (set, slot) in [
+            (tls_key, SecretSlot::TlsKey),
+            (ssh_password, SecretSlot::SshPassword),
+            (ssh_key_passphrase, SecretSlot::SshKeyPassphrase),
+        ] {
+            if set {
+                named.push(slot);
+            }
+        }
+        for arg in extra {
+            named.push(match arg.as_str() {
+                "--tls-key" => SecretSlot::TlsKey,
+                "--ssh-password" => SecretSlot::SshPassword,
+                "--ssh-key-passphrase" => SecretSlot::SshKeyPassphrase,
+                _ => anyhow::bail!(
+                    "the secret is read from a prompt or stdin, never from the command line"
+                ),
+            });
+        }
+        match named.as_slice() {
+            [] => Ok(SecretSlot::Password),
+            [slot] => Ok(*slot),
+            _ => anyhow::bail!(
+                "use at most one of --tls-key, --ssh-password and --ssh-key-passphrase"
+            ),
+        }
+    }
+}
+
+/// The SSH home, or an error when neither it nor the user name can be found.
+fn require_ssh_home() -> anyhow::Result<dbento_core::SshHome> {
+    secret::ssh_home()
+        .context("cannot find the home directory or user name for ~/.ssh; set $HOME and $USER")
 }
 
 #[derive(Serialize)]
@@ -275,6 +354,14 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
             }
             return exec::execute(&ws, &config, &sql, &exec).await;
         }
+        #[cfg(feature = "s3")]
+        Command::Download(args) => {
+            let ws = open_workspace(cli.workspace.as_deref())?;
+            let config = ws
+                .resolve(args.conn())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return download::download(&ws, &config, &args).await;
+        }
         Command::Import {
             source: ImportSource::Datagrip(args),
         } => return import::datagrip(cli.workspace.as_deref(), &args),
@@ -293,46 +380,93 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
             match action {
                 SecretAction::Set {
                     tls_key,
+                    ssh_password,
+                    ssh_key_passphrase,
                     conn,
                     extra,
                 } => {
-                    // The flag may also follow the name, where the trailing catch-all takes it.
-                    let tls_key = tls_key || extra == ["--tls-key"];
-                    if !extra.is_empty() && extra != ["--tls-key"] {
-                        anyhow::bail!(
-                            "the secret is read from a prompt or stdin, never from the command line"
-                        );
-                    }
+                    let slot =
+                        SecretSlot::from_flags(tls_key, ssh_password, ssh_key_passphrase, &extra)?;
                     // Refuse before prompting, so a bad connection never asks for a secret.
-                    let (what, label) = if tls_key {
-                        secret::key_connection(&ws, &conn)?;
-                        ("key passphrase", "Key passphrase")
-                    } else {
-                        secret::keychain_connection(&ws, &conn)?;
-                        ("secret", "Secret")
+                    let (what, prompt) = match slot {
+                        SecretSlot::Password => {
+                            secret::keychain_connection(&ws, &conn)?;
+                            ("secret", format!("Secret for '{conn}': "))
+                        }
+                        SecretSlot::TlsKey => {
+                            secret::key_connection(&ws, &conn)?;
+                            ("key passphrase", format!("Key passphrase for '{conn}': "))
+                        }
+                        SecretSlot::SshPassword => {
+                            secret::ssh_connection(&ws, &conn)?;
+                            let login = secret::ssh_login(&ws, &conn, &require_ssh_home()?)?;
+                            (
+                                "SSH password",
+                                format!("SSH password for '{conn}' ({login}): "),
+                            )
+                        }
+                        SecretSlot::SshKeyPassphrase => {
+                            secret::ssh_connection(&ws, &conn)?;
+                            (
+                                "SSH key passphrase",
+                                format!("SSH key passphrase for '{conn}': "),
+                            )
+                        }
                     };
                     let secret = if std::io::stdin().is_terminal() {
-                        let prompt = format!("{label} for '{conn}': ");
                         let typed = rpassword::prompt_password(prompt)?;
                         secret::read_secret(&mut typed.as_bytes())?
                     } else {
                         secret::read_secret(&mut std::io::stdin().lock())?
                     };
-                    if tls_key {
-                        secret::set_key_passphrase(&ws, &conn, &secret::store(), &secret)?;
-                    } else {
-                        secret::set(&ws, &conn, &secret::store(), &secret)?;
+                    let store = secret::store();
+                    match slot {
+                        SecretSlot::Password => secret::set(&ws, &conn, &store, &secret)?,
+                        SecretSlot::TlsKey => {
+                            secret::set_key_passphrase(&ws, &conn, &store, &secret)?;
+                        }
+                        SecretSlot::SshPassword => {
+                            let home = require_ssh_home()?;
+                            secret::set_ssh_password(&ws, &conn, &home, &store, &secret)?;
+                        }
+                        SecretSlot::SshKeyPassphrase => {
+                            secret::set_ssh_key_passphrase(&ws, &conn, &store, &secret)?;
+                        }
                     }
                     eprintln!("stored the {what} for '{conn}'");
                 }
-                SecretAction::Delete { tls_key, conn } => {
-                    if tls_key {
-                        secret::delete_key_passphrase(&ws, &conn, &secret::store())?;
-                        eprintln!("deleted the key passphrase for '{conn}'");
-                    } else {
-                        secret::delete(&ws, &conn, &secret::store())?;
-                        eprintln!("deleted the secret for '{conn}'");
-                    }
+                SecretAction::Delete {
+                    tls_key,
+                    ssh_password,
+                    ssh_key_passphrase,
+                    conn,
+                } => {
+                    let slot =
+                        SecretSlot::from_flags(tls_key, ssh_password, ssh_key_passphrase, &[])?;
+                    let store = secret::store();
+                    let what = match slot {
+                        SecretSlot::Password => {
+                            secret::delete(&ws, &conn, &store)?;
+                            "secret"
+                        }
+                        SecretSlot::TlsKey => {
+                            secret::delete_key_passphrase(&ws, &conn, &store)?;
+                            "key passphrase"
+                        }
+                        SecretSlot::SshPassword => {
+                            // The ssh table is checked first, so a direct connection's refusal
+                            // does not depend on finding a home.
+                            secret::ssh_connection(&ws, &conn)?;
+                            let home = require_ssh_home()?;
+                            secret::delete_ssh_password(&ws, &conn, &home, &store)?;
+                            "SSH password"
+                        }
+                        SecretSlot::SshKeyPassphrase => {
+                            secret::delete_ssh_key_passphrase(&ws, &conn, &store)?;
+                            "SSH key passphrase"
+                        }
+                    };
+                    eprintln!("deleted the {what} for '{conn}'");
                 }
             }
         }

@@ -101,3 +101,16 @@ fn a_long_device_name_stays_within_201_bytes() {
     assert!(name.starts_with("_CON."), "{name}");
     assert_eq!(name.len(), 201);
 }
+
+#[test]
+fn superscript_and_console_device_names_are_reserved_too() {
+    for name in ["COM¹", "lpt²", "COM³.txt", "CONIN$", "conout$.log"] {
+        let got = suggested_file_name(&format!("dir/{name}"));
+        assert_ne!(
+            got.to_ascii_lowercase(),
+            name.to_ascii_lowercase(),
+            "{name}"
+        );
+    }
+    assert_eq!(suggested_file_name("dir/COM10"), "COM10");
+}
