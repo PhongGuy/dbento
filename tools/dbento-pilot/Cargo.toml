@@ -13,7 +13,7 @@ publish = false
 dbento-app = { path = "../../crates/dbento-app" }
 dbento-core = { path = "../../crates/dbento-core", features = ["team"] }
 gpui-kit = "=0.11.0"
-gpui-pilot-host = { git = "https://github.com/PhongGuy/gpui-pilot", tag = "v0.7.0" }
+gpui-pilot-host = { git = "https://github.com/PhongGuy/gpui-pilot", tag = "v0.8.0" }
 anyhow = "1"
 
 [dev-dependencies]
@@ -23,7 +23,7 @@ serde_json = "1"
 toml = "1"
 tempfile = "3"
 png = "0.18"
-dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb"] }
+dbento-testkit = { path = "../../crates/dbento-testkit", features = ["duckdb", "mongodb", "redis", "dynamodb", "s3"] }
 minisign = "=0.10.0"
 base64 = "0.23"
 

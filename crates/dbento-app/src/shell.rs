@@ -12,12 +12,12 @@ use std::time::Duration;
 
 use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
-    EditError, EditPlan, Engine, FolderPath, GrantState, LogoutError, ObjectRef, OpenError,
-    RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey,
+    EditError, EditPlan, Engine, FolderPath, GrantState, LogoutError, ObjectKey, ObjectRef,
+    OpenError, RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError, SecretKey,
     SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem,
-    WorkspaceWatcher, WriteError, connect, move_secret, plan_edit, resolve_key_passphrase,
-    resolve_secret, secret_env_var, secret_renames, seen_text, seen_workspace, team_logout,
-    tls_key_is_encrypted,
+    WorkspaceWatcher, WriteError, connect, display_key, move_secret, plan_edit,
+    resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames, seen_text,
+    seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted,
 };
 use futures_util::future::{Either, join, join_all, select};
 use gpui_kit::assets::IconName;
@@ -56,6 +56,9 @@ use crate::connection_dialog::{
     ConnectionForm, ConnectionFormEvent, ErrorAt, FORM_WIDTH, Field, TestState,
 };
 use crate::definition_panel::{DefinitionPanel, DefinitionPanelEvent};
+use crate::downloads::{
+    DownloadRequest, Downloads, download_dir, downloads_strip, replace_existing,
+};
 use crate::drafts::{DraftSlot, Drafts};
 use crate::history::HistoryLog;
 use crate::history_panel::{HistoryPanel, HistoryPanelEvent};
@@ -76,7 +79,7 @@ use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
 use crate::rename_secret::{
-    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, stays_line, still_renamed,
 };
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
@@ -399,6 +402,13 @@ pub struct Shell {
     // Sessions of closed tabs, each drained off the main thread until it ends; a window close
     // waits for the unfinished ones too, taking their tasks but leaving the flags counted.
     closings: Vec<(Arc<AtomicBool>, Option<Task<()>>)>,
+    // The window's object downloads, which outlive the tabs that started them.
+    downloads: Entity<Downloads>,
+    // The folder the last download went to, where the next save dialog opens.
+    last_download_dir: Option<PathBuf>,
+    // Stands in for the platform downloads folder when set, so a test reads no user folder.
+    download_folder: Option<PathBuf>,
+    _downloads_notify: Subscription,
     // The open workspace's team sync, when the folder is bound and team mode is installed,
     // and the observation that redraws the window when its status changes.
     team: Option<(Entity<TeamSession>, [Subscription; 2])>,
@@ -585,7 +595,13 @@ impl Shell {
                 this.tab_recency.commit();
             }
         });
+        let downloads = cx.new(|_| Downloads::new());
+        let downloads_notify = cx.observe(&downloads, |_, _, cx| cx.notify());
         let mut shell = Shell {
+            downloads,
+            last_download_dir: None,
+            download_folder: None,
+            _downloads_notify: downloads_notify,
             services,
             history_log,
             history_panel: None,
@@ -672,9 +688,9 @@ impl Shell {
 
     /// Whether the window may close now. Every tab's draft is written first; when any cannot
     /// be, it asks, answering false; Close then continues below, Keep open cancels. The first
-    /// request with tabs or a catalog session closes them all, shows "closing sessions" when
-    /// there is a tab, answers false, and removes the window once every closing resolves or
-    /// `QUIT_CAP` passes. With neither, or on a second request, it answers true. Another
+    /// request with tabs, a catalog session or a running download closes them all, shows
+    /// "closing sessions" when there is a tab, answers false, and removes the window once every
+    /// closing resolves or `QUIT_CAP` passes. With neither, or on a second request, it answers true. Another
     /// discard question on screen is withdrawn as if answered Keep; while its own question is
     /// on screen it answers false and asks nothing.
     pub fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -694,8 +710,9 @@ impl Shell {
             let lost = self.flush_drafts(cx);
             let staged = self.staged_total(cx);
             let running = running_titles(self.tabs.iter(), cx);
-            if lost > 0 || staged > 0 || !running.is_empty() {
-                self.ask_close(lost, staged, &running, window, cx);
+            let fetching = self.downloads.read(cx).running();
+            if lost > 0 || staged > 0 || !running.is_empty() || !fetching.is_empty() {
+                self.ask_close(lost, staged, &running, &fetching, window, cx);
                 return false;
             }
         }
@@ -708,7 +725,10 @@ impl Shell {
             .as_ref()
             .map(|s| s.update(cx, |s, _| s.close_catalogs()))
             .unwrap_or_default();
-        if self.tabs.is_empty() && catalogs.is_empty() && self.pending_closings() == 0 {
+        let fetching = !self.downloads.read(cx).running().is_empty();
+        let downloads = self.downloads.update(cx, |d, cx| d.close_all(cx));
+        if self.tabs.is_empty() && catalogs.is_empty() && self.pending_closings() == 0 && !fetching
+        {
             return true;
         }
         self.closing = true;
@@ -729,7 +749,8 @@ impl Shell {
         let sessions = async move {
             let catalogs = join_all(catalogs.into_iter().map(CatalogClosing::wait));
             let tabs = join_all(tabs.into_iter().map(Closing::wait));
-            drop(join(join(tabs, catalogs), join_all(earlier)).await);
+            let sessions = join(join(tabs, catalogs), join_all(earlier));
+            drop(join(sessions, downloads.wait()).await);
         };
         // The cap bounds the wait whatever a session does, so a quit never hangs.
         let cap = cx.background_executor().timer(QUIT_CAP);
@@ -757,6 +778,7 @@ impl Shell {
         lost: usize,
         staged: usize,
         running: &[String],
+        downloads: &[String],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -769,6 +791,7 @@ impl Shell {
         };
         parts.extend((lost > 0).then(|| lost_detail(lost)));
         parts.extend(running_detail("Closing Dbento", running));
+        parts.extend(download_detail("Closing Dbento", downloads));
         let detail = parts.join(" ");
         self.ask_once(
             title,
@@ -1513,6 +1536,7 @@ impl Shell {
             connection: conn.name().to_owned(),
             store: Arc::clone(&self.services.store),
             env: Arc::clone(&self.services.env),
+            ssh: self.services.ssh.clone(),
         };
         let log = self.history_log.clone();
         let model = cx.new(|_| {
@@ -1570,6 +1594,10 @@ impl Shell {
                 }
             }
             QueryTabEvent::DiskCompare => this.ask_disk_compare(tab, window, cx),
+            QueryTabEvent::DownloadObject(key) => {
+                let name = tab.read(cx).model().read(cx).spec().connection.clone();
+                this.download_object(&name, key.clone(), window, cx);
+            }
         });
         // A filter, a sort or leaving the browse changes what the session restores.
         let browse = cx.subscribe(&model, |this, _, e: &BrowseEvent, cx| {
@@ -1595,7 +1623,9 @@ impl Shell {
         // A key tab hides its editor, so opening the connection skips it for one that has one.
         let newest = self.tabs.iter().rposition(|tab| {
             let model = tab.read(cx).model().read(cx);
-            model.spec().connection == name && model.key_view().is_none()
+            model.spec().connection == name
+                && model.key_view().is_none()
+                && model.object_view().is_none()
         });
         match newest {
             Some(tab) => self.activate(tab, window, cx),
@@ -1873,6 +1903,111 @@ impl Shell {
             // Opening recorded the tab while it still had a draft; it now has none to keep.
             self.save_session(cx);
         }
+    }
+
+    /// Opens S3 object `key` in `bucket` of declared connection `connection` in a tab of its
+    /// own, reading its metadata and preview at once.
+    pub fn open_object(
+        &mut self,
+        connection: usize,
+        bucket: String,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(name) = self.declared_name(connection) else {
+            return;
+        };
+        if let Some(tab) = self.open_unnumbered(&name, window, cx) {
+            tab.update(cx, |t, cx| t.open_object(bucket, key, cx));
+            // Opening recorded the tab while it still had a draft; it now has none to keep.
+            self.save_session(cx);
+        }
+    }
+
+    /// Asks where to save S3 object `key` of connection `connection`, then downloads it there
+    /// on a session of its own; the dialog opens where the last download went.
+    pub fn download_object(
+        &mut self,
+        connection: &str,
+        key: ObjectKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        if self.closing {
+            return;
+        }
+        if ws.connection(connection).is_none() {
+            let text = format!(
+                "Cannot download {}: connection {connection} is not in this workspace.",
+                suggested_file_name(&key.key)
+            );
+            let notice = ui::Notice {
+                text,
+                kind: ui::NoticeKind::Warning,
+            };
+            ui::notice(window, cx, notice);
+            return;
+        }
+        let spec = RunnerSpec {
+            workspace: ws,
+            connection: connection.to_owned(),
+            store: Arc::clone(&self.services.store),
+            env: Arc::clone(&self.services.env),
+            ssh: self.services.ssh.clone(),
+        };
+        // A set folder stands in for the platform ones, which are then never read.
+        let (downloads, home) = match &self.download_folder {
+            Some(dir) => (Some(dir.clone()), None),
+            None => (dirs::download_dir(), dirs::home_dir()),
+        };
+        let dir = download_dir(
+            self.last_download_dir.as_deref(),
+            downloads.as_deref(),
+            home.as_deref(),
+        )
+        .unwrap_or_else(std::env::temp_dir);
+        let reply = cx.prompt_for_new_path(&dir, Some(&suggested_file_name(&key.key)));
+        cx.spawn_in(window, async move |this, cx| {
+            let dest = match reply.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(e)) => {
+                    let notice = ui::Notice {
+                        text: format!("Download failed: {e}"),
+                        kind: ui::NoticeKind::Warning,
+                    };
+                    let _ = this.update_in(cx, |_, window, cx| ui::notice(window, cx, notice));
+                    return;
+                }
+            };
+            let _ = this.update(cx, |shell, cx| {
+                if shell.closing {
+                    return;
+                }
+                // The dialog asked before choosing a file that exists, so only then is it replaced.
+                let force = replace_existing(&dest);
+                shell.last_download_dir = dest.parent().map(Path::to_path_buf);
+                let mut req = DownloadRequest::new(spec, key, dest);
+                req.force = force;
+                shell.downloads.update(cx, |d, cx| d.start(req, cx));
+            });
+        })
+        .detach();
+    }
+
+    /// Sets the folder the first save dialog opens in, in place of the platform's downloads
+    /// folder.
+    pub fn set_download_folder(&mut self, dir: PathBuf) {
+        self.download_folder = Some(dir);
+    }
+
+    /// The window's downloads.
+    pub fn downloads(&self) -> &Entity<Downloads> {
+        &self.downloads
     }
 
     // Opens a new tab on `connection` holding `rel`'s select and loads it (`load_relation`);
@@ -2791,6 +2926,14 @@ impl Shell {
                             db,
                             key,
                         } => this.open_key(*connection, *db, key.clone(), window, cx),
+                        SidebarEvent::OpenObject {
+                            connection,
+                            bucket,
+                            key,
+                        } => this.open_object(*connection, bucket.clone(), key.clone(), window, cx),
+                        SidebarEvent::DownloadObject { connection, key } => {
+                            this.download_object(connection, key.clone(), window, cx)
+                        }
                         SidebarEvent::Definition {
                             connection,
                             object,
@@ -3328,7 +3471,8 @@ impl Shell {
         let jobs: Vec<_> = secret_renames(old, &new)
             .into_iter()
             .map(|r| {
-                let keys = rename_keys(old, &new, &r);
+                // Resolving the SSH login reads ~/.ssh/config here, once per tunnelled rename.
+                let keys = rename_keys(old, &new, &r, self.services.ssh.home());
                 let asked = new.declared(&r.to).cloned();
                 (r, keys, asked)
             })
@@ -3364,6 +3508,10 @@ impl Shell {
                     }
                 };
                 lines.extend(env_lines(&r, held, &env));
+                // Said before the movable check, so a rename that moves nothing still says it.
+                if let Some(line) = stays_line(&r, &keys, held) {
+                    let _ = cx.update(|w, cx| show_error("SSH password not moved", line, w, cx));
+                }
                 if !held.movable() {
                     continue;
                 }
@@ -4359,9 +4507,10 @@ impl Shell {
         // A rename is not applied yet, so stored secrets are still under the old name.
         let renamed = previous.filter(|p| *p != name);
         form.update(cx, |f, cx| f.set_test(TestState::Testing, cx));
-        let (store, env) = (
+        let (store, env, ssh) = (
             Arc::clone(&self.services.store),
             Arc::clone(&self.services.env),
+            self.services.ssh.clone(),
         );
         let attempt = crate::tokio_bridge::spawn(cx, async move {
             let plan = Arc::new(plan);
@@ -4397,6 +4546,7 @@ impl Shell {
                 Some(typed) => Some(typed),
                 None => {
                     let (plan, name) = (Arc::clone(&plan), name.clone());
+                    let (store, env) = (Arc::clone(&store), Arc::clone(&env));
                     tokio::task::spawn_blocking(move || {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
@@ -4414,13 +4564,25 @@ impl Shell {
                     .map_err(|e| e.to_string())??
                 }
             };
+            // SSH secrets are read under the name as typed, never a rename's old name.
+            let ssh_secrets = {
+                let (plan, name, ssh) = (Arc::clone(&plan), name.clone(), ssh.clone());
+                tokio::task::spawn_blocking(move || {
+                    let ws = plan.workspace();
+                    let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
+                    crate::ssh::ssh_secrets(ws, &conn, &ssh, &*store, &*env)
+                })
+                .await
+                .map_err(|e| e.to_string())??
+            };
             let ws = plan.workspace();
             let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
             let mut options = SessionOptions::default();
             options.key_passphrase = key_passphrase;
+            ssh.apply(&mut options, ssh_secrets);
             let mut session = connect(ws, &conn, secret, options)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| crate::ssh::connect_message(&name, &e, &ssh))?;
             // The server's databases fill Database's suggestions. The session connected, so a
             // list the engine lacks, the login may not read or the server stalls on leaves the
             // test passed.
@@ -5837,6 +5999,7 @@ impl Render for Shell {
                         .child(content),
                 ),
             )
+            .children(downloads_strip(&self.downloads, cx))
             .child(self.foot(cx))
     }
 }
@@ -6512,6 +6675,19 @@ fn running_detail(action: &str, titles: &[String]) -> Option<String> {
     Some(format!(
         "{action} cancels the statements running in {names}."
     ))
+}
+
+// The question's sentence naming the downloads `action` cancels, each file name escaped: both
+// of two, else the first and a count of the rest.
+fn download_detail(action: &str, files: &[String]) -> Option<String> {
+    let shown: Vec<String> = files.iter().map(|f| display_key(f)).collect();
+    let text = match shown.as_slice() {
+        [] => return None,
+        [one] => format!("the download of {one}"),
+        [a, b] => format!("the downloads of {a} and {b}"),
+        [a, rest @ ..] => format!("the download of {a} and {} others", rest.len()),
+    };
+    Some(format!("{action} cancels {text}."))
 }
 
 // The close-tab question's sentence for edited SQL: a saved query names its file.

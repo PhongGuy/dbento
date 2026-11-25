@@ -58,24 +58,32 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
         Some(true),
         "Tab skips the engine row"
     );
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 0);
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 0);
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 1, "Right picks SQLite");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 10),
+        1,
+        "Right picks SQLite"
+    );
     assert!(
         support::present(cx, o.win, "conn-path"),
         "the SQLite form shows"
     );
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 2, "Right picks MySQL");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 2, "Right picks MySQL");
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 3, "Right picks DuckDB");
+    assert_eq!(
+        chosen(cx, o.win, "conn-engine", 10),
+        3,
+        "Right picks DuckDB"
+    );
     assert!(
         support::present(cx, o.win, "conn-path"),
         "the DuckDB form shows"
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         4,
         "Right picks SQL Server"
     );
@@ -85,7 +93,7 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         5,
         "Right picks SurrealDB"
     );
@@ -95,7 +103,7 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         6,
         "Right picks MongoDB"
     );
@@ -104,14 +112,14 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
         "the MongoDB form shows"
     );
     press(cx, o.win, "right");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 7, "Right picks Redis");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 7, "Right picks Redis");
     assert!(
         support::present(cx, o.win, "conn-database") && !support::present(cx, o.win, "conn-uri"),
         "the Redis form shows"
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         8,
         "Right picks DynamoDB"
     );
@@ -120,18 +128,28 @@ fn tab_from_the_name_lands_on_the_engine_row_and_the_arrows_pick(cx: &mut TestAp
         "the DynamoDB form shows"
     );
     press(cx, o.win, "right");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 9, "Right picks S3");
+    assert!(
+        support::present(cx, o.win, "conn-buckets"),
+        "the S3 form shows"
+    );
+    press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
-        8,
+        chosen(cx, o.win, "conn-engine", 10),
+        9,
         "Right stops at the end"
     );
-    for want in [7, 6, 5, 4, 3, 2, 1, 0] {
+    for want in [8, 7, 6, 5, 4, 3, 2, 1, 0] {
         press(cx, o.win, "left");
-        assert_eq!(chosen(cx, o.win, "conn-engine", 9), want, "Left steps back");
+        assert_eq!(
+            chosen(cx, o.win, "conn-engine", 10),
+            want,
+            "Left steps back"
+        );
     }
     press(cx, o.win, "left");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         0,
         "Left stops at the start"
     );
@@ -174,38 +192,38 @@ fn up_and_down_move_the_engine_cards_by_a_row(cx: &mut TestAppContext) {
         Some(true),
         "a click focuses the grid"
     );
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 1);
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 1);
     press(cx, o.win, "down");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         4,
         "Down picks SQL Server"
     );
     press(cx, o.win, "down");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 7, "Down picks Redis");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 7, "Down picks Redis");
     press(cx, o.win, "down");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         7,
         "Down stays on the last row"
     );
     press(cx, o.win, "up");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         4,
         "Up moves a row back"
     );
     press(cx, o.win, "right");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         5,
         "Right steps one card"
     );
     press(cx, o.win, "up");
-    assert_eq!(chosen(cx, o.win, "conn-engine", 9), 2, "Up picks MySQL");
+    assert_eq!(chosen(cx, o.win, "conn-engine", 10), 2, "Up picks MySQL");
     press(cx, o.win, "up");
     assert_eq!(
-        chosen(cx, o.win, "conn-engine", 9),
+        chosen(cx, o.win, "conn-engine", 10),
         2,
         "Up stays on the first row"
     );

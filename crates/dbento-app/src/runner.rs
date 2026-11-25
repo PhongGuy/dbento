@@ -12,24 +12,33 @@ use dbento_core::message::{
     GroupInfo, MessageError, MessagePage, MessageRead, Position, SourceRef,
 };
 use dbento_core::{
-    CancelHandle, ColumnInfo, ConnectionConfig, EditTarget, Engine, ExecuteError, ExplainMode,
-    ExplainOutput, ExplainRequest, ForeignKey, KeyBrowseError, KeyRead, KeyValuePage, Limits,
-    OnTruncate, Outcome, ReadOnlyEnforcement, RelationRef, ResultBatch, ResultStream, Secret,
-    SecretError, SecretStore, Session, SessionOptions, TruncatedBy, Unguarded, ValueCursor,
-    Workspace, Writes, connect, resolve_key_passphrase, resolve_secret, secret_hint,
+    CancelHandle, ColumnInfo, ConnectError, ConnectionConfig, EditTarget, Engine, ExecuteError,
+    ExplainMode, ExplainOutput, ExplainRequest, ForeignKey, KeyBrowseError, KeyRead, KeyValuePage,
+    Limits, ObjectKey, ObjectRead, OnTruncate, Outcome, ReadOnlyEnforcement, RelationRef,
+    ResultBatch, ResultStream, Secret, SecretError, SecretStore, Session, SessionOptions,
+    SshSecrets, TruncatedBy, Unguarded, ValueCursor, Workspace, Writes, connect,
+    resolve_key_passphrase, resolve_secret, secret_hint,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
 use crate::app::EnvLookup;
+use crate::host_keys::{Gated, with_trust};
 use crate::link::{ConnectCause, ConnectFailure, fix_hint};
+use crate::object_view::{PREVIEW_BYTES, Preview};
+use crate::objects::{ObjectItem, object_error_text};
 use crate::parks::{self, Parked};
+use crate::ssh::{self, not_trusted, ssh_hint, unknown_key};
 
 /// The answer to `Command::SourceColumns`: per column, the relation's column it reads.
 pub type SourceColumns = Result<Vec<Option<String>>, String>;
 
 /// The answer to `Command::ReadKey`: one page of the key's value, or why there is none.
 pub type KeyValueAnswer = Result<KeyValuePage, String>;
+
+/// The answer to `Command::ReadObject`: the object's metadata and first bytes, or why not,
+/// with keys escaped.
+pub type ObjectAnswer = Result<(ObjectItem, Preview), String>;
 
 /// One stream call on the tab's session.
 #[derive(Debug)]
@@ -107,6 +116,12 @@ pub enum Command {
     Messages {
         call: MessageCall,
         reply: Sender<MessageAnswer>,
+    },
+    /// Read an S3 object's HEAD and its first `PREVIEW_BYTES` and send them on `reply`,
+    /// connecting first. Sent only while no run is active; a run in progress drops it.
+    ReadObject {
+        key: ObjectKey,
+        reply: Sender<ObjectAnswer>,
     },
 }
 
@@ -316,6 +331,7 @@ pub struct RunnerSpec {
     pub connection: String,
     pub store: Arc<dyn SecretStore>,
     pub env: EnvLookup,
+    pub ssh: crate::ssh::SshContext,
 }
 
 /// The runner's session, shared with [`guarded`] so a panic can still close it.
@@ -460,6 +476,16 @@ async fn run(
             next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
+        if let Command::ReadObject { key, reply } = command {
+            ensure_open(&spec, &mut session, &events).await;
+            let result = match session.as_mut() {
+                Some(s) => read_preview(s, key).await,
+                None => Err("not connected".to_owned()),
+            };
+            let _ = reply.try_send(result);
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
+            continue;
+        }
         if let Command::Messages { call, reply } = command {
             ensure_open(&spec, &mut session, &events).await;
             let result = match session.as_mut() {
@@ -487,7 +513,8 @@ async fn run(
             | Command::Target { .. }
             | Command::SourceColumns { .. }
             | Command::ReadKey { .. }
-            | Command::Messages { .. } => {
+            | Command::Messages { .. }
+            | Command::ReadObject { .. } => {
                 next = idle(&inbox, &mut session, &mut lost_settings, &events).await; // a Confirm, Skip, Pull or Fetch nobody waits for
                 continue;
             }
@@ -555,6 +582,19 @@ async fn run(
     {
         log::warn!("closing the session: {e}");
     }
+}
+
+/// The object's HEAD, then its first `PREVIEW_BYTES`, errors as the app shows them.
+async fn read_preview(s: &mut Session, key: ObjectKey) -> ObjectAnswer {
+    let meta = s
+        .stat_object(&key)
+        .await
+        .map_err(|e| object_error_text(&e))?;
+    let chunk = s
+        .read_object(&ObjectRead::new(key, PREVIEW_BYTES))
+        .await
+        .map_err(|e| object_error_text(&e))?;
+    Ok((meta.into(), chunk.into()))
 }
 
 /// One page of `read`; a key whose kind changed since the read began answers WRONGTYPE, and
@@ -742,19 +782,30 @@ async fn open_or_fix(
         conn,
         secret,
         key_passphrase,
+        ssh_secrets,
         hint,
     } = resolve_or_fix(spec).await?;
     let mut options = options(&conn);
     options.key_passphrase = key_passphrase;
-    connect(&spec.workspace, &conn, secret, options)
+    spec.ssh.apply(&mut options, ssh_secrets);
+    // An unknown host key waits on the app's one question for that server, then retries once.
+    let attempt = || connect(&spec.workspace, &conn, secret.clone(), options.clone());
+    let unknown = |e: &ConnectError| unknown_key(&spec.connection, e);
+    with_trust(&spec.ssh.gate, unknown, attempt)
         .await
-        .map_err(|e| {
-            let fix = fix_hint(ConnectCause::Connect(&e));
-            let message = match hint {
-                Some(h) => format!("{e}\nhint: {h}"),
-                None => e.to_string(),
-            };
-            ConnectFailure::new(message, fix)
+        .map_err(|g| match g {
+            Gated::Failed(e) => {
+                let fix = fix_hint(ConnectCause::Connect(&e))
+                    .or_else(|| ssh_hint(&spec.connection, &e, &spec.ssh));
+                let message = match &hint {
+                    Some(h) => format!("{e}\nhint: {h}"),
+                    None => e.to_string(),
+                };
+                ConnectFailure::new(message, fix)
+            }
+            Gated::NotTrusted { host, port, answer } => {
+                not_trusted(&spec.connection, &host, port, answer)
+            }
         })
 }
 
@@ -763,6 +814,8 @@ pub(crate) struct Resolved {
     pub(crate) conn: ConnectionConfig,
     pub(crate) secret: Option<Secret>,
     pub(crate) key_passphrase: Option<Secret>,
+    /// The SSH password and key passphrase; empty without an ssh table.
+    pub(crate) ssh_secrets: SshSecrets,
     /// Where a missing secret would come from; `None` when one was found.
     pub(crate) hint: Option<String>,
 }
@@ -776,38 +829,38 @@ pub(crate) async fn resolve(spec: &RunnerSpec) -> Result<Resolved, String> {
 /// `resolve`, whose failure also carries `fix_hint`'s fix for a secret that could not be read.
 async fn resolve_or_fix(spec: &RunnerSpec) -> Result<Resolved, ConnectFailure> {
     let plain = |message: String| ConnectFailure::new(message, None);
-    let missing = || {
-        plain(format!(
-            "no connection `{}` in dbento.toml",
-            spec.connection
-        ))
-    };
-    let (ws, store, env, name) = (
+    let (ws, store, env, name, ssh) = (
         Arc::clone(&spec.workspace),
         Arc::clone(&spec.store),
         Arc::clone(&spec.env),
         spec.connection.clone(),
+        spec.ssh.clone(),
     );
+    let secret_failure =
+        |e: SecretError| ConnectFailure::new(e.to_string(), fix_hint(ConnectCause::Secret(&e)));
     tokio::task::spawn_blocking(move || {
-        ws.connection(&name).map(|conn| {
-            let secret = resolve_secret(&ws, &conn, &*store, &|v| env(v))?;
-            let key_passphrase = resolve_key_passphrase(&ws, &conn, &*store, &|v| env(v))?;
-            let hint = match secret {
-                None => secret_hint(&ws, &conn, &*store),
-                Some(_) => None,
-            };
-            Ok::<_, SecretError>(Resolved {
-                conn: conn.into_owned(),
-                secret,
-                key_passphrase,
-                hint,
-            })
+        let conn = ws
+            .connection(&name)
+            .ok_or_else(|| plain(format!("no connection `{name}` in dbento.toml")))?;
+        let secret = resolve_secret(&ws, &conn, &*store, &|v| env(v)).map_err(secret_failure)?;
+        let key_passphrase =
+            resolve_key_passphrase(&ws, &conn, &*store, &|v| env(v)).map_err(secret_failure)?;
+        let ssh_secrets =
+            ssh::ssh_secrets(&ws, &conn, &ssh, &*store, &|v| env(v)).map_err(plain)?;
+        let hint = match secret {
+            None => secret_hint(&ws, &conn, &*store),
+            Some(_) => None,
+        };
+        Ok(Resolved {
+            conn: conn.into_owned(),
+            secret,
+            key_passphrase,
+            ssh_secrets,
+            hint,
         })
     })
     .await
     .map_err(|_| plain("the secret lookup stopped".to_owned()))?
-    .ok_or_else(missing)?
-    .map_err(|e| ConnectFailure::new(e.to_string(), fix_hint(ConnectCause::Secret(&e))))
 }
 
 /// The registry key of the SQLite file `spec`'s connection opens; None for Postgres.
@@ -905,7 +958,8 @@ impl Ctx<'_> {
                 | Command::Target { .. }
                 | Command::SourceColumns { .. }
                 | Command::ReadKey { .. }
-                | Command::Messages { .. } => {}
+                | Command::Messages { .. }
+                | Command::ReadObject { .. } => {}
             }
         }
     }
@@ -1197,7 +1251,8 @@ fn cut_by(command: Command, run_id: u64) -> Option<Flow> {
         | Command::Target { .. }
         | Command::SourceColumns { .. }
         | Command::ReadKey { .. }
-        | Command::Messages { .. } => None,
+        | Command::Messages { .. }
+        | Command::ReadObject { .. } => None,
     }
 }
 
@@ -1432,7 +1487,8 @@ async fn at_cap(
         | Command::Target { .. }
         | Command::SourceColumns { .. }
         | Command::ReadKey { .. }
-        | Command::Messages { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
+        | Command::Messages { .. }
+        | Command::ReadObject { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
     }
 }
 

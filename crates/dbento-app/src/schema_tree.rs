@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use dbento_core::{
     ColumnMeta, ConnectionConfig, ConstraintInfo, ConstraintKind, Databases, DefinitionKind,
-    Engine, FormatOptions, IndexInfo, ObjectRef, QueryLanguage, RELATION_CAP, RelationKind,
-    RelationList, RelationObjects, RelationRef, RoutineKind, SchemaInfo, SchemaObjects,
-    TriggerState, TypeKind, Workspace, format_sql, quote_ident,
+    Engine, FormatOptions, IndexInfo, ObjectCursor, ObjectRef, QueryLanguage, RELATION_CAP,
+    RelationKind, RelationList, RelationObjects, RelationRef, RoutineKind, SchemaInfo,
+    SchemaObjects, TriggerState, TypeKind, Workspace, display_key as display_object_key,
+    format_sql, quote_ident,
 };
 use gpui_kit::App;
 
@@ -17,6 +18,7 @@ use crate::keymap::{OpenSelected, keys_for};
 use crate::keys::{KeyFilter, KeyItem, KeyToken, display_key, filter_text, key_levels};
 use crate::labels::{MenuEntry, group_digits};
 use crate::link::LinkState;
+use crate::objects::{ObjectEntry, ObjectItem, segment_label};
 use crate::redis_completion::RedisDoc;
 
 /// A group of schema objects under a relation (the first four) or a schema (the last two).
@@ -93,6 +95,15 @@ pub enum NodeKey {
         /// The folder's full prefix, ending in `:`.
         prefix: Vec<u8>,
     },
+    /// A `/` prefix of an S3 bucket; lists its own level when opened.
+    Prefix {
+        /// The connection name.
+        conn: String,
+        /// The bucket.
+        bucket: String,
+        /// The prefix's full raw key, ending in `/`.
+        prefix: String,
+    },
 }
 
 /// What a row shows.
@@ -116,7 +127,7 @@ pub enum RowKind {
     /// An object group such as "indexes".
     Group(ObjectGroup),
     /// One schema object.
-    Object {
+    SchemaObject {
         /// The group it is listed in.
         group: ObjectGroup,
         /// What a definition load asks for.
@@ -146,8 +157,15 @@ pub enum RowKind {
     },
     /// One Redis key.
     Key(KeyItem),
-    /// Asks for the next page of a key listing.
+    /// Asks for the next page of a key or object listing.
     LoadMore,
+    /// A `/` prefix of an S3 bucket.
+    Prefix {
+        /// The prefix's full raw key, ending in `/`.
+        prefix: String,
+    },
+    /// One S3 object, its key raw.
+    Object(ObjectItem),
     /// A parent's database: a child connection, or `invalid` with why it cannot be one.
     Database {
         /// The resolve error of `parent/database`; None when the child connection exists.
@@ -217,7 +235,33 @@ struct KeyListing {
     more: More,
 }
 
-/// The next page of a key listing.
+/// One S3 level's listing: the pages loaded so far, the next page's state, and the prefixes
+/// already listed, since a later page may repeat one.
+struct ObjectListing {
+    entries: Vec<ObjectEntry>,
+    next: Option<ObjectCursor>,
+    more: More,
+    prefixes: HashSet<String>,
+}
+
+impl ObjectListing {
+    /// Appends `entries`, dropping each prefix listed before.
+    fn extend(&mut self, entries: Vec<ObjectEntry>) {
+        for e in entries {
+            if let ObjectEntry::Prefix(p) = &e
+                && !self.prefixes.insert(p.clone())
+            {
+                continue;
+            }
+            self.entries.push(e);
+        }
+    }
+}
+
+/// One S3 level: connection, bucket and prefix (empty for the bucket root).
+type ObjectLevel = (String, String, String);
+
+/// The next page of a key or object listing.
 enum More {
     Idle,
     Loading,
@@ -242,7 +286,8 @@ pub(crate) fn node_connection(key: &NodeKey) -> &str {
         | NodeKey::Relation { conn, .. }
         | NodeKey::RelationGroup { conn, .. }
         | NodeKey::SchemaGroup { conn, .. }
-        | NodeKey::KeyFolder { conn, .. } => conn,
+        | NodeKey::KeyFolder { conn, .. }
+        | NodeKey::Prefix { conn, .. } => conn,
         NodeKey::Objects(inner) => node_connection(inner),
     }
 }
@@ -269,6 +314,9 @@ pub struct CatalogTree {
     key_filters: HashMap<(String, u32), KeyFilter>,
     keys: HashMap<(String, u32), Load<KeyListing>>,
     command_docs: HashMap<String, Load<Arc<[RedisDoc]>>>,
+    // Connections whose schema rows are S3 buckets, and each listed bucket level.
+    object_browsers: HashSet<String>,
+    objects: HashMap<ObjectLevel, Load<ObjectListing>>,
     generation: u64,
     // The oldest generation still current, for all connections and per refreshed one.
     floor: u64,
@@ -295,6 +343,14 @@ struct KeyWalk<'a> {
     /// Whether every page has loaded, so folder counts are whole.
     complete: bool,
     /// The DB row's aria path, `conn.db0`.
+    path: &'a str,
+}
+
+/// One bucket as [`CatalogTree::object_level_rows`] walks its levels.
+struct ObjectAt<'a> {
+    w: &'a Walk<'a>,
+    bucket: &'a str,
+    /// The bucket row's aria path, `conn.bucket`.
     path: &'a str,
 }
 
@@ -345,7 +401,8 @@ impl CatalogTree {
             | NodeKey::RelationGroup { .. }
             | NodeKey::SchemaGroup { .. }
             | NodeKey::Objects(_)
-            | NodeKey::KeyFolder { .. } => self.expanded.contains(key),
+            | NodeKey::KeyFolder { .. }
+            | NodeKey::Prefix { .. } => self.expanded.contains(key),
         }
     }
 
@@ -373,14 +430,31 @@ impl CatalogTree {
             NodeKey::Connection(_)
             | NodeKey::Schema { .. }
             | NodeKey::Kind { .. }
-            | NodeKey::Relation { .. } => {}
+            | NodeKey::Relation { .. }
+            | NodeKey::Prefix { .. } => {}
         }
         if self.expanded.remove(key) {
             return None;
         }
         self.expanded.insert(key.clone());
         self.drop_failed_objects(key);
-        let absent_or_failed = match key {
+        let absent_or_failed = match self.object_level(key) {
+            Some(level) => !matches!(
+                self.objects.get(&level),
+                Some(Load::Loading | Load::Ready(_))
+            ),
+            None => self.level_absent_or_failed(key),
+        };
+        if absent_or_failed {
+            self.start(key)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the catalog level under a node that is no S3 level is absent or failed.
+    fn level_absent_or_failed(&self, key: &NodeKey) -> bool {
+        match key {
             NodeKey::Connection(c) => match self.parent(c) {
                 Some(Parent::All) => {
                     !matches!(self.databases.get(c), Some(Load::Loading | Load::Ready(_)))
@@ -406,12 +480,8 @@ impl CatalogTree {
             | NodeKey::RelationGroup { .. }
             | NodeKey::SchemaGroup { .. }
             | NodeKey::Objects(_)
-            | NodeKey::KeyFolder { .. } => false,
-        };
-        if absent_or_failed {
-            self.start(key)
-        } else {
-            None
+            | NodeKey::KeyFolder { .. }
+            | NodeKey::Prefix { .. } => false,
         }
     }
 
@@ -501,6 +571,15 @@ impl CatalogTree {
 
     /// Reloads a failed level under `key`; None unless it failed.
     pub fn retry(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        // An S3 level lists again from its first page whichever page failed, since a failed
+        // continuation token may have expired.
+        if let Some(level) = self.object_level(key) {
+            return match self.objects.get(&level) {
+                Some(Load::Failed(_)) => self.start(key),
+                Some(Load::Ready(l)) if matches!(l.more, More::Failed(_)) => self.start(key),
+                None | Some(Load::Loading | Load::Ready(_)) => None,
+            };
+        }
         // A key listing fails either its first page, which starts over, or a later one,
         // which is asked again from the cursor it kept.
         if let NodeKey::Schema { conn, schema } = key
@@ -550,13 +629,15 @@ impl CatalogTree {
                     | NodeKey::RelationGroup { .. }
                     | NodeKey::SchemaGroup { .. }
                     | NodeKey::Objects(_)
-                    | NodeKey::KeyFolder { .. } => None,
+                    | NodeKey::KeyFolder { .. }
+                    | NodeKey::Prefix { .. } => None,
                 };
             }
             NodeKey::Kind { .. }
             | NodeKey::RelationGroup { .. }
             | NodeKey::SchemaGroup { .. }
-            | NodeKey::KeyFolder { .. } => false,
+            | NodeKey::KeyFolder { .. }
+            | NodeKey::Prefix { .. } => false,
         };
         if failed { self.start(key) } else { None }
     }
@@ -582,7 +663,8 @@ impl CatalogTree {
             | NodeKey::RelationGroup { .. }
             | NodeKey::SchemaGroup { .. }
             | NodeKey::Objects(_)
-            | NodeKey::KeyFolder { .. } => {}
+            | NodeKey::KeyFolder { .. }
+            | NodeKey::Prefix { .. } => {}
         }
     }
 
@@ -596,8 +678,11 @@ impl CatalogTree {
                 NodeKey::Relation { conn, rel } => {
                     Some((conn.clone(), relation_objects_query(rel)))
                 }
-                // A Redis DB holds keys, never types or routines.
-                NodeKey::Schema { conn, schema } if self.key_db(conn, schema).is_none() => {
+                // A Redis DB holds keys and an S3 bucket objects, never types or routines.
+                NodeKey::Schema { conn, schema }
+                    if self.key_db(conn, schema).is_none()
+                        && !self.object_browsers.contains(conn) =>
+                {
                     Some((conn.clone(), schema_objects_query(schema)))
                 }
                 NodeKey::Connection(_)
@@ -606,7 +691,8 @@ impl CatalogTree {
                 | NodeKey::RelationGroup { .. }
                 | NodeKey::SchemaGroup { .. }
                 | NodeKey::Objects(_)
-                | NodeKey::KeyFolder { .. } => None,
+                | NodeKey::KeyFolder { .. }
+                | NodeKey::Prefix { .. } => None,
             })
             .collect();
         queries
@@ -657,12 +743,21 @@ impl CatalogTree {
             | NodeKey::Kind { .. }
             | NodeKey::Relation { .. }
             | NodeKey::Objects(_)
-            | NodeKey::KeyFolder { .. } => 0,
+            | NodeKey::KeyFolder { .. }
+            | NodeKey::Prefix { .. } => 0,
         }
     }
 
     /// Marks the level under `key` loading and builds its request at the current generation.
     fn start(&mut self, key: &NodeKey) -> Option<LoadRequest> {
+        if let Some((conn, bucket, prefix)) = self.object_level(key) {
+            let query = CatalogQuery::Objects {
+                bucket,
+                prefix,
+                after: None,
+            };
+            return Some(self.begin(&conn, query));
+        }
         let (conn, query) = match key {
             NodeKey::Connection(c) => match self.parent(c) {
                 Some(Parent::All) => (c, CatalogQuery::Databases),
@@ -690,7 +785,8 @@ impl CatalogTree {
             | NodeKey::RelationGroup { .. }
             | NodeKey::SchemaGroup { .. }
             | NodeKey::Objects(_)
-            | NodeKey::KeyFolder { .. } => return None,
+            | NodeKey::KeyFolder { .. }
+            | NodeKey::Prefix { .. } => return None,
         };
         Some(self.begin(&conn.clone(), query))
     }
@@ -727,11 +823,20 @@ impl CatalogTree {
             CatalogQuery::CommandDocs => {
                 self.command_docs.insert(c, Load::Loading);
             }
-            // Counts and definitions are no tree level, and a later key page is tracked by
-            // its listing.
+            CatalogQuery::Objects {
+                bucket,
+                prefix,
+                after: None,
+            } => {
+                let level = (c, bucket.clone(), prefix.clone());
+                self.objects.insert(level, Load::Loading);
+            }
+            // Counts and definitions are no tree level, and a later key or object page is
+            // tracked by its listing.
             CatalogQuery::Count { .. }
             | CatalogQuery::Definition { .. }
-            | CatalogQuery::Keys { .. } => {}
+            | CatalogQuery::Keys { .. }
+            | CatalogQuery::Objects { .. } => {}
         }
         LoadRequest {
             conn: conn.to_owned(),
@@ -756,11 +861,12 @@ impl CatalogTree {
             CatalogQuery::SchemaObjects { schema } => {
                 self.schema_objects.contains_key(&(c, schema.clone()))
             }
-            // A count or definition is no level of the tree, and keys load only from their
-            // DB row, so there is nothing to ensure.
+            // A count or definition is no level of the tree, and keys and objects load only
+            // from their own rows, so there is nothing to ensure.
             CatalogQuery::Count { .. }
             | CatalogQuery::Definition { .. }
-            | CatalogQuery::Keys { .. } => true,
+            | CatalogQuery::Keys { .. }
+            | CatalogQuery::Objects { .. } => true,
         };
         (!present).then(|| self.begin(conn, query.clone()))
     }
@@ -786,7 +892,8 @@ impl CatalogTree {
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
                     | CatalogData::CommandDocs(_)
-                    | CatalogData::KeyColumns { .. } => None,
+                    | CatalogData::KeyColumns { .. }
+                    | CatalogData::Objects(_) => None,
                 });
                 self.schemas.insert(conn, load);
             }
@@ -802,7 +909,8 @@ impl CatalogTree {
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
                     | CatalogData::CommandDocs(_)
-                    | CatalogData::KeyColumns { .. } => None,
+                    | CatalogData::KeyColumns { .. }
+                    | CatalogData::Objects(_) => None,
                 });
                 self.databases.insert(conn, load);
             }
@@ -818,7 +926,8 @@ impl CatalogTree {
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
                     | CatalogData::CommandDocs(_)
-                    | CatalogData::KeyColumns { .. } => None,
+                    | CatalogData::KeyColumns { .. }
+                    | CatalogData::Objects(_) => None,
                 });
                 self.relations.insert((conn, schema), load);
             }
@@ -840,7 +949,8 @@ impl CatalogTree {
                     | CatalogData::SchemaObjects(_)
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
-                    | CatalogData::CommandDocs(_) => None,
+                    | CatalogData::CommandDocs(_)
+                    | CatalogData::Objects(_) => None,
                 });
                 let k = (conn, rel);
                 match reason {
@@ -861,7 +971,8 @@ impl CatalogTree {
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
                     | CatalogData::CommandDocs(_)
-                    | CatalogData::KeyColumns { .. } => None,
+                    | CatalogData::KeyColumns { .. }
+                    | CatalogData::Objects(_) => None,
                 });
                 self.relation_objects.insert((conn, rel), load);
             }
@@ -877,13 +988,19 @@ impl CatalogTree {
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
                     | CatalogData::CommandDocs(_)
-                    | CatalogData::KeyColumns { .. } => None,
+                    | CatalogData::KeyColumns { .. }
+                    | CatalogData::Objects(_) => None,
                 });
                 self.schema_objects.insert((conn, schema), load);
             }
             CatalogQuery::Keys { db, filter, after } => {
                 self.apply_keys((conn, db), &filter, after, result);
             }
+            CatalogQuery::Objects {
+                bucket,
+                prefix,
+                after,
+            } => self.apply_objects((conn, bucket, prefix), after, result),
             CatalogQuery::CommandDocs => {
                 let load = load_of(result, |d| match d {
                     CatalogData::CommandDocs(d) => Some(d),
@@ -896,7 +1013,8 @@ impl CatalogTree {
                     | CatalogData::SchemaObjects(_)
                     | CatalogData::Definition(_)
                     | CatalogData::Keys(_)
-                    | CatalogData::KeyColumns { .. } => None,
+                    | CatalogData::KeyColumns { .. }
+                    | CatalogData::Objects(_) => None,
                 });
                 self.command_docs.insert(conn, load);
             }
@@ -934,7 +1052,8 @@ impl CatalogTree {
                 | CatalogData::SchemaObjects(_)
                 | CatalogData::Definition(_)
                 | CatalogData::CommandDocs(_)
-                | CatalogData::KeyColumns { .. } => None,
+                | CatalogData::KeyColumns { .. }
+                | CatalogData::Objects(_) => None,
             });
             self.keys.insert(k, load);
             return;
@@ -954,6 +1073,126 @@ impl CatalogTree {
             Ok(_) => l.more = More::Failed("unexpected catalog reply".into()),
             Err(m) => l.more = More::Failed(m),
         }
+    }
+
+    /// Stores an object page: a first page replaces the level's listing, a later one appends
+    /// only while the listing still waits on that very cursor.
+    fn apply_objects(
+        &mut self,
+        level: ObjectLevel,
+        after: Option<ObjectCursor>,
+        result: Result<CatalogData, String>,
+    ) {
+        let Some(after) = after else {
+            let load = load_of(result, |d| match d {
+                CatalogData::Objects(b) => {
+                    let mut l = ObjectListing {
+                        entries: Vec::new(),
+                        next: b.next,
+                        more: More::Idle,
+                        prefixes: HashSet::new(),
+                    };
+                    l.extend(b.entries);
+                    Some(l)
+                }
+                CatalogData::Schemas(_)
+                | CatalogData::Databases(_)
+                | CatalogData::Relations(_)
+                | CatalogData::Columns(_)
+                | CatalogData::Count(_)
+                | CatalogData::RelationObjects(_)
+                | CatalogData::SchemaObjects(_)
+                | CatalogData::Definition(_)
+                | CatalogData::Keys(_)
+                | CatalogData::CommandDocs(_)
+                | CatalogData::KeyColumns { .. } => None,
+            });
+            self.objects.insert(level, load);
+            return;
+        };
+        let Some(Load::Ready(l)) = self.objects.get_mut(&level) else {
+            return;
+        };
+        if !matches!(l.more, More::Loading) || l.next.as_ref() != Some(&after) {
+            return;
+        }
+        match result {
+            Ok(CatalogData::Objects(b)) => {
+                l.extend(b.entries);
+                l.next = b.next;
+                l.more = More::Idle;
+            }
+            Ok(_) => l.more = More::Failed("unexpected catalog reply".into()),
+            Err(m) => l.more = More::Failed(m),
+        }
+    }
+
+    /// Marks `conn` as an S3 object browser: its schema rows are buckets listing prefixes
+    /// and objects.
+    pub fn set_object_browser(&mut self, conn: &str) {
+        self.object_browsers.insert(conn.to_owned());
+    }
+
+    /// Whether `conn` is marked as an S3 object browser.
+    pub fn is_object_browser(&self, conn: &str) -> bool {
+        self.object_browsers.contains(conn)
+    }
+
+    /// Unmarks every object browser, so a workspace install can mark its own afresh.
+    pub fn clear_object_browsers(&mut self) {
+        self.object_browsers.clear();
+    }
+
+    /// The S3 level `key` lists: a bucket row of an object browser at its root, or a prefix.
+    fn object_level(&self, key: &NodeKey) -> Option<ObjectLevel> {
+        match key {
+            NodeKey::Schema { conn, schema } if self.object_browsers.contains(conn) => {
+                Some((conn.clone(), schema.clone(), String::new()))
+            }
+            NodeKey::Prefix {
+                conn,
+                bucket,
+                prefix,
+            } => Some((conn.clone(), bucket.clone(), prefix.clone())),
+            NodeKey::Connection(_)
+            | NodeKey::Schema { .. }
+            | NodeKey::Kind { .. }
+            | NodeKey::Relation { .. }
+            | NodeKey::RelationGroup { .. }
+            | NodeKey::SchemaGroup { .. }
+            | NodeKey::Objects(_)
+            | NodeKey::KeyFolder { .. } => None,
+        }
+    }
+
+    /// Asks for the next page of the level under `prefix` in `bucket`; None unless the
+    /// listing is ready, has a next page and has none in flight, so a double click cannot
+    /// list one cursor twice.
+    pub fn load_more_objects(
+        &mut self,
+        conn: &str,
+        bucket: &str,
+        prefix: &str,
+    ) -> Option<LoadRequest> {
+        let generation = self.generation;
+        let level = (conn.to_owned(), bucket.to_owned(), prefix.to_owned());
+        let Some(Load::Ready(l)) = self.objects.get_mut(&level) else {
+            return None;
+        };
+        if matches!(l.more, More::Loading) {
+            return None;
+        }
+        let after = l.next.clone()?;
+        l.more = More::Loading;
+        Some(LoadRequest {
+            conn: conn.to_owned(),
+            generation,
+            query: CatalogQuery::Objects {
+                bucket: bucket.to_owned(),
+                prefix: prefix.to_owned(),
+                after: Some(after),
+            },
+        })
     }
 
     /// Marks `conn` as a key browser: its DB rows list keys instead of relations.
@@ -1053,6 +1292,7 @@ impl CatalogTree {
         self.columns.clear();
         self.sample_errors.clear();
         self.keys.clear();
+        self.objects.clear();
         self.command_docs.clear();
         let rels = std::mem::take(&mut self.relation_objects)
             .into_keys()
@@ -1100,6 +1340,7 @@ impl CatalogTree {
         names.extend(self.schema_objects.keys().map(|(c, _)| c.clone()));
         names.extend(self.keys.keys().map(|(c, _)| c.clone()));
         names.extend(self.key_filters.keys().map(|(c, _)| c.clone()));
+        names.extend(self.objects.keys().map(|(c, _, _)| c.clone()));
         for name in names {
             if ws.connection(&name).is_none() {
                 self.forget(&name);
@@ -1151,6 +1392,7 @@ impl CatalogTree {
         self.columns.retain(|(c, _), _| !ours(c));
         self.sample_errors.retain(|(c, _), _| !ours(c));
         self.keys.retain(|(c, _), _| !ours(c));
+        self.objects.retain(|(c, _, _), _| !ours(c));
         self.command_docs.retain(|c, _| !ours(c));
         let rels = self
             .relation_objects
@@ -1215,6 +1457,7 @@ impl CatalogTree {
         self.schema_objects.retain(|(c, _), _| c != conn);
         self.keys.retain(|(c, _), _| c != conn);
         self.key_filters.retain(|(c, _), _| c != conn);
+        self.objects.retain(|(c, _, _), _| c != conn);
         self.command_docs.remove(conn);
     }
 
@@ -1399,14 +1642,29 @@ impl CatalogTree {
                 conn: conn.to_owned(),
                 schema: s.name().to_owned(),
             };
-            let matched = w.matches(s.name());
+            let bucket = self.object_browsers.contains(conn);
+            // A bucket matches on the escaped name its row shows.
+            let matched = if bucket {
+                w.matches(&display_object_key(s.name()))
+            } else {
+                w.matches(s.name())
+            };
             let expanded = self.expanded.contains(&skey);
             let children = match self.key_db(conn, s.name()) {
                 _ if !expanded => Vec::new(),
                 Some(db) => self.key_rows(&w, db, s.name(), depth + 1, matched),
+                None if bucket => self.bucket_rows(&w, s.name(), &skey, depth + 1, matched),
                 None => self.schema_children(&w, s.name(), depth + 1, matched),
             };
             if matched || !children.is_empty() {
+                // A bucket's name is the store's text, so it shows escaped.
+                if bucket {
+                    let shown = display_object_key(s.name());
+                    let aria = format!("{conn}.{shown}");
+                    out.push(row(RowKind::Schema, skey, depth, expanded, shown, aria));
+                    out.extend(children);
+                    continue;
+                }
                 let aria = format!("{conn}.{}", s.name());
                 // A DB whose keys are filtered says so, since its listing hides the rest.
                 let label = match self
@@ -1598,6 +1856,109 @@ impl CatalogTree {
                 label,
                 aria,
             ));
+        }
+        out
+    }
+
+    /// The root level of one expanded bucket.
+    fn bucket_rows(
+        &self,
+        w: &Walk,
+        bucket: &str,
+        skey: &NodeKey,
+        depth: usize,
+        all: bool,
+    ) -> Vec<CatalogRow> {
+        let path = format!("{}.{}", w.conn, display_object_key(bucket));
+        let at = ObjectAt {
+            w,
+            bucket,
+            path: &path,
+        };
+        self.object_level_rows(&at, skey, "", &path, depth, all)
+    }
+
+    /// The status rows, prefixes, objects and Load more row of one listed S3 level, each
+    /// open prefix followed by its own level. `level_path` is the level's aria path.
+    fn object_level_rows(
+        &self,
+        at: &ObjectAt,
+        lkey: &NodeKey,
+        prefix: &str,
+        level_path: &str,
+        depth: usize,
+        all: bool,
+    ) -> Vec<CatalogRow> {
+        // As under a schema, only an error row shows whatever the filter, since Retry acts.
+        let show_status = all || at.w.filter.is_empty();
+        let status = |kind, label: String, tag: &str| {
+            let aria = format!("{level_path}:{tag}");
+            row(kind, lkey.clone(), depth, false, label, aria)
+        };
+        let failed =
+            |m: &String| status(RowKind::Failed { message: m.clone() }, m.clone(), "error");
+        let level = (
+            at.w.conn.to_owned(),
+            at.bucket.to_owned(),
+            prefix.to_owned(),
+        );
+        let listing = match self.objects.get(&level) {
+            None | Some(Load::Loading) if show_status => {
+                return vec![status(RowKind::Loading, "loading…".into(), "loading")];
+            }
+            None | Some(Load::Loading) => return Vec::new(),
+            Some(Load::Failed(m)) => return vec![failed(m)],
+            Some(Load::Ready(l)) => l,
+        };
+        let mut out = Vec::new();
+        if listing.entries.is_empty() && listing.next.is_none() && show_status {
+            out.push(status(RowKind::Empty, "no objects".into(), "empty"));
+        }
+        for entry in &listing.entries {
+            match entry {
+                ObjectEntry::Prefix(p) => {
+                    let pkey = NodeKey::Prefix {
+                        conn: at.w.conn.to_owned(),
+                        bucket: at.bucket.to_owned(),
+                        prefix: p.clone(),
+                    };
+                    let shown = display_object_key(p);
+                    let matched = all || at.w.matches(&shown);
+                    let expanded = self.expanded.contains(&pkey);
+                    let aria = format!("{}/{shown}", at.path);
+                    let kids = if expanded {
+                        self.object_level_rows(at, &pkey, p, &aria, depth + 1, matched)
+                    } else {
+                        Vec::new()
+                    };
+                    if matched || !kids.is_empty() {
+                        let kind = RowKind::Prefix { prefix: p.clone() };
+                        let label = segment_label(prefix, p);
+                        out.push(row(kind, pkey, depth, expanded, label, aria));
+                        out.extend(kids);
+                    }
+                }
+                ObjectEntry::Object(o) => {
+                    let full = display_object_key(&o.key);
+                    if !(all || at.w.matches(&full)) {
+                        continue;
+                    }
+                    let aria = format!("{}.{full}", at.path);
+                    let label = segment_label(prefix, &o.key);
+                    let kind = RowKind::Object(o.clone());
+                    out.push(row(kind, lkey.clone(), depth, false, label, aria));
+                }
+            }
+        }
+        match &listing.more {
+            More::Loading if show_status => {
+                out.push(status(RowKind::Loading, "loading…".into(), "loading"));
+            }
+            More::Failed(m) => out.push(failed(m)),
+            More::Idle if listing.next.is_some() && show_status => {
+                out.push(status(RowKind::LoadMore, "Load more".into(), "more"));
+            }
+            More::Idle | More::Loading => {}
         }
         out
     }
@@ -1850,7 +2211,7 @@ impl CatalogTree {
             .into_iter()
             .filter(|(name, ..)| all || w.matches(name))
             .map(|(name, detail, object)| {
-                let kind = RowKind::Object {
+                let kind = RowKind::SchemaObject {
                     group,
                     object,
                     detail,
@@ -2222,6 +2583,9 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
     let copy_qualified = entry("tree-menu-copy-qualified", "Copy qualified name");
     let refresh = entry("tree-menu-refresh", "Refresh");
     let view_definition = entry("tree-menu-view-definition", "View definition");
+    let open_listing = entry("tree-menu-open-listing", "Open listing");
+    let copy_key = entry("tree-menu-copy-key", "Copy key");
+    let copy_url = entry("tree-menu-copy-url", "Copy s3:// URL");
     // Counting, INSERT templates and qualified names are SQL text; a SurrealQL engine gets none.
     let language = engine.capabilities().language;
     let sql = language == QueryLanguage::Sql;
@@ -2279,6 +2643,10 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             entry("tree-menu-clear-key-filter", "Clear filter"),
             refresh,
         ],
+        // An S3 bucket opens as an `ls` listing rather than a blank query.
+        RowKind::Schema if engine.capabilities().object_browser => {
+            vec![open_listing, copy_name, refresh]
+        }
         RowKind::Schema => vec![new_query("New query"), copy_name, refresh],
         RowKind::Kind(_) => vec![new_query("New query"), refresh],
         RowKind::Column { .. } => [copy_name].into_iter().chain(copy_qualified).collect(),
@@ -2288,7 +2656,7 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         ],
         RowKind::Group(_) => vec![refresh],
         // A DynamoDB index keeps no definition but reads as its own PartiQL target.
-        RowKind::Object {
+        RowKind::SchemaObject {
             group: ObjectGroup::Indexes,
             ..
         } if engine == Engine::Dynamodb => vec![
@@ -2298,14 +2666,14 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             },
             copy_name,
         ],
-        RowKind::Object { object, .. } if offers_definition(engine, object) => vec![
+        RowKind::SchemaObject { object, .. } if offers_definition(engine, object) => vec![
             MenuEntry {
                 keys: keys_for(&OpenSelected, cx),
                 ..view_definition
             },
             copy_name,
         ],
-        RowKind::Object { .. } => vec![copy_name],
+        RowKind::SchemaObject { .. } => vec![copy_name],
         RowKind::Loading | RowKind::Empty | RowKind::Truncated => Vec::new(),
         RowKind::Key(_) => vec![
             MenuEntry {
@@ -2318,6 +2686,16 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         // A child connection's session items come from the connection menu, ahead of these.
         RowKind::Database { .. } => vec![copy_name],
         RowKind::LoadMore => Vec::new(),
+        RowKind::Prefix { .. } => vec![open_listing, copy_key, copy_url, refresh],
+        RowKind::Object(_) => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..entry("tree-menu-preview", "Preview")
+            },
+            entry("tree-menu-download", "Download\u{2026}"),
+            copy_key,
+            copy_url,
+        ],
     }
 }
 

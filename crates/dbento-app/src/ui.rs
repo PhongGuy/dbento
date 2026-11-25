@@ -93,6 +93,7 @@ impl Icons {
     pub const Zap: IconName = IconName::Zap;
     pub const Shapes: IconName = IconName::Shapes;
     pub const SquareFunction: IconName = IconName::SquareFunction;
+    pub const Archive: IconName = IconName::Archive;
 
     /// Every const above; the registry test loads each one through [`AppAssets`].
     pub const ALL: &'static [IconName] = &[
@@ -158,6 +159,7 @@ impl Icons {
         Self::Zap,
         Self::Shapes,
         Self::SquareFunction,
+        Self::Archive,
     ];
 }
 
@@ -168,7 +170,7 @@ mod extra {
         X, Database, Table2, Columns3, KeyRound, Lock, Clock, Layers, Server, FileBox,
         FileCode, FastForward, Save, Rows3, CircleStop, SunMoon, FolderPlus, FolderSync,
         Pencil, Trash, WandSparkles, Funnel, Link, CopyPlus, RotateCcw, Download, Key, Hash,
-        ShieldCheck, Zap, Shapes, SquareFunction, ListTree,
+        ShieldCheck, Zap, Shapes, SquareFunction, ListTree, Archive,
     ]);
 }
 /// The names in [`Icons`] that the kit's default bundle lacks; only these are embedded.

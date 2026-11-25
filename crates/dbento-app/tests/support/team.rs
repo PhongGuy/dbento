@@ -138,6 +138,7 @@ pub fn start_on(cx: &mut TestAppContext, dir: &Path, hooks: Option<TeamHooks>) -
         .update(|cx| dbento_app::app::start(super::services(files.path()), Some(dir.into()), cx))
         .unwrap();
     super::present(cx, win, "connection-list");
+    super::quiet_downloads(cx, &shell, files.path());
     TeamStarted { files, win, shell }
 }
 pub fn team_started(cx: &mut TestAppContext, fx: &TeamFx) -> TeamStarted {

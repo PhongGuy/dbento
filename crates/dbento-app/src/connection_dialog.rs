@@ -3,6 +3,7 @@
 //! The form only reads its controls back into a `ConnectionSpec` and emits events; the shell
 //! owns saving, testing and the dialog around it.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use dbento_core::{
@@ -80,6 +81,8 @@ pub enum Field {
     Endpoint,
     /// The DynamoDB access key ID.
     AccessKeyId,
+    /// The S3 buckets to list, comma or space separated.
+    Buckets,
     /// The statement timeout.
     Timeout,
     /// The sidebar folder.
@@ -108,6 +111,7 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::Region => Some("e.g. eu-west-1"),
         Field::Endpoint => Some("optional"),
         Field::AccessKeyId => Some("optional"),
+        Field::Buckets => Some("e.g. logs, media"),
         Field::Timeout => Some("e.g. 30s"),
         Field::Folder => Some("e.g. Production"),
     }
@@ -234,12 +238,14 @@ pub struct ConnectionForm {
     region: Entity<InputState>,
     endpoint: Entity<InputState>,
     access_key_id: Entity<InputState>,
+    buckets: Entity<InputState>,
     timeout: Entity<InputState>,
     folder: Entity<InputState>,
     secret: SecretChoice,
     tls: TlsChoice,
     read_only: bool,
-    consistent_read: bool,
+    // Each flag key's checkbox state, by descriptor key.
+    flags: Flags,
     // The Databases choice and, under Choose, the ticked names in the order they show.
     databases_choice: DatabasesChoice,
     chosen: Vec<String>,
@@ -316,6 +322,7 @@ impl ConnectionForm {
         let region = text(Field::Region, &shown.region);
         let endpoint = text(Field::Endpoint, &shown.endpoint);
         let access_key_id = text(Field::AccessKeyId, &shown.access_key_id);
+        let buckets = text(Field::Buckets, &shown.buckets);
         let timeout = text(Field::Timeout, &shown.timeout);
         let folder = text(Field::Folder, &shown.folder);
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
@@ -348,7 +355,7 @@ impl ConnectionForm {
             &endpoint,
             &access_key_id,
         ];
-        let session_inputs = [&name, &read_only_user, &auth_level, &timeout];
+        let session_inputs = [&name, &read_only_user, &auth_level, &timeout, &buckets];
         let mut field_changes: Vec<Subscription> = server_inputs
             .into_iter()
             .map(|input| {
@@ -397,12 +404,13 @@ impl ConnectionForm {
             region,
             endpoint,
             access_key_id,
+            buckets,
             timeout,
             folder,
             secret: shown.secret,
             tls: shown.tls,
             read_only: shown.read_only,
-            consistent_read: shown.consistent_read,
+            flags: shown.flags,
             databases_choice: shown.databases_choice,
             chosen: shown.chosen,
             color: loaded.color,
@@ -506,6 +514,7 @@ impl ConnectionForm {
             (Field::Region, was.region, now.region),
             (Field::Endpoint, was.endpoint, now.endpoint),
             (Field::AccessKeyId, was.access_key_id, now.access_key_id),
+            (Field::Buckets, was.buckets, now.buckets),
             (Field::Timeout, was.timeout, now.timeout),
             (Field::Folder, was.folder, now.folder),
         ] {
@@ -527,8 +536,10 @@ impl ConnectionForm {
         if self.read_only == was.read_only {
             self.read_only = now.read_only;
         }
-        if self.consistent_read == was.consistent_read {
-            self.consistent_read = now.consistent_read;
+        for key in FLAG_FIELDS {
+            if flag(&self.flags, key) == flag(&was.flags, key) {
+                self.flags.insert(key, flag(&now.flags, key));
+            }
         }
         if self.databases_choice == was.databases_choice && self.chosen == was.chosen {
             self.databases_choice = now.databases_choice;
@@ -627,6 +638,7 @@ impl ConnectionForm {
             Field::Region => &self.region,
             Field::Endpoint => &self.endpoint,
             Field::AccessKeyId => &self.access_key_id,
+            Field::Buckets => &self.buckets,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
         }
@@ -873,7 +885,7 @@ impl ConnectionForm {
                             .map_err(at(Field::Port))?;
                     }
                 }
-                // A DynamoDB secret only pairs with an access key; without one the environment
+                // An AWS secret only pairs with an access key; without one the environment
                 // supplies every credential, so whatever the hidden rows held is not written.
                 FieldKind::Secret if self.secret_waits(cx) => spec.secret = None,
                 FieldKind::Secret => {
@@ -934,13 +946,27 @@ impl ConnectionForm {
                         )));
                     }
                 }
-                // Only `consistent_read` is a flag today; ticked writes true, unticked drops the key.
+                // Each flag writes its own key: ticked writes true, unticked drops the key.
                 FieldKind::Flag => {
-                    if f.key == "consistent_read" && self.consistent_read != shown.consistent_read {
-                        spec.consistent_read = self.consistent_read.then_some(true);
+                    let now = flag(&self.flags, f.key);
+                    if now != flag(&shown.flags, f.key) {
+                        let Some(slot) = flag_slot(&mut spec, f.key) else {
+                            continue;
+                        };
+                        *slot = now.then_some(true);
                     }
                 }
-                FieldKind::Text | FieldKind::Path | FieldKind::Uri | FieldKind::Names | _ => {
+                // A names list reads comma or space separated; an empty one drops the key.
+                FieldKind::Names => {
+                    let Some((field, _)) = field_of(f.key) else {
+                        continue;
+                    };
+                    let now = text(field);
+                    if field == Field::Buckets && now != shown.buckets.trim() {
+                        spec.buckets = names(&now);
+                    }
+                }
+                FieldKind::Text | FieldKind::Path | FieldKind::Uri | _ => {
                     let Some((field, _)) = field_of(f.key) else {
                         continue;
                     };
@@ -965,6 +991,7 @@ impl ConnectionForm {
                         Field::Endpoint => (&shown.endpoint, &mut spec.endpoint),
                         Field::AccessKeyId => (&shown.access_key_id, &mut spec.access_key_id),
                         Field::Name
+                        | Field::Buckets
                         | Field::Port
                         | Field::Password
                         | Field::EnvVar
@@ -1114,8 +1141,8 @@ impl ConnectionForm {
             if !was.iter().any(|f| f.kind == FieldKind::Tls) {
                 self.tls = shown.tls;
             }
-            if !had("consistent_read") {
-                self.consistent_read = shown.consistent_read;
+            for key in FLAG_FIELDS.into_iter().filter(|k| !had(k)) {
+                self.flags.insert(key, flag(&shown.flags, key));
             }
             if !had("databases") {
                 self.databases_choice = shown.databases_choice;
@@ -1146,8 +1173,8 @@ impl ConnectionForm {
         if !now.iter().any(|f| f.kind == FieldKind::Tls) {
             self.tls = TlsChoice::Default;
         }
-        if !has("consistent_read") {
-            self.consistent_read = false;
+        for key in FLAG_FIELDS.into_iter().filter(|k| !has(k)) {
+            self.flags.insert(key, false);
         }
         if !has("databases") {
             self.databases_choice = DatabasesChoice::Only;
@@ -1332,15 +1359,17 @@ impl ConnectionForm {
         Some(row.into_any_element())
     }
 
-    // True while a DynamoDB form has no access key ID, so the secret rows give way to a hint.
+    // True while a DynamoDB or S3 form has no access key ID, so the secret rows give way to a hint.
     fn secret_waits(&self, cx: &App) -> bool {
-        self.engine == Engine::Dynamodb && self.access_key_id.read(cx).value().trim().is_empty()
+        matches!(self.engine, Engine::Dynamodb | Engine::S3)
+            && self.access_key_id.read(cx).value().trim().is_empty()
     }
 
     // The source in effect: an access key ID needs its secret somewhere, so a None carried into
-    // a DynamoDB form reads as the keychain, the dialog's default.
+    // an AWS form reads as the keychain, the dialog's default.
     fn secret_choice(&self) -> SecretChoice {
-        if self.engine == Engine::Dynamodb && self.secret == SecretChoice::None {
+        if matches!(self.engine, Engine::Dynamodb | Engine::S3) && self.secret == SecretChoice::None
+        {
             SecretChoice::Keychain
         } else {
             self.secret
@@ -1363,7 +1392,7 @@ impl ConnectionForm {
         }
         let mut rows = vec![self.text_row(label, "conn-password", Field::Password, cx)];
         let choice = self.secret_choice();
-        let options: &[&str] = if self.engine == Engine::Dynamodb {
+        let options: &[&str] = if matches!(self.engine, Engine::Dynamodb | Engine::S3) {
             &["Keychain", "Environment variable"]
         } else {
             &["Keychain", "Environment variable", "None"]
@@ -1458,16 +1487,17 @@ impl ConnectionForm {
         rows
     }
 
-    // A flag key as a checkbox labelled by its descriptor, `conn-<key with dashes>`; the
-    // only flag key so far is `consistent_read`, whose state the form holds.
+    // A flag key as a checkbox labelled by its descriptor, `conn-<key with dashes>`, ticked
+    // from and writing to that key's own state in the form.
     fn flag_row(&self, f: &FormField, cx: &mut Context<Self>) -> AnyElement {
         let id = SharedString::from(format!("conn-{}", f.key.replace('_', "-")));
+        let key = f.key;
         let flag = Checkbox::new(id)
             .small()
             .label(f.label)
-            .checked(self.consistent_read)
-            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                this.consistent_read = *checked;
+            .checked(flag(&self.flags, key))
+            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                this.flags.insert(key, *checked);
                 this.touched(cx);
                 cx.notify();
             }));
@@ -1842,6 +1872,7 @@ impl Render for ConnectionForm {
             "MongoDB",
             "Redis",
             "DynamoDB",
+            "S3",
         ];
         let cards = ENGINES.iter().zip(labels).map(|(&engine, label)| ui::Card {
             icon: engine_icon(engine),
@@ -2037,12 +2068,13 @@ struct Shown {
     region: String,
     endpoint: String,
     access_key_id: String,
+    buckets: String,
     timeout: String,
     folder: String,
     secret: SecretChoice,
     tls: TlsChoice,
     read_only: bool,
-    consistent_read: bool,
+    flags: Flags,
     databases_choice: DatabasesChoice,
     chosen: Vec<String>,
 }
@@ -2067,6 +2099,7 @@ impl Shown {
             Field::Region => &self.region,
             Field::Endpoint => &self.endpoint,
             Field::AccessKeyId => &self.access_key_id,
+            Field::Buckets => &self.buckets,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
             Field::Name | Field::Password | Field::KeyPassphrase => "",
@@ -2106,6 +2139,11 @@ impl Shown {
             region: text(&spec.region),
             endpoint: text(&spec.endpoint),
             access_key_id: text(&spec.access_key_id),
+            buckets: spec
+                .buckets
+                .as_ref()
+                .map(|b| b.join(", "))
+                .unwrap_or_default(),
             timeout: text(&spec.statement_timeout),
             folder: spec
                 .folder
@@ -2119,7 +2157,10 @@ impl Shown {
                 Some(_) => TlsChoice::Verify,
             },
             read_only: spec.read_only.unwrap_or(false),
-            consistent_read: spec.consistent_read.unwrap_or(false),
+            flags: FLAG_FIELDS
+                .into_iter()
+                .map(|key| (key, flag_value(spec, key).unwrap_or(false)))
+                .collect(),
             databases_choice,
             chosen,
         }
@@ -2154,7 +2195,7 @@ fn engine_columns(window: &Window, cx: &App) -> usize {
 }
 
 /// The engines of `conn-engine`, in option order.
-const ENGINES: [Engine; 9] = [
+const ENGINES: [Engine; 10] = [
     Engine::Postgres,
     Engine::Sqlite,
     Engine::Mysql,
@@ -2164,7 +2205,46 @@ const ENGINES: [Engine; 9] = [
     Engine::Mongodb,
     Engine::Redis,
     Engine::Dynamodb,
+    Engine::S3,
 ];
+
+/// Checkbox state per flag key.
+type Flags = BTreeMap<&'static str, bool>;
+
+/// Every descriptor key the form shows as a checkbox.
+pub const FLAG_FIELDS: [&str; 2] = ["consistent_read", "virtual_hosted"];
+
+// A flag's state; a key the form never set reads unticked.
+fn flag(flags: &Flags, key: &str) -> bool {
+    flags.get(key).copied().unwrap_or(false)
+}
+
+// The spec slot a flag key writes.
+fn flag_slot<'a>(spec: &'a mut ConnectionSpec, key: &str) -> Option<&'a mut Option<bool>> {
+    match key {
+        "consistent_read" => Some(&mut spec.consistent_read),
+        "virtual_hosted" => Some(&mut spec.virtual_hosted),
+        _ => None,
+    }
+}
+
+fn flag_value(spec: &ConnectionSpec, key: &str) -> Option<bool> {
+    match key {
+        "consistent_read" => spec.consistent_read,
+        "virtual_hosted" => spec.virtual_hosted,
+        _ => None,
+    }
+}
+
+// A names list split on commas and whitespace, empty parts dropped; None when nothing is left.
+fn names(text: &str) -> Option<Vec<String>> {
+    let list: Vec<String> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (!list.is_empty()).then_some(list)
+}
 
 fn descriptor_fields(engine: Engine) -> Vec<FormField> {
     dbento_core::connection_form(engine)
@@ -2189,6 +2269,7 @@ fn field_of(key: &str) -> Option<(Field, &'static str)> {
         "region" => (Field::Region, "conn-region"),
         "endpoint" => (Field::Endpoint, "conn-endpoint"),
         "access_key_id" => (Field::AccessKeyId, "conn-access-key-id"),
+        "buckets" => (Field::Buckets, "conn-buckets"),
         _ => return None,
     })
 }
@@ -2243,8 +2324,13 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     if !has("auth_level") {
         spec.auth_level = None;
     }
-    if !has("consistent_read") {
-        spec.consistent_read = None;
+    for key in FLAG_FIELDS.into_iter().filter(|k| !has(k)) {
+        if let Some(slot) = flag_slot(spec, key) {
+            *slot = None;
+        }
+    }
+    if !has("buckets") {
+        spec.buckets = None;
     }
     if !has("databases") {
         spec.databases = None;

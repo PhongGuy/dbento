@@ -35,6 +35,7 @@ fn chinook_expands_and_opens_album(cx: &mut TestAppContext) {
         store: Arc::clone(&spec.store),
         env: Arc::clone(&spec.env),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))
@@ -101,6 +102,7 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
         store: Arc::clone(&spec.store),
         env: Arc::clone(&spec.env),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))
@@ -169,7 +171,7 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
                 .into_iter()
                 .find(|r| r.aria == aria)
                 .and_then(|r| match r.kind {
-                    RowKind::Object { detail, .. } => Some(detail),
+                    RowKind::SchemaObject { detail, .. } => Some(detail),
                     RowKind::Schema
                     | RowKind::Kind(_)
                     | RowKind::Relation(_)
@@ -182,6 +184,8 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
                     | RowKind::KeyFolder { .. }
                     | RowKind::Key(_)
                     | RowKind::LoadMore
+                    | RowKind::Prefix { .. }
+                    | RowKind::Object(_)
                     | RowKind::Database { .. } => None,
                 })
         })

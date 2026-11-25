@@ -9,13 +9,18 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use dbento_core::{
     CellRef, ColumnMeta, CommandDoc, Definition, DefinitionError, Engine, ExecuteError,
-    IntrospectError, KeyBrowseError, KeyCursor, KeyPage, KeyScan, KeyTtl, ObjectRef, RelationList,
-    RelationObjects, RelationRef, SchemaInfo, SchemaObjects, Session, SessionOptions, quote_ident,
+    IntrospectError, KeyBrowseError, KeyCursor, KeyPage, KeyScan, KeyTtl, ObjectBrowseError,
+    ObjectCursor, ObjectList, ObjectPage, ObjectRef, RelationList, RelationObjects, RelationRef,
+    SchemaInfo, SchemaObjects, Session, SessionOptions, quote_ident,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
 
 use crate::keys::{KEY_PAGE, KeyBatch, KeyFilter, KeyItem, KeyToken, kind_of};
+use crate::objects::{
+    OBJECT_PAGE, ObjectBatch, ObjectItem, introspect_message, merge_page, object_error_text,
+    object_listing_message,
+};
 use crate::redis_completion::RedisDoc;
 use crate::runner::{self, RunnerSpec};
 
@@ -77,6 +82,15 @@ pub enum CatalogQuery {
     },
     /// The Redis server's COMMAND DOCS, for completion; never a tree level.
     CommandDocs,
+    /// One page of the level under `prefix` in S3 bucket `bucket`.
+    Objects {
+        /// The bucket to list.
+        bucket: String,
+        /// The level's prefix, ending in `/`; empty for the bucket root.
+        prefix: String,
+        /// Where the listing resumes; None for its first page.
+        after: Option<ObjectCursor>,
+    },
 }
 
 /// A loaded catalog level, matching its [`CatalogQuery`].
@@ -102,6 +116,8 @@ pub enum CatalogData {
     Keys(KeyBatch),
     /// The answer to [`CatalogQuery::CommandDocs`].
     CommandDocs(Arc<[RedisDoc]>),
+    /// The answer to [`CatalogQuery::Objects`].
+    Objects(ObjectBatch),
     /// The answer to [`CatalogQuery::Columns`] when sampling the attributes failed but the
     /// declared key columns loaded; `reason` is the sampling error.
     KeyColumns {
@@ -253,13 +269,15 @@ async fn serve(
     }
 }
 
-// Listings fail as IntrospectError, definitions as DefinitionError and key pages and
-// command docs as KeyBrowseError; each says when the session behind it is gone.
+// Listings fail as IntrospectError, definitions as DefinitionError, key pages and command
+// docs as KeyBrowseError and object pages as ObjectBrowseError; each says when the session
+// behind it is gone.
 enum Asked {
     Listing(Result<CatalogData, IntrospectError>),
     Definition(Result<Definition, DefinitionError>),
     Keys(Result<KeyPage, KeyBrowseError>),
     Docs(Result<Vec<CommandDoc>, KeyBrowseError>),
+    Objects(Result<ObjectPage, ObjectBrowseError>),
 }
 
 // Connects on demand, so a failed connect is retried by the next load. A closed session,
@@ -284,6 +302,7 @@ async fn load(
         }
     };
     let deadline = *deadline;
+    let s3 = s.engine() == Engine::S3;
     let work = async {
         match query {
             CatalogQuery::Definition { object } => Asked::Definition(s.definition(object).await),
@@ -291,6 +310,17 @@ async fn load(
                 Asked::Keys(s.scan_keys(&key_scan(*db, filter, after.as_ref())).await)
             }
             CatalogQuery::CommandDocs => Asked::Docs(s.command_docs().await),
+            CatalogQuery::Objects {
+                bucket,
+                prefix,
+                after,
+            } => {
+                let mut list = ObjectList::new(bucket.as_str(), prefix.as_str()).want(OBJECT_PAGE);
+                if let Some(c) = after {
+                    list = list.after(c.clone());
+                }
+                Asked::Objects(s.list_objects(&list).await)
+            }
             q @ (CatalogQuery::Schemas
             | CatalogQuery::Databases
             | CatalogQuery::Relations { .. }
@@ -326,17 +356,27 @@ async fn load(
             | Ok(Asked::Docs(Err(
                 KeyBrowseError::SessionEnded { .. } | KeyBrowseError::Timeout
             )))
+            | Ok(Asked::Objects(Err(
+                ObjectBrowseError::SessionEnded { .. } | ObjectBrowseError::Timeout
+            )))
     );
+    // S3 listing errors carry the store's own text, which is shown escaped.
+    let listing_message = if s3 {
+        object_listing_message
+    } else {
+        introspect_message
+    };
     if lost && let Some((s, _)) = session.take() {
         let _ = s.close().await;
     }
     match answer {
-        Ok(Asked::Listing(r)) => r.map_err(|e| e.to_string()),
+        Ok(Asked::Listing(r)) => r.map_err(|e| listing_message(&e)),
         Ok(Asked::Definition(r)) => r.map(CatalogData::Definition).map_err(definition_message),
         Ok(Asked::Keys(r)) => r.map(key_batch).map_err(|e| e.to_string()),
         Ok(Asked::Docs(r)) => r
             .map(|docs| CatalogData::CommandDocs(docs.iter().map(RedisDoc::from).collect()))
             .map_err(|e| e.to_string()),
+        Ok(Asked::Objects(r)) => r.map(object_batch).map_err(|e| object_error_text(&e)),
         Err(_) => Err("the catalog session stopped".into()),
     }
 }
@@ -363,6 +403,15 @@ fn key_batch(page: KeyPage) -> CatalogData {
         .collect();
     let next = page.next.map(KeyToken::new);
     CatalogData::Keys(KeyBatch { items, next })
+}
+
+// One level's page as tree entries, prefixes and objects merged by key.
+fn object_batch(page: ObjectPage) -> CatalogData {
+    let objects = page.objects.into_iter().map(ObjectItem::from).collect();
+    CatalogData::Objects(ObjectBatch {
+        entries: merge_page(page.prefixes, objects),
+        next: page.next,
+    })
 }
 
 // A missing object points at the explorer's refresh; any other error reads as itself.
@@ -413,8 +462,11 @@ async fn ask(s: &mut Session, query: &CatalogQuery) -> Result<CatalogData, Intro
             }
             r => CatalogData::SchemaObjects(r?),
         },
-        // `load` sends definitions, key pages and command docs down their own arms.
-        CatalogQuery::Definition { .. } | CatalogQuery::Keys { .. } | CatalogQuery::CommandDocs => {
+        // `load` sends definitions, key and object pages and command docs down their own arms.
+        CatalogQuery::Definition { .. }
+        | CatalogQuery::Keys { .. }
+        | CatalogQuery::CommandDocs
+        | CatalogQuery::Objects { .. } => {
             return Err(IntrospectError::Unexpected {
                 message: "not a catalog listing".into(),
             });

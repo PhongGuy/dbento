@@ -2564,6 +2564,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "dbento-core",
+ "dirs 7.0.0",
  "futures-util",
  "gpui-kit",
  "image",
@@ -2680,6 +2681,7 @@ name = "dbento-testkit"
 version = "0.2.0"
 dependencies = [
  "aws-sdk-dynamodb",
+ "aws-sdk-s3",
  "aws-smithy-http-client",
  "base64 0.23.1",
  "bson",
@@ -4381,8 +4383,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pilot-host"
-version = "0.7.0"
-source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.7.0#5ceb76f3d0dc4ca7bfe37bae8a28ff21005668e9"
+version = "0.8.0"
+source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.8.0#85b686b823dbbc51b6ac009958c87c4d000dd3f4"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4396,8 +4398,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pilot-protocol"
-version = "0.7.0"
-source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.7.0#5ceb76f3d0dc4ca7bfe37bae8a28ff21005668e9"
+version = "0.8.0"
+source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.8.0#85b686b823dbbc51b6ac009958c87c4d000dd3f4"
 dependencies = [
  "serde",
  "serde_json",
@@ -8473,7 +8475,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -8493,7 +8495,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -8506,7 +8508,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

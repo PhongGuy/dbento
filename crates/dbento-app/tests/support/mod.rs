@@ -33,12 +33,25 @@ pub fn init_tokio(cx: &mut TestAppContext) {
 }
 /// Services over files in `dir`, an empty in-memory keychain and no environment.
 pub fn services(dir: &Path) -> Services {
+    // SSH reads a temp home under `dir` with no agent, never the real ones.
+    let state = dbento_core::StatePaths::in_dir(dir);
+    let home = dbento_core::SshHome::new(dir.join("ssh-home"), "tester");
+    let env = dbento_core::SshEnv::new(home, state.ssh_known_hosts.clone());
     Services {
         paths: AppPaths::in_dir(dir),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::new(Some(env), Some(state)),
     }
+}
+/// Points the window's first save dialog at `dir`, so no test reads a user folder.
+pub fn quiet_downloads(
+    cx: &mut TestAppContext,
+    shell: &gpui_kit::Entity<dbento_app::shell::Shell>,
+    dir: &Path,
+) {
+    shell.update(cx, |sh, _| sh.set_download_folder(dir.to_path_buf()));
 }
 pub fn present(cx: &mut TestAppContext, win: AnyWindowHandle, id: impl Into<ElementId>) -> bool {
     let id = id.into();
@@ -133,6 +146,7 @@ pub fn spec(fx: &Fx, conn: &str) -> RunnerSpec {
         connection: conn.into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
+        ssh: dbento_app::ssh::SshContext::none(),
     }
 }
 pub const MANY: &str = "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 5000) SELECT x FROM r";
@@ -221,6 +235,7 @@ pub fn opened(cx: &mut TestAppContext, setup: &str, extra: &str, ix: usize) -> O
         .update(|cx| dbento_app::app::start(services(files.path()), Some(fx.dir.path().into()), cx))
         .unwrap();
     present(cx, win, "connection-list");
+    quiet_downloads(cx, &shell, files.path());
     let name = fx.ws.connections()[ix].name().to_owned();
     open_connection_row(cx, win, &name);
     Opened {
@@ -263,6 +278,7 @@ pub fn launched(cx: &mut TestAppContext, setup: &str, extra: &str) -> Opened {
         .update(|cx| dbento_app::app::start(services(files.path()), Some(fx.dir.path().into()), cx))
         .unwrap();
     present(cx, win, "connection-list");
+    quiet_downloads(cx, &shell, files.path());
     Opened {
         fx,
         files,
@@ -346,6 +362,7 @@ pub fn started_custom(
         .update(|cx| dbento_app::app::start(services, Some(dir.path().into()), cx))
         .unwrap();
     present(cx, win, "connection-list");
+    quiet_downloads(cx, &shell, files.path());
     Started {
         dir,
         files,
@@ -428,6 +445,7 @@ pub async fn pg_spec(extra: &str) -> (dbento_testkit::PgDb, tempfile::TempDir, R
         connection: "pg".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (db, dir, spec)
 }
@@ -447,6 +465,7 @@ pub fn my_spec(db: &dbento_testkit::MyDb, extra: &str) -> (tempfile::TempDir, Ru
         connection: "my".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::MY_SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }
@@ -466,6 +485,7 @@ pub fn ms_spec(db: &dbento_testkit::MsDb, extra: &str) -> (tempfile::TempDir, Ru
         connection: "ms".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::MS_SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }
@@ -491,6 +511,7 @@ pub fn redis_spec(
         connection: "rd".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == var).then(|| password.clone()).flatten()),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }
@@ -874,4 +895,23 @@ pub fn approval_target(ws: &Path, conn: &str) -> dbento_core::ApprovalTarget {
         .clone()
     });
     dbento_core::ApprovalTarget::of(&config)
+}
+
+/// A runner spec on connection `s3`: `s3`'s bucket on Moto with `extra` keys, its secret
+/// from the environment the spec carries.
+#[cfg(feature = "s3")]
+pub fn s3_spec(s3: &dbento_testkit::S3Moto, extra: &str) -> (tempfile::TempDir, RunnerSpec) {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!("dbento = 1\n{}", s3.connection_toml("s3", extra));
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let spec = RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir.path()).unwrap()),
+        connection: "s3".into(),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(|v| {
+            (v == dbento_testkit::S3_SECRET_VAR).then(|| dbento_testkit::S3_SECRET.to_owned())
+        }),
+        ssh: dbento_app::ssh::SshContext::none(),
+    };
+    (dir, spec)
 }
