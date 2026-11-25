@@ -5,6 +5,7 @@ use dbento_app::catalog::{CatalogData, CatalogQuery, CatalogReply};
 use dbento_app::explorer::part_id;
 use dbento_app::link::LinkState;
 use dbento_app::palette::Mode;
+use dbento_app::schema_tree::RowKind;
 use dbento_core::{Relation, RelationKind, RelationList, SchemaInfo};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, TestAppContext};
@@ -154,6 +155,14 @@ fn the_palette_lists_a_childs_tables_and_offers_to_search_the_others(cx: &mut Te
         CatalogQuery::Schemas,
         CatalogData::Schemas(vec![SchemaInfo::new("public")]),
     );
+    // The schemas auto-open `public`, whose loads go to the failing runner; its replies must
+    // land before ours, or a late failure replaces the tables we answer.
+    wait_real(cx, "the runner's own replies", |cx| {
+        s.sidebar(cx).read_with(cx, |sb, _| {
+            let rows = sb.tree().rows("listed/app", 0, "");
+            !rows.iter().any(|r| matches!(r.kind, RowKind::Loading))
+        })
+    });
     let public = CatalogQuery::Relations {
         schema: "public".into(),
     };
