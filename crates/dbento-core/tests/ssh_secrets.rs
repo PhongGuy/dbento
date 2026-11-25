@@ -249,3 +249,40 @@ fn session_options_carry_no_ssh_secret_by_default() {
     let o = SessionOptions::default();
     assert!(o.ssh_secrets.password.is_none() && o.ssh_secrets.key_passphrase.is_none());
 }
+
+#[test]
+fn ssh_secrets_for_reads_the_env_and_asks_nothing_when_the_table_does_not_resolve() {
+    let ws = ws();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let env = dbento_core::SshEnv::new(
+        SshHome::new(home.path(), "tester"),
+        dbento_core::StatePaths::in_dir(state.path()).ssh_known_hosts,
+    );
+    let var = ssh_password_env_var("tun");
+    let lookup = |v: &str| (v == var).then(|| "pw".to_owned());
+    let found = dbento_core::ssh_secrets_for(
+        &ws,
+        ws.declared("tun").unwrap(),
+        &env,
+        &MemoryStore::new(),
+        &lookup,
+    )
+    .unwrap();
+    assert_eq!(found.password.unwrap().expose(), "pw");
+    std::fs::write(
+        home.path().join(".ssh/config"),
+        "Host jump\n  ProxyJump hop\n",
+    )
+    .unwrap();
+    let none = dbento_core::ssh_secrets_for(
+        &ws,
+        ws.declared("tun").unwrap(),
+        &env,
+        &Untouchable,
+        &|_| panic!("nothing may be read"),
+    )
+    .unwrap();
+    assert!(none.password.is_none() && none.key_passphrase.is_none());
+}

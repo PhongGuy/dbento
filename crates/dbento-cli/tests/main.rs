@@ -35,6 +35,7 @@ mod cli_run_secret;
 mod cli_s3;
 mod cli_safety;
 mod cli_self_update;
+mod cli_ssh;
 mod cli_surreal;
 #[cfg(feature = "team")]
 mod cli_team_account;

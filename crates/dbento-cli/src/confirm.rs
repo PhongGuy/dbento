@@ -25,7 +25,7 @@ pub(crate) fn unguarded_words(kind: Unguarded) -> (&'static str, &'static str) {
 
 /// Whether stdin is a person at a terminal. Debug builds also accept the test seam
 /// `DBENTO_TEST_ASSUME_TTY`, so integration tests can answer through a pipe.
-fn stdin_is_terminal() -> bool {
+pub(crate) fn stdin_is_terminal() -> bool {
     io::stdin().is_terminal()
         || (cfg!(debug_assertions) && std::env::var_os("DBENTO_TEST_ASSUME_TTY").is_some())
 }

@@ -407,15 +407,12 @@ fn host_key_refusal(
     problem: HostKeyProblem,
 ) -> String {
     let file = file.display();
+    let head = format!("the SSH host key of {host}:{port} ({fingerprint})");
     match problem {
-        HostKeyProblem::Changed => format!(
-            "the SSH host key of {host}:{port} differs from line {line} of {file} ({fingerprint}); refusing"
-        ),
-        HostKeyProblem::Revoked => format!(
-            "the SSH host key of {host}:{port} is revoked at line {line} of {file} ({fingerprint})"
-        ),
+        HostKeyProblem::Changed => format!("{head} differs from line {line} of {file}; refusing"),
+        HostKeyProblem::Revoked => format!("{head} is revoked at line {line} of {file}; refusing"),
         HostKeyProblem::Unreadable => {
-            format!("line {line} of {file} for {host}:{port} cannot be read")
+            format!("{head} cannot be checked: line {line} of {file} cannot be read; refusing")
         }
     }
 }
@@ -2238,6 +2235,34 @@ fn another_engine() -> ExecuteError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_host_key_refusal_names_the_fingerprint_first_and_ends_refusing() {
+        let said = |problem| {
+            ConnectError::SshHostKeyChanged {
+                host: "bastion".into(),
+                port: 2222,
+                fingerprint: "SHA256:abc".into(),
+                file: PathBuf::from("/k"),
+                line: 7,
+                problem,
+            }
+            .to_string()
+        };
+        let head = "the SSH host key of bastion:2222 (SHA256:abc)";
+        assert_eq!(
+            said(HostKeyProblem::Changed),
+            format!("{head} differs from line 7 of /k; refusing")
+        );
+        assert_eq!(
+            said(HostKeyProblem::Revoked),
+            format!("{head} is revoked at line 7 of /k; refusing")
+        );
+        assert_eq!(
+            said(HostKeyProblem::Unreadable),
+            format!("{head} cannot be checked: line 7 of /k cannot be read; refusing")
+        );
+    }
 
     #[test]
     fn only_mysql_says_a_non_transactional_write_may_be_kept() {

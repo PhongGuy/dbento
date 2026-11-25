@@ -70,3 +70,20 @@ fn the_user_known_hosts_is_only_read() {
         text
     );
 }
+
+#[test]
+fn only_an_unmarked_line_lists_the_host() {
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let home_ = SshHome::new(home.path(), "tester");
+    let revoked = format!("@revoked [db.example]:2222 {A}\n");
+    std::fs::write(ssh.join("known_hosts"), &revoked).unwrap();
+    assert!(!user_known_hosts_lists(&home_, "db.example", 2222));
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!("{revoked}[db.example]:2222 {A}\n"),
+    )
+    .unwrap();
+    assert!(user_known_hosts_lists(&home_, "db.example", 2222));
+}

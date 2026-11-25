@@ -171,14 +171,14 @@ pub fn forget_host_key(
     Ok(removed)
 }
 
-/// Whether `<home>/.ssh/known_hosts` has a line naming `host`:`port`; reads only.
+/// Whether `<home>/.ssh/known_hosts` has an unmarked line naming `host`:`port`; reads only.
 pub fn user_known_hosts_lists(home: &SshHome, host: &str, port: u16) -> bool {
     let path = home.dir().join(".ssh").join("known_hosts");
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };
     let id = Identity { host, port };
-    lines(&text).any(|line| line.marker != Some(Marker::CertAuthority) && line.names(&id))
+    lines(&text).any(|line| line.marker.is_none() && line.names(&id))
 }
 
 /// The host and port a key is looked up under.
