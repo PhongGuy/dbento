@@ -1,6 +1,17 @@
 # Contributing to Dbento
 
-This is the developer guide; the page for people who use Dbento is [README.md](README.md). Issues and pull requests are welcome.
+This is the developer guide; the page for people who use Dbento is [README.md](README.md).
+
+## Sending a change
+
+Dbento is open source under MIT or Apache-2.0, and issues and pull requests from anyone are welcome. A first pull request is fine too, and so is a small one: a typo, a clearer error message, a missing test.
+
+Before I merge, I check that:
+
+- `make check` passes: formatting, clippy with warnings as errors, and the tests (see [Checks and tests](#checks-and-tests)). CI runs it on every pull request, so you can lean on CI if you can't run it all locally.
+- the pull request makes one change, ideally for one issue.
+
+If something is missing, I'll say what and help get the pull request over the line. If you're not sure an idea fits, open an issue first and I'll answer there. The conventions are in [Sending a pull request](#sending-a-pull-request).
 
 ## Requirements
 
@@ -124,10 +135,10 @@ Open an issue with one of the templates: bug report, feature request, looks wron
 
 ## Pilot QA
 
-The pilot crate (`tools/dbento-pilot`) runs the app under [gpui-pilot](https://github.com/PhongGuy/gpui-pilot) v0.6.0. `make pilot-check` and `make screenshots` need the `gpui-pilot` server on your `PATH`, or `GPUI_PILOT_BIN` naming it. Install it with:
+The pilot crate (`tools/dbento-pilot`) runs the app under [gpui-pilot](https://github.com/PhongGuy/gpui-pilot) v0.7.0. `make pilot-check` and `make screenshots` need the `gpui-pilot` server on your `PATH`, or `GPUI_PILOT_BIN` naming it. Install it with:
 
 ```sh
-cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.6.0 gpui-pilot
+cargo install --locked --git https://github.com/PhongGuy/gpui-pilot --tag v0.7.0 gpui-pilot
 ```
 
 `gpui-pilot.toml` tells the pilot how to build and launch Dbento. Headless mode runs `tools/dbento-pilot` against a fresh data directory, with an optional workspace folder as the launch argument; `DBENTO_PILOT_THEME` (`dark`, `light` or `system`, through the launch's `env`) seeds the theme, and `light` is the only way to a light shot, since the headless host reports a dark system. Session mode runs the optimised `dbento-app` from the `timing` profile in a private KDE KWin session.
