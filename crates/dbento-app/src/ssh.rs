@@ -194,3 +194,39 @@ pub fn connect_message(conn: &str, e: &ConnectError, ctx: &SshContext) -> String
         None => e.to_string(),
     }
 }
+
+/// Whether `e` is an SSH failure (every Ssh* variant, SshUnsupported included).
+pub fn is_ssh_failure(e: &ConnectError) -> bool {
+    matches!(
+        e,
+        ConnectError::SshConnect { .. }
+            | ConnectError::SshAuth { .. }
+            | ConnectError::SshUnsupported { .. }
+            | ConnectError::SshHostKeyUnknown { .. }
+            | ConnectError::SshHostKeyChanged { .. }
+            | ConnectError::SshTunnel { .. }
+    )
+}
+
+/// A connect failure as one message: an SSH failure is `connect_message` (its fix, never the
+/// database-secret `db_hint`); any other keeps `db_hint` as a `\nhint: ` line.
+pub fn failure_text(
+    conn: &str,
+    e: &ConnectError,
+    db_hint: Option<&str>,
+    ctx: &SshContext,
+) -> String {
+    match db_hint {
+        Some(h) if !is_ssh_failure(e) => format!("{e}\nhint: {h}"),
+        Some(_) | None => connect_message(conn, e, ctx),
+    }
+}
+
+/// `not_trusted`'s message and fix as one text: "{message}\nhint: {fix}".
+pub fn not_trusted_text(conn: &str, host: &str, port: u16, answer: HostKeyAnswer) -> String {
+    let f = not_trusted(conn, host, port, answer);
+    match f.fix {
+        Some(fix) => format!("{}\nhint: {fix}", f.message),
+        None => f.message,
+    }
+}

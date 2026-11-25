@@ -9,10 +9,10 @@ use async_channel::Receiver;
 use dbento_core::message::{MessageError, MessageRead, SourceRef};
 use dbento_core::{
     Applied, ApplyError, Browse, CancelHandle, CellRef, Change, ChangeOutcome, ColumnInfo,
-    EditBatch, EditTarget, EditValue, Engine, ExecuteError, ExplainMode, ExplainOutput,
-    ExplainRequest, ForeignKey, HistoryEntry, HistoryOutcome, KeyKind, Keyset, Outcome,
-    ReadOnlyEnforcement, RelationRef, ResultBatch, RowKey, Sort, Unguarded, Workspace, browse_sql,
-    render_sql, result_ranges, statement_count,
+    ConnectError, EditBatch, EditTarget, EditValue, Engine, ExecuteError, ExplainMode,
+    ExplainOutput, ExplainRequest, ForeignKey, HistoryEntry, HistoryOutcome, KeyKind, Keyset,
+    Outcome, ReadOnlyEnforcement, RelationRef, RereadError, ResultBatch, RowKey, Sort, Unguarded,
+    Workspace, browse_sql, render_sql, result_ranges, statement_count,
 };
 use gpui_kit::{Context, Entity, EventEmitter, Pixels, Task};
 
@@ -20,6 +20,7 @@ use crate::browse::{self, BrowseEvent, BrowseState, EditBlock};
 use crate::catalog::catalog_options;
 use crate::grid::{ColumnView, cell_display, fit_width_at};
 use crate::history::{HistoryLog, history_outcome};
+use crate::host_keys::{Gated, with_trust};
 use crate::key_view::KeyView;
 use crate::link::{ConnectFailure, LinkState};
 use crate::message_view::{
@@ -34,7 +35,7 @@ use crate::runner::{
     Runner, RunnerSpec, RunnerTuning, SourceColumns, StatementEnd, StopReason,
 };
 use crate::settings;
-use crate::ssh::connect_message;
+use crate::ssh::{connect_message, failure_text, not_trusted_text, unknown_key};
 use crate::staged::{self, EditHistory, GridRow, StagedEdits};
 use crate::tokio_bridge;
 
@@ -2809,17 +2810,28 @@ impl TabModel {
             let mut options = catalog_options(found.conn.statement_timeout());
             options.key_passphrase = found.key_passphrase;
             spec.ssh.apply(&mut options, found.ssh_secrets);
-            let mut session = dbento_core::connect(
-                &spec.workspace,
-                &found.conn,
-                found.secret.clone(),
-                options.clone(),
-            )
-            .await
-            .map_err(|e| match &found.hint {
-                Some(h) => format!("{e}\nhint: {h}"),
-                None => connect_message(&spec.connection, &e, &spec.ssh),
-            })?;
+            // The first connect may meet an unknown host key; the second, in `reread`, then
+            // finds it trusted.
+            let attempt = || {
+                dbento_core::connect(
+                    &spec.workspace,
+                    &found.conn,
+                    found.secret.clone(),
+                    options.clone(),
+                )
+            };
+            let unknown = |e: &ConnectError| unknown_key(&spec.connection, e);
+            let hint = found.hint.clone();
+            let failed =
+                |e: &ConnectError| failure_text(&spec.connection, e, hint.as_deref(), &spec.ssh);
+            let mut session = with_trust(&spec.ssh.gate, unknown, attempt)
+                .await
+                .map_err(|g| match g {
+                    Gated::Failed(e) => failed(&e),
+                    Gated::NotTrusted { host, port, answer } => {
+                        not_trusted_text(&spec.connection, &host, port, answer)
+                    }
+                })?;
             let read = read_rows(&mut session, &sql, max_rows).await;
             // A read-only session leaves no write for close to report.
             let _ = session.close().await;
@@ -2837,7 +2849,12 @@ impl TabModel {
             )
             .await
             .map(Some)
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                if let RereadError::Connect(c) = &e {
+                    return failed(c);
+                }
+                e.to_string()
+            })
         });
         self.reload_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -3029,14 +3046,35 @@ impl TabModel {
             let mut options = dbento_core::SessionOptions::default();
             options.key_passphrase = found.key_passphrase;
             spec.ssh.apply(&mut options, found.ssh_secrets);
-            // A connect failure becomes a message so an SSH one carries its fix.
-            dbento_core::apply_with(&spec.workspace, &found.conn, found.secret, options, batch)
+            // A connect failure means nothing was sent, so meeting an unknown host key may ask
+            // and retry once; it becomes a message so an SSH one carries its fix.
+            let attempt = || {
+                dbento_core::apply_with(
+                    &spec.workspace,
+                    &found.conn,
+                    found.secret.clone(),
+                    options.clone(),
+                    batch.clone(),
+                )
+            };
+            let unknown = |e: &ApplyError| {
+                let ApplyError::Connect(c) = e else {
+                    return None;
+                };
+                unknown_key(&spec.connection, c)
+            };
+            with_trust(&spec.ssh.gate, unknown, attempt)
                 .await
-                .map_err(|e| {
-                    if let ApplyError::Connect(c) = &e {
-                        return Err(connect_message(&spec.connection, c, &spec.ssh));
+                .map_err(|g| match g {
+                    Gated::Failed(e) => {
+                        if let ApplyError::Connect(c) = &e {
+                            return Err(connect_message(&spec.connection, c, &spec.ssh));
+                        }
+                        Ok(e)
                     }
-                    Ok(e)
+                    Gated::NotTrusted { host, port, answer } => {
+                        Err(not_trusted_text(&spec.connection, &host, port, answer))
+                    }
                 })
         });
         self.save_task = Some(cx.spawn(async move |this, cx| {

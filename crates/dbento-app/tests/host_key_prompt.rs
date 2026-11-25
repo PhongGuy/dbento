@@ -1,13 +1,19 @@
 //! An unknown SSH host key asks once per server; the sessions waiting on it go on after Trust
 //! or fail after Don't trust, and a changed key is refused without a question.
-use crate::support::{self, click_id, label_of, present, wait_real};
+use crate::support::{self, click_id, label_of, present, wait_idle, wait_prompt, wait_real};
 use dbento_app::app::start;
+use dbento_app::browse::BrowseEvent;
+use dbento_app::host_keys::HostKeyAnswer;
 use dbento_app::host_keys::host_key_ask;
 use dbento_app::link::{ConnectFailure, LinkState};
+use dbento_app::runner::RunnerSpec;
 use dbento_app::ssh::{AUTH_HINT, TUNNEL_HINT};
+use dbento_app::tab_model::TabModel;
+use dbento_core::{RelationRef, Workspace, trust_host_key};
 use dbento_core::{StatePaths, ssh_password_env_var};
 use dbento_testkit::{SSH_PASSWORD, SSH_USER, SshNet};
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -223,4 +229,78 @@ fn a_changed_key_is_refused_without_a_question(cx: &mut TestAppContext) {
         seed,
         "untouched"
     );
+}
+
+/// `tun` as a runner spec on `support::services(files)`, Dbento's known_hosts seeded with the
+/// fixture's key so the browse connects without a question.
+fn tunnelled_spec(f: &SshNet, dir: &Path, files: &Path) -> RunnerSpec {
+    let toml = format!("dbento = 1\n{}", tunnelled(f, "tun", f.db_host()));
+    std::fs::write(dir.join("dbento.toml"), toml).unwrap();
+    let known_hosts = StatePaths::in_dir(files).ssh_known_hosts;
+    std::fs::create_dir_all(known_hosts.parent().unwrap()).unwrap();
+    let seed = format!("[127.0.0.1]:{} {}\n", f.ssh_port(), f.host_key());
+    std::fs::write(&known_hosts, seed).unwrap();
+    let services = support::services(files);
+    let (db_pw, ssh_var) = (f.pg().password().to_owned(), ssh_password_env_var("tun"));
+    RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir).unwrap()),
+        connection: "tun".into(),
+        store: services.store,
+        env: Arc::new(move |v: &str| match v {
+            PW_VAR => Some(db_pw.clone()),
+            v if v == ssh_var => Some(SSH_PASSWORD.to_owned()),
+            _ => None,
+        }),
+        ssh: services.ssh,
+    }
+}
+
+#[gpui_kit::test]
+fn a_save_that_meets_an_unknown_key_asks_then_applies(cx: &mut TestAppContext) {
+    let rt = runtime(cx);
+    let _enter = rt.enter();
+    let f = rt.block_on(dbento_testkit::ssh_net());
+    rt.block_on(async {
+        let setup = "CREATE TABLE t(id int PRIMARY KEY, name text); INSERT INTO t VALUES (1, 'a');";
+        f.pg().admin().await.batch_execute(setup).await.unwrap()
+    });
+    let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let spec = tunnelled_spec(&f, dir.path(), files.path());
+    let gate = Arc::clone(&spec.ssh.gate);
+    // The test is the prompt handler, so it sees exactly what Save asks.
+    let prompts = gate.prompts();
+    let m = cx.new(|_| TabModel::new(spec));
+    cx.update(|cx| {
+        cx.subscribe(&m, |m, e: &BrowseEvent, cx| {
+            if let BrowseEvent::Run(sql) = e {
+                let sql = sql.clone();
+                m.update(cx, |m, cx| m.run(sql, cx));
+            }
+        })
+        .detach();
+    });
+    m.update(cx, |m, cx| {
+        m.load_target(RelationRef::new("public", "t"), cx)
+    });
+    wait_real(cx, "an editable browse", |cx| {
+        m.read_with(cx, |m, _| m.editable() && !m.running())
+    });
+    // Dbento loses the key, so Save's own connect meets it as unknown.
+    let known_hosts = StatePaths::in_dir(files.path()).ssh_known_hosts;
+    std::fs::remove_file(&known_hosts).unwrap();
+    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "z", cx)));
+    assert!(m.update(cx, |m, cx| m.save(cx)));
+    let mut asked = None;
+    wait_real(cx, "a question or a failure", |cx| {
+        asked = asked.take().or_else(|| prompts.try_recv().ok());
+        asked.is_some() || m.read_with(cx, |m, _| m.edit_banner().is_some())
+    });
+    let banner = m.read_with(cx, |m, _| m.edit_banner().map(str::to_owned));
+    let p = asked.unwrap_or_else(|| panic!("Save never asked: {banner:?}"));
+    assert_eq!(p.fingerprint, f.fingerprint());
+    trust_host_key(&StatePaths::in_dir(files.path()), &p.key).unwrap();
+    assert!(gate.answer(&p.host, p.port, &p.fingerprint, HostKeyAnswer::Trusted));
+    wait_prompt(cx, &m);
+    m.update(cx, |m, cx| m.rollback(cx));
+    wait_idle(cx, &m);
 }
