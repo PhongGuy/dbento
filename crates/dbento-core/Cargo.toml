@@ -142,7 +142,7 @@ syn = { version = "2.0.119", features = ["extra-traits", "fold", "full", "visit"
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "test-util", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "test-util", "time"] }
 aws-smithy-types.workspace = true
 dbento-testkit = { path = "../dbento-testkit" }
 wiremock.workspace = true

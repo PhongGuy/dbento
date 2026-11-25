@@ -5,6 +5,8 @@
 
 pub(crate) mod catalog;
 mod conn;
+#[cfg(test)]
+mod ssh_thread_tests;
 mod types;
 
 use std::sync::atomic::{AtomicBool, Ordering};
