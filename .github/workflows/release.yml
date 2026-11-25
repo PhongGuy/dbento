@@ -131,6 +131,8 @@ jobs:
           name: notes-${{ needs.guard.outputs.version }}
           path: notes/
           if-no-files-found: error
+          # The draft body is unpublished until the release is, so the copy expires with the run.
+          retention-days: 1
 
   # Adds the stable-named copies and SHA256SUMS, writes the unsigned update manifest on a tag release,
   # and hands dist/ and update/ on as one artifact.
