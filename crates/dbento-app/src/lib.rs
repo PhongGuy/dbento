@@ -39,6 +39,7 @@ pub mod link;
 pub mod message_view;
 mod mongo_completion;
 pub mod nav;
+pub mod objects;
 pub mod palette;
 mod parks;
 pub mod persist;

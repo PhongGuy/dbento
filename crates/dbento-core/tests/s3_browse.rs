@@ -2,6 +2,18 @@
 use crate::support::sqlite_fixture;
 use dbento_core::{ObjectBrowseError, ObjectKey, ObjectList, ObjectRead, SessionOptions};
 
+#[test]
+fn a_cursor_compares_and_hashes_by_its_token() {
+    use std::collections::HashSet;
+    let a = dbento_core::ObjectCursor::new("t1");
+    assert_eq!(a, dbento_core::ObjectCursor::new("t1"));
+    assert_ne!(a, dbento_core::ObjectCursor::new("t2"));
+    let set: HashSet<_> = [a.clone(), dbento_core::ObjectCursor::new("t1")]
+        .into_iter()
+        .collect();
+    assert_eq!(set.len(), 1, "equal tokens hash alike");
+}
+
 #[tokio::test]
 async fn sqlite_has_no_objects_to_browse() {
     let lite = sqlite_fixture("CREATE TABLE t (a)", "");

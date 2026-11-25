@@ -54,9 +54,19 @@ pub const MAX_READ_BYTES: u32 = 1 << 20;
 
 /// Where a listing resumes: the store's continuation token, opaque to the caller.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectCursor {
     pub(crate) token: String,
+}
+
+impl ObjectCursor {
+    /// A cursor resuming at `token`, for tests that need a page token without a store.
+    #[doc(hidden)]
+    pub fn new(token: impl Into<String>) -> Self {
+        ObjectCursor {
+            token: token.into(),
+        }
+    }
 }
 
 /// One page request of a bucket listing.
