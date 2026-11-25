@@ -42,6 +42,7 @@ mod connection_look;
 mod connection_menu;
 mod connection_rename;
 mod connection_secrets;
+mod connection_ssh;
 mod connection_steady;
 mod connection_test_mysql;
 mod connection_test_pg;

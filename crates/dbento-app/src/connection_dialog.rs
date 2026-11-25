@@ -25,6 +25,10 @@ use gpui_kit::{
 use crate::confirm::{self, ChoiceStyle, with_keys};
 use crate::keymap::{SaveConnection, chip_keys, keys_for};
 use crate::sidebar::{color_name, engine_icon, tag_color};
+use crate::ssh_form::{
+    SSH_HOST_NOTE, SSH_PLAINTEXT_NOTE, SshAuthChoice, SshField, SshTyped, identity_warning,
+    shows_passphrase, shows_password, ssh_shown, ssh_spec, takes_ssh,
+};
 use crate::theme;
 use crate::ui::{self, Icons};
 
@@ -87,6 +91,18 @@ pub enum Field {
     Timeout,
     /// The sidebar folder.
     Folder,
+    /// The SSH server's host or `~/.ssh/config` alias.
+    SshHost,
+    /// The SSH server's port.
+    SshPort,
+    /// The SSH login user.
+    SshUser,
+    /// The SSH identity (private key) file.
+    SshIdentity,
+    /// The SSH password, which goes only to the keychain.
+    SshPassword,
+    /// The SSH key's passphrase, which goes only to the keychain.
+    SshKeyPassphrase,
 }
 
 /// The example a field shows while empty; the password has none.
@@ -114,6 +130,12 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::Buckets => Some("e.g. logs, media"),
         Field::Timeout => Some("e.g. 30s"),
         Field::Folder => Some("e.g. Production"),
+        Field::SshHost => Some("e.g. bastion or a ~/.ssh/config alias"),
+        Field::SshPort => Some("22"),
+        Field::SshUser => Some("default: from ~/.ssh/config"),
+        Field::SshIdentity => Some("e.g. ~/.ssh/id_ed25519"),
+        Field::SshPassword => None,
+        Field::SshKeyPassphrase => Some("only for an encrypted key"),
     }
 }
 
@@ -241,6 +263,18 @@ pub struct ConnectionForm {
     buckets: Entity<InputState>,
     timeout: Entity<InputState>,
     folder: Entity<InputState>,
+    ssh_host: Entity<InputState>,
+    ssh_port: Entity<InputState>,
+    ssh_user: Entity<InputState>,
+    ssh_identity: Entity<InputState>,
+    ssh_password: Entity<InputState>,
+    ssh_key_passphrase: Entity<InputState>,
+    // The SSH tick, auth segment and keepalive tick; the text rows are the inputs above.
+    ssh_on: bool,
+    ssh_auth: SshAuthChoice,
+    ssh_keepalive: bool,
+    // The home folder an absolute identity file is checked against.
+    ssh_home: Option<PathBuf>,
     secret: SecretChoice,
     tls: TlsChoice,
     read_only: bool,
@@ -325,12 +359,19 @@ impl ConnectionForm {
         let buckets = text(Field::Buckets, &shown.buckets);
         let timeout = text(Field::Timeout, &shown.timeout);
         let folder = text(Field::Folder, &shown.folder);
-        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
-        let key_passphrase = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder(placeholder(Field::KeyPassphrase).unwrap_or(""))
-        });
+        let ssh_host = text(Field::SshHost, &shown.ssh.host);
+        let ssh_port = text(Field::SshPort, &shown.ssh.port);
+        let ssh_user = text(Field::SshUser, &shown.ssh.user);
+        let ssh_identity = text(Field::SshIdentity, &shown.ssh.identity_file);
+        // Secrets are masked and never prefilled: the file holds none to show.
+        let mut masked = |field: Field| {
+            let hint = placeholder(field).unwrap_or("");
+            cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(hint))
+        };
+        let password = masked(Field::Password);
+        let key_passphrase = masked(Field::KeyPassphrase);
+        let ssh_password = masked(Field::SshPassword);
+        let ssh_key_passphrase = masked(Field::SshKeyPassphrase);
         let folder_changes = cx.subscribe_in(&folder, window, |this, _, e: &InputEvent, _, cx| {
             if matches!(e, InputEvent::Change) {
                 this.suggest(cx);
@@ -354,6 +395,12 @@ impl ConnectionForm {
             &region,
             &endpoint,
             &access_key_id,
+            &ssh_host,
+            &ssh_port,
+            &ssh_user,
+            &ssh_identity,
+            &ssh_password,
+            &ssh_key_passphrase,
         ];
         let session_inputs = [&name, &read_only_user, &auth_level, &timeout, &buckets];
         let mut field_changes: Vec<Subscription> = server_inputs
@@ -407,6 +454,16 @@ impl ConnectionForm {
             buckets,
             timeout,
             folder,
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_identity,
+            ssh_password,
+            ssh_key_passphrase,
+            ssh_on: shown.ssh.on,
+            ssh_auth: shown.ssh.auth,
+            ssh_keepalive: shown.ssh.keepalive,
+            ssh_home: None,
             secret: shown.secret,
             tls: shown.tls,
             read_only: shown.read_only,
@@ -478,6 +535,13 @@ impl ConnectionForm {
         self
     }
 
+    /// Sets the home folder an absolute SSH identity file is checked against; without one
+    /// every absolute path warns.
+    pub fn with_ssh_home(mut self, home: Option<PathBuf>) -> Self {
+        self.ssh_home = home;
+        self
+    }
+
     /// Moves the form onto `loaded`, the edited connection's keys after a reload: a control
     /// the user left as first shown takes the new value, a changed one keeps the user's input.
     /// `None` keeps the form as it is and leaves Save to report the missing connection.
@@ -517,6 +581,14 @@ impl ConnectionForm {
             (Field::Buckets, was.buckets, now.buckets),
             (Field::Timeout, was.timeout, now.timeout),
             (Field::Folder, was.folder, now.folder),
+            (Field::SshHost, was.ssh.host, now.ssh.host),
+            (Field::SshPort, was.ssh.port, now.ssh.port),
+            (Field::SshUser, was.ssh.user, now.ssh.user),
+            (
+                Field::SshIdentity,
+                was.ssh.identity_file,
+                now.ssh.identity_file,
+            ),
         ] {
             let input = self.input(field).clone();
             if input.read(cx).value().trim() == was.trim() {
@@ -535,6 +607,15 @@ impl ConnectionForm {
         }
         if self.read_only == was.read_only {
             self.read_only = now.read_only;
+        }
+        if self.ssh_on == was.ssh.on {
+            self.ssh_on = now.ssh.on;
+        }
+        if self.ssh_auth == was.ssh.auth {
+            self.ssh_auth = now.ssh.auth;
+        }
+        if self.ssh_keepalive == was.ssh.keepalive {
+            self.ssh_keepalive = now.ssh.keepalive;
         }
         for key in FLAG_FIELDS {
             if flag(&self.flags, key) == flag(&was.flags, key) {
@@ -641,6 +722,12 @@ impl ConnectionForm {
             Field::Buckets => &self.buckets,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
+            Field::SshHost => &self.ssh_host,
+            Field::SshPort => &self.ssh_port,
+            Field::SshUser => &self.ssh_user,
+            Field::SshIdentity => &self.ssh_identity,
+            Field::SshPassword => &self.ssh_password,
+            Field::SshKeyPassphrase => &self.ssh_key_passphrase,
         }
     }
 
@@ -661,6 +748,46 @@ impl ConnectionForm {
         }
         let typed = self.key_passphrase.read(cx).value();
         (!typed.is_empty()).then(|| Secret::new(typed.to_string()))
+    }
+
+    /// The typed SSH password, when non-empty, SSH is ticked and the auth shows its row.
+    /// Never prefilled.
+    pub fn ssh_password(&self, cx: &App) -> Option<Secret> {
+        let shown = shows_password(self.ssh_auth);
+        self.ssh_secret(&self.ssh_password, shown, cx)
+    }
+
+    /// The typed SSH key passphrase, by the same rule as [`Self::ssh_password`].
+    pub fn ssh_key_passphrase(&self, cx: &App) -> Option<Secret> {
+        let shown = shows_passphrase(self.ssh_auth);
+        self.ssh_secret(&self.ssh_key_passphrase, shown, cx)
+    }
+
+    fn ssh_secret(&self, input: &Entity<InputState>, row: bool, cx: &App) -> Option<Secret> {
+        if !(self.ssh_open() && row) {
+            return None;
+        }
+        let typed = input.read(cx).value();
+        (!typed.is_empty()).then(|| Secret::new(typed.to_string()))
+    }
+
+    // Whether the SSH rows show: ticked, on an engine this build tunnels.
+    fn ssh_open(&self) -> bool {
+        self.ssh_on && takes_ssh(self.engine)
+    }
+
+    // What the SSH controls hold, untrimmed, as `ssh_spec` compares them with the loaded table.
+    fn ssh_typed(&self, cx: &App) -> SshTyped {
+        let text = |input: &Entity<InputState>| input.read(cx).value().to_string();
+        SshTyped {
+            on: self.ssh_on,
+            host: text(&self.ssh_host),
+            port: text(&self.ssh_port),
+            user: text(&self.ssh_user),
+            auth: self.ssh_auth,
+            identity_file: text(&self.ssh_identity),
+            keepalive: self.ssh_keepalive,
+        }
     }
 
     /// The databases offered under `conn-database` for the text typed so far.
@@ -1001,13 +1128,23 @@ impl ConnectionForm {
                         | Field::KeyPassphrase
                         | Field::AuthLevel
                         | Field::Timeout
-                        | Field::Folder => continue,
+                        | Field::Folder
+                        | Field::SshHost
+                        | Field::SshPort
+                        | Field::SshUser
+                        | Field::SshIdentity
+                        | Field::SshPassword
+                        | Field::SshKeyPassphrase => continue,
                     };
                     if let Some(v) = changed(field, was) {
                         *key = v;
                     }
                 }
             }
+        }
+        if takes_ssh(self.engine) {
+            spec.ssh = ssh_spec(self.loaded.ssh.as_ref(), &self.ssh_typed(cx))
+                .map_err(|(f, says)| at(ssh_field(f))(says))?;
         }
         if self.read_only != shown.read_only {
             spec.read_only = Some(self.read_only);
@@ -1208,7 +1345,10 @@ impl ConnectionForm {
     ) -> AnyElement {
         let input = Self::styled(Input::new(self.input(field)), field != Field::Name, cx);
         let input = self.marked(input, field, cx);
-        let input = if matches!(field, Field::Password | Field::KeyPassphrase) {
+        let input = if matches!(
+            field,
+            Field::Password | Field::KeyPassphrase | Field::SshPassword | Field::SshKeyPassphrase
+        ) {
             input.mask_toggle()
         } else {
             input
@@ -1251,13 +1391,13 @@ impl ConnectionForm {
         Self::row(label, file, cx)
     }
 
-    // A field and Port share one row: the field fills it and the port, at most five digits,
+    // A field and a port share one row: the field fills it and the port, at most five digits,
     // keeps a fixed 96 px box after its own label.
     fn host_port_row(
         &self,
         label: &'static str,
-        id: &'static str,
-        field: Field,
+        (id, field): (&'static str, Field),
+        (port_id, port_field): (&'static str, Field),
         cx: &App,
     ) -> AnyElement {
         let host = self.marked(
@@ -1265,8 +1405,8 @@ impl ConnectionForm {
             field,
             cx,
         );
-        let port = Self::styled(Input::new(&self.port), true, cx).w(px(PORT_WIDTH));
-        let port = self.marked(port, Field::Port, cx);
+        let port = Self::styled(Input::new(self.input(port_field)), true, cx).w(px(PORT_WIDTH));
+        let port = self.marked(port, port_field, cx);
         let line = h_flex()
             .gap_3()
             .child(div().id(id).test_support().flex_1().min_w_0().child(host))
@@ -1279,7 +1419,7 @@ impl ConnectionForm {
             )
             .child(
                 div()
-                    .id("conn-port")
+                    .id(port_id)
                     .test_support()
                     .flex_none()
                     .w(px(PORT_WIDTH))
@@ -1622,7 +1762,8 @@ impl ConnectionForm {
                     rows.extend(self.error_line(Some(ErrorAt::Databases), cx));
                 }
                 (FieldKind::Text, Some((field, id))) if next_is_port => {
-                    rows.push(self.host_port_row(f.label, id, field, cx));
+                    let port = ("conn-port", Field::Port);
+                    rows.push(self.host_port_row(f.label, (id, field), port, cx));
                     shown.push(&fields[ix + 1]);
                     ix += 1;
                 }
@@ -1785,6 +1926,87 @@ impl ConnectionForm {
         Some(note.into_any_element())
     }
 
+    // The SSH tick and, once ticked, the server, login and auth rows with their notes. A row
+    // the auth does not use is hidden; an error about a hidden identity shows under Auth.
+    fn ssh_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let tick = Checkbox::new("conn-ssh")
+            .small()
+            .label("Connect through an SSH server")
+            .checked(self.ssh_on)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.ssh_on = *checked;
+                this.touched(cx);
+            }));
+        let mut rows = vec![Self::row("", tick, cx)];
+        if !self.ssh_on {
+            return rows;
+        }
+        let (host, port) = (
+            ("conn-ssh-host", Field::SshHost),
+            ("conn-ssh-port", Field::SshPort),
+        );
+        rows.push(self.host_port_row("SSH host", host, port, cx));
+        rows.extend(self.error_line(Some(ErrorAt::Field(Field::SshHost)), cx));
+        rows.extend(self.error_line(Some(ErrorAt::Field(Field::SshPort)), cx));
+        rows.push(self.text_row("SSH user", "conn-ssh-user", Field::SshUser, cx));
+        let auth = ui::segmented(
+            "conn-ssh-auth",
+            &["Default", "Agent", "Key", "Password"],
+            self.ssh_auth as usize,
+            cx.listener(|this, ix: &usize, _, cx| {
+                this.ssh_auth = [
+                    SshAuthChoice::Default,
+                    SshAuthChoice::Agent,
+                    SshAuthChoice::Key,
+                    SshAuthChoice::Password,
+                ][*ix];
+                this.touched(cx);
+            }),
+            window,
+            cx,
+        );
+        rows.push(Self::row("Auth", h_flex().child(auth), cx));
+        let identity = Field::SshIdentity;
+        if matches!(self.ssh_auth, SshAuthChoice::Default | SshAuthChoice::Key) {
+            let prompt = "Choose identity file";
+            rows.push(self.file_row("Identity", "conn-ssh-identity", identity, prompt, cx));
+            rows.extend(self.error_line(Some(ErrorAt::Field(identity)), cx));
+            let typed = self.ssh_identity.read(cx).value().to_string();
+            if let Some(says) = identity_warning(&typed, self.ssh_home.as_deref()) {
+                rows.push(Self::help_line(
+                    "conn-ssh-identity-warning".into(),
+                    says,
+                    cx,
+                ));
+            }
+        } else {
+            rows.extend(self.error_line(Some(ErrorAt::Field(identity)), cx));
+        }
+        if shows_password(self.ssh_auth) {
+            let field = Field::SshPassword;
+            rows.push(self.text_row("SSH password", "conn-ssh-password", field, cx));
+        }
+        if shows_passphrase(self.ssh_auth) {
+            let (id, field) = ("conn-ssh-key-passphrase", Field::SshKeyPassphrase);
+            rows.push(self.text_row("Key passphrase", id, field, cx));
+        }
+        let keepalive = Checkbox::new("conn-ssh-keepalive")
+            .small()
+            .label("Send keepalives")
+            .checked(self.ssh_keepalive)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.ssh_keepalive = *checked;
+                this.untested(cx);
+            }));
+        rows.push(Self::row("", keepalive, cx));
+        rows.push(Self::help_line("conn-ssh-note".into(), SSH_HOST_NOTE, cx));
+        if self.tls == TlsChoice::Off {
+            let id = "conn-ssh-plaintext".into();
+            rows.push(Self::help_line(id, SSH_PLAINTEXT_NOTE, cx));
+        }
+        rows
+    }
+
     fn swatches(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let ring = cx.theme().foreground;
         let hollow = cx.theme().muted_foreground;
@@ -1901,16 +2123,23 @@ impl Render for ConnectionForm {
         let mut sections: Vec<(&'static str, Vec<AnyElement>)> = vec![("Connection", first)];
         // Rows join the section of the same title, so Name and Engine lead Connection and the
         // common rows end Options, which SQLite's descriptor lacks.
-        let mut section = |title: &'static str, rows: Vec<AnyElement>| match sections
-            .iter_mut()
-            .find(|(t, _)| *t == title)
-        {
-            Some((_, held)) => held.extend(rows),
-            None => sections.push((title, rows)),
-        };
         let form = dbento_core::connection_form(self.engine);
         for s in &form.sections {
-            section(s.title, self.section_rows(&s.fields, window, cx));
+            join(
+                &mut sections,
+                s.title,
+                self.section_rows(&s.fields, window, cx),
+            );
+        }
+        // SSH follows the engine's own sections but comes before Options, which most
+        // descriptors open themselves.
+        if takes_ssh(self.engine) {
+            let rows = self.ssh_rows(window, cx);
+            join(&mut sections, "SSH", rows);
+            if let Some(options) = sections.iter().position(|(t, _)| *t == "Options") {
+                let ssh = sections.remove(sections.len() - 1);
+                sections.insert(options, ssh);
+            }
         }
         let read_only = Checkbox::new("conn-read-only")
             .small()
@@ -1939,7 +2168,7 @@ impl Render for ConnectionForm {
                 self.suggestion_list("conn-folder-suggestion", Field::Folder, items, picked, cx);
             options.push(list.into_any_element());
         }
-        section("Options", options);
+        join(&mut sections, "Options", options);
 
         let danger = cx.theme().danger;
         let error = self.error_line(None, cx);
@@ -2050,6 +2279,18 @@ impl Render for ConnectionForm {
     }
 }
 
+// Adds `rows` to the section titled `title`, or opens it at the end.
+fn join(
+    sections: &mut Vec<(&'static str, Vec<AnyElement>)>,
+    title: &'static str,
+    rows: Vec<AnyElement>,
+) {
+    match sections.iter_mut().find(|(t, _)| *t == title) {
+        Some((_, held)) => held.extend(rows),
+        None => sections.push((title, rows)),
+    }
+}
+
 /// The text and choices each control shows for a spec.
 struct Shown {
     path: String,
@@ -2077,6 +2318,7 @@ struct Shown {
     flags: Flags,
     databases_choice: DatabasesChoice,
     chosen: Vec<String>,
+    ssh: SshTyped,
 }
 
 impl Shown {
@@ -2102,7 +2344,15 @@ impl Shown {
             Field::Buckets => &self.buckets,
             Field::Timeout => &self.timeout,
             Field::Folder => &self.folder,
-            Field::Name | Field::Password | Field::KeyPassphrase => "",
+            Field::SshHost => &self.ssh.host,
+            Field::SshPort => &self.ssh.port,
+            Field::SshUser => &self.ssh.user,
+            Field::SshIdentity => &self.ssh.identity_file,
+            Field::Name
+            | Field::Password
+            | Field::KeyPassphrase
+            | Field::SshPassword
+            | Field::SshKeyPassphrase => "",
         }
         .to_owned()
     }
@@ -2163,6 +2413,7 @@ impl Shown {
                 .collect(),
             databases_choice,
             chosen,
+            ssh: ssh_shown(spec.ssh.as_ref()),
         }
     }
 }
@@ -2344,6 +2595,18 @@ fn clear_other_engine(spec: &mut ConnectionSpec) {
     }
     if !client_cert(spec.engine) {
         (spec.tls_cert, spec.tls_key) = (None, None);
+    }
+    if !takes_ssh(spec.engine) {
+        spec.ssh = None;
+    }
+}
+
+// The form field an SSH refusal shows under.
+fn ssh_field(field: SshField) -> Field {
+    match field {
+        SshField::Host => Field::SshHost,
+        SshField::Port => Field::SshPort,
+        SshField::Identity => Field::SshIdentity,
     }
 }
 

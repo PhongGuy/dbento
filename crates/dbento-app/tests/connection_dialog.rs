@@ -137,7 +137,7 @@ fn a_changed_file_offers_reload(cx: &mut TestAppContext) {
 fn the_folder_field_suggests_existing_folders_and_takes_new_ones(cx: &mut TestAppContext) {
     let o = opened(cx, "", "folder = \"team/core\"", 0);
     // Tall enough that the list under Folder, at the foot of the form, needs no scrolling.
-    cx.simulate_window_resize(o.win, gpui_kit::size(px(1440.), px(1200.)));
+    cx.simulate_window_resize(o.win, gpui_kit::size(px(1440.), px(1300.)));
     support::gear(cx, o.win, "nopg");
     let folder = form(cx, &o).read_with(cx, |f, _| f.input(Field::Folder).clone());
     cx.update_window(o.win, |_, w, cx| {
@@ -320,6 +320,8 @@ fn reload_keeps_the_users_own_change(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn reload_after_the_connection_is_gone_keeps_the_dialog(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
+    // Tall enough that the colour swatches, near the foot of the form, need no scrolling.
+    cx.simulate_window_resize(o.win, gpui_kit::size(px(1440.), px(1200.)));
     support::gear(cx, o.win, "nopg");
     form(cx, &o);
     let file = o.fx.dir.path().join("dbento.toml");
@@ -341,6 +343,8 @@ fn reload_after(
     o: &support::Opened,
     outside: impl FnOnce(&std::path::Path),
 ) {
+    // Tall enough that the colour swatches, near the foot of the form, need no scrolling.
+    cx.simulate_window_resize(o.win, gpui_kit::size(px(1440.), px(1200.)));
     support::gear(cx, o.win, "nopg");
     form(cx, o);
     outside(&o.fx.dir.path().join("dbento.toml"));

@@ -4185,6 +4185,7 @@ impl Shell {
         let folders = ws.folders().iter().map(|f| f.path().clone()).collect();
         let dir = ws.dir().to_path_buf();
         let secrets_in_memory = self.services.secrets_in_memory;
+        let ssh_home = self.services.ssh.home().map(|h| h.dir().to_path_buf());
         let env_fallback = match &start {
             FormStart::Edit(name, _) => (self.services.env)(&secret_env_var(name)).is_some(),
             FormStart::New | FormStart::Copy(..) => false,
@@ -4199,7 +4200,9 @@ impl Shell {
                     ConnectionForm::copy_of(&name, spec, folders, secrets_in_memory, window, cx)
                 }
             };
-            form.with_base_dir(dir).with_env_fallback(env_fallback)
+            form.with_base_dir(dir)
+                .with_env_fallback(env_fallback)
+                .with_ssh_home(ssh_home)
         });
         let events = cx.subscribe_in(&form, window, |this, form, event, window, cx| match event {
             ConnectionFormEvent::Save => this.save_connection(window, cx),
