@@ -2,8 +2,10 @@
 //! the sshd fixture, a temporary SSH home and state folder, and SSH secrets.
 #![allow(dead_code)]
 
+use crate::support::{Cell, run};
 use dbento_core::{
-    ConnectError, Secret, SshEnv, SshHome, SshSecrets, StatePaths, Workspace, ssh_channel_check,
+    ConnectError, Limits, Secret, Session, SessionOptions, SshEnv, SshHome, SshSecrets, StatePaths,
+    Workspace, connect, ssh_channel_check,
 };
 use dbento_testkit::{SSH_USER, SshNet};
 use tempfile::TempDir;
@@ -80,6 +82,29 @@ impl Tunnel {
     ) -> Result<(), ConnectError> {
         let conn = self.ws.declared("pg").unwrap();
         ssh_channel_check(&self.ws, conn, &self.env(), secrets, host, port).await
+    }
+
+    /// Opens a session on `pg` through the tunnel with `env` and `secrets`.
+    pub async fn connect(
+        &self,
+        net: &SshNet,
+        env: SshEnv,
+        secrets: SshSecrets,
+    ) -> Result<Session, ConnectError> {
+        let mut opts = SessionOptions::default();
+        opts.ssh_env = Some(env);
+        opts.ssh_secrets = secrets;
+        let conn = self.ws.declared("pg").unwrap();
+        connect(&self.ws, conn, Some(Secret::new(net.pg().password())), opts).await
+    }
+}
+
+/// The first cell of `sql`'s first row, as text.
+pub async fn scalar(session: &mut Session, sql: &str) -> String {
+    let ran = run(session, sql, Limits::default()).await;
+    match &ran[0].as_ref().unwrap().rows[0][0] {
+        Cell::Text(t) => t.clone(),
+        other @ (Cell::Null | Cell::Bytes(_)) => panic!("{other:?}"),
     }
 }
 

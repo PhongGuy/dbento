@@ -9,5 +9,6 @@ pub use known_hosts::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,
     trust_host_key, user_known_hosts_lists,
 };
+pub(crate) use link::{Dialer, SshLink, SshStream, resolved, tunnel_target};
 pub use link::{SshEnv, ssh_channel_check};
 pub use resolve::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};

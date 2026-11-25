@@ -67,6 +67,23 @@ impl SshEnv {
 /// A channel to the database, carried by the SSH link.
 pub(crate) type SshStream = russh::ChannelStream<Msg>;
 
+/// How a driver reaches its database: by its own socket, or through a session's SSH link.
+#[derive(Clone)]
+pub(crate) enum Dialer {
+    Direct,
+    Ssh(Arc<SshLink>),
+}
+
+/// The database host and port (Postgres's 5432 when unset) a tunnel opens its channels to.
+/// A missing host fails before anything is dialled: no default would be the user's database.
+pub(crate) fn tunnel_target(conn: &ConnectionConfig) -> Result<(&str, u16), ConnectError> {
+    let host = conn.host().ok_or_else(|| ConnectError::SshTunnel {
+        message: "the connection has no database host for the SSH server to reach; set `host`"
+            .to_owned(),
+    })?;
+    Ok((host, conn.port().unwrap_or(5432)))
+}
+
 /// One signed-in SSH connection. Dropping it asks the server to disconnect.
 pub(crate) struct SshLink {
     handle: Option<Handle<Checker>>,
