@@ -77,13 +77,24 @@ impl SecretStore for KeychainStore {
     }
 }
 
-/// The keychain account for `key`: a JSON array of workspace directory and connection, the path
-/// with forward slashes so one workspace has one account on every OS.
+/// The keychain account for `key`: a JSON array of workspace directory and connection, then the
+/// slot's tag and an SSH password's login, the path with forward slashes so one workspace has
+/// one account on every OS.
 fn account(key: &SecretKey) -> String {
     let path = key.workspace_dir().to_string_lossy().replace('\\', "/");
     match key.slot() {
         Slot::Password => serde_json::json!([path, key.connection()]).to_string(),
         Slot::KeyPassphrase => serde_json::json!([path, key.connection(), "tls_key"]).to_string(),
+        Slot::SshPassword => serde_json::json!([
+            path,
+            key.connection(),
+            "ssh_password",
+            key.ssh_login().unwrap_or_default()
+        ])
+        .to_string(),
+        Slot::SshKeyPassphrase => {
+            serde_json::json!([path, key.connection(), "ssh_key"]).to_string()
+        }
     }
 }
 
@@ -204,6 +215,22 @@ mod tests {
         assert_eq!(
             account(&SecretKey::key_passphrase("/home/u/w", "a-b")),
             r#"["/home/u/w","a-b","tls_key"]"#
+        );
+    }
+
+    #[test]
+    fn the_ssh_slots_have_their_own_accounts() {
+        assert_eq!(
+            account(&SecretKey::ssh_password(
+                "/home/u/w",
+                "a-b",
+                "ops@jump:2222"
+            )),
+            r#"["/home/u/w","a-b","ssh_password","ops@jump:2222"]"#
+        );
+        assert_eq!(
+            account(&SecretKey::ssh_key_passphrase("/home/u/w", "a-b")),
+            r#"["/home/u/w","a-b","ssh_key"]"#
         );
     }
 

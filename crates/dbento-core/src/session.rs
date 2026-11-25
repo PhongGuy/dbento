@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Secret;
 use crate::capacity::CapacityUnits;
 #[cfg(feature = "duckdb")]
 use crate::duckdb::{DuckCancel, DuckDriver};
@@ -39,6 +38,7 @@ use crate::sqlite::{SqliteCancel, SqliteDriver};
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
 use crate::value::{ColumnInfo, ResultBatch};
 use crate::workspace::{ConnectionConfig, Engine, Workspace};
+use crate::{Secret, SshSecrets};
 
 /// Per-session overrides of the connection's configuration.
 #[non_exhaustive]
@@ -50,6 +50,8 @@ pub struct SessionOptions {
     pub statement_timeout: Option<Duration>,
     /// Decrypts an encrypted `tls_key`; see [`crate::resolve_key_passphrase`].
     pub key_passphrase: Option<Secret>,
+    /// The SSH password and key passphrase; see [`crate::resolve_ssh_secrets`].
+    pub ssh_secrets: SshSecrets,
     /// The session runs only SQL that Dbento generated, so a database may enforce read-only
     /// by transaction alone. Other engines ignore it.
     pub trusted_sql: bool,
@@ -522,6 +524,8 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) conn: &'a ConnectionConfig,
     pub(crate) secret: Option<&'a Secret>,
     pub(crate) key_passphrase: Option<&'a Secret>,
+    #[allow(dead_code)] // the SSH connect in session.rs reads it
+    pub(crate) ssh_secrets: SshSecrets,
     pub(crate) read_only: bool,
     pub(crate) timeout: Option<Duration>,
     /// See [`SessionOptions::trusted_sql`]. Only DuckDB reads it.
@@ -634,6 +638,7 @@ pub async fn connect(
         conn,
         secret: secret.as_ref(),
         key_passphrase: opts.key_passphrase.as_ref(),
+        ssh_secrets: opts.ssh_secrets,
         read_only,
         timeout,
         #[cfg(feature = "duckdb")]

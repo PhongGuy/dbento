@@ -4,7 +4,8 @@
 //! only when the two point at the same login and the pairing is unambiguous.
 
 use crate::{
-    ConnectionConfig, Engine, SecretError, SecretKey, SecretSource, SecretStore, Workspace,
+    ConnectionConfig, Engine, SecretError, SecretKey, SecretSource, SecretStore, SshHome,
+    Workspace, resolve_ssh,
 };
 
 /// How closely a renamed connection matches the one it replaced.
@@ -37,6 +38,8 @@ pub struct SecretRename {
     pub password: bool,
     /// Both sides have a client key whose passphrase may be saved.
     pub passphrase: bool,
+    /// Both sides have an ssh table, so the SSH password and key passphrase may be saved.
+    pub ssh: bool,
 }
 
 /// The keychain connections of `old` that `new` appears to have renamed, sorted by `from`.
@@ -105,7 +108,8 @@ fn vanished<'a>(this: &'a Workspace, other: &Workspace) -> Vec<&'a ConnectionCon
 fn pair(a: &ConnectionConfig, b: &ConnectionConfig) -> Option<SecretRename> {
     let password = keychain_backed(a) && keychain_backed(b);
     let passphrase = a.tls_key().is_some() && b.tls_key().is_some();
-    if !(password || passphrase) {
+    let ssh = a.ssh().is_some() && b.ssh().is_some();
+    if !(password || passphrase || ssh) {
         return None;
     }
     let (matched, changed) = if a.same_session(b) {
@@ -124,6 +128,7 @@ fn pair(a: &ConnectionConfig, b: &ConnectionConfig) -> Option<SecretRename> {
         changed,
         password,
         passphrase,
+        ssh,
     })
 }
 
@@ -164,4 +169,86 @@ pub fn adopt_secret(
     store.set(to, &secret)?;
     store.delete(from)?;
     Ok(Adopted::Moved)
+}
+
+/// Where `adopt_ssh_secrets` left the pinned SSH password.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshPasswordMove {
+    /// Both sides log in as the same `user@host:port`, so the entry followed the rename.
+    Moved(Adopted),
+    /// The entry stays under the old name; `message` says why and names
+    /// `dbento secret set <to> --ssh-password`.
+    Kept {
+        /// Why the entry stayed, and the command that saves it for the new name.
+        message: String,
+    },
+}
+
+/// What `adopt_ssh_secrets` did with each SSH slot.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshAdopted {
+    /// The password, pinned to the resolved login.
+    pub password: SshPasswordMove,
+    /// The `identity_file` passphrase, which is not pinned.
+    pub key_passphrase: Adopted,
+}
+
+/// Moves both SSH slots of `r`. The password moves only when both sides resolve (against
+/// `home`) to the same login; otherwise it stays and the result says so.
+pub fn adopt_ssh_secrets(
+    store: &dyn SecretStore,
+    old: &Workspace,
+    new: &Workspace,
+    r: &SecretRename,
+    home: &SshHome,
+) -> Result<SshAdopted, SecretError> {
+    let (Some(from), Some(to)) = (declared(old, &r.from), declared(new, &r.to)) else {
+        return Ok(SshAdopted {
+            password: kept(r, "the connection is no longer declared"),
+            key_passphrase: Adopted::NothingStored,
+        });
+    };
+    let key_passphrase = adopt_secret(
+        store,
+        &SecretKey::ssh_key_passphrase_for(old, from),
+        &SecretKey::ssh_key_passphrase_for(new, to),
+    )?;
+
+    // The password is pinned to the login it was saved for, so it follows only when the new
+    // name still logs in to the same place; any doubt leaves it where it is.
+    let resolve = |ws: &Workspace, conn: &ConnectionConfig| {
+        resolve_ssh(conn, ws.dir(), home)
+            .map(|resolved| resolved.login())
+            .map_err(|e| format!("`{}` does not resolve: {e}", conn.name()))
+    };
+    let password = match (resolve(old, from), resolve(new, to)) {
+        (Ok(was), Ok(now)) if was == now => SshPasswordMove::Moved(adopt_secret(
+            store,
+            &SecretKey::ssh_password_for(old, from, &was),
+            &SecretKey::ssh_password_for(new, to, &now),
+        )?),
+        (Ok(was), Ok(now)) => kept(r, &format!("it logged in as {was}, `{}` as {now}", r.to)),
+        (Err(reason), _) | (_, Err(reason)) => kept(r, &reason),
+    };
+    Ok(SshAdopted {
+        password,
+        key_passphrase,
+    })
+}
+
+/// The connection `ws` declares as `name`, derived children left out.
+fn declared<'a>(ws: &'a Workspace, name: &str) -> Option<&'a ConnectionConfig> {
+    ws.connections().iter().find(|c| c.name() == name)
+}
+
+/// The `Kept` result for `r`'s SSH password, with `reason` and the command that sets it anew.
+fn kept(r: &SecretRename, reason: &str) -> SshPasswordMove {
+    SshPasswordMove::Kept {
+        message: format!(
+            "the SSH password of `{}` stays under its old entry: {reason}; run `dbento secret set {} --ssh-password`",
+            r.from, r.to
+        ),
+    }
 }

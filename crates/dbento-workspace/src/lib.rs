@@ -28,11 +28,11 @@ pub use mongo_uri::BAD_PORT as MONGO_BAD_PORT;
 pub use secret_key::SecretKey;
 #[doc(hidden)]
 pub use secret_key::Slot;
-pub use spec::ConnectionSpec;
+pub use spec::{ConnectionSpec, SshSpec};
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, Engine, Folder, InitError, MAX_QUERY_FILE_BYTES,
-    OpenError, QueryFileError, ResolveError, SavedQuery, SecretSource, TEMPLATE, TlsMode,
-    Workspace, valid_database_name,
+    OpenError, QueryFileError, ResolveError, SavedQuery, SecretSource, SshAuth, SshConfig,
+    TEMPLATE, TlsMode, Workspace, valid_database_name,
 };
 #[doc(hidden)]
 pub use workspace::{color_word, is_identifier, is_local_host, timeout_in_range, valid_name};

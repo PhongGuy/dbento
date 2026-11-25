@@ -26,8 +26,8 @@ use crate::{theme, ui};
 pub const APPROVAL_POLL: Duration = Duration::from_secs(1);
 
 /// How far the folder label's hover area reaches below its text. The path tooltip centres on
-/// that area, so it sits half this lower: its shadow clears the headline, yet stays short of
-/// the SQL box, which then draws over the shadow's lower tail.
+/// that area, so it sits half this lower: its shadow clears the headline and the tooltip stays
+/// clear of the SQL box, where only its soft shadow tail may reach the top padding.
 pub const FOLDER_TIP_DROP: f32 = 6.;
 
 /// What the dialog says when the connection now resolves to another target than the request's.

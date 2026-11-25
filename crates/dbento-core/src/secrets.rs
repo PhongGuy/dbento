@@ -1,5 +1,6 @@
 //! Secret values that refuse to print themselves.
 
+use crate::ssh::ResolvedSsh;
 use crate::workspace::{ConnectionConfig, Engine, SecretSource, Workspace};
 use std::collections::HashMap;
 use std::fmt;
@@ -208,6 +209,24 @@ pub fn key_passphrase_env_var(connection: &str) -> String {
     )
 }
 
+/// The environment fallback for an SSH password: `DBENTO_SSH_PASSWORD_<NAME>`, uppercased, `-`
+/// as `_`.
+pub fn ssh_password_env_var(connection: &str) -> String {
+    format!(
+        "DBENTO_SSH_PASSWORD_{}",
+        connection.to_ascii_uppercase().replace('-', "_")
+    )
+}
+
+/// The environment fallback for an SSH `identity_file` passphrase:
+/// `DBENTO_SSH_KEY_PASSPHRASE_<NAME>`, uppercased, `-` as `_`.
+pub fn ssh_key_passphrase_env_var(connection: &str) -> String {
+    format!(
+        "DBENTO_SSH_KEY_PASSPHRASE_{}",
+        connection.to_ascii_uppercase().replace('-', "_")
+    )
+}
+
 /// Moves the stored secret; `Ok(false)` when `from` holds none. Deletes `from` only after
 /// `to` is set, so a failure never loses the secret.
 pub fn move_secret(
@@ -307,6 +326,50 @@ pub fn resolve_key_passphrase(
         Err(e) => return Err(e),
     }
     Ok(env(&key_passphrase_env_var(conn.secret_owner())).map(Secret::new))
+}
+
+/// The SSH secrets a tunnelled connection may need; either is `None` when nothing supplies it.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default)]
+pub struct SshSecrets {
+    /// The SSH password, read from the entry pinned to the resolved `user@host:port`.
+    pub password: Option<Secret>,
+    /// The passphrase of the SSH `identity_file`.
+    pub key_passphrase: Option<Secret>,
+}
+
+/// The SSH password and key passphrase for a connection with an `ssh` table: each from the
+/// keychain first, then `DBENTO_SSH_PASSWORD_<OWNER>` or `DBENTO_SSH_KEY_PASSPHRASE_<OWNER>`.
+///
+/// The password's entry is pinned to `resolved.login()`, so a repointed host misses it. A
+/// connection without `ssh` resolves to nothing without touching the store. Only an absent or
+/// `Unavailable` keychain falls through to the environment; a failing one is an error.
+pub fn resolve_ssh_secrets(
+    ws: &Workspace,
+    conn: &ConnectionConfig,
+    resolved: &ResolvedSsh,
+    store: &dyn SecretStore,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<SshSecrets, SecretError> {
+    if conn.ssh().is_none() {
+        return Ok(SshSecrets::default());
+    }
+    let owner = conn.secret_owner();
+    let slot = |key: SecretKey, variable: String| match store.get(&key) {
+        Ok(Some(secret)) => Ok(Some(secret)),
+        Ok(None) | Err(SecretError::Unavailable { .. }) => Ok(env(&variable).map(Secret::new)),
+        Err(e) => Err(e),
+    };
+    Ok(SshSecrets {
+        password: slot(
+            SecretKey::ssh_password_for(ws, conn, &resolved.login()),
+            ssh_password_env_var(owner),
+        )?,
+        key_passphrase: slot(
+            SecretKey::ssh_key_passphrase_for(ws, conn),
+            ssh_key_passphrase_env_var(owner),
+        )?,
+    })
 }
 
 /// Whether the connection's `tls_key` file reads as an encrypted PKCS#8 PEM, so it needs a
