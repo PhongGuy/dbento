@@ -2371,7 +2371,7 @@ fn parse_auth_level(text: &str) -> Result<AuthLevel, String> {
 }
 
 // Digits only: `u16::from_str` also takes a leading `+`.
-fn parse_port(text: &str) -> Result<u16, String> {
+pub(crate) fn parse_port(text: &str) -> Result<u16, String> {
     Some(text)
         .filter(|t| t.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|t| t.parse::<u16>().ok())
