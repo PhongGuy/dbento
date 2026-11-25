@@ -329,6 +329,7 @@ async fn postgres_streams_and_cancels_pg_sleep_within_a_second() {
         connection: "pg".into(),
         store: Arc::new(MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let r = spawn_on(&here(), spec);
     let ev = r.events();

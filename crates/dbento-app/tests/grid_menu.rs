@@ -373,6 +373,7 @@ fn a_mongodb_result_offers_no_sql_insert(cx: &mut TestAppContext) {
         connection: "mg".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == MG_SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let m = cx.new(|_| dbento_app::tab_model::TabModel::new(spec));
     let text = "db.t.insertOne({_id: 1, name: \"a\"});\ndb.t.find()";

@@ -954,6 +954,7 @@ impl Sidebar {
                 connection: conn.clone(),
                 store: Arc::clone(&self.services.store),
                 env: Arc::clone(&self.services.env),
+                ssh: self.services.ssh.clone(),
             };
             let runner = spawn_catalog(&tokio_bridge::handle(cx), spec);
             self.catalogs_started += 1;

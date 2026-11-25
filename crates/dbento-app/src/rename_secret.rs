@@ -6,8 +6,9 @@
 use std::path::Path;
 
 use dbento_core::{
-    ConnectionConfig, RenameMatch, SecretError, SecretKey, SecretRename, SecretStore, Workspace,
-    adopt_secret, key_passphrase_env_var, secret_env_var,
+    ConnectionConfig, RenameMatch, SecretError, SecretKey, SecretRename, SecretStore, SshHome,
+    Workspace, adopt_secret, key_passphrase_env_var, resolve_ssh, secret_env_var,
+    ssh_key_passphrase_env_var, ssh_password_env_var,
 };
 
 use crate::app::EnvLookup;
@@ -20,6 +21,13 @@ pub struct RenameKeys {
     pub password: Option<(SecretKey, SecretKey)>,
     /// The key passphrase entry pair, when both sides have a client key.
     pub passphrase: Option<(SecretKey, SecretKey)>,
+    /// The SSH password entry pair, when both sides tunnel and resolve to the same SSH login.
+    pub ssh_password: Option<(SecretKey, SecretKey)>,
+    /// The SSH key passphrase entry pair, when both sides tunnel.
+    pub ssh_passphrase: Option<(SecretKey, SecretKey)>,
+    /// The old pinned SSH password entry and why it stays: another login, or the new side does
+    /// not resolve.
+    pub ssh_password_stays: Option<(SecretKey, String)>,
 }
 
 /// Per slot: whether the old name holds a secret, and whether the new name already does.
@@ -33,18 +41,54 @@ pub struct Held {
     pub password_taken: bool,
     /// The new name already holds a key passphrase.
     pub passphrase_taken: bool,
+    /// The old name holds an SSH password.
+    pub ssh_password: bool,
+    /// The new name already holds an SSH password.
+    pub ssh_password_taken: bool,
+    /// The old name holds an SSH key passphrase.
+    pub ssh_passphrase: bool,
+    /// The new name already holds an SSH key passphrase.
+    pub ssh_passphrase_taken: bool,
+    /// The SSH password entry that stays under its old login holds a secret.
+    pub ssh_password_left: bool,
 }
 
 impl Held {
     /// Whether some slot holds a secret under the old name and none under the new.
     pub fn movable(&self) -> bool {
-        (self.password && !self.password_taken) || (self.passphrase && !self.passphrase_taken)
+        self.moves().into_iter().any(|(moves, _)| moves)
+    }
+
+    /// Per slot in display order: whether the move would carry it, and its name.
+    fn moves(&self) -> [(bool, &'static str); 4] {
+        [
+            (self.password && !self.password_taken, "password"),
+            (self.passphrase && !self.passphrase_taken, "key passphrase"),
+            (
+                self.ssh_password && !self.ssh_password_taken,
+                "SSH password",
+            ),
+            (
+                self.ssh_passphrase && !self.ssh_passphrase_taken,
+                "SSH key passphrase",
+            ),
+        ]
     }
 }
 
 /// The key pairs for `r`'s carried slots, taken only from each workspace's declared targets.
-pub fn rename_keys(old: &Workspace, new: &Workspace, r: &SecretRename) -> RenameKeys {
+/// The SSH password pairs only when both sides resolve against `home` to one login.
+pub fn rename_keys(
+    old: &Workspace,
+    new: &Workspace,
+    r: &SecretRename,
+    home: Option<&SshHome>,
+) -> RenameKeys {
     let both = |a: Option<SecretKey>, b: Option<SecretKey>| a.zip(b);
+    let (ssh_password, ssh_password_stays) = match (r.ssh, home) {
+        (true, Some(home)) => ssh_password_keys(old, new, r, home),
+        (true, None) | (false, _) => (None, None),
+    };
     RenameKeys {
         password: r
             .password
@@ -59,6 +103,56 @@ pub fn rename_keys(old: &Workspace, new: &Workspace, r: &SecretRename) -> Rename
                 )
             })
             .flatten(),
+        ssh_password,
+        ssh_passphrase: r
+            .ssh
+            .then(|| {
+                both(
+                    old.ssh_key_passphrase_target(&r.from),
+                    new.ssh_key_passphrase_target(&r.to),
+                )
+            })
+            .flatten(),
+        ssh_password_stays,
+    }
+}
+
+/// The SSH password pair and the staying old entry, as `RenameKeys` holds them.
+type SshPasswordKeys = (Option<(SecretKey, SecretKey)>, Option<(SecretKey, String)>);
+
+/// The SSH password is pinned to its login, so it pairs only when both sides resolve to the
+/// same one; an old login that resolves but has no match on the new side stays, with the reason.
+fn ssh_password_keys(
+    old: &Workspace,
+    new: &Workspace,
+    r: &SecretRename,
+    home: &SshHome,
+) -> SshPasswordKeys {
+    let login = |ws: &Workspace, name: &str| {
+        ws.declared(name)
+            .map(|c| resolve_ssh(c, ws.dir(), home).map(|s| s.login()))
+    };
+    let Some(Ok(from_login)) = login(old, &r.from) else {
+        return (None, None);
+    };
+    let Some(from) = old.ssh_password_target(&r.from, &from_login) else {
+        return (None, None);
+    };
+    match login(new, &r.to) {
+        Some(Ok(to_login)) if to_login == from_login => (
+            new.ssh_password_target(&r.to, &to_login)
+                .map(|to| (from, to)),
+            None,
+        ),
+        Some(Ok(to_login)) => (
+            None,
+            Some((
+                from,
+                format!("the SSH login changed from {from_login} to {to_login}"),
+            )),
+        ),
+        Some(Err(e)) => (None, Some((from, e.to_string()))),
+        None => (None, None),
     }
 }
 
@@ -79,6 +173,17 @@ pub fn probe(store: &dyn SecretStore, keys: &RenameKeys) -> Result<Held, SecretE
         held.passphrase = has(from)?;
         held.passphrase_taken = has(to)?;
     }
+    if let Some((from, to)) = &keys.ssh_password {
+        held.ssh_password = has(from)?;
+        held.ssh_password_taken = has(to)?;
+    }
+    if let Some((from, to)) = &keys.ssh_passphrase {
+        held.ssh_passphrase = has(from)?;
+        held.ssh_passphrase_taken = has(to)?;
+    }
+    if let Some((left, _)) = &keys.ssh_password_stays {
+        held.ssh_password_left = has(left)?;
+    }
     Ok(held)
 }
 
@@ -92,6 +197,14 @@ pub fn adopt_held(
     let slots = [
         (&keys.password, held.password && !held.password_taken),
         (&keys.passphrase, held.passphrase && !held.passphrase_taken),
+        (
+            &keys.ssh_password,
+            held.ssh_password && !held.ssh_password_taken,
+        ),
+        (
+            &keys.ssh_passphrase,
+            held.ssh_passphrase && !held.ssh_passphrase_taken,
+        ),
     ];
     for (pair, wanted) in slots {
         if let (Some((from, to)), true) = (pair, wanted) {
@@ -105,13 +218,15 @@ pub fn adopt_held(
 /// The question for a SameLogin rename: Keep (0, default and cancel) or Move (1).
 pub fn move_ask(r: &SecretRename, held: Held) -> Ask {
     // Name only the slots the move would carry: held under the old name, free under the new.
-    let what = match (
-        held.password && !held.password_taken,
-        held.passphrase && !held.passphrase_taken,
-    ) {
-        (true, true) => "password and key passphrase",
-        (false, true) => "key passphrase",
-        (true, false) | (false, false) => "password",
+    let names: Vec<&str> = held
+        .moves()
+        .into_iter()
+        .filter_map(|(moves, name)| moves.then_some(name))
+        .collect();
+    let what = match names.as_slice() {
+        [] => "password".to_owned(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     };
     let detail = format!(
         "{from} was renamed to {to} in dbento.toml, and these settings changed too: {keys}. \
@@ -144,6 +259,18 @@ pub fn move_ask(r: &SecretRename, held: Held) -> Ask {
     }
 }
 
+/// The notice for an SSH password that stays under its old login, said only when that entry
+/// holds a secret; it names the connections and the reason, never the secret.
+pub fn stays_line(r: &SecretRename, keys: &RenameKeys, held: Held) -> Option<String> {
+    let (_, why) = keys.ssh_password_stays.as_ref()?;
+    held.ssh_password_left.then(|| {
+        format!(
+            "The SSH password saved for {} stays under its old entry: {why}. Enter it again for {} in Edit connection.",
+            r.from, r.to
+        )
+    })
+}
+
 /// Whether `now` still says what was asked: same directory, `to` declared and same_session
 /// with `asked`, `from` undeclared.
 pub fn still_renamed(
@@ -171,6 +298,16 @@ pub fn env_lines(r: &SecretRename, held: Held, env: &EnvLookup) -> Vec<String> {
             r.passphrase,
             held.passphrase || held.passphrase_taken,
             key_passphrase_env_var,
+        ),
+        (
+            r.ssh,
+            held.ssh_password || held.ssh_password_taken || held.ssh_password_left,
+            ssh_password_env_var,
+        ),
+        (
+            r.ssh,
+            held.ssh_passphrase || held.ssh_passphrase_taken,
+            ssh_key_passphrase_env_var,
         ),
     ];
     // A SameLogin line repeats the targets, since the user decides whether it is the same login.

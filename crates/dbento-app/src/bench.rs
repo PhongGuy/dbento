@@ -52,6 +52,7 @@ pub fn main(config: PathBuf) -> ! {
                 .flatten()
         }),
         secrets_in_memory: false,
+        ssh: crate::ssh::SshContext::none(),
     };
     let ws_dir = targets.dir().to_path_buf();
     // Stays Unreported unless the report is written or an error is printed, so a window
