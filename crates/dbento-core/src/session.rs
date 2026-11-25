@@ -42,6 +42,7 @@ use crate::s3::{
     ObjectList, ObjectMeta, ObjectPage, ObjectRead,
 };
 use crate::sqlite::{SqliteCancel, SqliteDriver};
+use crate::ssh::{Dialer, HostKey, HostKeyProblem, SshEnv, SshLink, resolved, tunnel_target};
 #[cfg(feature = "surrealdb")]
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
 use crate::value::{ColumnInfo, ResultBatch};
@@ -60,6 +61,9 @@ pub struct SessionOptions {
     pub key_passphrase: Option<Secret>,
     /// The SSH password and key passphrase; see [`crate::resolve_ssh_secrets`].
     pub ssh_secrets: SshSecrets,
+    /// Where SSH settings, known hosts and the agent are read from; `None` is the running
+    /// user's, see [`SshEnv::from_env`].
+    pub ssh_env: Option<SshEnv>,
     /// The session runs only SQL that Dbento generated, so a database may enforce read-only
     /// by transaction alone. Other engines ignore it.
     pub trusted_sql: bool,
@@ -336,6 +340,84 @@ pub enum ConnectError {
         /// What is unsupported.
         reason: String,
     },
+    /// The SSH server could not be reached or the SSH handshake failed.
+    #[error("cannot reach the SSH server {address}: {message}")]
+    SshConnect {
+        /// The SSH server's `host:port`, never the database's.
+        address: String,
+        /// What failed.
+        message: String,
+    },
+    /// The SSH server refused the login, or nothing was there to log in with.
+    #[error("SSH login failed: {message}")]
+    SshAuth {
+        /// What was tried and what to set.
+        message: String,
+    },
+    /// The connection's SSH settings use something Dbento cannot honour yet.
+    #[error("SSH: {message}")]
+    SshUnsupported {
+        /// What is unsupported.
+        message: String,
+    },
+    /// No known_hosts file knows the SSH server; its key can be trusted once checked.
+    #[error(
+        "the SSH host key of {host}:{port} is not trusted yet ({})",
+        key.fingerprint()
+    )]
+    SshHostKeyUnknown {
+        /// The SSH host as resolved.
+        host: String,
+        /// The SSH port.
+        port: u16,
+        /// The key the server presented.
+        key: HostKey,
+    },
+    /// A known_hosts line refuses the SSH server's key.
+    #[error("{}", host_key_refusal(host, *port, fingerprint, file, *line, *problem))]
+    SshHostKeyChanged {
+        /// The SSH host as resolved.
+        host: String,
+        /// The SSH port.
+        port: u16,
+        /// The presented key's SHA-256 fingerprint.
+        fingerprint: String,
+        /// The known_hosts file holding the refusing line.
+        file: PathBuf,
+        /// The refusing line's number, from 1.
+        line: usize,
+        /// Why the key is refused.
+        problem: HostKeyProblem,
+    },
+    /// The SSH server would not open a channel to the database.
+    #[error("{message}")]
+    SshTunnel {
+        /// The target as the SSH server resolves it, and why it refused.
+        message: String,
+    },
+}
+
+/// How a refused SSH host key reads, by the rule that refused it.
+fn host_key_refusal(
+    host: &str,
+    port: u16,
+    fingerprint: &str,
+    file: &Path,
+    line: usize,
+    problem: HostKeyProblem,
+) -> String {
+    let file = file.display();
+    match problem {
+        HostKeyProblem::Changed => format!(
+            "the SSH host key of {host}:{port} differs from line {line} of {file} ({fingerprint}); refusing"
+        ),
+        HostKeyProblem::Revoked => format!(
+            "the SSH host key of {host}:{port} is revoked at line {line} of {file} ({fingerprint})"
+        ),
+        HostKeyProblem::Unreadable => {
+            format!("line {line} of {file} for {host}:{port} cannot be read")
+        }
+    }
 }
 
 /// Whether a refused TCP connect sits anywhere in `e`'s chain of sources.
@@ -532,8 +614,9 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) conn: &'a ConnectionConfig,
     pub(crate) secret: Option<&'a Secret>,
     pub(crate) key_passphrase: Option<&'a Secret>,
-    #[allow(dead_code)] // the SSH connect in session.rs reads it
     pub(crate) ssh_secrets: SshSecrets,
+    /// How the driver reaches the database; only Postgres reads it.
+    pub(crate) dialer: Dialer,
     pub(crate) read_only: bool,
     pub(crate) timeout: Option<Duration>,
     /// See [`SessionOptions::trusted_sql`]. Only DuckDB reads it.
@@ -648,11 +731,12 @@ pub async fn connect(
     if let Some(t) = timeout.filter(|t| !crate::workspace::timeout_in_range(*t)) {
         return Err(ConnectError::InvalidTimeout { timeout: t });
     }
-    let params = ConnectParams {
+    let mut params = ConnectParams {
         conn,
         secret: secret.as_ref(),
         key_passphrase: opts.key_passphrase.as_ref(),
         ssh_secrets: opts.ssh_secrets,
+        dialer: Dialer::Direct,
         read_only,
         timeout,
         #[cfg(feature = "duckdb")]
@@ -661,6 +745,36 @@ pub async fn connect(
         bounds: opts.bounds,
         ws_dir: ws.dir(),
     };
+    // A connection with an ssh table never connects directly: the link opens first, and an
+    // engine without a tunnelled driver yet is refused before anything is dialled.
+    let ssh = match conn.ssh() {
+        None => None,
+        Some(_) if conn.engine() != Engine::Postgres => {
+            return Err(ConnectError::SshUnsupported {
+                message: format!(
+                    "SSH tunnels for {} are not available yet",
+                    conn.engine().name()
+                ),
+            });
+        }
+        Some(_) => {
+            tunnel_target(conn)?;
+            let env = match opts.ssh_env {
+                Some(env) => env,
+                None => crate::StatePaths::from_env()
+                    .and_then(|paths| SshEnv::from_env(&paths))
+                    .ok_or_else(|| ConnectError::SshUnsupported {
+                        message: "no home directory to read SSH settings from".to_owned(),
+                    })?,
+            };
+            let resolved = resolved(ws, conn, &env)?;
+            let link = SshLink::open(conn, &resolved, &env, &params.ssh_secrets).await?;
+            Some(Arc::new(link))
+        }
+    };
+    if let Some(link) = &ssh {
+        params.dialer = Dialer::Ssh(Arc::clone(link));
+    }
     match conn.engine() {
         Engine::Postgres => {
             let d = PgDriver::connect(params).await?;
@@ -668,6 +782,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Postgres(d),
                 read_only: level,
+                ssh,
             })
         }
         Engine::Mysql => {
@@ -676,6 +791,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Mysql(d),
                 read_only: level,
+                ssh: None,
             })
         }
         Engine::Sqlite => {
@@ -684,6 +800,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Sqlite(d),
                 read_only: level,
+                ssh: None,
             })
         }
         Engine::Mssql => {
@@ -692,6 +809,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Mssql(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(feature = "duckdb")]
@@ -701,6 +819,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Duckdb(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(not(feature = "duckdb"))]
@@ -714,6 +833,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Mongodb(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(not(feature = "mongodb"))]
@@ -727,6 +847,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Surreal(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(not(feature = "surrealdb"))]
@@ -740,6 +861,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Redis(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(not(feature = "redis"))]
@@ -753,6 +875,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::Dynamodb(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(not(feature = "dynamodb"))]
@@ -766,6 +889,7 @@ pub async fn connect(
             Ok(Session {
                 inner: SessionInner::S3(d),
                 read_only: level,
+                ssh: None,
             })
         }
         #[cfg(not(feature = "s3"))]
@@ -815,6 +939,13 @@ pub fn read_only_residual(engine: Engine) -> Option<&'static str> {
 pub struct Session {
     inner: SessionInner,
     read_only: Option<ReadOnlyEnforcement>,
+    /// The SSH link the driver's connection runs through; declared after `inner` so the
+    /// driver closes before the link, and dropping the session ends SSH.
+    #[expect(
+        dead_code,
+        reason = "held only so the link lives as long as the session"
+    )]
+    ssh: Option<Arc<SshLink>>,
 }
 
 impl Session {

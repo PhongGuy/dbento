@@ -27,12 +27,14 @@ pub struct StatePaths {
     pub team: PathBuf,
     /// The folder holding each team workspace's conflict copies.
     pub team_conflicts: PathBuf,
+    /// The SSH host keys Dbento has been told to trust, in OpenSSH known_hosts format.
+    pub ssh_known_hosts: PathBuf,
 }
 
 impl StatePaths {
     /// The platform locations: state, settings, keymap and team under the config dir,
-    /// history, drafts, approvals and team conflicts under the data dir, each in a `dbento`
-    /// folder. `None` without a home directory.
+    /// history, drafts, approvals, team conflicts and SSH known hosts under the data dir,
+    /// each in a `dbento` folder. `None` without a home directory.
     pub fn platform() -> Option<StatePaths> {
         let config = dirs::config_dir()?.join("dbento");
         let data = dirs::data_dir()?.join("dbento");
@@ -45,6 +47,7 @@ impl StatePaths {
             keymap: config.join("keymap.json"),
             team: config.join("team.json"),
             team_conflicts: data.join("team-conflicts"),
+            ssh_known_hosts: data.join("ssh_known_hosts"),
         })
     }
 
@@ -59,6 +62,7 @@ impl StatePaths {
             keymap: dir.join("keymap.json"),
             team: dir.join("team.json"),
             team_conflicts: dir.join("team-conflicts"),
+            ssh_known_hosts: dir.join("ssh_known_hosts"),
         }
     }
 
