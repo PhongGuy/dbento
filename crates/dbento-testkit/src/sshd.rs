@@ -2,7 +2,6 @@
 //! sshd image is built locally from Alpine, with its host and client keys generated at build
 //! time and read out of the container, so no private key is ever committed.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -93,9 +92,14 @@ pub struct SshNet {
     fingerprint: String,
     db_host: String,
     ca_pem: String,
+    network: String,
 }
 
 impl SshNet {
+    /// The user-defined network both containers join; engine containers join it too.
+    pub fn network(&self) -> &str {
+        &self.network
+    }
     /// sshd's port 22, as published on 127.0.0.1.
     pub fn ssh_port(&self) -> u16 {
         self.ssh_port
@@ -132,21 +136,9 @@ impl SshNet {
 
     /// The `HostIp` of every port either container publishes.
     pub async fn published_ips(&self) -> Vec<String> {
-        let docker = engine().expect("reaching the container engine");
-        let ids = [Some(self.sshd.id()), self.pg.container_id()];
-        let mut ips = Vec::new();
-        for id in ids.into_iter().flatten() {
-            let inspected = docker
-                .inspect_container(id, None::<InspectContainerOptions>)
-                .await
-                .expect("inspecting a fixture container");
-            let ports = inspected
-                .network_settings
-                .and_then(|n| n.ports)
-                .unwrap_or_default();
-            for binding in ports.into_values().flatten().flatten() {
-                ips.push(binding.host_ip.unwrap_or_default());
-            }
+        let mut ips = published_ips(self.sshd.id()).await;
+        if let Some(id) = self.pg.container_id() {
+            ips.extend(published_ips(id).await);
         }
         ips
     }
@@ -193,7 +185,7 @@ async fn net(cert_name: Option<&str>) -> SshNet {
                     "/docker-entrypoint-initdb.d/tls.sh",
                     script.as_bytes().to_vec(),
                 )
-                .with_host_config_modifier(|h| loopback_only(h, "5432/tcp"))
+                .with_host_config_modifier(|h| loopback_only(h, &["5432/tcp"]))
         },
         "127.0.0.1",
     )
@@ -238,20 +230,45 @@ async fn net(cert_name: Option<&str>) -> SshNet {
         fingerprint,
         db_host: alias,
         ca_pem: tls.ca_pem,
+        network,
     }
 }
 
-/// Publishes only `port` and only on 127.0.0.1, with a host port the engine picks. It replaces
-/// the publish-everything default testcontainers sets on a networked request.
-fn loopback_only(host: &mut HostConfig, port: &str) {
+/// Publishes only `ports` ("6379/tcp") and only on 127.0.0.1, each on a host port the engine
+/// picks. It replaces the publish-everything default testcontainers sets on a networked request.
+pub(crate) fn loopback_only(host: &mut HostConfig, ports: &[&str]) {
     host.publish_all_ports = Some(false);
-    host.port_bindings = Some(HashMap::from([(
-        port.to_owned(),
-        Some(vec![PortBinding {
-            host_ip: Some("127.0.0.1".to_owned()),
-            host_port: None,
-        }]),
-    )]));
+    host.port_bindings = Some(
+        ports
+            .iter()
+            .map(|port| {
+                let binding = PortBinding {
+                    host_ip: Some("127.0.0.1".to_owned()),
+                    host_port: None,
+                };
+                ((*port).to_owned(), Some(vec![binding]))
+            })
+            .collect(),
+    );
+}
+
+/// The `HostIp` of every port container `id` publishes.
+pub async fn published_ips(id: &str) -> Vec<String> {
+    let docker = engine().expect("reaching the container engine");
+    let inspected = docker
+        .inspect_container(id, None::<InspectContainerOptions>)
+        .await
+        .expect("inspecting a fixture container");
+    let ports = inspected
+        .network_settings
+        .and_then(|n| n.ports)
+        .unwrap_or_default();
+    ports
+        .into_values()
+        .flatten()
+        .flatten()
+        .map(|binding| binding.host_ip.unwrap_or_default())
+        .collect()
 }
 
 /// Builds the image once per content (its tag hashes the build inputs) and starts it on
@@ -278,7 +295,7 @@ async fn start_sshd(network: &str) -> ContainerAsync<GenericImage> {
             .with_label("dbento.pid", std::process::id().to_string())
             .with_label(ATTEMPT_LABEL, attempt.clone())
             .with_host_config_modifier(|h| {
-                loopback_only(h, "22/tcp");
+                loopback_only(h, &["22/tcp"]);
                 own_oom_score(h);
             });
         async move {

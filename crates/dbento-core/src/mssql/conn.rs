@@ -15,7 +15,6 @@ use tiberius::{
     Client, ColumnData, Config, DoneItem, DoneKind, QueryItem, QueryStream, ResultMetadata, Row,
     ToSql,
 };
-use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt as _};
 
@@ -31,10 +30,12 @@ use crate::session::{
     Classification, ConnectError, DRAIN_CAP, ExecuteError, Flavor, Limits, OnTruncate, Outcome,
     Prepared, ServerInfo, TruncatedBy, Writes,
 };
+use crate::ssh::Dialer;
+use crate::ssh::stream::{DbStream, DialError, dial};
 use crate::value::{BatchBuilder, ColumnInfo, ResultBatch};
 use crate::workspace::Engine;
 
-type MsClient = Client<Compat<TcpStream>>;
+type MsClient = Client<Compat<DbStream>>;
 
 /// TDS's CurCmd for SELECT: a counted DONE under it without metadata is a variable assignment.
 const CUR_CMD_SELECT: u16 = 193;
@@ -112,11 +113,14 @@ pub(crate) struct Rules {
 
 /// Starts the session's thread on a current-thread runtime of its own and waits for its
 /// login; returns the session's request channel and its cancel, built on the logged-in client.
+/// `host` is the configured host errors name; the socket opens to `dial` through `dialer`.
 pub(crate) async fn start(
     config: Config,
     host: String,
+    dial: (String, u16),
     target: String,
     rules: Rules,
+    dialer: Dialer,
 ) -> Result<(mpsc::UnboundedSender<Request>, ServerInfo, Arc<MssqlCancel>), ConnectError> {
     let open = |message: String| ConnectError::Open { message };
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -129,7 +133,14 @@ pub(crate) async fn start(
         .name("dbento-mssql".into())
         .spawn(move || {
             runtime.block_on(async move {
-                let sign_in = login(config, &host, &target, rules.reader.as_deref());
+                let sign_in = login(
+                    config,
+                    &host,
+                    &dial,
+                    &dialer,
+                    &target,
+                    rules.reader.as_deref(),
+                );
                 let opened = tokio::time::timeout(CONNECT_TIMEOUT, sign_in)
                     .await
                     .unwrap_or_else(|_| {
@@ -138,6 +149,8 @@ pub(crate) async fn start(
                             CONNECT_TIMEOUT.as_secs()
                         )))
                     });
+                // Only the session holds the SSH link once logged in, so dropping it ends SSH.
+                drop(dialer);
                 match opened {
                     Ok((client, server, database)) => {
                         let cancel = Arc::new(MssqlCancel::new(client.attention_handle()));
@@ -152,6 +165,8 @@ pub(crate) async fn start(
                     }
                     Err(e) => drop(opened_tx.send(Err(e))),
                 }
+                // A dropped SSH channel spawns its close; let that run before the runtime goes.
+                tokio::task::yield_now().await;
             });
         })
         .map_err(|e| open(format!("cannot start the SQL Server thread: {e}")))?;
@@ -161,11 +176,13 @@ pub(crate) async fn start(
     Ok((requests, server, cancel))
 }
 
-/// TCP, the TDS login, the version and database query, and the switch to `reader` if there is
-/// one; any failure names the target.
+/// The socket, the TDS login, the version and database query, and the switch to `reader` if
+/// there is one; any failure names the target.
 async fn login(
     config: Config,
     host: &str,
+    to: &(String, u16),
+    dialer: &Dialer,
     target: &str,
     reader: Option<&str>,
 ) -> Result<(MsClient, ServerInfo, String), ConnectError> {
@@ -173,11 +190,11 @@ async fn login(
         message: format!("{target}: {e}"),
     };
     let refused = |e: tiberius::error::Error| connect_error(host, target, &e);
-    let tcp = TcpStream::connect(config.get_addr())
-        .await
-        .map_err(|e| failed(&e))?;
-    tcp.set_nodelay(true).map_err(|e| failed(&e))?;
-    let mut client = Client::connect(config, tcp.compat_write())
+    let stream = dial(dialer, &to.0, to.1).await.map_err(|e| match e {
+        DialError::Io(e) => failed(&e),
+        DialError::Ssh(e) => e,
+    })?;
+    let mut client = Client::connect(config, stream.compat_write())
         .await
         .map_err(refused)?;
     let row = client

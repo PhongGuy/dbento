@@ -7,7 +7,7 @@ use dbento_core::{
     ConnectError, Limits, Secret, Session, SessionOptions, SshEnv, SshHome, SshSecrets, StatePaths,
     Workspace, connect, ssh_channel_check,
 };
-use dbento_testkit::{SSH_USER, SshNet};
+use dbento_testkit::{SSH_PASSWORD, SSH_USER, SshNet};
 use tempfile::TempDir;
 
 pub struct Tunnel {
@@ -55,7 +55,43 @@ pub fn tunnel_with(net: &SshNet, ssh: &str, pg_extra: &str, files: &[(&str, &str
     }
 }
 
+/// `[connections.<name>]` holding `body`, then its ssh table for the fixture's password user;
+/// `files` are written into the workspace first.
+pub fn engine_tunnel(net: &SshNet, name: &str, body: &str, files: &[(&str, &str)]) -> Tunnel {
+    let dir = tempfile::tempdir().unwrap();
+    for (file, text) in files {
+        std::fs::write(dir.path().join(file), text).unwrap();
+    }
+    let toml = format!(
+        "dbento = 1\n[connections.{name}]\n{body}\n[connections.{name}.ssh]\nhost = \"127.0.0.1\"\nport = {}\n{}\n",
+        net.ssh_port(),
+        password_login()
+    );
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+    Tunnel {
+        dir,
+        home,
+        state: tempfile::tempdir().unwrap(),
+        ws,
+    }
+}
+
 impl Tunnel {
+    /// Connects `name` with the tunnel's env and the fixture password as the SSH secret.
+    pub async fn session(
+        &self,
+        name: &str,
+        secret: Option<Secret>,
+    ) -> Result<Session, ConnectError> {
+        let mut opts = SessionOptions::default();
+        opts.ssh_env = Some(self.env());
+        opts.ssh_secrets = password(SSH_PASSWORD);
+        connect(&self.ws, self.ws.declared(name).unwrap(), secret, opts).await
+    }
+
     pub fn paths(&self) -> StatePaths {
         StatePaths::in_dir(self.state.path())
     }

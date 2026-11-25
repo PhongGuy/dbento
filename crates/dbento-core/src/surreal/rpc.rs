@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
@@ -21,6 +20,8 @@ use super::wire::{WireError, field};
 use crate::postgres::{TLS_WAYS_OUT, rustls_config, tls_error};
 use crate::secrets::Secret;
 use crate::session::ConnectError;
+use crate::ssh::Dialer;
+use crate::ssh::stream::{DbStream, DialError, dial};
 use crate::workspace::{ConnectionConfig, TlsMode};
 
 /// The largest reply the socket accepts; one frame holds up to 256 rows, so wide rows need room.
@@ -282,6 +283,7 @@ impl Rpc {
         conn: &ConnectionConfig,
         passphrase: Option<&Secret>,
         call_bound: Duration,
+        dialer: &Dialer,
     ) -> Result<Rpc, ConnectError> {
         let host = conn.host().unwrap_or_default();
         let port = conn.port().unwrap_or(8000);
@@ -294,10 +296,11 @@ impl Rpc {
             header::SEC_WEBSOCKET_PROTOCOL,
             header::HeaderValue::from_static("cbor"),
         );
-        let tcp = TcpStream::connect((host, port))
-            .await
-            .map_err(|e| open_error(conn, e.to_string()))?;
-        let _ = tcp.set_nodelay(true);
+        let stream = match dial(dialer, host, port).await {
+            Ok(stream) => stream,
+            Err(DialError::Io(e)) => return Err(open_error(conn, e.to_string())),
+            Err(DialError::Ssh(e)) => return Err(e),
+        };
         // Always a connector: `None` would build one with no roots at all.
         let connector = if tls {
             Connector::Rustls(Arc::new(rustls_config(conn, passphrase)?))
@@ -307,13 +310,14 @@ impl Rpc {
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_REPLY))
             .max_frame_size(Some(MAX_REPLY));
-        let (socket, _) = client_async_tls_with_config(upgrade, tcp, Some(config), Some(connector))
-            .await
-            .map_err(|e| handshake_error(conn, tls, e))?;
+        let (socket, _) =
+            client_async_tls_with_config(upgrade, stream, Some(config), Some(connector))
+                .await
+                .map_err(|e| handshake_error(conn, tls, e))?;
         Ok(Rpc::start(socket, call_bound))
     }
 
-    fn start(socket: WebSocketStream<MaybeTlsStream<TcpStream>>, call_bound: Duration) -> Rpc {
+    fn start(socket: WebSocketStream<MaybeTlsStream<DbStream>>, call_bound: Duration) -> Rpc {
         let (commands, rx) = mpsc::unbounded_channel();
         let gauge = Arc::new(Gauge::default());
         let closed = Arc::new(Mutex::new(None));
@@ -449,7 +453,7 @@ fn handshake_error(conn: &ConnectionConfig, tls: bool, e: WsError) -> ConnectErr
 // The task: a `select` over commands and the socket, which it stops polling past the buffer
 // bound. Commands still run then, so a stop can always reach the server.
 async fn run(
-    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    socket: WebSocketStream<MaybeTlsStream<DbStream>>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     gauge: Arc<Gauge>,
     closed: Arc<Mutex<Option<String>>>,
