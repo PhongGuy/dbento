@@ -305,7 +305,7 @@ pub async fn mssql_tls() -> (MsDb, String) {
     if let Err(e) = source {
         panic!("{e}");
     }
-    let tls = server_tls();
+    let tls = server_tls(&["localhost"]);
     let db = container(Some(&tls)).await;
     (db, tls.ca_pem)
 }

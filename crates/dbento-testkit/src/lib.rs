@@ -14,7 +14,8 @@ use rcgen::{
 };
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::bollard::query_parameters::{
-    InspectContainerOptions, ListContainersOptions, ListVolumesOptions, RemoveContainerOptions,
+    InspectContainerOptions, ListContainersOptions, ListNetworksOptions, ListVolumesOptions,
+    RemoveContainerOptions,
 };
 use testcontainers_modules::testcontainers::bollard::{API_DEFAULT_VERSION, Docker};
 use testcontainers_modules::testcontainers::{
@@ -33,6 +34,7 @@ mod mysql;
 pub mod potluck;
 #[cfg(feature = "redis")]
 mod redis;
+mod sshd;
 mod surreal;
 #[cfg(feature = "redis")]
 pub use self::redis::*;
@@ -44,6 +46,7 @@ pub use dynamo::*;
 pub use mongo::*;
 pub use mssql::*;
 pub use mysql::*;
+pub use sshd::*;
 pub use surreal::*;
 
 /// The environment variable the generated connection reads its password from.
@@ -238,7 +241,7 @@ pub async fn pg_container() -> PgDb {
     start(|| Postgres::default().into(), "127.0.0.1").await
 }
 
-/// A fresh CA and a "localhost" server certificate it signed.
+/// A fresh CA and a server certificate it signed for the names `server_tls` was given.
 pub(crate) struct ServerTls {
     issuer: Issuer<'static, KeyPair>,
     pub(crate) ca_pem: String,
@@ -246,14 +249,14 @@ pub(crate) struct ServerTls {
     pub(crate) key_pem: String,
 }
 
-pub(crate) fn server_tls() -> ServerTls {
+pub(crate) fn server_tls(names: &[&str]) -> ServerTls {
     let ca_key = KeyPair::generate().expect("CA key");
     let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let ca_cert = ca_params.self_signed(&ca_key).expect("CA certificate");
     let issuer = Issuer::new(ca_params, ca_key);
     let key = KeyPair::generate().expect("server key");
-    let cert = CertificateParams::new(vec!["localhost".to_owned()])
+    let cert = CertificateParams::new(names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>())
         .expect("server params")
         .signed_by(&key, &issuer)
         .expect("server certificate");
@@ -278,7 +281,7 @@ fn tls_script(tls: &ServerTls) -> String {
 /// A container with `ssl = on` and a server certificate for "localhost", signed by a fresh CA.
 /// Returns the database (host "localhost") and the CA's PEM.
 pub async fn pg_tls() -> (PgDb, String) {
-    let tls = server_tls();
+    let tls = server_tls(&["localhost"]);
     let script = tls_script(&tls);
     let image = || {
         Postgres::default().with_copy_to(
@@ -308,7 +311,7 @@ pub struct ClientCert {
 /// with a client certificate the same CA signed (`hostssl ... cert`). The `postgres` admin
 /// keeps its password login, so the harness still makes the fresh database.
 pub async fn pg_client_cert() -> (PgDb, ClientCert) {
-    let tls = server_tls();
+    let tls = server_tls(&["localhost"]);
     let client = client_cert(&tls);
     // The cert line goes first, since the first matching pg_hba line decides.
     let script = format!(
@@ -546,8 +549,42 @@ async fn sweep_orphans() {
             for id in orphans(labelled("dbento.role=test").await, alive) {
                 remove(&id).await;
             }
+            // Networks carry no labels, so the sshd fixture's names carry the pid instead.
+            // Their containers went above, which frees the networks to be removed.
+            let Ok(docker) = engine() else { return };
+            let names = docker
+                .list_networks(None::<ListNetworksOptions>)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|n| n.name);
+            for name in orphan_networks(names, alive) {
+                if let Err(e) = docker.remove_network(&name).await {
+                    eprintln!("dbento-testkit: cannot remove network {name}: {e}");
+                }
+            }
         })
         .await;
+}
+
+/// Names of sshd fixture networks (`dbento-ssh-<pid>-<n>`) whose pid `alive` calls dead.
+fn orphan_networks(
+    names: impl IntoIterator<Item = String>,
+    alive: impl Fn(u32) -> bool,
+) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|name| {
+            let Some((pid, n)) = name
+                .strip_prefix("dbento-ssh-")
+                .and_then(|rest| rest.split_once('-'))
+            else {
+                return false;
+            };
+            let numbered = !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+            numbered && pid.parse().is_ok_and(|pid| !alive(pid))
+        })
+        .collect()
 }
 
 /// Every container, running or not, carrying `label` (`key=value`), with its labels. Empty
@@ -1105,6 +1142,24 @@ mod tests {
         assert_eq!(
             orphans(containers, |pid| pid == 22),
             vec!["dead".to_owned()]
+        );
+    }
+
+    #[test]
+    fn only_ssh_networks_of_exited_processes_are_orphans() {
+        let names = [
+            "dbento-ssh-11-0",
+            "dbento-ssh-11-7",
+            "dbento-ssh-22-0",
+            "dbento-ssh-x-0",
+            "dbento-ssh-11",
+            "podman",
+            "other-ssh-11-0",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            orphan_networks(names, |pid| pid == 22),
+            vec!["dbento-ssh-11-0".to_owned(), "dbento-ssh-11-7".to_owned()]
         );
     }
 

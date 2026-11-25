@@ -383,7 +383,7 @@ pub async fn surreal_server(tag: &str, env: &[(&str, &str)]) -> SrDb {
 /// A fresh container serving wss with a "localhost" certificate from a fresh CA, on host
 /// "localhost". The string is the CA's PEM. `admin` cannot reach it, as it speaks plain HTTP.
 pub async fn surreal_tls() -> (SrDb, String) {
-    let tls = server_tls();
+    let tls = server_tls(&["localhost"]);
     let (cert, key) = (tls.cert_pem.clone(), tls.key_pem.clone());
     let env = [
         ("SURREAL_WEB_CRT".to_owned(), "/tmp/server.crt".to_owned()),
