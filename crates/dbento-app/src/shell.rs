@@ -4502,9 +4502,10 @@ impl Shell {
         // A rename is not applied yet, so stored secrets are still under the old name.
         let renamed = previous.filter(|p| *p != name);
         form.update(cx, |f, cx| f.set_test(TestState::Testing, cx));
-        let (store, env) = (
+        let (store, env, ssh) = (
             Arc::clone(&self.services.store),
             Arc::clone(&self.services.env),
+            self.services.ssh.clone(),
         );
         let attempt = crate::tokio_bridge::spawn(cx, async move {
             let plan = Arc::new(plan);
@@ -4540,6 +4541,7 @@ impl Shell {
                 Some(typed) => Some(typed),
                 None => {
                     let (plan, name) = (Arc::clone(&plan), name.clone());
+                    let (store, env) = (Arc::clone(&store), Arc::clone(&env));
                     tokio::task::spawn_blocking(move || {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
@@ -4557,13 +4559,25 @@ impl Shell {
                     .map_err(|e| e.to_string())??
                 }
             };
+            // SSH secrets are read under the name as typed, never a rename's old name.
+            let ssh_secrets = {
+                let (plan, name, ssh) = (Arc::clone(&plan), name.clone(), ssh.clone());
+                tokio::task::spawn_blocking(move || {
+                    let ws = plan.workspace();
+                    let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
+                    crate::ssh::ssh_secrets(ws, &conn, &ssh, &*store, &*env)
+                })
+                .await
+                .map_err(|e| e.to_string())??
+            };
             let ws = plan.workspace();
             let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
             let mut options = SessionOptions::default();
             options.key_passphrase = key_passphrase;
+            ssh.apply(&mut options, ssh_secrets);
             let mut session = connect(ws, &conn, secret, options)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| crate::ssh::connect_message(&name, &e, &ssh))?;
             // The server's databases fill Database's suggestions. The session connected, so a
             // list the engine lacks, the login may not read or the server stalls on leaves the
             // test passed.

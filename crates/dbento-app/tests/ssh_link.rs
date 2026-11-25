@@ -12,6 +12,12 @@ use dbento_core::{
 };
 use std::path::{Path, PathBuf};
 
+use crate::support::{
+    Started, click_id, gear, label_of, open_connection_row, present, started, wait_real,
+};
+use gpui_kit::TestAppContext;
+use std::sync::Arc;
+
 /// A context over an empty home and state folder under `dir`, with no agent.
 fn ctx(dir: &Path) -> SshContext {
     let state = StatePaths::in_dir(dir);
@@ -340,4 +346,69 @@ fn a_message_without_its_own_fix_line_carries_the_ssh_fix() {
         unsupported.to_string(),
         "no fix"
     );
+}
+
+/// A tunnelled connection whose SSH host is an alias only the test home's `~/.ssh/config`
+/// defines, pointing at a closed port: reaching 127.0.0.1:9 proves the app's SSH context was
+/// applied, since the real home would not resolve the alias.
+const UNREACHABLE: &str = "dbento = 1\n[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = \"none\"\n[connections.tun.ssh]\nhost = \"dbento-test-jump\"\nuser = \"ops\"\nauth = \"password\"\n";
+
+/// Writes the alias into the SSH home `support::services` gives the app (D-b7).
+fn alias_home(s: &Started) {
+    let ssh = s.files.path().join("ssh-home").join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(
+        ssh.join("config"),
+        "Host dbento-test-jump\n  HostName 127.0.0.1\n  Port 9\n",
+    )
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn an_unreachable_ssh_server_names_the_ssh_address_and_its_fix(cx: &mut TestAppContext) {
+    let s = started(cx, UNREACHABLE);
+    alias_home(&s);
+    open_connection_row(cx, s.win, "tun");
+    wait_real(cx, "the failure", |cx| {
+        present(cx, s.win, "connect-error-hint")
+    });
+    assert_eq!(
+        label_of(cx, s.win, "connect-error-hint").as_deref(),
+        Some(CONNECT_HINT)
+    );
+    let message = label_of(cx, s.win, "connect-error-message").unwrap();
+    assert!(
+        message.contains("127.0.0.1:9"),
+        "names the SSH address: {message}"
+    );
+}
+
+#[gpui_kit::test]
+fn test_connection_tunnels_through_the_apps_ssh_home_and_shows_the_ssh_fix(
+    cx: &mut TestAppContext,
+) {
+    let s = started(cx, UNREACHABLE);
+    alias_home(&s);
+    // Stored under the login the alias resolves to, so the SSH secret lookup has a hit to find.
+    let store = s
+        .shell
+        .read_with(cx, |sh, _| Arc::clone(&sh.services().store));
+    store
+        .set(
+            &SecretKey::ssh_password(s.dir.path(), "tun", "ops@127.0.0.1:9"),
+            &Secret::new("pw"),
+        )
+        .unwrap();
+    gear(cx, s.win, "tun");
+    wait_real(cx, "the dialog", |cx| present(cx, s.win, "conn-name"));
+    click_id(cx, s.win, "conn-test");
+    wait_real(cx, "the test result", |cx| {
+        label_of(cx, s.win, "conn-test-result").is_some_and(|l| l.starts_with("Failed: "))
+    });
+    let failed = label_of(cx, s.win, "conn-test-result").unwrap();
+    assert!(
+        failed.contains("127.0.0.1:9"),
+        "dialled through the app's SSH home: {failed}"
+    );
+    assert!(failed.contains(CONNECT_HINT), "with the SSH fix: {failed}");
 }
