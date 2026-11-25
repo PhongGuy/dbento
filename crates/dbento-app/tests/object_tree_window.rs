@@ -248,3 +248,70 @@ fn s3_rows_offer_their_own_menus(cx: &mut TestAppContext) {
         ]
     );
 }
+
+#[gpui_kit::test]
+fn enter_on_an_object_opens_its_tab(cx: &mut TestAppContext) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _enter = rt.enter();
+    let s3 = rt.block_on(s3_moto());
+    let b = s3.bucket().to_owned();
+    let s = s3_window(cx, &s3);
+    click_id(cx, s.win, part_id("connection-toggle", "s3"));
+    expand(cx, &s, &format!("s3.{b}"));
+    expand(cx, &s, &format!("s3.{b}/json/"));
+    let doc = wait_row(cx, &s, &format!("s3.{b}.json/doc.json"));
+    click_id(cx, s.win, ("tree-row", doc));
+    assert!(
+        !present(cx, s.win, "object-header"),
+        "a single click only selects"
+    );
+    cx.update_window(s.win, |_, w, cx| {
+        w.dispatch_action(Box::new(dbento_app::keymap::OpenSelected), cx)
+    })
+    .unwrap();
+    wait_real(cx, "the object tab", |cx| {
+        present(cx, s.win, "object-header")
+    });
+    let key = s.shell.read_with(cx, |sh, cx| {
+        sh.tab().and_then(|t| {
+            t.read(cx)
+                .model()
+                .read(cx)
+                .object_view()
+                .map(|v| v.object_key().key)
+        })
+    });
+    assert_eq!(key.as_deref(), Some("json/doc.json"));
+}
+
+#[gpui_kit::test]
+fn the_download_menu_item_saves_the_object(cx: &mut TestAppContext) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _enter = rt.enter();
+    let s3 = rt.block_on(s3_moto());
+    let b = s3.bucket().to_owned();
+    let s = s3_window(cx, &s3);
+    click_id(cx, s.win, part_id("connection-toggle", "s3"));
+    expand(cx, &s, &format!("s3.{b}"));
+    expand(cx, &s, &format!("s3.{b}/text/"));
+    menu(
+        cx,
+        &s,
+        &format!("s3.{b}.text/hello.txt"),
+        "tree-menu-download",
+    );
+    let out = tempfile::tempdir().unwrap();
+    let dest = out.path().join("hello.txt");
+    let (target, home) = (dest.clone(), s.files.path().to_path_buf());
+    cx.simulate_new_path_selection(move |dir| {
+        assert_eq!(
+            dir,
+            home.as_path(),
+            "a test window never opens a user folder"
+        );
+        Some(target)
+    });
+    wait_real(cx, "the file", |_| {
+        std::fs::read(&dest).is_ok_and(|b| b == b"hello, bento\n")
+    });
+}

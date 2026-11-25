@@ -154,8 +154,15 @@ fn the_window_close_names_a_running_download_and_cancels_it(cx: &mut TestAppCont
         })
     })
     .unwrap();
-    let target = out.path().join("k.txt");
-    cx.simulate_new_path_selection(move |_| Some(target));
+    let (target, home) = (out.path().join("k.txt"), s.files.path().to_path_buf());
+    cx.simulate_new_path_selection(move |dir| {
+        assert_eq!(
+            dir,
+            home.as_path(),
+            "a test window never opens a user folder"
+        );
+        Some(target)
+    });
     wait_real(cx, "the running download", |cx| {
         present(cx, s.win, ("download-cancel", 0usize))
     });

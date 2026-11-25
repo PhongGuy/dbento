@@ -1416,7 +1416,8 @@ impl TabModel {
     }
 
     /// Shows S3 object `key` in `bucket`: its HEAD and a preview of its first bytes, read now.
-    /// False, changing nothing, while the tab is closed, fenced or running.
+    /// False while the tab is closed, fenced or running, which leaves it as it was, and false
+    /// when no runner starts, after the old results are cleared.
     pub fn open_object(&mut self, bucket: String, key: String, cx: &mut Context<Self>) -> bool {
         if self.closed || self.fence.is_some() || self.running {
             return false;
