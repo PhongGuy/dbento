@@ -1,7 +1,7 @@
 use super::support::{client, get, head, key, names, stub};
 use crate::aws::AwsCancel;
 use crate::s3::download::download;
-use crate::{DownloadError, DownloadOptions};
+use crate::{DownloadError, DownloadOptions, ObjectBrowseError};
 use std::time::Duration;
 
 #[tokio::test]
@@ -226,4 +226,33 @@ async fn without_a_content_length_the_head_size_is_the_expected_length() {
     .await;
     assert!(matches!(e, Err(DownloadError::Truncated)), "{e:?}");
     assert_eq!(names(dir.path()), ["out.bin"]);
+}
+
+#[tokio::test]
+async fn a_forbidden_head_is_remote_access_denied() {
+    let forbidden = (
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_owned(),
+        Vec::new(),
+        false,
+    );
+    let s = stub(vec![forbidden]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let e = download(
+        &client(s.port),
+        &AwsCancel::new(),
+        &key(),
+        &dir.path().join("out.bin"),
+        &DownloadOptions::default(),
+    )
+    .await;
+    assert!(
+        matches!(
+            e,
+            Err(DownloadError::Remote(
+                ObjectBrowseError::AccessDenied { .. }
+            ))
+        ),
+        "{e:?}"
+    );
+    assert!(names(dir.path()).is_empty());
 }

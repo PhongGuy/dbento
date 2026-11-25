@@ -43,6 +43,25 @@ async fn a_bodiless_head_redirect_or_miss_still_classifies() {
 }
 
 #[tokio::test]
+async fn a_bodiless_head_403_is_access_denied() {
+    let r = Replay::new(vec![Reply::status(403)]);
+    assert!(matches!(
+        classify(c(&r).head_object("b", "k").await.unwrap_err()),
+        S3Failure::AccessDenied { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_bodiless_head_400_hints_at_expired_credentials() {
+    let r = Replay::new(vec![Reply::status(400)]);
+    let e = classify(c(&r).head_object("b", "k").await.unwrap_err());
+    assert!(
+        matches!(e, S3Failure::Service { ref code, ref message } if code == "HTTP 400" && message.contains("expired")),
+        "{e:?}"
+    );
+}
+
+#[tokio::test]
 async fn codes_map_to_their_failures() {
     let r = Replay::new(vec![
         Reply::status(403).xml(&s3_error("AccessDenied", "Access Denied")),

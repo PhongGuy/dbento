@@ -89,6 +89,17 @@ where
                 message: "the bucket or key does not exist".to_owned(),
             },
             416 => S3Failure::InvalidRange,
+            // A HEAD reply has no body, so a forbidden key or bucket arrives as a bare 403.
+            403 => S3Failure::AccessDenied {
+                message: "the endpoint answered HTTP 403".to_owned(),
+            },
+            // A bare 400 on a HEAD is most often an expired session token, but not surely so.
+            400 => S3Failure::Service {
+                code: "HTTP 400".to_owned(),
+                message: "the endpoint answered HTTP 400 without an S3 error; \
+                          the credentials or session token may be expired"
+                    .to_owned(),
+            },
             _ => S3Failure::Service {
                 code: format!("HTTP {status}"),
                 message: format!("the endpoint answered HTTP {status} without an S3 error"),
