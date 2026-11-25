@@ -80,6 +80,12 @@ pub(crate) async fn download(
         Err(e) => return Err(e),
     };
     interrupt.arm(session.cancel_handle());
+    // A press while the session opened has no download to cancel yet, so stop here.
+    if interrupt.stopped() {
+        let _ = session.close().await;
+        eprintln!("interrupted");
+        return Ok(Exit::Failed);
+    }
     let options = DownloadOptions::default()
         .with_max_size(args.max_size)
         .with_force(args.force);
