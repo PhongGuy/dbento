@@ -11,10 +11,12 @@ use russh::client::{self, Handle, Msg};
 use russh::keys::{Algorithm, HashAlg, PublicKey, PublicKeyOrCertificate};
 use russh::{ChannelOpenFailure, Disconnect, Preferred};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const KEEPALIVE_MAX: usize = 3;
@@ -62,6 +64,33 @@ impl SshEnv {
     pub fn home(&self) -> &SshHome {
         &self.home
     }
+
+    /// The ssh-agent's socket (on Windows, its pipe), if one is set.
+    pub(crate) fn agent(&self) -> Option<&Path> {
+        self.agent.as_deref()
+    }
+}
+
+/// Handshakes allowed at once per SSH target, so a burst of connects cannot trip the
+/// server's `MaxStartups`.
+const HANDSHAKES_PER_TARGET: usize = 4;
+
+/// A slot for one handshake to `target` (`host_name:port`), shared process-wide; `None`
+/// only if the semaphore were closed, which nothing does.
+pub(crate) async fn handshake_permit(target: &str) -> Option<OwnedSemaphorePermit> {
+    static SLOTS: OnceLock<Mutex<HashMap<String, Arc<Semaphore>>>> = OnceLock::new();
+    let semaphore = {
+        let mut slots = SLOTS
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(
+            slots
+                .entry(target.to_owned())
+                .or_insert_with(|| Arc::new(Semaphore::new(HANDSHAKES_PER_TARGET))),
+        )
+    };
+    semaphore.acquire_owned().await.ok()
 }
 
 /// A channel to the database, carried by the SSH link.
@@ -234,6 +263,8 @@ async fn handshake(
         resolved.keepalive,
         &known_hosts::known_algorithms(&files, &id),
     );
+    // Held from the TCP connect to the end of sign-in, inside the caller's timeout budget.
+    let _permit = handshake_permit(&address).await;
     let stream = tokio::net::TcpStream::connect((resolved.host_name.as_str(), resolved.port))
         .await
         .map_err(|e| unreachable(e.to_string()))?;
