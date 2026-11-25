@@ -61,9 +61,9 @@ async fn a_cancel_right_after_execute_is_not_lost() {
     let handle = s.cancel_handle();
     let mut script = s.script(SPIN);
     let pending = script.next().await.unwrap().unwrap();
-    // join! polls execute first, and execute takes the statement's generation before its first
-    // await, so the cancel aims at this statement. The worker thread may already have sent the
-    // columns by then, so the cancel shows on execute or, failing that, on the stream.
+    // `next` took the statement's generation, so the cancel aims at this statement. The worker
+    // thread may already have sent the columns by then, so the cancel shows on execute or,
+    // failing that, on the stream.
     let (result, ()) = bounded(async {
         tokio::join!(pending.execute(Limits::default()), async {
             handle.cancel()
@@ -111,6 +111,34 @@ async fn a_cancel_mid_stream_fails_the_stream_as_cancelled() {
                     other => break other,
                 }
             }
+        })
+        .await;
+        assert!(matches!(end, Err(ExecuteError::Cancelled)), "{end:?}");
+    }
+    select_one_works(&mut s).await;
+    s.close().await.unwrap();
+}
+
+/// The runner reports a statement as executing after `next` and before `execute`; a cancel
+/// in that gap aims at that statement, not the one before it.
+#[tokio::test]
+async fn a_cancel_after_next_reaches_the_statement_it_prepared() {
+    let fx = duckdb_fixture("", "");
+    let mut s = fx.session(SessionOptions::default()).await;
+    let handle = s.cancel_handle();
+    {
+        let mut script = s.script(&format!("SELECT 1; {SPIN}"));
+        let first = script.next().await.unwrap().unwrap();
+        let mut stream = first.execute(Limits::default()).await.unwrap();
+        while stream.next_batch().await.unwrap().is_some() {}
+        drop(stream);
+        let mut pending = script.next().await.unwrap().unwrap();
+        assert!(pending.is_last().await);
+        handle.cancel();
+        let end = bounded(async {
+            let mut stream = pending.execute(Limits::default()).await?;
+            while stream.next_batch().await?.is_some() {}
+            Ok(())
         })
         .await;
         assert!(matches!(end, Err(ExecuteError::Cancelled)), "{end:?}");
