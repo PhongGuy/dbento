@@ -87,10 +87,10 @@ async fn connect_offline(text: &str, name: &str) -> Option<ConnectError> {
 
 #[tokio::test]
 async fn an_engine_without_ssh_support_yet_refuses_before_any_network() {
-    let text = "dbento = 1\n[connections.m]\nengine = \"mysql\"\nhost = \"db.internal\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.m.ssh]\nhost = \"127.0.0.1\"\nport = 1\n";
+    let text = "dbento = 1\n[connections.m]\nengine = \"surrealdb\"\nhost = \"db.internal\"\nnamespace = \"n\"\ndatabase = \"d\"\ntls = \"off\"\n[connections.m.ssh]\nhost = \"127.0.0.1\"\nport = 1\n";
     match connect_offline(text, "m").await {
         Some(e @ ConnectError::SshUnsupported { .. }) => {
-            assert!(e.to_string().contains("mysql"), "{e}");
+            assert!(e.to_string().contains("surrealdb"), "{e}");
         }
         other => panic!("{other:?}"),
     }
