@@ -34,6 +34,7 @@ use crate::rowedit::{
     EditTarget, EditValue, Param, mysql_edit_target, pg_edit_target, sqlite_edit_target,
 };
 use crate::sqlite::{SqliteCancel, SqliteDriver};
+use crate::ssh::{HostKey, HostKeyProblem};
 #[cfg(feature = "surrealdb")]
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
 use crate::value::{ColumnInfo, ResultBatch};
@@ -328,6 +329,84 @@ pub enum ConnectError {
         /// What is unsupported.
         reason: String,
     },
+    /// The SSH server could not be reached or the SSH handshake failed.
+    #[error("cannot reach the SSH server {address}: {message}")]
+    SshConnect {
+        /// The SSH server's `host:port`, never the database's.
+        address: String,
+        /// What failed.
+        message: String,
+    },
+    /// The SSH server refused the login, or nothing was there to log in with.
+    #[error("SSH login failed: {message}")]
+    SshAuth {
+        /// What was tried and what to set.
+        message: String,
+    },
+    /// The connection's SSH settings use something Dbento cannot honour yet.
+    #[error("SSH: {message}")]
+    SshUnsupported {
+        /// What is unsupported.
+        message: String,
+    },
+    /// No known_hosts file knows the SSH server; its key can be trusted once checked.
+    #[error(
+        "the SSH host key of {host}:{port} is not trusted yet ({})",
+        key.fingerprint()
+    )]
+    SshHostKeyUnknown {
+        /// The SSH host as resolved.
+        host: String,
+        /// The SSH port.
+        port: u16,
+        /// The key the server presented.
+        key: HostKey,
+    },
+    /// A known_hosts line refuses the SSH server's key.
+    #[error("{}", host_key_refusal(host, *port, fingerprint, file, *line, *problem))]
+    SshHostKeyChanged {
+        /// The SSH host as resolved.
+        host: String,
+        /// The SSH port.
+        port: u16,
+        /// The presented key's SHA-256 fingerprint.
+        fingerprint: String,
+        /// The known_hosts file holding the refusing line.
+        file: PathBuf,
+        /// The refusing line's number, from 1.
+        line: usize,
+        /// Why the key is refused.
+        problem: HostKeyProblem,
+    },
+    /// The SSH server would not open a channel to the database.
+    #[error("{message}")]
+    SshTunnel {
+        /// The target as the SSH server resolves it, and why it refused.
+        message: String,
+    },
+}
+
+/// How a refused SSH host key reads, by the rule that refused it.
+fn host_key_refusal(
+    host: &str,
+    port: u16,
+    fingerprint: &str,
+    file: &Path,
+    line: usize,
+    problem: HostKeyProblem,
+) -> String {
+    let file = file.display();
+    match problem {
+        HostKeyProblem::Changed => format!(
+            "the SSH host key of {host}:{port} differs from line {line} of {file} ({fingerprint}); refusing"
+        ),
+        HostKeyProblem::Revoked => format!(
+            "the SSH host key of {host}:{port} is revoked at line {line} of {file} ({fingerprint})"
+        ),
+        HostKeyProblem::Unreadable => {
+            format!("line {line} of {file} for {host}:{port} cannot be read")
+        }
+    }
 }
 
 /// Whether a refused TCP connect sits anywhere in `e`'s chain of sources.

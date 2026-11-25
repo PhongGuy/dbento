@@ -22,10 +22,20 @@ const DEFAULT_PORT: u16 = 22;
 pub struct HostKey {
     host: String,
     port: u16,
-    key: PublicKey,
+    // Boxed: an RSA key is large and this rides inside every `ConnectError`.
+    key: Box<PublicKey>,
 }
 
 impl HostKey {
+    /// `key` as presented for `host`:`port`.
+    pub(crate) fn new(host: &str, port: u16, key: PublicKey) -> HostKey {
+        HostKey {
+            host: host.to_owned(),
+            port,
+            key: Box::new(key),
+        }
+    }
+
     /// The host the key was presented for, as resolved.
     pub fn host(&self) -> &str {
         &self.host
@@ -52,7 +62,7 @@ impl HostKey {
         Some(HostKey {
             host: host.to_owned(),
             port,
-            key: PublicKey::from_openssh(key).ok()?,
+            key: Box::new(PublicKey::from_openssh(key).ok()?),
         })
     }
 }
@@ -209,10 +219,6 @@ pub(crate) enum Verdict {
 
 /// Judges `presented` for `id`. A revoked key refuses first, then an unreadable line that
 /// could concern this host, then an equal key trusts, then any other known key means changed.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the SSH link's host-key handler calls it")
-)]
 pub(crate) fn check(files: &[KnownFile], id: &Identity<'_>, presented: &PublicKey) -> Verdict {
     let all = || {
         files
@@ -248,10 +254,6 @@ pub(crate) fn check(files: &[KnownFile], id: &Identity<'_>, presented: &PublicKe
 }
 
 /// The algorithms of the keys known for `id`, in file order without repeats.
-#[allow(
-    dead_code,
-    reason = "the SSH link orders its preferred host-key algorithms by it"
-)]
 pub(crate) fn known_algorithms(files: &[KnownFile], id: &Identity<'_>) -> Vec<Algorithm> {
     let mut found = Vec::new();
     for key in files
