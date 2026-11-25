@@ -283,12 +283,7 @@ impl Driver for MssqlDriver {
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
         let config = tiberius_config(conn, params.secret);
-        // The socket goes where tiberius would open it itself: no host or "." is the local server.
-        let dial_host = match conn.host() {
-            None | Some(".") => "localhost",
-            Some(h) => h,
-        };
-        let dial = (dial_host.to_owned(), conn.port().unwrap_or(1433));
+        let dial = dial_target(conn.host(), conn.port());
         let host = conn.host().unwrap_or_default().to_owned();
         let reader = conn
             .read_only_user()
@@ -567,6 +562,19 @@ fn stream_error(e: &tiberius::error::Error, reader: bool) -> StreamError {
     }
 }
 
+/// The host and port the socket opens, where tiberius would open it itself: no host or "."
+/// is the local server, and a bracketed IPv6 literal such as `[::1]` loses one pair of brackets.
+fn dial_target(host: Option<&str>, port: Option<u16>) -> (String, u16) {
+    let host = match host {
+        None | Some(".") => "localhost",
+        Some(h) => h
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(h),
+    };
+    (host.to_owned(), port.unwrap_or(1433))
+}
+
 /// Major, minor and build of `SERVERPROPERTY('ProductVersion')`, such as "16.0.4295.3".
 fn product_version(text: &str) -> Option<(u16, u16, u16)> {
     let mut parts = text.split('.').map(|p| p.parse::<u16>().ok());
@@ -577,6 +585,31 @@ fn product_version(text: &str) -> Option<(u16, u16, u16)> {
 mod tests {
     use super::*;
     use tiberius::error::Error;
+
+    #[test]
+    fn the_dial_target_maps_hosts_as_tiberius_did_and_unbrackets_ipv6() {
+        let cases = [
+            (Some("[::1]"), "::1"),
+            (Some("::1"), "::1"),
+            (Some("[[::1]]"), "[::1]"),
+            (Some("."), "localhost"),
+            (None, "localhost"),
+            (Some(""), ""),
+            (Some("db.example.com"), "db.example.com"),
+        ];
+        for (host, want) in cases {
+            assert_eq!(
+                dial_target(host, None),
+                (want.to_owned(), 1433),
+                "host {host:?}"
+            );
+        }
+        assert_eq!(
+            dial_target(Some("[::1]"), Some(14330)),
+            ("::1".to_owned(), 14330),
+            "a configured port is kept"
+        );
+    }
 
     #[test]
     fn the_version_is_the_first_three_parts() {
