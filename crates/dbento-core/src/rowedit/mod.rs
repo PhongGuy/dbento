@@ -3,10 +3,12 @@
 
 mod apply;
 mod browse;
+mod reread;
 mod sql;
 mod target;
 pub use apply::{Applied, ApplyError, ChangeOutcome, apply, apply_with};
 pub use browse::{Browse, BrowseError, Keyset, Sort, browse_sql, key_filter};
+pub use reread::{RereadError, reread};
 use sql::Dialect;
 pub(crate) use sql::Param;
 pub use sql::render_sql;
@@ -56,6 +58,8 @@ pub enum Change {
         key: RowKey,
         /// The `(column, value)` pairs written.
         set: Vec<(String, EditValue)>,
+        /// `(column, loaded value)` pairs the row must still hold; empty checks the key only.
+        expected: Vec<(String, EditValue)>,
     },
     /// A new row; columns not listed take their default.
     Insert {
@@ -66,6 +70,8 @@ pub enum Change {
     Delete {
         /// The row removed.
         key: RowKey,
+        /// `(column, loaded value)` pairs the row must still hold; empty checks the key only.
+        expected: Vec<(String, EditValue)>,
     },
 }
 
@@ -140,6 +146,12 @@ pub enum BatchError {
         /// Index of the change.
         change: usize,
     },
+    /// An expected value is DEFAULT, which no row holds.
+    #[error("change {change}: an expected value cannot be DEFAULT")]
+    DefaultExpected {
+        /// Index of the change.
+        change: usize,
+    },
 }
 
 impl EditBatch {
@@ -191,20 +203,22 @@ impl EditBatch {
 
 fn normalize(target: &EditTarget, change: usize, c: Change) -> Result<Change, BatchError> {
     Ok(match c {
-        Change::Update { key, set } => {
+        Change::Update { key, set, expected } => {
             check_key(target, change, &key)?;
             let set = editable_values(target, change, set)?;
             if set.is_empty() {
                 return Err(BatchError::EmptyUpdate { change });
             }
-            Change::Update { key, set }
+            check_expected(target, change, &expected)?;
+            Change::Update { key, set, expected }
         }
         Change::Insert { values } => Change::Insert {
             values: editable_values(target, change, values)?,
         },
-        Change::Delete { key } => {
+        Change::Delete { key, expected } => {
             check_key(target, change, &key)?;
-            Change::Delete { key }
+            check_expected(target, change, &expected)?;
+            Change::Delete { key, expected }
         }
     })
 }
@@ -232,25 +246,48 @@ fn editable_values(
     change: usize,
     values: Vec<(String, EditValue)>,
 ) -> Result<Vec<(String, EditValue)>, BatchError> {
-    let mut kept = Vec::with_capacity(values.len());
-    for (i, (column, value)) in values.iter().enumerate() {
-        let Some(col) = target.column(column) else {
+    check_columns(target, change, &values)?;
+    Ok(values
+        .into_iter()
+        .filter(|(column, _)| target.column(column).is_some_and(|c| c.editable()))
+        .collect())
+}
+
+/// Expected values are kept for every column, non-editable ones included, since the
+/// row must still hold them all; a DEFAULT is refused because no row holds it.
+fn check_expected(
+    target: &EditTarget,
+    change: usize,
+    expected: &[(String, EditValue)],
+) -> Result<(), BatchError> {
+    check_columns(target, change, expected)?;
+    if expected.iter().any(|(_, v)| *v == EditValue::Default) {
+        return Err(BatchError::DefaultExpected { change });
+    }
+    Ok(())
+}
+
+/// Every name must be a distinct target column, locators excluded.
+fn check_columns(
+    target: &EditTarget,
+    change: usize,
+    values: &[(String, EditValue)],
+) -> Result<(), BatchError> {
+    for (i, (column, _)) in values.iter().enumerate() {
+        if target.column(column).is_none() {
             return Err(BatchError::UnknownColumn {
                 change,
                 column: column.clone(),
             });
-        };
+        }
         if values[..i].iter().any(|(c, _)| c == column) {
             return Err(BatchError::DuplicateColumn {
                 change,
                 column: column.clone(),
             });
         }
-        if col.editable() {
-            kept.push((column.clone(), value.clone()));
-        }
     }
-    Ok(kept)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -475,11 +475,10 @@ pub struct TabModel {
     pending_task: Option<Task<()>>,
 }
 
-/// The conflicting rows as a reload read them, and which fresh row each loaded row is now.
+/// The conflicting rows as a reload read them, by loaded row.
 struct FreshRows {
-    store: ResultStore,
-    /// Loaded row to its fresh row; None when no row has its key any more.
-    rows: HashMap<u64, Option<u64>>,
+    /// Loaded row to its target columns now; None when no row has its key any more.
+    rows: HashMap<u64, Option<Vec<(String, EditValue)>>>,
 }
 
 /// A committed updated row the post-commit re-run no longer loads, and the band's text for it.
@@ -2352,12 +2351,34 @@ impl TabModel {
                 let Some(key) = self.row_key(row) else {
                     return false;
                 };
-                self.track(|edits| edits.delete(row, key));
+                let expected = self.loaded_target_values(row);
+                self.track(|edits| edits.delete(row, key, expected));
                 true
             }
         };
         cx.notify();
         deleted
+    }
+
+    /// The loaded value of every result column the edit target knows, in result order, so a
+    /// staged delete can be refused when the row changed since it loaded. Every browse cell
+    /// is Text, Null or Bytes today, so none is left out as unconvertible.
+    fn loaded_target_values(&self, row: u64) -> Vec<(String, EditValue)> {
+        let (Some(browse), Some(result)) = (self.browse.as_ref(), self.results.first()) else {
+            return Vec::new();
+        };
+        let target = browse.target();
+        result
+            .store
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| target.column(info.name()).is_some())
+            .filter_map(|(col, info)| {
+                let value = staged::edit_value(result.store.cell(row, col)?)?;
+                Some((info.name().to_owned(), value))
+            })
+            .collect()
     }
 
     /// Drops one row's change (an inserted row is removed); false when it has none or a
@@ -2453,8 +2474,12 @@ impl TabModel {
             CopyKind::Update => Change::Update {
                 key: key()?,
                 set: values,
+                expected: vec![],
             },
-            CopyKind::Delete => Change::Delete { key: key()? },
+            CopyKind::Delete => Change::Delete {
+                key: key()?,
+                expected: vec![],
+            },
         };
         let batch = EditBatch::new(target.clone(), vec![change]).ok()?;
         Some(render_sql(&batch))
@@ -2686,18 +2711,17 @@ impl TabModel {
             return false;
         };
         // Each conflict by the key it was staged under, so the read finds what holds it now.
-        let keys: Vec<(u64, RowKey)> = self
-            .conflicts
-            .iter()
-            .filter_map(|at| match at {
-                GridRow::Loaded(row) => match self.edits.row(*row)? {
-                    staged::RowEdit::Update { key, .. } | staged::RowEdit::Delete { key } => {
-                        Some((*row, key.clone()))
-                    }
-                },
-                GridRow::Inserted(_) => None,
-            })
-            .collect();
+        let keys: Vec<(u64, RowKey)> =
+            self.conflicts
+                .iter()
+                .filter_map(|at| match at {
+                    GridRow::Loaded(row) => match self.edits.row(*row)? {
+                        staged::RowEdit::Update { key, .. }
+                        | staged::RowEdit::Delete { key, .. } => Some((*row, key.clone())),
+                    },
+                    GridRow::Inserted(_) => None,
+                })
+                .collect();
         if keys.is_empty() {
             return false;
         }
@@ -2714,22 +2738,57 @@ impl TabModel {
         };
         let spec = self.spec.clone();
         let max_rows = keys.len() as u64;
-        // A fresh read-only session, never the tab's: the tab may hold a parked stream or a BEGIN.
+        let loaded: Option<Vec<ColumnInfo>> =
+            self.results.first().map(|r| r.store.columns().into());
+        let row_keys: Vec<RowKey> = keys.iter().map(|(_, key)| key.clone()).collect();
+        // Fresh read-only sessions, never the tab's: the tab may hold a parked stream or a BEGIN.
+        // The browse read only checks the table's shape, before `reread` reads by column name;
+        // a changed shape lands as None.
         let work = tokio_bridge::spawn(cx, async move {
-            let mut session =
-                runner::open(&spec, |c| catalog_options(c.statement_timeout())).await?;
+            let found = runner::resolve(&spec).await?;
+            let mut options = catalog_options(found.conn.statement_timeout());
+            options.key_passphrase = found.key_passphrase;
+            let mut session = dbento_core::connect(
+                &spec.workspace,
+                &found.conn,
+                found.secret.clone(),
+                options.clone(),
+            )
+            .await
+            .map_err(|e| match &found.hint {
+                Some(h) => format!("{e}\nhint: {h}"),
+                None => e.to_string(),
+            })?;
             let read = read_rows(&mut session, &sql, max_rows).await;
             // A read-only session leaves no write for close to report.
             let _ = session.close().await;
-            read
+            let shape = read?;
+            if !loaded.is_some_and(|l| same_columns(&l, shape.columns())) {
+                return Ok(None);
+            }
+            dbento_core::reread(
+                &spec.workspace,
+                &found.conn,
+                found.secret,
+                options,
+                &target,
+                &row_keys,
+            )
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string())
         });
         self.reload_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |m, cx| {
                 m.reload_task = None;
                 match result {
-                    Ok(Ok(store)) => {
-                        m.reloaded(store, &keys);
+                    Ok(Ok(None)) => {
+                        m.fresh = None;
+                        m.columns_changed();
+                    }
+                    Ok(Ok(Some(rows))) => {
+                        m.reloaded(rows, &keys);
                         if m.notice
                             .as_deref()
                             .is_some_and(|n| n.starts_with(RELOAD_FAILED))
@@ -2758,11 +2817,14 @@ impl TabModel {
         let GridRow::Loaded(row) = at else {
             return None;
         };
-        let fresh = self.fresh.as_ref()?;
-        match fresh.rows.get(&row)? {
-            Some(r) => fresh.store.cell(*r, col).map(staged::Fresh::Value),
-            None => Some(staged::Fresh::Gone),
-        }
+        let found = self.fresh.as_ref()?.rows.get(&row)?;
+        let Some(values) = found else {
+            return Some(staged::Fresh::Gone);
+        };
+        // The reread names its columns; a loaded column it lacks, such as a rowid, has no value.
+        let name = self.results.first()?.store.columns().get(col)?.name();
+        let (_, value) = values.iter().find(|(n, _)| n == name)?;
+        staged::cell_of(value).map(staged::Fresh::Value)
     }
 
     /// Whether the last reload found no row with `at`'s staged key.
@@ -2771,37 +2833,20 @@ impl TabModel {
         self.fresh_at(at, 0) == Some(staged::Fresh::Gone)
     }
 
-    // Each conflicting row is the fresh row with its staged key; none with it means it is gone.
-    fn reloaded(&mut self, store: ResultStore, keys: &[(u64, RowKey)]) {
-        let Some(identity) = self.browse.as_ref().map(|b| b.target().identity().to_vec()) else {
-            return;
-        };
-        // Fresh values are read by the loaded column index, which only holds while the shape does.
-        let loaded = self.results.first().map(|r| r.store.columns());
-        if !loaded.is_some_and(|l| same_columns(l, store.columns())) {
-            self.fresh = None;
-            self.columns_changed();
-            return;
-        }
-        let fresh_keys: Vec<Option<RowKey>> = (0..store.rows())
-            .map(|r| {
-                let cells = store
-                    .columns()
-                    .iter()
-                    .enumerate()
-                    .map(|(c, info)| Some((info.name(), store.cell(r, c)?)))
-                    .collect::<Option<Vec<_>>>()?;
-                staged::row_key(&identity, &cells)
-            })
-            .collect();
+    // Each reread row becomes its loaded row's baseline, so the next save guards against what
+    // the database holds now; a baseline is not an undo step.
+    fn reloaded(&mut self, found: Vec<Option<Vec<(String, EditValue)>>>, keys: &[(u64, RowKey)]) {
         let rows = keys
             .iter()
-            .map(|(row, key)| {
-                let found = fresh_keys.iter().position(|k| k.as_ref() == Some(key));
-                (*row, found.map(|r| r as u64))
+            .zip(found)
+            .map(|((row, _), values)| {
+                if let Some(values) = &values {
+                    self.edits.rebaseline(*row, values.clone());
+                }
+                (*row, values)
             })
             .collect();
-        self.fresh = Some(FreshRows { store, rows });
+        self.fresh = Some(FreshRows { rows });
     }
 
     /// Forgets conflicting rows no longer staged; once none is left, its reload and fresh
@@ -2850,7 +2895,7 @@ impl TabModel {
             .enumerate()
             .filter_map(|(change, at)| match at {
                 GridRow::Loaded(row) => match self.edits.row(*row)? {
-                    staged::RowEdit::Update { key, cells } => {
+                    staged::RowEdit::Update { key, cells, .. } => {
                         let changed: Vec<_> = cells.values().cloned().collect();
                         // The re-run loads the row under the key the database wrote, which
                         // differs from the staged text for "010", NULL or DEFAULT.
