@@ -157,6 +157,7 @@ mod sqlite_safety;
 mod sqlite_stream;
 mod ssh2_config_probe;
 mod ssh_auth;
+mod ssh_host_keys;
 mod ssh_known_hosts;
 mod ssh_link;
 mod ssh_postgres;

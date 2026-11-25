@@ -2,7 +2,7 @@
 //! rules, signed in, from which `direct-tcpip` channels to the database are opened.
 
 use super::known_hosts::{self, Identity, KnownFile, Verdict};
-use super::{HostKey, ResolvedSsh, SshHome, SshResolveError, auth, resolve_ssh};
+use super::{HostKey, HostKeyStatus, ResolvedSsh, SshHome, SshResolveError, auth, resolve_ssh};
 use crate::paths::StatePaths;
 use crate::secrets::SshSecrets;
 use crate::session::ConnectError;
@@ -128,14 +128,7 @@ impl SshLink {
         env: &SshEnv,
         secrets: &SshSecrets,
     ) -> Result<SshLink, ConnectError> {
-        let address = format!("{}:{}", resolved.host_name, resolved.port);
-        let budget = resolved.connect_timeout;
-        let handle = tokio::time::timeout(budget, handshake(conn, resolved, env, secrets))
-            .await
-            .map_err(|_| ConnectError::SshConnect {
-                address,
-                message: format!("no answer within {} s", budget.as_secs()),
-            })??;
+        let handle = within_budget(resolved, handshake(conn, resolved, env, secrets)).await?;
         Ok(SshLink {
             handle: Some(handle),
             runtime: tokio::runtime::Handle::current(),
@@ -191,6 +184,55 @@ pub async fn ssh_channel_check(
     link.channel(host, port).await.map(drop)
 }
 
+/// Connects and finishes the key exchange without authenticating, then judges the key by
+/// the same rules as `connect`. Never writes any file.
+pub async fn probe_host_key(
+    ws: &Workspace,
+    conn: &ConnectionConfig,
+    env: &SshEnv,
+) -> Result<HostKeyStatus, ConnectError> {
+    let resolved = resolved(ws, conn, env)?;
+    // A key the gate refused comes back as its refusal error, which the probe reports as a
+    // status; only a failure unrelated to the key stays an error.
+    match within_budget(&resolved, key_exchange(&resolved, env)).await {
+        Ok((handle, _permit)) => {
+            let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+            Ok(HostKeyStatus::Trusted)
+        }
+        Err(ConnectError::SshHostKeyUnknown { key, .. }) => Ok(HostKeyStatus::Unknown(key)),
+        Err(ConnectError::SshHostKeyChanged {
+            host,
+            port,
+            fingerprint,
+            file,
+            line,
+            problem,
+        }) => Ok(HostKeyStatus::Changed {
+            host,
+            port,
+            fingerprint,
+            file,
+            line,
+            problem,
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+/// `work` cut off at the resolved connect timeout, which then reads as an unanswered connect.
+async fn within_budget<T>(
+    resolved: &ResolvedSsh,
+    work: impl Future<Output = Result<T, ConnectError>>,
+) -> Result<T, ConnectError> {
+    let budget = resolved.connect_timeout;
+    tokio::time::timeout(budget, work)
+        .await
+        .map_err(|_| ConnectError::SshConnect {
+            address: format!("{}:{}", resolved.host_name, resolved.port),
+            message: format!("no answer within {} s", budget.as_secs()),
+        })?
+}
+
 /// `conn`'s ssh table merged with `~/.ssh/config`, its failures worded as connect errors.
 pub(crate) fn resolved(
     ws: &Workspace,
@@ -242,13 +284,24 @@ fn same_family(a: &Algorithm, b: &Algorithm) -> bool {
     ) || matches!((a, b), (Algorithm::Ecdsa { curve: x }, Algorithm::Ecdsa { curve: y }) if x == y)
 }
 
-/// TCP connect, SSH handshake under the host-key gate, then sign-in.
+/// The key exchange, then sign-in while the handshake slot is still held.
 async fn handshake(
     conn: &ConnectionConfig,
     resolved: &ResolvedSsh,
     env: &SshEnv,
     secrets: &SshSecrets,
 ) -> Result<Handle<Checker>, ConnectError> {
+    let (mut handle, _permit) = key_exchange(resolved, env).await?;
+    auth::authenticate(&mut handle, conn, resolved, env, secrets).await?;
+    Ok(handle)
+}
+
+/// TCP connect and the SSH key exchange under the host-key gate, returning the handshake
+/// slot for sign-in to keep; a refused key fails as its host-key error.
+async fn key_exchange(
+    resolved: &ResolvedSsh,
+    env: &SshEnv,
+) -> Result<(Handle<Checker>, Option<OwnedSemaphorePermit>), ConnectError> {
     let address = format!("{}:{}", resolved.host_name, resolved.port);
     let unreachable = |message: String| ConnectError::SshConnect {
         address: address.clone(),
@@ -264,7 +317,7 @@ async fn handshake(
         &known_hosts::known_algorithms(&files, &id),
     );
     // Held from the TCP connect to the end of sign-in, inside the caller's timeout budget.
-    let _permit = handshake_permit(&address).await;
+    let permit = handshake_permit(&address).await;
     let stream = tokio::net::TcpStream::connect((resolved.host_name.as_str(), resolved.port))
         .await
         .map_err(|e| unreachable(e.to_string()))?;
@@ -277,15 +330,13 @@ async fn handshake(
         files,
         seen: Arc::clone(&seen),
     };
-    let mut handle = match client::connect_stream(Arc::new(config), stream, checker).await {
-        Ok(handle) => handle,
+    match client::connect_stream(Arc::new(config), stream, checker).await {
+        Ok(handle) => Ok((handle, permit)),
         Err(e) => {
             let verdict = seen.lock().unwrap_or_else(PoisonError::into_inner).take();
-            return Err(refusal(resolved, verdict).unwrap_or_else(|| unreachable(e.to_string())));
+            Err(refusal(resolved, verdict).unwrap_or_else(|| unreachable(e.to_string())))
         }
-    };
-    auth::authenticate(&mut handle, conn, resolved, env, secrets).await?;
-    Ok(handle)
+    }
 }
 
 /// The host-key error a failed handshake stands for, when the key was what failed it.
