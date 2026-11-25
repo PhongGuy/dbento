@@ -82,6 +82,55 @@ fn feed() -> (u16, String) {
     (port, STANDARD.encode(key.pk.to_box().unwrap().to_string()))
 }
 
+const NOTES: &str = r#"{"schema":1,"releases":[{"version":"99.0.0","previous":null,"date":"2026-12-01","groups":[{"kind":"fixes","title":"Fixes","items":[{"text":"Keep NULLs","pr":42}]}]}]}"#;
+
+/// SHA-256 hex through the system tool, so the pilot crate needs no hashing dependency.
+fn sha256_hex(data: &[u8]) -> String {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(data).unwrap();
+    let out = child.wait_with_output().unwrap();
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+/// As `feed`, with NOTES served on a second loopback port and listed as the manifest's notes_asset.
+fn feed_with_notes() -> (u16, String) {
+    let notes_port = serve(vec![("/notes.json", NOTES.as_bytes().to_vec())]);
+    let key = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let manifest = format!(
+        r#"{{"version":"99.0.0","notes_asset":{{"url":"http://127.0.0.1:{notes_port}/notes.json","size":{},"sha256":"{}"}},"targets":{{"{}":{{"url":"http://127.0.0.1:9/artifact","format":"appimage","size":1,"sha256":"{}"}}}}}}"#,
+        NOTES.len(),
+        sha256_hex(NOTES.as_bytes()),
+        target_id(Product::App).unwrap(),
+        "0".repeat(64)
+    );
+    let sig = minisign::sign(
+        Some(&key.pk),
+        &key.sk,
+        std::io::Cursor::new(manifest.as_bytes()),
+        Some("timestamp:0\tfile:latest.json"),
+        None,
+    )
+    .unwrap();
+    let port = serve(vec![
+        ("/latest.json", manifest.into_bytes()),
+        (
+            "/latest.json.sig",
+            STANDARD.encode(sig.to_string()).into_bytes(),
+        ),
+    ]);
+    (port, STANDARD.encode(key.pk.to_box().unwrap().to_string()))
+}
+
 async fn until(pilot: &Pilot, what: &str, done: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -184,5 +233,56 @@ async fn the_banner_skip_and_the_settings_toggle() {
         name(t, "settings-update-status") == Some("Dbento 99.0.0 is available.")
     })
     .await;
+    pilot.assert_bus_untouched();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whats_new_shows_the_signed_notes() {
+    let (port, key_line) = feed_with_notes();
+    let (ws, state) = (sqlite_workspace(), tempfile::tempdir().unwrap());
+    let pilot = Pilot::start().await;
+    let mut args = launch_args("headless", ws.path());
+    args["env"] = json!({
+        "DBENTO_STATE_DIR": state.path(),
+        "DBENTO_UPDATE_MANIFEST_URL": format!("http://127.0.0.1:{port}/latest.json"),
+        "DBENTO_TEST_UPDATE_KEYS": key_line,
+    });
+    pilot.ok("launch", args).await;
+    until(&pilot, "the What's new button", |t| {
+        find_node(t, "update-whats-new").is_some()
+    })
+    .await;
+    click(&pilot, "update-whats-new").await;
+    let tree = until(&pilot, "the notes", |t| {
+        find_node(t, "update-notes-item-0-0-0").is_some()
+    })
+    .await;
+    assert_eq!(
+        name(&tree, "update-notes-release-0"),
+        Some("Dbento 99.0.0 (2026-12-01)")
+    );
+    assert_eq!(
+        name(&tree, "update-notes-item-0-0-0"),
+        Some("• Keep NULLs (#42)")
+    );
+    assert!(
+        find_node(&tree, "update-notes-older").is_none(),
+        "a first release pointed at older notes"
+    );
+    if let Some(dir) = std::env::var_os("DBENTO_SHOTS_DIR").map(std::path::PathBuf::from) {
+        std::fs::create_dir_all(&dir).unwrap();
+        pilot
+            .ok(
+                "screenshot",
+                json!({ "save_to": dir.join("update-notes.png") }),
+            )
+            .await;
+    }
+    click(&pilot, "update-notes-close").await;
+    until(&pilot, "the dialog to close", |t| {
+        find_node(t, "update-notes-dialog").is_none()
+    })
+    .await;
+    assert!(find_node(&pilot.ok("tree", json!({})).await, "update-banner").is_some());
     pilot.assert_bus_untouched();
 }

@@ -6,9 +6,10 @@ use dbento_app::settings_dialog::SettingsView;
 use dbento_app::settings_store;
 use dbento_app::theme::Appearance;
 use dbento_app::updates::{
-    self, CheckResult, Checker, Offer, Prepared, Progress, Stager, UpdateHooks, Updates,
+    self, CheckResult, Checker, Notes, NotesState, Offer, Prepared, Progress, Stager, UpdateHooks,
+    Updates,
 };
-use dbento_core::update::{Relaunch, release_notes_url};
+use dbento_core::update::{Relaunch, ReleaseNotes, release_notes_url};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, Pixels, Task, TestAppContext,
@@ -290,4 +291,154 @@ fn a_narrow_window_wraps_the_banner_and_a_wide_one_keeps_one_row(cx: &mut TestAp
             row.size.height
         );
     }
+}
+
+const NOTES: &str = r#"{"schema":1,"releases":[{"version":"99.0.0","previous":"98.0.0","date":"2026-12-01","intro":"Big one.","groups":[{"kind":"features","title":"New features","items":[{"text":"Search fast","pr":12}]}]}]}"#;
+
+fn notes_hook(result: Result<Option<&'static str>, &'static str>) -> Notes {
+    Rc::new(move |_: &mut App, _version: String| {
+        Task::ready(match result {
+            Ok(Some(doc)) => Ok(Some(ReleaseNotes::parse(doc.as_bytes()).unwrap())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_owned()),
+        })
+    })
+}
+
+fn open_with_notes(cx: &mut TestAppContext, notes: Notes) -> Open {
+    support::init(cx);
+    cx.update(|cx| settings_store::ensure(Appearance::System, cx));
+    let files = tempfile::tempdir().unwrap();
+    let hooks = UpdateHooks::checking(checker()).with_notes(notes);
+    let path = files.path().join("update-state.json");
+    let updates = cx.update(|cx| updates::install(Some(path), hooks, cx));
+    let (win, _) = cx
+        .update(|cx| dbento_app::app::start(support::services(files.path()), None, cx))
+        .unwrap();
+    cx.run_until_parked();
+    Open {
+        files,
+        win,
+        updates,
+    }
+}
+
+#[gpui_kit::test]
+fn whats_new_opens_the_grouped_notes(cx: &mut TestAppContext) {
+    let o = open_with_notes(cx, notes_hook(Ok(Some(NOTES))));
+    assert!(present(cx, o.win, "update-whats-new"));
+    click_id(cx, o.win, "update-whats-new");
+    assert!(present(cx, o.win, "update-notes-dialog"));
+    assert!(present(cx, o.win, "update-notes-scroll"));
+    for (id, want) in [
+        ("update-notes-release-0", "Dbento 99.0.0 (2026-12-01)"),
+        ("update-notes-intro-0", "Big one."),
+        ("update-notes-group-0-0", "New features"),
+        ("update-notes-item-0-0-0", "• Search fast (#12)"),
+        (
+            "update-notes-older",
+            "Older changes are on the release page",
+        ),
+    ] {
+        assert_eq!(label_of(cx, o.win, id).as_deref(), Some(want), "{id}");
+    }
+    click_id(cx, o.win, "update-notes-releases");
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some(dbento_core::update::RELEASES_URL)
+    );
+    click_id(cx, o.win, "update-notes-close");
+    assert!(!present(cx, o.win, "update-notes-dialog"));
+    assert!(present(cx, o.win, "update-banner"));
+}
+
+#[gpui_kit::test]
+fn notes_that_fail_say_so_and_keep_the_offer(cx: &mut TestAppContext) {
+    let o = open_with_notes(cx, notes_hook(Err("bad hash")));
+    assert!(matches!(
+        o.updates.read_with(cx, |u, _| u.notes_state().clone()),
+        NotesState::Failed(_)
+    ));
+    click_id(cx, o.win, "update-whats-new");
+    assert_eq!(
+        label_of(cx, o.win, "update-notes-failed").as_deref(),
+        Some("Release notes couldn't be loaded")
+    );
+    assert!(o.updates.read_with(cx, |u, _| u.offer().is_some()));
+    assert_eq!(
+        label_of(cx, o.win, "update-banner-text").as_deref(),
+        Some("Dbento 99.0.0 is available")
+    );
+}
+
+#[gpui_kit::test]
+fn a_release_without_notes_shows_no_whats_new(cx: &mut TestAppContext) {
+    let o = open_with_notes(cx, notes_hook(Ok(None)));
+    assert!(present(cx, o.win, "update-banner"));
+    assert!(!present(cx, o.win, "update-whats-new"));
+}
+
+#[gpui_kit::test]
+fn no_notes_hook_shows_no_whats_new(cx: &mut TestAppContext) {
+    let o = open(cx, None);
+    assert!(present(cx, o.win, "update-banner"));
+    assert!(
+        !present(cx, o.win, "update-whats-new"),
+        "no hook still offered notes"
+    );
+}
+
+// The hook resolves only after the dialog is open, so the Loading dialog must repaint when the notes land.
+#[gpui_kit::test]
+fn an_open_dialog_shows_notes_that_arrive_later(cx: &mut TestAppContext) {
+    let (tx, rx) = async_channel::bounded::<()>(1);
+    let hook: Notes = Rc::new(move |cx: &mut App, _version: String| {
+        let rx = rx.clone();
+        cx.background_spawn(async move {
+            let _ = rx.recv().await;
+            Ok(Some(ReleaseNotes::parse(NOTES.as_bytes()).unwrap()))
+        })
+    });
+    let o = open_with_notes(cx, hook);
+    assert_eq!(
+        o.updates.read_with(cx, |u, _| u.notes_state().clone()),
+        NotesState::Loading
+    );
+    click_id(cx, o.win, "update-whats-new");
+    assert!(present(cx, o.win, "update-notes-loading"));
+    assert!(!present(cx, o.win, "update-notes-release-0"));
+    tx.try_send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        label_of(cx, o.win, "update-notes-release-0").as_deref(),
+        Some("Dbento 99.0.0 (2026-12-01)")
+    );
+    assert!(!present(cx, o.win, "update-notes-loading"));
+}
+
+#[gpui_kit::test]
+fn skip_clears_the_notes(cx: &mut TestAppContext) {
+    let o = open_with_notes(cx, notes_hook(Ok(Some(NOTES))));
+    assert!(matches!(
+        o.updates.read_with(cx, |u, _| u.notes_state().clone()),
+        NotesState::Loaded(_)
+    ));
+    click_id(cx, o.win, "update-skip");
+    assert_eq!(
+        o.updates.read_with(cx, |u, _| u.notes_state().clone()),
+        NotesState::Unavailable
+    );
+}
+
+#[gpui_kit::test]
+fn escape_closes_whats_new(cx: &mut TestAppContext) {
+    let o = open_with_notes(cx, notes_hook(Ok(Some(NOTES))));
+    click_id(cx, o.win, "update-whats-new");
+    assert!(present(cx, o.win, "update-notes-dialog"));
+    cx.update_window(o.win, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    assert!(
+        !present(cx, o.win, "update-notes-dialog"),
+        "Escape left it open"
+    );
 }
