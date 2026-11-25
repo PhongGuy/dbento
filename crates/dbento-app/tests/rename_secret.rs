@@ -3,10 +3,12 @@ use crate::support::{self, click_id, label_of, present, wait_real};
 use dbento_app::app::{AppPaths, EnvLookup, SavedState, start};
 use dbento_app::persist::{load_json, save_json};
 use dbento_app::rename_secret::{
-    Held, adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+    Held, RenameKeys, adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, stays_line,
+    still_renamed,
 };
 use dbento_core::{
-    Edit, MemoryStore, Secret, SecretError, SecretKey, SecretStore, Workspace, secret_renames,
+    Edit, MemoryStore, Secret, SecretError, SecretKey, SecretRename, SecretStore, SshHome,
+    Workspace, secret_renames,
 };
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use std::path::{Path, PathBuf};
@@ -73,7 +75,7 @@ fn keys_ab(extra: &str) -> dbento_app::rename_secret::RenameKeys {
         at_w(&pg("a", "x", "x", extra)),
         at_w(&pg("b", "x", "x", extra)),
     );
-    rename_keys(&old, &new, &secret_renames(&old, &new)[0])
+    rename_keys(&old, &new, &secret_renames(&old, &new)[0], None)
 }
 
 #[test]
@@ -901,4 +903,195 @@ fn closed_a_folder_opened_by_another_path_still_finds_its_snapshot(cx: &mut Test
     // The fixture's data folder exists, so this path canonicalizes to the workspace.
     a.open(cx, &a.dir.join("data").join(".."));
     wait_real(cx, "the moved secret", |_| a.holds(&a.password("pg2")));
+}
+
+fn tun(name: &str, ssh_user: &str) -> String {
+    format!(
+        "{}[connections.{name}.ssh]\nhost = \"jump\"\nuser = \"{ssh_user}\"\n",
+        pg(name, "x", "x", "")
+    )
+}
+
+fn ssh_keys(a_user: &str, b_user: &str, home: Option<&SshHome>) -> (SecretRename, RenameKeys) {
+    let (old, new) = (at_w(&tun("a", a_user)), at_w(&tun("b", b_user)));
+    let r = secret_renames(&old, &new).remove(0);
+    let keys = rename_keys(&old, &new, &r, home);
+    (r, keys)
+}
+
+fn temp_home() -> (tempfile::TempDir, SshHome) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = SshHome::new(dir.path(), "tester");
+    (dir, home)
+}
+
+#[test]
+fn rename_keys_pair_the_ssh_slots_on_one_login() {
+    let (_d, home) = temp_home();
+    let (_, keys) = ssh_keys("ops", "ops", Some(&home));
+    assert_eq!(
+        keys.ssh_password,
+        Some((
+            SecretKey::ssh_password("/w", "a", "ops@jump:22"),
+            SecretKey::ssh_password("/w", "b", "ops@jump:22")
+        ))
+    );
+    assert_eq!(
+        keys.ssh_passphrase,
+        Some((
+            SecretKey::ssh_key_passphrase("/w", "a"),
+            SecretKey::ssh_key_passphrase("/w", "b")
+        ))
+    );
+    assert_eq!(keys.ssh_password_stays, None);
+}
+
+#[test]
+fn another_ssh_user_leaves_the_password_with_the_reason() {
+    let (_d, home) = temp_home();
+    let (_, keys) = ssh_keys("ops", "dev", Some(&home));
+    assert_eq!(keys.ssh_password, None);
+    let (key, why) = keys.ssh_password_stays.clone().unwrap();
+    assert_eq!(key, SecretKey::ssh_password("/w", "a", "ops@jump:22"));
+    assert!(
+        why.contains("ops@jump:22") && why.contains("dev@jump:22"),
+        "{why}"
+    );
+    assert!(
+        keys.ssh_passphrase.is_some(),
+        "the passphrase is not pinned"
+    );
+}
+
+#[test]
+fn without_a_home_only_the_passphrase_pairs() {
+    let (_, keys) = ssh_keys("ops", "ops", None);
+    assert_eq!((keys.ssh_password, keys.ssh_password_stays), (None, None));
+    assert!(keys.ssh_passphrase.is_some(), "passphrase");
+}
+
+#[test]
+fn probe_and_adopt_carry_the_ssh_slots() {
+    let (_d, home) = temp_home();
+    let (_, keys) = ssh_keys("ops", "ops", Some(&home));
+    let store = MemoryStore::new();
+    let (pw_a, pw_b) = keys.ssh_password.clone().unwrap();
+    let (pp_a, pp_b) = keys.ssh_passphrase.clone().unwrap();
+    store.set(&pw_a, &Secret::new(SECRET)).unwrap();
+    store.set(&pp_a, &Secret::new(SECRET)).unwrap();
+    let held = probe(&store, &keys).unwrap();
+    assert!(
+        held.ssh_password && held.ssh_passphrase && held.movable(),
+        "{held:?}"
+    );
+    adopt_held(&store, &keys, held).unwrap();
+    assert!(store.get(&pw_b).unwrap().is_some() && store.get(&pp_b).unwrap().is_some());
+    assert!(store.get(&pw_a).unwrap().is_none() && store.get(&pp_a).unwrap().is_none());
+}
+
+#[test]
+fn a_password_left_behind_is_said_once() {
+    let (_d, home) = temp_home();
+    let (r, keys) = ssh_keys("ops", "dev", Some(&home));
+    let store = MemoryStore::new();
+    let (old, _) = keys.ssh_password_stays.clone().unwrap();
+    store.set(&old, &Secret::new(SECRET)).unwrap();
+    let held = probe(&store, &keys).unwrap();
+    assert!(held.ssh_password_left, "{held:?}");
+    let line = stays_line(&r, &keys, held).unwrap();
+    assert!(
+        line.starts_with("The SSH password saved for a stays under its old entry")
+            && line.ends_with("Enter it again for b in Edit connection."),
+        "{line}"
+    );
+    assert!(!line.contains(SECRET), "never the secret");
+    assert!(
+        stays_line(&r, &keys, Held::default()).is_none(),
+        "nothing saved, nothing said"
+    );
+}
+
+#[test]
+fn the_question_names_the_ssh_slots_it_moves() {
+    let (old, new) = (at_w(&pg("a", "x", "x", KEY)), at_w(&pg("b", "x", "y", KEY)));
+    let r = secret_renames(&old, &new).remove(0);
+    let says = |held: Held| move_ask(&r, held).detail.unwrap().to_string();
+    assert!(
+        says(Held {
+            ssh_password: true,
+            ..Held::default()
+        })
+        .contains("Saved SSH password for:")
+    );
+    assert!(
+        says(Held {
+            password: true,
+            ssh_passphrase: true,
+            ..Held::default()
+        })
+        .contains("Saved password and SSH key passphrase for:")
+    );
+    assert!(
+        says(Held {
+            password: true,
+            passphrase: true,
+            ssh_password: true,
+            ..Held::default()
+        })
+        .contains("Saved password, key passphrase and SSH password for:")
+    );
+}
+
+#[test]
+fn env_lines_name_the_ssh_variables() {
+    let (r, _) = ssh_keys("ops", "ops", None);
+    let env = env_with(&["DBENTO_SSH_PASSWORD_A", "DBENTO_SSH_KEY_PASSPHRASE_A"]);
+    assert_eq!(
+        env_lines(&r, Held::default(), &env),
+        vec![
+            "DBENTO_SSH_PASSWORD_A -> DBENTO_SSH_PASSWORD_B".to_owned(),
+            "DBENTO_SSH_KEY_PASSPHRASE_A -> DBENTO_SSH_KEY_PASSPHRASE_B".to_owned(),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn an_exact_outside_rename_moves_the_ssh_secrets_too(cx: &mut TestAppContext) {
+    let a = app(cx, &tun("nopg", "ops"), memory(), no_env());
+    let dir = a.dir.clone();
+    let pw = |n: &str| SecretKey::ssh_password(&dir, n, "ops@jump:22");
+    let pp = |n: &str| SecretKey::ssh_key_passphrase(&dir, n);
+    a.save(&pw("nopg"));
+    a.save(&pp("nopg"));
+    a.outside(cx, &tun("pg2", "ops"));
+    wait_real(cx, "the moved SSH secrets", |_| {
+        a.holds(&pw("pg2")) && a.holds(&pp("pg2"))
+    });
+    assert!(
+        !a.holds(&pw("nopg")) && !a.holds(&pp("nopg")),
+        "the old entries are gone"
+    );
+    assert!(
+        !present(cx, a.win, "confirm-dialog"),
+        "an exact rename asks nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn another_ssh_user_leaves_the_ssh_password_and_says_so(cx: &mut TestAppContext) {
+    let a = app(cx, &tun("nopg", "ops"), memory(), no_env());
+    let old = SecretKey::ssh_password(&a.dir, "nopg", "ops@jump:22");
+    a.save(&old);
+    a.outside(cx, &tun("pg2", "dev"));
+    wait_real(cx, "the notice", |cx| present(cx, a.win, "save-error-ok"));
+    let detail = label_of(cx, a.win, "confirm-detail").unwrap();
+    assert!(
+        detail.contains("SSH password") && detail.contains("pg2"),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains(SECRET),
+        "the dialog never shows the secret"
+    );
+    assert!(a.holds(&old), "the old entry stays");
 }

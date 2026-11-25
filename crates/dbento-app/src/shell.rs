@@ -79,7 +79,7 @@ use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
 use crate::rename_secret::{
-    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, stays_line, still_renamed,
 };
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
@@ -3471,7 +3471,8 @@ impl Shell {
         let jobs: Vec<_> = secret_renames(old, &new)
             .into_iter()
             .map(|r| {
-                let keys = rename_keys(old, &new, &r);
+                // Resolving the SSH login reads ~/.ssh/config here, once per tunnelled rename.
+                let keys = rename_keys(old, &new, &r, self.services.ssh.home());
                 let asked = new.declared(&r.to).cloned();
                 (r, keys, asked)
             })
@@ -3507,6 +3508,10 @@ impl Shell {
                     }
                 };
                 lines.extend(env_lines(&r, held, &env));
+                // Said before the movable check, so a rename that moves nothing still says it.
+                if let Some(line) = stays_line(&r, &keys, held) {
+                    let _ = cx.update(|w, cx| show_error("SSH password not moved", line, w, cx));
+                }
                 if !held.movable() {
                     continue;
                 }
