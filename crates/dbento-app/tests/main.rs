@@ -208,6 +208,7 @@ mod schema_tree_pg;
 mod schema_tree_view;
 mod segmented_keys;
 mod session;
+mod session_count;
 mod settings_apply;
 mod settings_density;
 mod settings_dialog;
