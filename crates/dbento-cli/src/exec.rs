@@ -5,9 +5,10 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use dbento_core::{
-    CancelHandle, ColumnInfo, ConnectionConfig, Engine, ExecuteError, Limits, Outcome,
-    ReadOnlyEnforcement, ResultBatch, Session, SessionOptions, Unguarded, Workspace, connect,
-    read_only_residual, resolve_key_passphrase, resolve_secret, result_ranges,
+    CancelHandle, ColumnInfo, ConnectError, ConnectionConfig, Engine, ExecuteError, Limits,
+    Outcome, ReadOnlyEnforcement, ResultBatch, Session, SessionOptions, Unguarded, Workspace,
+    connect, read_only_residual, resolve_key_passphrase, resolve_secret, result_ranges,
+    ssh_secrets_for,
 };
 
 use crate::Exit;
@@ -153,6 +154,12 @@ pub(crate) async fn open(
     let store = crate::secret::store();
     let secret = resolve_secret(ws, conn, &store, &|v| std::env::var(v).ok())?;
     options.key_passphrase = resolve_key_passphrase(ws, conn, &store, &|v| std::env::var(v).ok())?;
+    options.ssh_env = crate::ssh::ssh_env();
+    if conn.ssh().is_some()
+        && let Some(env) = &options.ssh_env
+    {
+        options.ssh_secrets = ssh_secrets_for(ws, conn, env, &store, &|v| std::env::var(v).ok())?;
+    }
     let supplied = secret.is_some();
     let connected = tokio::select! {
         r = connect(ws, conn, secret, options) => r,
@@ -162,6 +169,15 @@ pub(crate) async fn open(
         }
     };
     connected.map_err(|e| {
+        // An unknown host key needs trusting whatever the secrets were, so it comes first.
+        if let ConnectError::SshHostKeyUnknown { key, .. } = &e {
+            let hint = format!(
+                "check {} with the server's admin, then run `dbento ssh trust {}`",
+                key.fingerprint(),
+                conn.name()
+            );
+            return crate::secret::with_hint(e, Some(hint));
+        }
         // Only a missing secret gets the hint; a wrong one is the server's to report.
         let hint = if supplied {
             None
