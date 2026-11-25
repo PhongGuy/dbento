@@ -14,6 +14,8 @@ use dbento_testkit::{MG_SECRET_VAR, MgDb, MgUser};
 use dbento_testkit::{MS_SECRET_VAR, MY_SECRET_VAR, MsDb, MyDb, PgDb, SECRET_VAR, SrDb};
 #[cfg(feature = "redis")]
 use dbento_testkit::{RD_SECRET_VAR, RdUser, RedisDb};
+#[cfg(feature = "s3")]
+use dbento_testkit::{S3_SECRET, S3_SECRET_VAR, S3Moto};
 use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, Tool};
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService};
 use rmcp::{RoleClient, ServiceExt};
@@ -171,6 +173,26 @@ impl TestServer {
             o.env_lookup(|v| (v == DY_SECRET_VAR).then(|| DY_SECRET.to_owned()))
         })
         .await
+    }
+
+    #[cfg(feature = "s3")]
+    /// Serve the workspace `toml` with `S3_SECRET_VAR` answered by `S3_SECRET`, then the
+    /// options adjusted by `configure`.
+    pub async fn s3_toml(
+        toml: &str,
+        configure: impl FnOnce(McpOptions) -> McpOptions,
+    ) -> TestServer {
+        TestServer::start_with(toml, move |o| {
+            configure(o.env_lookup(|v| (v == S3_SECRET_VAR).then(|| S3_SECRET.to_owned())))
+        })
+        .await
+    }
+
+    #[cfg(feature = "s3")]
+    /// Serve a workspace whose connection `ob` is `s3`'s bucket, its secret from the env lookup.
+    pub async fn s3(s3: &S3Moto, extra_toml: &str) -> TestServer {
+        let toml = format!("dbento = 1\n{}", s3.connection_toml("ob", extra_toml));
+        TestServer::s3_toml(&toml, |o| o).await
     }
 
     async fn serve(dir: TempDir, configure: impl FnOnce(McpOptions) -> McpOptions) -> TestServer {
