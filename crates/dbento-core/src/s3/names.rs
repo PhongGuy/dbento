@@ -66,17 +66,27 @@ fn trim_ends(s: &str) -> &str {
     s.trim_matches(|c: char| c == '.' || c.is_whitespace())
 }
 
-/// Windows reserves these stems whatever the case or extension: CON, PRN, AUX, NUL, COM1-9, LPT1-9.
+/// Windows reserves these stems whatever the case or extension: CON, PRN, AUX, NUL, CONIN$,
+/// CONOUT$, and COM or LPT followed by a digit 1-9 or a superscript one, two or three.
 fn is_device_name(name: &str) -> bool {
     let stem = name
         .split('.')
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    match stem.as_bytes() {
-        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
-        [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => (b'1'..=b'9').contains(d),
-        _ => false,
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+        _ => {
+            // Compared on chars, since the superscript digits take two bytes each.
+            let digit = stem
+                .strip_prefix("COM")
+                .or_else(|| stem.strip_prefix("LPT"));
+            let mut chars = digit.unwrap_or_default().chars();
+            match (chars.next(), chars.next()) {
+                (Some(d), None) => matches!(d, '1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'),
+                _ => false,
+            }
+        }
     }
 }
 
