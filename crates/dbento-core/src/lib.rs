@@ -21,7 +21,11 @@ pub use workspace::{
 };
 
 mod ssh;
-pub use ssh::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};
+pub use ssh::{
+    ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, ResolvedSsh, SshEnv, SshHome,
+    SshResolveError, TrustHostKeyError, forget_host_key, probe_host_key, resolve_ssh,
+    ssh_channel_check, ssh_warnings, trust_host_key, user_known_hosts_lists,
+};
 
 mod form;
 pub use form::{ConnectionForm, FieldKind, FormField, FormSection, connection_form};
@@ -157,7 +161,7 @@ mod aws;
 mod duckdb;
 mod dynamo;
 mod s3;
-pub use s3::names::{display_key, suggested_file_name};
+pub use s3::names::{display_key, is_hidden_char, suggested_file_name};
 pub use s3::{
     DEFAULT_MAX_DOWNLOAD, DownloadError, DownloadOptions, DownloadProgress, DownloadReport,
     MAX_READ_BYTES, ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList,

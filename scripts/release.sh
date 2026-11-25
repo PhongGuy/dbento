@@ -287,17 +287,21 @@ manifest_entry() {
     '{($id): {url: $url, format: $format, size: $size, sha256: $sha}}'
 }
 
-# Write UPDATE/latest.json for stable VERSION, artifact URLs under BASE_URL; nothing is written on failure.
+# Write UPDATE/latest.json for stable VERSION, artifact URLs under BASE_URL, naming DIST/notes.json
+# as notes_asset; nothing is written on failure.
 write_manifest() {
-  local dist=$1 update=$2 version=$3 base=${4%/} re='^[0-9]+\.[0-9]+\.[0-9]+$' id where pattern format name dir entries=
+  local dist=$1 update=$2 version=$3 base=${4%/} re='^[0-9]+\.[0-9]+\.[0-9]+$' id where pattern format name dir entries= notes
   if [[ ! $version =~ $re ]]; then echo "release: the update manifest needs a stable version, got '$version'" >&2; return 1; fi
+  if [[ ! -f $dist/notes.json ]]; then echo "release: the update manifest needs $dist/notes.json" >&2; return 1; fi
+  notes=$(jq -cn --arg url "$base/notes.json" --arg sha "$(sha256sum "$dist/notes.json" | cut -d' ' -f1)" \
+    --argjson size "$(wc -c <"$dist/notes.json" | tr -d ' ')" '{url: $url, size: $size, sha256: $sha}') || return 1
   while read -r id where pattern format; do
     name=${pattern//@V@/$version}
     if [[ $where == dist ]]; then dir=$dist; else dir=$update; fi
     entries="$entries$(manifest_entry "$id" "$dir/$name" "$format" "$base/$name")"$'\n' || return 1
   done < <(update_targets)
-  printf '%s' "$entries" | jq -s --arg v "$version" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{version: $v, pub_date: $d, targets: add}' >"$update/latest.json.tmp" || { rm -f -- "$update/latest.json.tmp"; return 1; }
+  printf '%s' "$entries" | jq -s --arg v "$version" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson n "$notes" \
+    '{version: $v, pub_date: $d, targets: add, notes_asset: $n}' >"$update/latest.json.tmp" || { rm -f -- "$update/latest.json.tmp"; return 1; }
   mv -- "$update/latest.json.tmp" "$update/latest.json"
 }
 

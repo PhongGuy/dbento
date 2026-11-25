@@ -6,10 +6,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dbento_core::update::{
-    self, Available, CheckError, InstallError, InstallKind, Os, Product, Reason, Relaunch, Staged,
+    self, Available, CheckError, InstallError, InstallKind, NotesError, Os, Product, Reason,
+    Relaunch, ReleaseNotes, Staged,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription, Task, Window,
@@ -76,6 +78,22 @@ pub type Progress = Box<dyn FnMut(u64, u64) + Send>;
 
 /// Downloads and verifies the offered `version` for this install, reporting progress.
 pub type Stager = Rc<dyn Fn(&mut App, String, Progress) -> Task<Result<Prepared, String>>>;
+
+/// Fetches the release notes for the offered version: Ok(None) when the release lists none.
+pub type Notes = Rc<dyn Fn(&mut App, String) -> Task<Result<Option<ReleaseNotes>, String>>>;
+
+/// Where the offered release's notes stand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotesState {
+    /// No offer, no notes hook, or a release that lists no notes.
+    Unavailable,
+    /// The notes are being fetched.
+    Loading,
+    /// The notes of the offered release.
+    Loaded(ReleaseNotes),
+    /// Fetching failed with this message; the offer stands.
+    Failed(String),
+}
 
 /// Where installing the offered release stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +239,7 @@ pub fn relaunch_command(path: &Path, pid: u32, os: Os) -> Option<Command> {
 pub struct UpdateHooks {
     checker: Option<Checker>,
     stager: Option<Stager>,
+    notes: Option<Notes>,
     launcher: Rc<dyn Launcher>,
 }
 
@@ -230,6 +249,7 @@ impl UpdateHooks {
         UpdateHooks {
             checker: None,
             stager: None,
+            notes: None,
             launcher: Rc::new(NoLauncher),
         }
     }
@@ -239,6 +259,7 @@ impl UpdateHooks {
         UpdateHooks {
             checker: Some(checker),
             stager: None,
+            notes: None,
             launcher: Rc::new(NoLauncher),
         }
     }
@@ -247,6 +268,14 @@ impl UpdateHooks {
     pub fn with_stager(self, s: Stager) -> Self {
         UpdateHooks {
             stager: Some(s),
+            ..self
+        }
+    }
+
+    /// Fetches the offered release's notes with `n`.
+    pub fn with_notes(self, n: Notes) -> Self {
+        UpdateHooks {
+            notes: Some(n),
             ..self
         }
     }
@@ -277,19 +306,31 @@ impl UpdateHooks {
             InstallKind::AppImage(_) | InstallKind::MacApp(_) | InstallKind::WindowsNsis
         );
         let stager = owned.then(|| real_stager(cfg.clone(), kind));
+        // The notes hook reads the release the last check found, so it needs no check of its own.
+        let found: Arc<Mutex<Option<Available>>> = Arc::default();
+        let notes = real_notes(Arc::clone(&found));
         let checker: Checker = Rc::new(move |cx: &mut App| {
-            let cfg = cfg.clone();
+            let (cfg, found) = (cfg.clone(), Arc::clone(&found));
             let download_page = cfg.download_page().to_owned();
             // The check blocks on HTTP, so it runs on the tokio runtime and is awaited here.
             let job = crate::tokio_bridge::spawn(cx, async move { update::check(&cfg).await });
             cx.background_spawn(async move {
                 match job.await {
-                    Ok(result) => check_result(result, &download_page),
+                    Ok(result) => {
+                        if let Ok(Some(a)) = &result
+                            && let Ok(mut slot) = found.lock()
+                        {
+                            *slot = Some(a.clone());
+                        }
+                        check_result(result, &download_page)
+                    }
                     Err(e) => Err(e.to_string()),
                 }
             })
         });
-        let hooks = UpdateHooks::checking(checker).with_launcher(Rc::new(SystemLauncher));
+        let hooks = UpdateHooks::checking(checker)
+            .with_notes(notes)
+            .with_launcher(Rc::new(SystemLauncher));
         match stager {
             Some(s) => hooks.with_stager(s),
             None => hooks,
@@ -322,6 +363,26 @@ fn real_stager(cfg: update::UpdateConfig, kind: InstallKind) -> Stager {
             Ok(Prepared::new(version, kind, staged))
         });
         cx.background_spawn(async move { job.await.map_err(|e| e.to_string())? })
+    })
+}
+
+// Fetches the notes of the release the checker stored and refuses any other version, so the
+// dialog never shows notes for a release the banner does not offer.
+fn real_notes(found: Arc<Mutex<Option<Available>>>) -> Notes {
+    Rc::new(move |cx: &mut App, version: String| {
+        let stored = found.lock().ok().and_then(|slot| slot.clone());
+        let Some(a) = stored.filter(|a| a.version() == version) else {
+            return Task::ready(Err(format!("no checked release is version {version}")));
+        };
+        let job = crate::tokio_bridge::spawn(cx, async move { update::release_notes(&a).await });
+        cx.background_spawn(async move {
+            match job.await {
+                Ok(Ok(notes)) => Ok(Some(notes)),
+                Ok(Err(NotesError::NotPublished)) => Ok(None),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        })
     })
 }
 
@@ -404,6 +465,9 @@ pub struct Updates {
     armed: bool,
     preparing: Option<Task<()>>,
     progress: Option<Task<()>>,
+    notes: Option<Notes>,
+    notes_state: NotesState,
+    notes_job: Option<Task<()>>,
 }
 
 impl EventEmitter<UpdatesEvent> for Updates {}
@@ -430,12 +494,20 @@ impl Updates {
             armed: false,
             preparing: None,
             progress: None,
+            notes: hooks.notes,
+            notes_state: NotesState::Unavailable,
+            notes_job: None,
         }
     }
 
     /// The offer the banner shows, if any.
     pub fn offer(&self) -> Option<&Offer> {
         self.offer.as_ref()
+    }
+
+    /// Where the offered release's notes stand.
+    pub fn notes_state(&self) -> &NotesState {
+        &self.notes_state
     }
 
     /// The outcome of the last manual check.
@@ -472,6 +544,7 @@ impl Updates {
     /// Hides the offer for this run and cancels its download; a prepared release is kept.
     pub fn later(&mut self, cx: &mut Context<Self>) {
         self.offer = None;
+        self.clear_notes();
         self.cancel_download();
         cx.notify();
     }
@@ -483,6 +556,7 @@ impl Updates {
             self.state.skipped_version = Some(offer.version);
             self.save();
         }
+        self.clear_notes();
         self.drop_release();
         cx.notify();
     }
@@ -625,10 +699,17 @@ impl Updates {
 
     // No offer, or a different version, disarms and discards the prepared release, so a
     // release is installed only while the banner shows its version.
-    fn set_offer(&mut self, offer: Option<Offer>) {
+    fn set_offer(&mut self, offer: Option<Offer>, cx: &mut Context<Self>) {
         match &offer {
-            None => self.drop_release(),
+            None => {
+                self.clear_notes();
+                self.drop_release();
+            }
             Some(new) => {
+                let fresh = self.offer.as_ref().is_none_or(|o| o.version != new.version);
+                if fresh || matches!(self.notes_state, NotesState::Failed(_)) {
+                    self.fetch_notes(new.version.clone(), cx);
+                }
                 if self
                     .prepared
                     .as_ref()
@@ -643,6 +724,38 @@ impl Updates {
             }
         }
         self.offer = offer;
+    }
+
+    // A result lands only while the offer still holds the version it was fetched for, and
+    // it never touches the offer itself.
+    fn fetch_notes(&mut self, version: String, cx: &mut Context<Self>) {
+        let Some(hook) = self.notes.as_ref().map(Rc::clone) else {
+            self.clear_notes();
+            return;
+        };
+        self.notes_state = NotesState::Loading;
+        let job = hook(cx, version.clone());
+        self.notes_job = Some(cx.spawn(async move |this, cx| {
+            let result = job.await;
+            let _ = this.update(cx, |u, cx| {
+                if u.offer.as_ref().is_none_or(|o| o.version != version) {
+                    return;
+                }
+                u.notes_job = None;
+                u.notes_state = match result {
+                    Ok(Some(notes)) => NotesState::Loaded(notes),
+                    Ok(None) => NotesState::Unavailable,
+                    Err(message) => NotesState::Failed(message),
+                };
+                cx.notify();
+            });
+        }));
+    }
+
+    // Dropping the job cancels a fetch for an offer that is gone.
+    fn clear_notes(&mut self) {
+        self.notes_job = None;
+        self.notes_state = NotesState::Unavailable;
     }
 
     // Dropping the tasks cancels the download, so it can neither report back nor arm.
@@ -694,19 +807,19 @@ impl Updates {
         let manual = manual || std::mem::take(&mut self.manual_pending);
         match (result, manual) {
             (Ok(CheckResult::UpToDate), true) => {
-                self.set_offer(None);
+                self.set_offer(None, cx);
                 self.finish_report(Report::UpToDate, cx);
             }
             (Ok(CheckResult::Available(offer)), true) => {
                 let report = Report::Available(offer.version.clone());
-                self.set_offer(Some(offer));
+                self.set_offer(Some(offer), cx);
                 self.finish_report(report, cx);
             }
             (Err(e), true) => self.finish_report(Report::Failed(e), cx),
-            (Ok(CheckResult::UpToDate), false) => self.set_offer(None),
+            (Ok(CheckResult::UpToDate), false) => self.set_offer(None, cx),
             (Ok(CheckResult::Available(offer)), false) => {
                 if self.state.skipped_version.as_deref() != Some(offer.version.as_str()) {
-                    self.set_offer(Some(offer));
+                    self.set_offer(Some(offer), cx);
                 }
             }
             (Err(e), false) => log::warn!("update check: {e}"),

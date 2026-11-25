@@ -15,7 +15,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -53,6 +53,7 @@ use crate::session::{
     Limits, OnTruncate, Outcome, Prepared, StreamItem, TruncatedBy, Writes, refused,
 };
 use crate::split::split;
+use crate::ssh::{Dialer, SshLink, SshStream, tunnel_target};
 use crate::value::{BatchBuilder, CellRef, ColumnInfo, ColumnSource};
 use crate::workspace::{ConnectionConfig, TlsMode};
 
@@ -313,6 +314,13 @@ enum CancelTarget {
     /// The socket file itself, not its directory.
     #[cfg(unix)]
     Unix(PathBuf),
+    /// A fresh channel through the session's SSH link, to the host as the SSH server
+    /// resolves it; weak, so a pending cancel never keeps SSH open.
+    Ssh {
+        link: Weak<SshLink>,
+        host: String,
+        port: u16,
+    },
 }
 
 impl CancelTarget {
@@ -327,6 +335,18 @@ impl CancelTarget {
             Host::Unix(dir) => Some(CancelTarget::Unix(dir.join(format!(".s.PGSQL.{port}")))),
         }
     }
+}
+
+/// Drives a session's connection until every client handle is gone, holding `alive` so the
+/// session learns when it ends.
+fn run_connection<F>(connection: F, alive: watch::Sender<()>) -> JoinHandle<()>
+where
+    F: Future + Send + 'static,
+{
+    tokio::spawn(async move {
+        let _alive = alive;
+        let _ = connection.await;
+    })
 }
 
 /// How long a cancel request may take before the next request stops waiting for it.
@@ -378,9 +398,24 @@ impl PgCancel {
 
 /// Sends one cancel request and, where the stream can be wrapped, returns only once the
 /// server has hung up. A Unix socket under Rustls, or no target, falls back to tokio-postgres's
-/// own request, which returns after the write. Errors are ignored: the statement runs on.
+/// own request, which returns after the write. An SSH target only ever goes through its link,
+/// and does nothing once the link is gone. Errors are ignored: the statement runs on.
 async fn send_cancel(token: CancelToken, connector: Connector, target: Option<CancelTarget>) {
     let _ = match (connector, target) {
+        (connector, Some(CancelTarget::Ssh { link, host, port })) => {
+            let Some(link) = link.upgrade() else { return };
+            let Ok(s) = link.channel(&host, port).await else {
+                return;
+            };
+            match connector {
+                Connector::Plain => token.cancel_query_raw(UntilEof::new(s), NoTls).await,
+                Connector::Rustls(mut tls) => {
+                    let Ok(connect) =
+                        MakeTlsConnect::<UntilEof<SshStream>>::make_tls_connect(&mut tls, &host);
+                    token.cancel_query_raw(UntilEof::new(s), connect).await
+                }
+            }
+        }
         (Connector::Plain, Some(CancelTarget::Tcp { host, port })) => {
             match TcpStream::connect((host.as_str(), port)).await {
                 Ok(s) => token.cancel_query_raw(UntilEof::new(s), NoTls).await,
@@ -876,34 +911,64 @@ impl Driver for PgDriver {
         // Each connector yields its own Connection type, so each branch spawns its task. The
         // connection future ends once every Client handle is gone. Verify uses Require, so a
         // server without TLS is an error and never a plaintext fallback.
-        let target = CancelTarget::of(&config);
+        // Through SSH, the session and its cancels open channels to the host as the SSH
+        // server resolves it; nothing on that path dials the database host directly.
+        let tunnel = match &params.dialer {
+            Dialer::Direct => None,
+            Dialer::Ssh(link) => Some((link, tunnel_target(conn)?)),
+        };
+        let target = match tunnel {
+            None => CancelTarget::of(&config),
+            Some((link, (host, port))) => Some(CancelTarget::Ssh {
+                link: Arc::downgrade(link),
+                host: host.to_owned(),
+                port,
+            }),
+        };
         // The connection task holds the only sender, so `closed` learns when it ends.
         let (alive, ended) = watch::channel(());
         // tokio-postgres bounds only the TCP connect; a server that accepts and then stays
         // silent (a paused container) would hang the startup and auth, so bound them all.
+        // Through SSH the channel open shares that budget. Under TLS the certificate must
+        // name the configured host, even when the SSH server resolves it.
         let handshake = async {
-            Ok::<_, ConnectError>(if conn.tls() == Some(TlsMode::Verify) {
-                let tls = rustls_connector(conn, params.key_passphrase)?;
+            let fail = |e| connect_error(conn, e);
+            let tls = if conn.tls() == Some(TlsMode::Verify) {
                 config.ssl_mode(SslMode::Require);
-                let (client, connection) = config
-                    .connect(tls.clone())
-                    .await
-                    .map_err(|e| connect_error(conn, e))?;
-                let task = tokio::spawn(async move {
-                    let _alive = alive;
-                    let _ = connection.await;
-                });
-                (client, task, Connector::Rustls(tls))
+                Some(rustls_connector(conn, params.key_passphrase)?)
             } else {
-                let (client, connection) = config
-                    .connect(NoTls)
-                    .await
-                    .map_err(|e| connect_error(conn, e))?;
-                let task = tokio::spawn(async move {
-                    let _alive = alive;
-                    let _ = connection.await;
-                });
-                (client, task, Connector::Plain)
+                None
+            };
+            Ok::<_, ConnectError>(match (tunnel, tls) {
+                (None, Some(tls)) => {
+                    let (client, connection) = config.connect(tls.clone()).await.map_err(fail)?;
+                    (
+                        client,
+                        run_connection(connection, alive),
+                        Connector::Rustls(tls),
+                    )
+                }
+                (None, None) => {
+                    let (client, connection) = config.connect(NoTls).await.map_err(fail)?;
+                    (client, run_connection(connection, alive), Connector::Plain)
+                }
+                (Some((link, (host, port))), Some(mut tls)) => {
+                    let stream = link.channel(host, port).await?;
+                    let Ok(connect) = MakeTlsConnect::<SshStream>::make_tls_connect(&mut tls, host);
+                    let (client, connection) =
+                        config.connect_raw(stream, connect).await.map_err(fail)?;
+                    (
+                        client,
+                        run_connection(connection, alive),
+                        Connector::Rustls(tls),
+                    )
+                }
+                (Some((link, (host, port))), None) => {
+                    let stream = link.channel(host, port).await?;
+                    let (client, connection) =
+                        config.connect_raw(stream, NoTls).await.map_err(fail)?;
+                    (client, run_connection(connection, alive), Connector::Plain)
+                }
             })
         };
         let (client, connection, connector) = tokio::time::timeout(CONNECT_TIMEOUT, handshake)

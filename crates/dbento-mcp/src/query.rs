@@ -3,9 +3,9 @@
 use std::time::{Instant, SystemTime};
 
 use dbento_core::{
-    CapacityUnits, CellRef, Classification, ColumnInfo, ExecuteError, HistoryEntry, HistoryOutcome,
-    HistorySource, Limits, OnTruncate, Outcome, Pending, ReadOnlyEnforcement, Script, TruncatedBy,
-    statement_count,
+    CapacityUnits, CellRef, Classification, ColumnInfo, Engine, ExecuteError, HistoryEntry,
+    HistoryOutcome, HistorySource, Limits, OnTruncate, Outcome, Pending, ReadOnlyEnforcement,
+    Script, TruncatedBy, statement_count,
 };
 use rmcp::RoleServer;
 use rmcp::service::RequestContext;
@@ -43,7 +43,7 @@ pub(crate) struct QueryArgs {
 pub(crate) struct QueryResult {
     columns: Vec<ResultColumn>,
     /// Each cell is a string, null, `{"hex"}` for bytes, or `{"text"|"hex", "cut": true}`
-    /// when it was longer than 4 KiB.
+    /// when it was longer than 4 KiB. An S3 `cat`'s text content is whole up to 64 KiB.
     rows: Vec<Vec<Value>>,
     /// Each returned row's stored document as text, cut like a cell: relaxed Extended JSON on
     /// MongoDB, plain JSON on DynamoDB; absent on engines whose rows carry none.
@@ -225,6 +225,8 @@ async fn collect(
         ));
     }
     let mut stream = pending.execute(limits).await.map_err(failed)?;
+    let names: Vec<&str> = stream.columns().iter().map(ColumnInfo::name).collect();
+    let cat = is_s3_cat(engine, &names);
     let mut rows = Vec::new();
     let mut documents: Option<Vec<Value>> = None;
     while let Some(batch) = stream.next_batch().await.map_err(failed)? {
@@ -241,7 +243,10 @@ async fn collect(
             }
             rows.push(
                 (0..batch.column_count())
-                    .map(|c| cell(batch.cell(r, c)))
+                    .map(|c| match c {
+                        0 if cat => whole_cell(batch.cell(r, c)),
+                        _ => cell(batch.cell(r, c)),
+                    })
                     .collect::<Result<_, _>>()?,
             );
         }
@@ -339,12 +344,27 @@ pub(crate) fn capacity_json(c: Option<CapacityUnits>) -> Option<f64> {
     c.map(CapacityUnits::as_f64)
 }
 
+/// Whether a result is an S3 `cat`, whose content cell is the point of the call.
+pub(crate) fn is_s3_cat(engine: Engine, names: &[&str]) -> bool {
+    engine == Engine::S3 && names == ["content", "size", "truncated"]
+}
+
 /// A string, null, {"hex"}, or {"text"|"hex", "cut": true} past CELL_CUT.
 pub(crate) fn cell(c: CellRef<'_>) -> Result<Value, ToolError> {
+    cut_cell(c, CELL_CUT)
+}
+
+/// As `cell`, but text stays whole up to `BYTE_BUDGET` bytes; bytes are cut as any cell.
+pub(crate) fn whole_cell(c: CellRef<'_>) -> Result<Value, ToolError> {
+    cut_cell(c, usize::try_from(BYTE_BUDGET).unwrap_or(usize::MAX))
+}
+
+/// A cell with text cut at `text_cut` bytes on a char boundary and bytes at CELL_CUT hex.
+fn cut_cell(c: CellRef<'_>, text_cut: usize) -> Result<Value, ToolError> {
     Ok(match c {
         CellRef::Null => Value::Null,
-        CellRef::Text(t) if t.len() <= CELL_CUT => json!(t),
-        CellRef::Text(t) => json!({"text": &t[..t.floor_char_boundary(CELL_CUT)], "cut": true}),
+        CellRef::Text(t) if t.len() <= text_cut => json!(t),
+        CellRef::Text(t) => json!({"text": &t[..t.floor_char_boundary(text_cut)], "cut": true}),
         // Two hex characters per byte, so only the bytes that fit are encoded.
         CellRef::Bytes(b) if b.len() * 2 <= CELL_CUT => json!({"hex": hex(b)}),
         CellRef::Bytes(b) => json!({"hex": hex(&b[..CELL_CUT / 2]), "cut": true}),
@@ -371,6 +391,48 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_whole_cell_keeps_text_to_the_byte_budget_but_cuts_bytes_like_any_cell() {
+        let long = "a".repeat(CELL_CUT * 4);
+        assert_eq!(
+            whole_cell(CellRef::Text(&long)).unwrap(),
+            json!(long),
+            "whole"
+        );
+        let budget = usize::try_from(BYTE_BUDGET).unwrap();
+        let over = "b".repeat(budget + 10);
+        assert_eq!(
+            whole_cell(CellRef::Text(&over)).unwrap(),
+            json!({"text": "b".repeat(budget), "cut": true}),
+            "cut at the budget"
+        );
+        let blob = vec![0xab; CELL_CUT];
+        assert_eq!(
+            whole_cell(CellRef::Bytes(&blob)).unwrap(),
+            cell(CellRef::Bytes(&blob)).unwrap(),
+            "bytes cut as any cell"
+        );
+        assert_eq!(whole_cell(CellRef::Null).unwrap(), json!(null), "null");
+    }
+
+    #[test]
+    fn only_an_s3_cat_result_keeps_its_content_whole() {
+        let cat = ["content", "size", "truncated"];
+        assert!(is_s3_cat(dbento_core::Engine::S3, &cat), "an S3 cat");
+        assert!(
+            !is_s3_cat(dbento_core::Engine::Sqlite, &cat),
+            "another engine"
+        );
+        assert!(
+            !is_s3_cat(dbento_core::Engine::S3, &cat[..2]),
+            "another shape"
+        );
+        assert!(
+            !is_s3_cat(dbento_core::Engine::S3, &["kind", "key", "size"]),
+            "an ls"
+        );
+    }
 
     #[test]
     fn cells_are_strings_null_hex_or_cut_on_a_char_boundary() {
