@@ -57,6 +57,7 @@ mod derived_tree;
 mod disk_banner;
 mod disk_compare;
 mod disk_state;
+mod downloads;
 mod draft_tabs;
 mod drafts;
 mod duckdb_app;

@@ -19,6 +19,7 @@ pub mod confirm;
 pub mod connection_dialog;
 pub mod copy;
 pub mod definition_panel;
+pub mod downloads;
 pub mod drafts;
 pub mod editor_completion;
 pub mod explorer;
