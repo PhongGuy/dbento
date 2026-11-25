@@ -287,7 +287,8 @@ fn stale_replies_after_refresh_are_dropped_and_expanded_levels_reload() {
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
             | CatalogQuery::Databases
-            | CatalogQuery::CommandDocs => cols(&[
+            | CatalogQuery::CommandDocs
+            | CatalogQuery::Objects { .. } => cols(&[
                 ("AlbumId", "INTEGER", Some(1)),
                 ("Title", "NVARCHAR(160)", None),
             ]),
@@ -662,7 +663,8 @@ fn with_objects(
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
             | CatalogQuery::Databases
-            | CatalogQuery::CommandDocs => main.clone(),
+            | CatalogQuery::CommandDocs
+            | CatalogQuery::Objects { .. } => main.clone(),
         };
         answer(&mut t, req, result);
     }
@@ -686,7 +688,8 @@ fn fixture_for(q: &CatalogQuery) -> CatalogData {
         | CatalogQuery::Definition { .. }
         | CatalogQuery::Keys { .. }
         | CatalogQuery::Databases
-        | CatalogQuery::CommandDocs) => panic!("{other:?} is no tree level"),
+        | CatalogQuery::CommandDocs
+        | CatalogQuery::Objects { .. }) => panic!("{other:?} is no tree level"),
     }
 }
 const ALL_GROUPS: [ObjectGroup; 6] = [
@@ -941,7 +944,7 @@ fn object_groups_follow_columns_and_kinds_collapsed() {
         .unwrap();
     assert_eq!(
         pk.kind,
-        RowKind::Object {
+        RowKind::SchemaObject {
             group: ObjectGroup::Keys,
             object: key(None, ConstraintKind::PrimaryKey, &["AlbumId"]).object_ref(),
             detail: "primary key".into(),
@@ -955,7 +958,7 @@ fn object_groups_follow_columns_and_kinds_collapsed() {
     let details: Vec<(String, String)> = rows
         .iter()
         .filter_map(|r| match &r.kind {
-            RowKind::Object { detail, .. } => Some((r.label.clone(), detail.clone())),
+            RowKind::SchemaObject { detail, .. } => Some((r.label.clone(), detail.clone())),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
@@ -968,6 +971,8 @@ fn object_groups_follow_columns_and_kinds_collapsed() {
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
             | RowKind::LoadMore
+            | RowKind::Prefix { .. }
+            | RowKind::Object(_)
             | RowKind::Database { .. } => None,
         })
         .collect();
@@ -1003,7 +1008,7 @@ fn a_replica_only_trigger_says_so_like_a_disabled_one() {
         .rows("lite", 1, "")
         .iter()
         .filter_map(|r| match &r.kind {
-            RowKind::Object { detail, .. } => Some((r.label.clone(), detail.clone())),
+            RowKind::SchemaObject { detail, .. } => Some((r.label.clone(), detail.clone())),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
@@ -1016,6 +1021,8 @@ fn a_replica_only_trigger_says_so_like_a_disabled_one() {
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
             | RowKind::LoadMore
+            | RowKind::Prefix { .. }
+            | RowKind::Object(_)
             | RowKind::Database { .. } => None,
         })
         .collect();
@@ -1052,7 +1059,8 @@ fn unreadable_album(columns: Result<CatalogData, String>) -> CatalogTree {
             | CatalogQuery::Definition { .. }
             | CatalogQuery::Keys { .. }
             | CatalogQuery::Databases
-            | CatalogQuery::CommandDocs => Ok(no_objects().1),
+            | CatalogQuery::CommandDocs
+            | CatalogQuery::Objects { .. } => Ok(no_objects().1),
         };
         answer(&mut t, req, result);
     }
@@ -1266,7 +1274,8 @@ fn a_connection_refresh_keeps_another_connections_objects() {
         | NodeKey::RelationGroup { .. }
         | NodeKey::SchemaGroup { .. }
         | NodeKey::Objects(_)
-        | NodeKey::KeyFolder { .. }) => other,
+        | NodeKey::KeyFolder { .. }
+        | NodeKey::Prefix { .. }) => other,
     };
     // pg mirrors lite: main and Album expanded, their objects loaded.
     for key in [
@@ -1338,7 +1347,7 @@ fn object_details_name_index_flags_and_constraint_kinds() {
         .rows("lite", 1, "")
         .iter()
         .filter_map(|r| match &r.kind {
-            RowKind::Object { detail, .. } => Some((r.label.clone(), detail.clone())),
+            RowKind::SchemaObject { detail, .. } => Some((r.label.clone(), detail.clone())),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
@@ -1351,6 +1360,8 @@ fn object_details_name_index_flags_and_constraint_kinds() {
             | RowKind::KeyFolder { .. }
             | RowKind::Key(_)
             | RowKind::LoadMore
+            | RowKind::Prefix { .. }
+            | RowKind::Object(_)
             | RowKind::Database { .. } => None,
         })
         .collect();

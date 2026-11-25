@@ -169,7 +169,7 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
                 .into_iter()
                 .find(|r| r.aria == aria)
                 .and_then(|r| match r.kind {
-                    RowKind::Object { detail, .. } => Some(detail),
+                    RowKind::SchemaObject { detail, .. } => Some(detail),
                     RowKind::Schema
                     | RowKind::Kind(_)
                     | RowKind::Relation(_)
@@ -182,6 +182,8 @@ fn a_postgres_schema_shows_types_routines_and_table_objects(cx: &mut TestAppCont
                     | RowKind::KeyFolder { .. }
                     | RowKind::Key(_)
                     | RowKind::LoadMore
+                    | RowKind::Prefix { .. }
+                    | RowKind::Object(_)
                     | RowKind::Database { .. } => None,
                 })
         })

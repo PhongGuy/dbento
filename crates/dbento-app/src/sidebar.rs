@@ -42,6 +42,7 @@ use crate::keys::{
     KeyFilter, display_key, filter_text, folder_count_text, parse_key_filter, ttl_text, type_name,
 };
 use crate::link::{LinkState, shows_read_only};
+use crate::objects::size_words;
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
@@ -211,7 +212,7 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
             WorkspaceItem::Connection(name) => Some(Selection::Connection(name.clone())),
         },
         SidebarRow::Catalog(r, ..) => match &r.kind {
-            RowKind::Object { object, .. } => Some(Selection::Object {
+            RowKind::SchemaObject { object, .. } => Some(Selection::Object {
                 conn: node_connection(&r.key).to_owned(),
                 object: object.clone(),
             }),
@@ -220,6 +221,7 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
             | RowKind::Relation(_)
             | RowKind::Group(_)
             | RowKind::KeyFolder { .. }
+            | RowKind::Prefix { .. }
             | RowKind::Database { invalid: None } => Some(Selection::Node(r.key.clone())),
             // A key shares its parent's node, so it selects by its DB and name instead.
             RowKind::Key(item) => Some(Selection::Key {
@@ -235,6 +237,7 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
             | RowKind::Loading
             | RowKind::Truncated
             | RowKind::Empty
+            | RowKind::Object(_)
             | RowKind::Database { invalid: Some(_) } => None,
         },
     }
@@ -250,7 +253,8 @@ fn node_db(key: &NodeKey) -> Option<u32> {
         | NodeKey::Relation { .. }
         | NodeKey::RelationGroup { .. }
         | NodeKey::SchemaGroup { .. }
-        | NodeKey::Objects(_) => None,
+        | NodeKey::Objects(_)
+        | NodeKey::Prefix { .. } => None,
     }
 }
 
@@ -1324,7 +1328,7 @@ impl Sidebar {
             },
             // An object row is a leaf, though it carries its group's key.
             SidebarRow::Catalog(r, ..)
-                if matches!(r.kind, RowKind::Object { .. } | RowKind::Key(_)) =>
+                if matches!(r.kind, RowKind::SchemaObject { .. } | RowKind::Key(_)) =>
             {
                 None
             }
@@ -1782,6 +1786,7 @@ impl Sidebar {
                 | RowKind::Relation(_)
                 | RowKind::Group(_)
                 | RowKind::KeyFolder { .. }
+                | RowKind::Prefix { .. }
                 | RowKind::Database { invalid: None }
         );
         // Under a parent the rows belong to a child connection, which only the key names.
@@ -1817,7 +1822,7 @@ impl Sidebar {
             muted
         };
         let selected = match &row.kind {
-            RowKind::Object { object, .. } => {
+            RowKind::SchemaObject { object, .. } => {
                 self.selection.as_ref()
                     == Some(&Selection::Object {
                         conn: conn_name.clone(),
@@ -1838,6 +1843,8 @@ impl Sidebar {
             | RowKind::Truncated
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
+            | RowKind::Prefix { .. }
+            | RowKind::Object(_)
             | RowKind::Database { .. } => {
                 expandable && self.selection.as_ref() == Some(&Selection::Node(row.key.clone()))
             }
@@ -1871,7 +1878,7 @@ impl Sidebar {
                 | RowKind::Kind(_)
                 | RowKind::Column { .. }
                 | RowKind::Group(_)
-                | RowKind::Object { .. }
+                | RowKind::SchemaObject { .. }
                 | RowKind::Loading
                 | RowKind::Failed { .. }
                 | RowKind::Truncated
@@ -1879,6 +1886,8 @@ impl Sidebar {
                 | RowKind::KeyFolder { .. }
                 | RowKind::Key(_)
                 | RowKind::LoadMore
+                | RowKind::Prefix { .. }
+                | RowKind::Object(_)
                 | RowKind::Database { .. } => None,
             };
             base.cursor_pointer()
@@ -1896,7 +1905,7 @@ impl Sidebar {
                         _ => {}
                     }
                 }))
-        } else if let RowKind::Object { object, .. } = &row.kind {
+        } else if let RowKind::SchemaObject { object, .. } = &row.kind {
             let (conn, object) = (conn_name.clone(), object.clone());
             base.cursor_pointer()
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -1968,7 +1977,8 @@ impl Sidebar {
                 | NodeKey::RelationGroup { .. }
                 | NodeKey::SchemaGroup { .. }
                 | NodeKey::Objects(_)
-                | NodeKey::KeyFolder { .. } => base.child(name(row.label.clone())),
+                | NodeKey::KeyFolder { .. }
+                | NodeKey::Prefix { .. } => base.child(name(row.label.clone())),
             },
             RowKind::Key(item) => {
                 let detail = format!("{} {}", type_name(&item.kind), ttl_text(&item.ttl))
@@ -1988,6 +1998,18 @@ impl Sidebar {
                 .child(div().flex_1())
                 .child(mono_dim(folder_count_text(*keys, *complete))),
             RowKind::LoadMore => base.text_color(accent).child(name(row.label.clone())),
+            RowKind::Prefix { .. } => base.child(name(row.label.clone())),
+            RowKind::Object(o) => {
+                let detail = size_words(o.size);
+                base.child(name(row.label.clone()))
+                    .child(div().flex_1())
+                    .child(
+                        mono_dim(detail.clone())
+                            .id(("tree-detail", visible))
+                            .aria_label(detail)
+                            .test_support(),
+                    )
+            }
             RowKind::Relation(_) => {
                 let tip: Option<SharedString> = match &row.key {
                     NodeKey::Relation { conn, rel } if self.tip_allowed(&row.key, false) => {
@@ -2000,7 +2022,8 @@ impl Sidebar {
                     | NodeKey::RelationGroup { .. }
                     | NodeKey::SchemaGroup { .. }
                     | NodeKey::Objects(_)
-                    | NodeKey::KeyFolder { .. } => None,
+                    | NodeKey::KeyFolder { .. }
+                    | NodeKey::Prefix { .. } => None,
                 };
                 let key = row.key.clone();
                 base.on_hover(cx.listener(move |this, over: &bool, _, cx| {
@@ -2025,7 +2048,8 @@ impl Sidebar {
                     | NodeKey::RelationGroup { .. }
                     | NodeKey::SchemaGroup { .. }
                     | NodeKey::Objects(_)
-                    | NodeKey::KeyFolder { .. } => 0,
+                    | NodeKey::KeyFolder { .. }
+                    | NodeKey::Prefix { .. } => 0,
                 };
                 base.text_color(muted)
                     .child(name(group_title(*kind).to_owned()))
@@ -2037,7 +2061,7 @@ impl Sidebar {
                 .child(name(object_group_title(*group).to_owned()))
                 .child(div().flex_1())
                 .child(mono_dim(self.tree.group_count(&row.key).to_string())),
-            RowKind::Object { detail, .. } => base
+            RowKind::SchemaObject { detail, .. } => base
                 .child(name(row.label.clone()))
                 .child(mono_dim(detail.clone()).min_w_0().truncate()),
             RowKind::Column {
@@ -2107,7 +2131,8 @@ impl Sidebar {
                     | NodeKey::RelationGroup { .. }
                     | NodeKey::SchemaGroup { .. }
                     | NodeKey::KeyFolder { .. }
-                    | NodeKey::Objects(_) => None,
+                    | NodeKey::Objects(_)
+                    | NodeKey::Prefix { .. } => None,
                 };
                 base.child(name(row.label.clone()))
                     .when_some(glyph, |row, glyph| row.child(glyph))
@@ -2236,7 +2261,8 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
     match kind {
         RowKind::Schema => Some(Icons::Layers),
         RowKind::Database { .. } => Some(Icons::Database),
-        RowKind::KeyFolder { .. } => Some(Icons::Folder),
+        RowKind::KeyFolder { .. } | RowKind::Prefix { .. } => Some(Icons::Folder),
+        RowKind::Object(_) => Some(Icons::FileText),
         RowKind::Key(item) => Some(match &item.kind {
             KeyKind::String => Icons::FileText,
             KeyKind::Hash => Icons::Hash,
@@ -2251,7 +2277,7 @@ pub fn node_icon(kind: &RowKind) -> Option<IconName> {
             primary_key: true, ..
         } => Some(Icons::KeyRound),
         RowKind::Column { .. } => Some(Icons::Columns3),
-        RowKind::Group(g) | RowKind::Object { group: g, .. } => Some(match g {
+        RowKind::Group(g) | RowKind::SchemaObject { group: g, .. } => Some(match g {
             ObjectGroup::Keys => Icons::Key,
             ObjectGroup::Indexes => Icons::Hash,
             ObjectGroup::Checks => Icons::ShieldCheck,
@@ -2664,7 +2690,8 @@ fn catalog_menu(
         | NodeKey::RelationGroup { .. }
         | NodeKey::SchemaGroup { .. }
         | NodeKey::Objects(_)
-        | NodeKey::KeyFolder { .. } => None,
+        | NodeKey::KeyFolder { .. }
+        | NodeKey::Prefix { .. } => None,
     };
     let qualified = rel.as_ref().map(|rel| match t.kind {
         RowKind::Column { .. } => format!(
@@ -2676,7 +2703,7 @@ fn catalog_menu(
         | RowKind::Kind(_)
         | RowKind::Relation(_)
         | RowKind::Group(_)
-        | RowKind::Object { .. }
+        | RowKind::SchemaObject { .. }
         | RowKind::Loading
         | RowKind::Failed { .. }
         | RowKind::Truncated
@@ -2684,6 +2711,8 @@ fn catalog_menu(
         | RowKind::KeyFolder { .. }
         | RowKind::Key(_)
         | RowKind::LoadMore
+        | RowKind::Prefix { .. }
+        | RowKind::Object(_)
         | RowKind::Database { .. } => qualified_name(engine, rel),
     });
     let copy = |text: String| {
@@ -2714,7 +2743,7 @@ fn catalog_menu(
                         s.open_relation(&conn, &rel, kind, cx)
                     }))
                 }
-                (RowKind::Object { object, .. }, _) => {
+                (RowKind::SchemaObject { object, .. }, _) => {
                     let object = object.clone();
                     item.on_click(on_sidebar(weak, move |s, cx| {
                         s.open_object(conn.clone(), object.clone(), cx)
@@ -2735,7 +2764,7 @@ fn catalog_menu(
             }
             "tree-menu-view-definition" => {
                 let object = match (&t.kind, &rel) {
-                    (RowKind::Object { object, .. }, _) => object.clone(),
+                    (RowKind::SchemaObject { object, .. }, _) => object.clone(),
                     (RowKind::Relation(_), Some(rel)) => ObjectRef::relation(rel.clone()),
                     _ => continue,
                 };
@@ -2758,12 +2787,14 @@ fn catalog_menu(
                     | RowKind::Relation(_)
                     | RowKind::Column { .. }
                     | RowKind::Group(_)
-                    | RowKind::Object { .. }
+                    | RowKind::SchemaObject { .. }
                     | RowKind::Loading
                     | RowKind::Failed { .. }
                     | RowKind::Truncated
                     | RowKind::Empty
                     | RowKind::LoadMore
+                    | RowKind::Prefix { .. }
+                    | RowKind::Object(_)
                     | RowKind::Database { .. },
                     _,
                 ) => t.label.clone(),
@@ -2829,13 +2860,15 @@ fn catalog_menu(
                 | RowKind::Relation(_)
                 | RowKind::Column { .. }
                 | RowKind::Group(_)
-                | RowKind::Object { .. }
+                | RowKind::SchemaObject { .. }
                 | RowKind::Loading
                 | RowKind::Truncated
                 | RowKind::Empty
                 | RowKind::KeyFolder { .. }
                 | RowKind::Key(_)
                 | RowKind::LoadMore
+                | RowKind::Prefix { .. }
+                | RowKind::Object(_)
                 | RowKind::Database { .. } => continue,
             },
             _ => item,

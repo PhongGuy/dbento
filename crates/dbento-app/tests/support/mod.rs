@@ -875,3 +875,21 @@ pub fn approval_target(ws: &Path, conn: &str) -> dbento_core::ApprovalTarget {
     });
     dbento_core::ApprovalTarget::of(&config)
 }
+
+/// A runner spec on connection `s3`: `s3`'s bucket on Moto with `extra` keys, its secret
+/// from the environment the spec carries.
+#[cfg(feature = "s3")]
+pub fn s3_spec(s3: &dbento_testkit::S3Moto, extra: &str) -> (tempfile::TempDir, RunnerSpec) {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!("dbento = 1\n{}", s3.connection_toml("s3", extra));
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let spec = RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir.path()).unwrap()),
+        connection: "s3".into(),
+        store: Arc::new(dbento_core::MemoryStore::new()),
+        env: Arc::new(|v| {
+            (v == dbento_testkit::S3_SECRET_VAR).then(|| dbento_testkit::S3_SECRET.to_owned())
+        }),
+    };
+    (dir, spec)
+}

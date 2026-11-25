@@ -90,9 +90,9 @@ pub fn segment_label(parent: &str, key: &str) -> String {
     }
 }
 
-/// `s3://bucket/key` with the key escaped for display.
+/// `s3://bucket/key` with the bucket and key escaped for display.
 pub fn s3_url(bucket: &str, key: &str) -> String {
-    format!("s3://{bucket}/{}", display_key(key))
+    format!("s3://{}/{}", display_key(bucket), display_key(key))
 }
 
 /// A byte count in words: whole bytes below 1 KiB, else one decimal in the largest binary unit.
@@ -113,7 +113,7 @@ pub fn size_words(bytes: u64) -> String {
     }
 }
 
-/// An object-browser error as the app shows it: keys and store messages escaped, a hint on
+/// An object-browser error as the app shows it: keys and every store text escaped, a hint on
 /// its own line.
 pub fn object_error_text(e: &ObjectBrowseError) -> String {
     match e {
@@ -126,11 +126,12 @@ pub fn object_error_text(e: &ObjectBrowseError) -> String {
             message,
             hint,
         } => with_hint(
-            format!("{} ({code})", display_key(message)),
-            hint.as_deref(),
+            format!("{} ({})", display_key(message), display_key(code)),
+            hint.as_deref().map(display_key).as_deref(),
         ),
+        // The hint may name a region the server sent.
+        ObjectBrowseError::WrongRegion { hint } => format!("wrong region: {}", display_key(hint)),
         ObjectBrowseError::Unsupported { .. }
-        | ObjectBrowseError::WrongRegion { .. }
         | ObjectBrowseError::Timeout
         | ObjectBrowseError::SessionEnded { .. }
         | _ => e.to_string(),
@@ -149,6 +150,27 @@ pub fn introspect_message(e: &IntrospectError) -> String {
         | _ => None,
     };
     with_hint(e.to_string(), hint)
+}
+
+/// A bucket listing error as [`introspect_message`] gives it, with the store's message, code
+/// and hint escaped, since on S3 they are text from the server.
+pub fn object_listing_message(e: &IntrospectError) -> String {
+    match e {
+        IntrospectError::Execute(ExecuteError::Database {
+            code,
+            message,
+            hint,
+            ..
+        }) => with_hint(
+            format!("{} ({})", display_key(message), display_key(code)),
+            hint.as_deref().map(display_key).as_deref(),
+        ),
+        IntrospectError::Execute(_)
+        | IntrospectError::Unexpected { .. }
+        | IntrospectError::Missing { .. }
+        | IntrospectError::Unsupported { .. }
+        | _ => display_key(&e.to_string()),
+    }
 }
 
 fn with_hint(text: String, hint: Option<&str>) -> String {
