@@ -6,6 +6,7 @@ use dbento_app::ssh::{
     AUTH_HINT, CONNECT_HINT, NO_HOME, SshContext, TUNNEL_HINT, UNKNOWN_KEY_HINT, connect_message,
     not_trusted, ssh_hint, ssh_secrets, unknown_key,
 };
+use dbento_app::ssh::{SshFollow, apply_follow, ssh_follow};
 use dbento_app::ssh::{failure_text, is_ssh_failure, not_trusted_text};
 use dbento_core::{
     ConnectError, HostKey, HostKeyProblem, MemoryStore, Secret, SecretError, SecretKey,
@@ -538,4 +539,127 @@ async fn an_ssh_failure_leaves_out_the_database_secret_hint() {
         | Event::Settling { .. }
         | Event::SettleFailed { .. }) => panic!("{other:?}"),
     }
+}
+
+fn at(body: &str) -> Workspace {
+    Workspace::from_text(
+        PathBuf::from("/w"),
+        Path::new("/w/dbento.toml"),
+        &format!("dbento = 1\n{body}"),
+    )
+    .unwrap()
+}
+fn pg(name: &str) -> String {
+    format!(
+        "[connections.{name}]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n"
+    )
+}
+fn tun(name: &str, ssh_user: &str) -> String {
+    format!(
+        "{}[connections.{name}.ssh]\nhost = \"jump\"\nuser = \"{ssh_user}\"\n",
+        pg(name)
+    )
+}
+fn pw(name: &str, login: &str) -> SecretKey {
+    SecretKey::ssh_password("/w", name, login)
+}
+fn pp(name: &str) -> SecretKey {
+    SecretKey::ssh_key_passphrase("/w", name)
+}
+fn home() -> (tempfile::TempDir, SshHome) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = SshHome::new(dir.path(), "tester");
+    (dir, home)
+}
+
+#[test]
+fn a_new_tunnelled_connection_stores_at_its_pinned_entries() {
+    let (_d, home) = home();
+    let f = ssh_follow(&at(""), "a", &at(&tun("a", "ops")), "a", Some(&home));
+    assert_eq!(
+        f,
+        SshFollow {
+            password_to: Some(pw("a", "ops@jump:22")),
+            passphrase_to: Some(pp("a")),
+            ..SshFollow::default()
+        }
+    );
+}
+
+#[test]
+fn a_rename_on_the_same_login_moves_both_entries() {
+    let (_d, home) = home();
+    let f = ssh_follow(
+        &at(&tun("a", "ops")),
+        "a",
+        &at(&tun("b", "ops")),
+        "b",
+        Some(&home),
+    );
+    assert_eq!(
+        f.moves,
+        vec![
+            (pw("a", "ops@jump:22"), pw("b", "ops@jump:22")),
+            (pp("a"), pp("b"))
+        ]
+    );
+    assert!(f.drops.is_empty(), "{f:?}");
+    assert_eq!(f.password_to, Some(pw("b", "ops@jump:22")));
+}
+
+#[test]
+fn dropping_the_ssh_table_drops_both_entries() {
+    let (_d, home) = home();
+    let f = ssh_follow(&at(&tun("a", "ops")), "a", &at(&pg("a")), "a", Some(&home));
+    assert_eq!(f.drops, vec![pw("a", "ops@jump:22"), pp("a")]);
+    assert_eq!((f.password_to, f.passphrase_to), (None, None));
+}
+
+#[test]
+fn another_ssh_login_drops_the_old_password_and_keeps_the_passphrase() {
+    let (_d, home) = home();
+    let f = ssh_follow(
+        &at(&tun("a", "ops")),
+        "a",
+        &at(&tun("a", "dev")),
+        "a",
+        Some(&home),
+    );
+    assert_eq!(f.drops, vec![pw("a", "ops@jump:22")]);
+    assert!(f.moves.is_empty(), "{f:?}");
+    assert_eq!(f.password_to, Some(pw("a", "dev@jump:22")));
+}
+
+#[test]
+fn without_a_home_the_password_has_no_entry_and_says_why() {
+    let f = ssh_follow(&at(""), "a", &at(&tun("a", "ops")), "a", None);
+    assert_eq!(f.password_to, None);
+    assert_eq!(f.passphrase_to, Some(pp("a")));
+    assert_eq!(f.problem.as_deref(), Some(NO_HOME));
+}
+
+#[test]
+fn apply_follow_moves_then_stores_the_typed_password() {
+    let (_d, home) = home();
+    let store = MemoryStore::new();
+    store.set(&pp("a"), &Secret::new("x")).unwrap();
+    let f = ssh_follow(
+        &at(&tun("a", "ops")),
+        "a",
+        &at(&tun("b", "ops")),
+        "b",
+        Some(&home),
+    );
+    apply_follow(&store, &f, Some(&Secret::new("x")), None).unwrap();
+    let held = |k: &SecretKey| store.get(k).unwrap().is_some();
+    assert!(
+        held(&pw("b", "ops@jump:22")),
+        "the typed password lands at the new entry"
+    );
+    assert!(held(&pp("b")), "the passphrase moved");
+    assert!(!held(&pp("a")), "the old passphrase entry is gone");
+    assert!(
+        !held(&pw("a", "ops@jump:22")),
+        "nothing left at the old password entry"
+    );
 }

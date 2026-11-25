@@ -3,8 +3,10 @@
 use crate::support::{self, click_id, fill, form, label_of, opened, present, wait_real};
 use dbento_app::connection_dialog::Field;
 use dbento_app::ssh_form::{SSH_HOST_NOTE, SSH_IDENTITY_WARNING, SSH_PLAINTEXT_NOTE};
+use dbento_core::{Secret, SecretKey, SecretStore};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ScrollDelta, TestAppContext, point, px};
+use std::sync::Arc;
 
 const TUN: &str = "\n[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.tun.ssh]\nhost = \"jump\"\nuser = \"ops\"\n";
 
@@ -165,5 +167,72 @@ fn an_existing_table_shows_and_unticking_removes_it(cx: &mut TestAppContext) {
     assert!(
         text.contains("[connections.tun]") && !text.contains("[connections.tun.ssh]"),
         "{text}"
+    );
+}
+
+fn store_and_dir(
+    cx: &mut TestAppContext,
+    o: &support::Opened,
+) -> (Arc<dyn SecretStore>, std::path::PathBuf) {
+    o.shell.read_with(cx, |s, _| {
+        (
+            Arc::clone(&s.services().store),
+            s.workspace().unwrap().dir().to_path_buf(),
+        )
+    })
+}
+
+#[gpui_kit::test]
+fn a_typed_ssh_password_goes_to_its_pinned_entry_only(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    new_pg(cx, &o);
+    click_id(cx, o.win, "conn-ssh");
+    fill(cx, &o, Field::SshHost, "bastion");
+    fill(cx, &o, Field::SshUser, "ops");
+    segment(cx, &o, "conn-ssh-auth", 3);
+    fill(cx, &o, Field::SshPassword, "x");
+    click_id(cx, o.win, "conn-save");
+    let (st, dir) = store_and_dir(cx, &o);
+    let k = SecretKey::ssh_password(&dir, "pg", "ops@bastion:22");
+    wait_real(cx, "the stored SSH password", |_| {
+        st.get(&k).unwrap().is_some()
+    });
+    assert_eq!(st.get(&k).unwrap().unwrap().expose(), "x");
+    let text = toml(&o);
+    assert!(
+        text.contains(
+            "[connections.pg.ssh]\nhost = \"bastion\"\nuser = \"ops\"\nauth = \"password\"\n"
+        ),
+        "{text}"
+    );
+    // The fixture's other connections use "x" as a database and user; only pg's entry counts.
+    let entry = &text[text.find("[connections.pg]").unwrap()..];
+    assert!(!entry.contains("\"x\""), "never in the file: {text}");
+}
+
+#[gpui_kit::test]
+fn renaming_in_the_form_carries_both_ssh_entries(cx: &mut TestAppContext) {
+    let o = opened(cx, "", TUN, 0);
+    let (st, dir) = store_and_dir(cx, &o);
+    let (pw, pp) = (
+        |d: &std::path::Path, n: &str| SecretKey::ssh_password(d, n, "ops@jump:22"),
+        |d: &std::path::Path, n: &str| SecretKey::ssh_key_passphrase(d, n),
+    );
+    st.set(&pw(&dir, "tun"), &Secret::new("x")).unwrap();
+    st.set(&pp(&dir, "tun"), &Secret::new("x")).unwrap();
+    support::gear(cx, o.win, "tun");
+    form(cx, &o);
+    fill(cx, &o, Field::Name, "tun2");
+    click_id(cx, o.win, "conn-save");
+    wait_real(cx, "the moved entries", |_| {
+        st.get(&pw(&dir, "tun2")).unwrap().is_some() && st.get(&pp(&dir, "tun2")).unwrap().is_some()
+    });
+    assert!(
+        st.get(&pw(&dir, "tun")).unwrap().is_none(),
+        "old password entry gone"
+    );
+    assert!(
+        st.get(&pp(&dir, "tun")).unwrap().is_none(),
+        "old passphrase entry gone"
     );
 }

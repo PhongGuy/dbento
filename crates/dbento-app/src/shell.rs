@@ -89,7 +89,7 @@ use crate::schema_tree::{NodeKey, select_text};
 use crate::settings_dialog::{SettingsView, SettingsViewEvent};
 use crate::settings_store::{self, SettingsEvent, SettingsStore};
 use crate::sidebar::{Sidebar, SidebarEvent, color_name, tag_color};
-use crate::ssh::SshContext;
+use crate::ssh::{SshContext, apply_follow, ssh_follow};
 use crate::staged::discard_title;
 use crate::status_bar::{STATUS_HEIGHT, status_bar};
 use crate::tab_model::{Closing, SWITCH_WHILE_RUNNING, SwitchBlocked, TabModel};
@@ -130,6 +130,15 @@ async fn listed_within<E>(
 
 // One open saved query's read in a reload pass: the tab, what it knew then, what was read.
 type TabRead = (WeakEntity<QueryTab>, TabDisk, DiskRead);
+
+/// The secrets a connection form typed: the database password at its entry, the client key's
+/// passphrase, the SSH password and the SSH key passphrase.
+type TypedSecrets = (
+    Option<(SecretKey, Secret)>,
+    Option<Secret>,
+    Option<Secret>,
+    Option<Secret>,
+);
 
 // What `tab` knows of its saved query now; None for a tab with no file.
 fn tab_disk(tab: &Entity<QueryTab>, cx: &App) -> Option<TabDisk> {
@@ -4053,8 +4062,8 @@ impl Shell {
                     return;
                 };
                 if let Written::Done(plan) = shell.write_edit(&edit, window, cx) {
-                    shell
-                        .finish_connection_write(&base, &old, &name, *plan, None, None, window, cx);
+                    let typed = (None, None, None, None);
+                    shell.finish_connection_write(base, &old, &name, *plan, typed, window, cx);
                 }
             });
         })
@@ -4759,39 +4768,34 @@ impl Shell {
                 // Read before the form closes, which clears the password field.
                 let password = Self::password_to_store(&form, &plan, &name, cx);
                 let key_passphrase = form.read(cx).key_passphrase(cx);
+                let ssh_password = form.read(cx).ssh_password(cx);
+                let ssh_passphrase = form.read(cx).ssh_key_passphrase(cx);
                 let old_name = previous.clone().unwrap_or_else(|| name.clone());
-                self.finish_connection_write(
-                    &ws,
-                    &old_name,
-                    &name,
-                    plan,
-                    password,
-                    key_passphrase,
-                    window,
-                    cx,
-                );
+                let typed = (password, key_passphrase, ssh_password, ssh_passphrase);
+                self.finish_connection_write(ws, &old_name, &name, plan, typed, window, cx);
             }
         }
     }
 
     // After a connection edit from `base` is written: a rename moves `queries/<old>/` before
     // install, any open form closes, and the keychain follows off the UI thread (moved,
-    // removed, or `password` stored). A failed folder move keeps the rename and says so.
+    // removed, or the typed secrets stored). A failed folder move keeps the rename and says so.
+    // `typed` is the database password, the key passphrase, the SSH password and passphrase.
     #[allow(clippy::too_many_arguments)]
     fn finish_connection_write(
         &mut self,
-        base: &Workspace,
+        base: Arc<Workspace>,
         old_name: &str,
         name: &str,
         plan: EditPlan,
-        password: Option<(SecretKey, Secret)>,
-        key_passphrase: Option<Secret>,
+        typed: TypedSecrets,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let (password, key_passphrase, ssh_password, ssh_passphrase) = typed;
         let reads_key =
             |ws: &Workspace, name: &str| ws.declared(name).is_some_and(|c| c.tls_key().is_some());
-        let key_before = reads_key(base, old_name);
+        let key_before = reads_key(&base, old_name);
         let key_after = reads_key(plan.workspace(), name);
         let renamed = plan
             .renamed_connection()
@@ -4845,9 +4849,55 @@ impl Shell {
                 cx,
             );
         }
+        self.follow_ssh_secrets(
+            base,
+            old_name,
+            name,
+            (ssh_password, ssh_passphrase),
+            window,
+            cx,
+        );
         if let Some(detail) = folder {
             show_error("Saved queries not moved", detail, window, cx);
         }
+    }
+
+    // The SSH entries follow the saved connection off the UI thread, since resolving its login
+    // reads ~/.ssh/config. A login that cannot be resolved is only worth saying when an SSH
+    // password was typed for it.
+    fn follow_ssh_secrets(
+        &mut self,
+        base: Arc<Workspace>,
+        old_name: &str,
+        name: &str,
+        (password, passphrase): (Option<Secret>, Option<Secret>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(now) = self.workspace.clone() else {
+            return;
+        };
+        let tunnelled = |ws: &Workspace, n: &str| ws.declared(n).is_some_and(|c| c.ssh().is_some());
+        if !tunnelled(&base, old_name) && !tunnelled(&now, name) {
+            return;
+        }
+        let store = Arc::clone(&self.services.store);
+        let home = self.services.ssh.home().cloned();
+        let (old_name, name) = (old_name.to_owned(), name.to_owned());
+        let done = cx.background_spawn(async move {
+            let follow = ssh_follow(&base, &old_name, &now, &name, home.as_ref());
+            apply_follow(&*store, &follow, password.as_ref(), passphrase.as_ref())?;
+            Ok::<_, SecretError>(follow.problem.filter(|_| password.is_some()))
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            let detail = match done.await {
+                Ok(None) => return,
+                Ok(Some(problem)) => problem,
+                Err(e) => e.to_string(),
+            };
+            let _ = cx.update(|window, cx| show_error("SSH secret not saved", detail, window, cx));
+        })
+        .detach();
     }
 
     // The client key's passphrase follows its connection as the password does, off the UI
