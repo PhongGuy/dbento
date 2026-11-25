@@ -97,8 +97,8 @@ pub(crate) struct SqliteStream {
     parked: bool,
 }
 
-/// Cancellation shared by the session's handles and its worker. Each `execute` takes a new
-/// generation; a cancel marks the latest one, so it can only ever hit that statement.
+/// Cancellation shared by the session's handles and its worker. Each prepared statement takes
+/// a new generation; a cancel marks the latest one, so it can only ever hit that statement.
 /// Only the statement's progress handler acts on the mark: `sqlite3_interrupt` would also
 /// hit whatever the worker prepares or runs next.
 #[derive(Debug)]
@@ -147,6 +147,8 @@ pub(crate) struct SqliteScript {
     ctl: std_mpsc::Sender<Ctl>,
     timeout: Option<Duration>,
     cancel: Arc<SqliteCancel>,
+    /// The prepared statement's generation, which `execute` runs it under.
+    generation: u64,
 }
 
 impl Driver for SqliteDriver {
@@ -208,6 +210,7 @@ impl Driver for SqliteDriver {
             ctl,
             timeout: self.timeout,
             cancel: Arc::clone(&self.cancel),
+            generation: 0,
         }
     }
 
@@ -216,7 +219,14 @@ impl Driver for SqliteDriver {
         if script.ctl.send(Ctl::Next { reply }).is_err() {
             return Some(Err(ExecuteError::SessionClosed));
         }
-        wait.await.unwrap_or(Some(Err(ExecuteError::SessionClosed)))
+        let next = wait.await.unwrap_or(Some(Err(ExecuteError::SessionClosed)));
+        // Taken here, not in `execute`: a caller reports the statement as executing before it
+        // calls `execute`, and a cancel from then on must aim at this statement. Generations
+        // start at 1 because `cancelled` starts at 0, which no statement owns.
+        if let Some(Ok(_)) = next {
+            script.generation = script.cancel.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        }
+        next
     }
 
     async fn is_last(script: &mut SqliteScript) -> bool {
@@ -233,8 +243,7 @@ impl Driver for SqliteDriver {
     ) -> Result<(Vec<ColumnInfo>, Self::Stream), ExecuteError> {
         let (reply, wait) = oneshot::channel();
         let (events, rx) = mpsc::channel(1);
-        // Generations start at 1 because `cancelled` starts at 0, which no statement owns.
-        let generation = script.cancel.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation = script.generation;
         let (resume, resume_rx) = match limits.on_truncate {
             OnTruncate::Park => {
                 let (tx, rx) = std_mpsc::channel();

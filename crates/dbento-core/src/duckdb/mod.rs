@@ -44,6 +44,8 @@ pub(crate) struct DuckScript {
     ctl: std_mpsc::Sender<Ctl>,
     cancel: Arc<DuckCancel>,
     timeout: Option<Duration>,
+    /// The prepared statement's generation, which `execute` runs it under.
+    generation: u64,
 }
 
 /// How long `settle` and `close` wait, past `DRAIN_CAP`, for a cancelled statement to stop.
@@ -209,6 +211,7 @@ impl Driver for DuckDriver {
             ctl,
             cancel: Arc::clone(&self.cancel),
             timeout: self.timeout,
+            generation: 0,
         }
     }
 
@@ -217,7 +220,13 @@ impl Driver for DuckDriver {
         if script.ctl.send(Ctl::Next { reply }).is_err() {
             return Some(Err(ExecuteError::SessionClosed));
         }
-        wait.await.unwrap_or(Some(Err(ExecuteError::SessionClosed)))
+        let next = wait.await.unwrap_or(Some(Err(ExecuteError::SessionClosed)));
+        // Taken here, not in `execute`: a caller reports the statement as executing before it
+        // calls `execute`, and a cancel from then on must aim at this statement.
+        if let Some(Ok(_)) = next {
+            script.generation = script.cancel.next_generation();
+        }
+        next
     }
 
     async fn is_last(script: &mut DuckScript) -> bool {
@@ -241,8 +250,7 @@ impl Driver for DuckDriver {
             }
             OnTruncate::Drain | OnTruncate::Close => (None, None),
         };
-        // Taken before the request goes out, so a cancel from now on aims at this statement.
-        let generation = script.cancel.next_generation();
+        let generation = script.generation;
         if script
             .ctl
             .send(Ctl::Execute {
