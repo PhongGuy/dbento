@@ -1,10 +1,9 @@
 //! The S3 engine as the workspace and dialect layers see it, before any server.
 use dbento_core::{
-    ConnectError, ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions,
-    OpenError, QueryLanguage, ReadOnlyEnforcement, SecretSource, SessionOptions, Workspace,
-    connect, default_schema, explain_request, explain_text, format_sql, line_comment_starts,
-    plan_edit, quote_ident, quote_literal, read_only_residual, single_source, statement_count,
-    statement_ranges,
+    ConnectionSpec, Edit, Engine, ExplainError, ExplainMode, FormatOptions, OpenError,
+    QueryLanguage, ReadOnlyEnforcement, SecretSource, Workspace, default_schema, explain_request,
+    explain_text, format_sql, line_comment_starts, plan_edit, quote_ident, quote_literal,
+    read_only_residual, single_source, statement_count, statement_ranges,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -255,8 +254,10 @@ fn the_residual_names_the_reader_iam_actions() {
     }
 }
 
+#[cfg(not(feature = "s3"))]
 #[tokio::test]
-async fn connect_refuses_s3_until_the_driver_exists() {
+async fn connect_refuses_s3_in_a_build_without_it() {
+    use dbento_core::{ConnectError, SessionOptions, connect};
     let (_d, ws) = open(S3);
     match connect(
         &ws,

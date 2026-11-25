@@ -565,19 +565,34 @@ pub fn forced() -> SessionOptions {
 }
 
 /// One statement that must succeed.
-#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
+#[cfg(any(
+    feature = "mongodb",
+    feature = "redis",
+    feature = "dynamodb",
+    feature = "s3"
+))]
 pub async fn one(s: &mut Session, text: &str, limits: Limits) -> Ran {
     run(s, text, limits).await.remove(0).unwrap()
 }
 
 /// `one` with no limits.
-#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
+#[cfg(any(
+    feature = "mongodb",
+    feature = "redis",
+    feature = "dynamodb",
+    feature = "s3"
+))]
 pub async fn read(s: &mut Session, text: &str) -> Ran {
     one(s, text, Limits::default()).await
 }
 
 /// One statement that must fail.
-#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
+#[cfg(any(
+    feature = "mongodb",
+    feature = "redis",
+    feature = "dynamodb",
+    feature = "s3"
+))]
 pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
     match run(s, text, Limits::default()).await.remove(0) {
         Ok(ran) => panic!("{text}: {:?}", ran.outcome),
@@ -586,7 +601,12 @@ pub async fn failure(s: &mut Session, text: &str) -> ExecuteError {
 }
 
 /// A `Database` error's code.
-#[cfg(any(feature = "mongodb", feature = "redis", feature = "dynamodb"))]
+#[cfg(any(
+    feature = "mongodb",
+    feature = "redis",
+    feature = "dynamodb",
+    feature = "s3"
+))]
 pub fn code_of(e: ExecuteError) -> String {
     match e {
         ExecuteError::Database { code, .. } => code,
