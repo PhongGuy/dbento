@@ -2429,7 +2429,7 @@ pub fn engine_icon(engine: Engine) -> IconName {
         Engine::Mongodb => Icons::FileCode,
         Engine::Redis => Icons::Zap,
         Engine::Dynamodb => Icons::Shapes,
-        Engine::S3 => Icons::FolderOpen,
+        Engine::S3 => Icons::Archive,
     }
 }
 
