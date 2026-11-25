@@ -178,3 +178,88 @@ async fn hostile_keys_reach_the_text_block_escaped_and_round_trip_into_cat() {
     let r = server.ok("query", q(&format!("cat {quoted}"))).await;
     assert_eq!(r["rows"][0][0], "x", "the exact key reads its object");
 }
+
+/// `bytes` as lowercase hex.
+fn hex(bytes: impl IntoIterator<Item = u8>) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+#[tokio::test]
+async fn cat_shows_text_up_to_the_byte_budget_and_binary_as_cut_hex() {
+    let s3 = dbento_testkit::s3_moto().await;
+    s3.put(
+        "text/long.txt",
+        "a".repeat(100 << 10).into_bytes(),
+        Some("text/plain"),
+    )
+    .await;
+    let server = TestServer::s3(&s3, "read_only = true").await;
+    let at = |key: &str| q(&format!("cat 's3://{}/{key}'", s3.bucket()));
+
+    let long = server.ok("query", at("text/long.txt")).await;
+    assert_eq!(
+        long["columns"][0],
+        json!({"name": "content", "type": "text"}),
+        "{}",
+        long["columns"]
+    );
+    let content = long["rows"][0][0]
+        .as_str()
+        .expect("whole text, not a cut object");
+    assert_eq!(
+        content.len(),
+        (64 << 10) - 64,
+        "the read under the byte budget"
+    );
+    assert_eq!(long["rows"][0][1], "102400", "size is the whole object");
+    assert_eq!(
+        long["rows"][0][2], "true",
+        "the object is longer than the read"
+    );
+    assert_eq!(
+        (&long["truncated"], &long["truncated_by"]),
+        (&json!(false), &json!(null)),
+        "one row, not cut"
+    );
+
+    let blob = server.ok("query", at("bin/blob.bin")).await;
+    assert_eq!(blob["columns"][0]["type"], "bytes", "{blob}");
+    assert_eq!(
+        blob["rows"][0],
+        json!([{"hex": hex(0..=255u8)}, "256", "false"]),
+        "a small binary object whole"
+    );
+
+    let big = server.ok("query", at("big/three-mib.bin")).await;
+    let cell = &big["rows"][0][0];
+    assert_eq!(cell["cut"], true, "{cell}");
+    assert_eq!(
+        cell["hex"],
+        json!(hex((0..2048).map(dbento_testkit::big_byte))),
+        "the first 2 KiB as hex"
+    );
+    assert_eq!(big["rows"][0][1], "3145728", "{big}");
+    assert_eq!(big["rows"][0][2], "true", "{big}");
+}
+
+#[tokio::test]
+async fn a_sqlite_result_named_like_cat_is_still_cut() {
+    let server = TestServer::sqlite("", "").await;
+    let r = server
+        .ok(
+            "query",
+            json!({"connection": "lite", "sql": "SELECT replace(hex(zeroblob(5000)), '0', 'a') AS content, 1 AS size, 0 AS truncated"}),
+        )
+        .await;
+    assert_eq!(r["rows"][0][0]["cut"], true, "{}", r["rows"][0][0]);
+    assert_eq!(
+        r["rows"][0][0]["text"].as_str().map(str::len),
+        Some(4 << 10),
+        "the generic 4 KiB cut"
+    );
+}
