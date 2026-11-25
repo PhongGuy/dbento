@@ -1,6 +1,8 @@
 //! The public names for objects the S3 browser lists, reads and downloads.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// One object's address: a bucket and the raw key inside it.
@@ -226,6 +228,8 @@ pub struct DownloadOptions {
     pub force: bool,
     /// The longest wait for any one response or body chunk.
     pub idle_timeout: Duration,
+    /// Where the download reports its bytes, if anyone watches.
+    pub progress: Option<DownloadProgress>,
 }
 
 impl Default for DownloadOptions {
@@ -234,6 +238,7 @@ impl Default for DownloadOptions {
             max_size: DEFAULT_MAX_DOWNLOAD,
             force: false,
             idle_timeout: Duration::from_secs(60),
+            progress: None,
         }
     }
 }
@@ -258,6 +263,67 @@ impl DownloadOptions {
     pub fn with_idle_timeout(mut self, d: Duration) -> Self {
         self.idle_timeout = d;
         self
+    }
+
+    /// Reports the object's size and each written chunk to `p`.
+    #[must_use]
+    pub fn with_progress(mut self, p: DownloadProgress) -> Self {
+        self.progress = Some(p);
+        self
+    }
+}
+
+/// A shared counter a running download updates: the bytes written so far and the object's
+/// size once its HEAD answers. Clones watch the same download.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default)]
+pub struct DownloadProgress {
+    inner: Arc<Counts>,
+}
+
+/// The total starts at `u64::MAX`, which stands for a size not yet known.
+#[derive(Debug)]
+struct Counts {
+    written: AtomicU64,
+    total: AtomicU64,
+}
+
+impl Default for Counts {
+    fn default() -> Self {
+        Counts {
+            written: AtomicU64::new(0),
+            total: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl DownloadProgress {
+    /// A counter with nothing written and no size known.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The bytes written to the partial file so far.
+    #[must_use]
+    pub fn written(&self) -> u64 {
+        self.inner.written.load(Ordering::Relaxed)
+    }
+
+    /// The object's size, once the HEAD has reported it.
+    #[must_use]
+    pub fn total(&self) -> Option<u64> {
+        Some(self.inner.total.load(Ordering::Relaxed)).filter(|t| *t != u64::MAX)
+    }
+
+    #[cfg(feature = "s3")]
+    pub(crate) fn set_total(&self, n: u64) {
+        self.inner.total.store(n, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "s3")]
+    pub(crate) fn add(&self, n: u64) {
+        self.inner.written.fetch_add(n, Ordering::Relaxed);
     }
 }
 

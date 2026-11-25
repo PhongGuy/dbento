@@ -22,7 +22,7 @@ pub(crate) mod replay;
 pub(crate) mod stream;
 
 pub use browse::{
-    DEFAULT_MAX_DOWNLOAD, DownloadError, DownloadOptions, DownloadReport, MAX_READ_BYTES,
-    ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList, ObjectMeta, ObjectPage,
-    ObjectRead,
+    DEFAULT_MAX_DOWNLOAD, DownloadError, DownloadOptions, DownloadProgress, DownloadReport,
+    MAX_READ_BYTES, ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList,
+    ObjectMeta, ObjectPage, ObjectRead,
 };

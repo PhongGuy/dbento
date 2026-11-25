@@ -171,4 +171,38 @@ mod moto {
             "{e:?}"
         );
     }
+
+    #[tokio::test]
+    async fn progress_counts_every_byte_against_the_heads_size() {
+        let fx = s3fx("").await;
+        let mut s = fx.session().await;
+        let dir = tempfile::tempdir().unwrap();
+        let key = ObjectKey::new(fx.s3.bucket(), "big/three-mib.bin");
+        let progress = dbento_core::DownloadProgress::new();
+        assert_eq!((progress.written(), progress.total()), (0, None));
+        let opts = dbento_core::DownloadOptions::default().with_progress(progress.clone());
+        s.download_object(&key, &dir.path().join("big.bin"), opts)
+            .await
+            .unwrap();
+        assert_eq!(
+            (progress.written(), progress.total()),
+            (3 << 20, Some(3 << 20))
+        );
+        let small = dbento_core::DownloadProgress::new();
+        let opts = dbento_core::DownloadOptions::default()
+            .with_max_size(10)
+            .with_progress(small.clone());
+        let e = s
+            .download_object(&key, &dir.path().join("cap.bin"), opts)
+            .await;
+        assert!(
+            matches!(e, Err(dbento_core::DownloadError::TooLarge { .. })),
+            "{e:?}"
+        );
+        assert_eq!(
+            (small.written(), small.total()),
+            (0, Some(3 << 20)),
+            "the size is known before the refusal"
+        );
+    }
 }
