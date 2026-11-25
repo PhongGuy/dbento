@@ -2,10 +2,10 @@
 //! kept apart per key, clearing on switch, and its glyph.
 use crate::support;
 use crate::support::present;
-use dbento_app::connection_dialog::{ConnectionForm, Field};
+use dbento_app::connection_dialog::{ConnectionForm, FLAG_FIELDS, Field};
 use dbento_app::sidebar::engine_icon;
 use dbento_app::ui::Icons;
-use dbento_core::{ConnectionSpec, Engine};
+use dbento_core::{ConnectionSpec, Engine, FieldKind};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, ElementId, Entity, TestAppContext};
 
@@ -188,4 +188,32 @@ fn s3_has_its_own_glyph() {
         Icons::ALL.contains(&Icons::Archive),
         "the registry test loads it"
     );
+}
+
+#[test]
+fn every_descriptor_flag_is_one_the_form_saves() {
+    let engines = [
+        Engine::Postgres,
+        Engine::Sqlite,
+        Engine::Mysql,
+        Engine::Duckdb,
+        Engine::Mssql,
+        Engine::Surrealdb,
+        Engine::Mongodb,
+        Engine::Redis,
+        Engine::Dynamodb,
+        Engine::S3,
+    ];
+    for engine in engines {
+        let form = dbento_core::connection_form(engine);
+        for f in form.sections.iter().flat_map(|s| &s.fields) {
+            if f.kind == FieldKind::Flag {
+                assert!(
+                    FLAG_FIELDS.contains(&f.key),
+                    "{engine:?} flag {} has a checkbox that never saves",
+                    f.key
+                );
+            }
+        }
+    }
 }

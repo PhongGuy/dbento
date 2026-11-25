@@ -2212,7 +2212,7 @@ const ENGINES: [Engine; 10] = [
 type Flags = BTreeMap<&'static str, bool>;
 
 /// Every descriptor key the form shows as a checkbox.
-const FLAG_FIELDS: [&str; 2] = ["consistent_read", "virtual_hosted"];
+pub const FLAG_FIELDS: [&str; 2] = ["consistent_read", "virtual_hosted"];
 
 // A flag's state; a key the form never set reads unticked.
 fn flag(flags: &Flags, key: &str) -> bool {
