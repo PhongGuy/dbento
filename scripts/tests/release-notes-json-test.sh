@@ -253,6 +253,16 @@ test_a_window_with_only_new_contributors_has_no_groups_and_does_not_fail() {
   [[ $(jq -c '.releases[1] | [.version, .groups]' <<<"$out") == '["0.2.0",[]]' ]] || fail "v0.2.0: $(jq -c '.releases[1]' <<<"$out")"
 }
 
+test_bullets_before_any_section_are_one_changes_group_without_a_kind() {
+  rm -f "$WORK/releases"
+  local out
+  out=$(run_json v0.3.0 "## What's Changed"$'\n'"* loose one by @a in https://github.com/PhongGuy/dbento/pull/1"$'\n'"* loose two"$'\n'"### Fixes"$'\n'"* fixed by @a in https://github.com/PhongGuy/dbento/pull/3"$'\n') \
+    || { fail "json failed"; return 0; }
+  [[ $(jq -c '.releases[0].groups[0]' <<<"$out") == '{"title":"Changes","items":[{"text":"loose one","pr":1},{"text":"loose two"}]}' ]] \
+    || fail "unsectioned group: $(jq -c '.releases[0].groups[0]' <<<"$out")"
+  [[ $(jq -c '.releases[0].groups[1] | [.kind, .title]' <<<"$out") == '["fixes","Fixes"]' ]] || fail "sectioned group: $(jq -c '.releases[0].groups[1]' <<<"$out")"
+}
+
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do "$t"; done
 if ((FAILS > 0)); then echo "$FAILS failure(s)" >&2; exit 1; fi
 echo "release notes json tests passed"

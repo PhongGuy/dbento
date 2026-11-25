@@ -42,7 +42,7 @@ def groups($lines):
             ($line | bullet | strip_item) as $item
             | .bullets += 1
             | if $item.text == "" then .
-              elif .groups == [] then .groups = [{kind: "other", title: "Other changes", items: [$item]}]
+              elif .groups == [] then .groups = [{title: "Changes", items: [$item]}]
               else .groups[-1].items += [$item] end
           else . end)
         | {bullets, groups: (.groups | map(select(.items != [])))}) as $parsed
