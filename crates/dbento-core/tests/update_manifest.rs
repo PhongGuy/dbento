@@ -145,3 +145,24 @@ fn loopback_http_artifacts_are_allowed_for_local_testing() {
     let m = manifest("2.0.0", &cli(), "binary", "http://127.0.0.1:9/a", SHA);
     assert!(evaluate(m.as_bytes(), &cfg("0.1.0")).unwrap().is_some());
 }
+
+#[test]
+fn a_manifest_with_notes_asset_is_still_offered() {
+    let m = own("1.2.0").replacen(
+        '{',
+        &format!(r#"{{"notes_asset":{{"url":"https://example.com/notes.json","size":10,"sha256":"{SHA}"}},"#),
+        1,
+    );
+    assert!(evaluate(m.as_bytes(), &cfg("1.1.9")).unwrap().is_some());
+    for bad in [
+        r#""notes_asset":7,"#,
+        r#""notes_asset":{"url":"ftp://x","size":1,"sha256":"AB"},"#,
+        r#""notes_asset":null,"#,
+    ] {
+        let m = own("1.2.0").replacen('{', &format!("{{{bad}"), 1);
+        assert!(
+            evaluate(m.as_bytes(), &cfg("1.1.9")).unwrap().is_some(),
+            "{bad}"
+        );
+    }
+}

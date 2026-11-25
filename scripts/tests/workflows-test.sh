@@ -203,7 +203,7 @@ test_advisories_scans_daily_with_the_gate_pin() {
 
 test_release_jobs_have_their_timeouts() {
   [[ -f $RELEASE ]] || { fail "no release.yml"; return 0; }
-  [[ $(job_timeouts "$RELEASE") == "attest=15 build=90 checksums=45 draft=30 guard=5 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
+  [[ $(job_timeouts "$RELEASE") == "attest=15 build=90 checksums=45 draft=30 guard=5 notes=10 " ]] || fail "release timeouts: $(job_timeouts "$RELEASE")"
   pinned_uses_only "$RELEASE"
 }
 
@@ -302,19 +302,25 @@ test_release_attests_every_drafted_file() {
   perms=$(awk '/^    permissions:$/ { on = 1; next } on && /^      [a-z-]+: [a-z]+( #.*)?$/ { sub(/ #.*/, ""); print $0; next } { on = 0 }' <<<"$attest" | LC_ALL=C sort | tr -s ' ' | tr '\n' '|')
   [[ $perms == " artifact-metadata: write| attestations: write| contents: read| id-token: write|" ]] || fail "attest permissions: $perms"
   [[ $(grep -c 'id-token: write' "$RELEASE") == 1 ]] || fail "id-token: write outside the attest job"
-  # It compiles nothing: its only commands are the minisign install and the sign step.
-  [[ $(grep -cE '^        run:' <<<"$attest") == 2 ]] || fail "attest runs more than the minisign install and the sign step"
+  # It compiles nothing: its only commands are the minisign install, the sign step and the notes check.
+  [[ $(grep -cE '^        run:' <<<"$attest") == 3 ]] || fail "attest runs more than the minisign install, the sign step and the notes check"
   if grep -nE 'cargo|make |scripts/|actions/checkout' <<<"$attest"; then fail "the attest job builds or runs repository code"; fi
   grep -qxF '          sudo apt-get install -y -qq --no-install-recommends minisign=0.11-1' <<<"$attest" \
     || fail "minisign is not the pinned distro package"
-  [[ $(grep -cxF "        if: hashFiles('update/latest.json') != ''" <<<"$attest") == 2 ]] \
-    || fail "the minisign steps do not wait for a manifest"
-  local install sign att
+  [[ $(grep -cxF "        if: hashFiles('update/latest.json') != ''" <<<"$attest") == 3 ]] \
+    || fail "the minisign and notes check steps do not wait for a manifest"
+  local install sign check att
   install=$(grep -nxF '      - name: Install minisign' <<<"$attest" | cut -d: -f1) || true
   sign=$(grep -nxF '      - name: Sign the update manifest' <<<"$attest" | cut -d: -f1) || true
+  check=$(grep -nxF '      - name: Check the release notes' <<<"$attest" | cut -d: -f1) || true
   att=$(grep -n 'uses: actions/attest@' <<<"$attest" | cut -d: -f1) || true
-  [[ -n $install && -n $sign && -n $att && $install -lt $sign && $sign -lt $att ]] \
-    || fail "attest order: install '$install', sign '$sign', attest '$att'"
+  [[ -n $install && -n $sign && -n $check && -n $att && $install -lt $sign && $sign -lt $check && $check -lt $att ]] \
+    || fail "attest order: install '$install', sign '$sign', check '$check', attest '$att'"
+  local notes_check
+  notes_check=$(step_body "$RELEASE" attest 'Check the release notes')
+  if grep -nE 'secrets\.|scripts/|gh |cargo' <<<"$notes_check"; then fail "the notes check holds a secret or runs repository code"; fi
+  { grep -qF 'sha256sum' <<<"$notes_check" && grep -qF 'stat -c %s' <<<"$notes_check" && grep -qF 'jq' <<<"$notes_check"; } \
+    || fail "the notes check does not compare size and sha256 with jq: $notes_check"
   if grep -qxF '          path: dist' <<<"$attest$draft"; then fail "attest or draft still unpacks into dist only"; fi
   grep -qF 'name: signed-${{ needs.guard.outputs.version }}' <<<"$attest" || fail "attest does not upload the signed set"
   # One artifact carries the files from the sums to the attestation to the draft.
@@ -322,7 +328,7 @@ test_release_attests_every_drafted_file() {
   grep -qF 'name: release-${{ needs.guard.outputs.version }}' <<<"$attest" || fail "attest does not download the release files"
   grep -qF 'name: signed-${{ needs.guard.outputs.version }}' <<<"$draft" || fail "draft does not download the signed set"
   grep -qxF '    needs: [guard, checksums]' <<<"$attest" || fail "attest does not follow checksums"
-  grep -qxF '    needs: [guard, checksums, attest]' <<<"$draft" || fail "draft does not wait for attest"
+  grep -qxF '    needs: [guard, checksums, attest, notes]' <<<"$draft" || fail "draft does not wait for attest and notes"
   grep -qxF "    if: github.ref_type == 'tag' && !inputs.dry_run" <<<"$draft" || fail "draft does not run only on a tag release"
 }
 
@@ -340,14 +346,15 @@ test_release_drafts_only_on_a_tag() {
   [[ -f $RELEASE ]] || return 0
   [[ $(grep -cE '^[[:space:]]+run: .*gh release' "$RELEASE") == 1 ]] || fail "want exactly one run: line calling gh release: $(grep -n 'gh release' "$RELEASE")"
   [[ $(grep -cE '^[[:space:]]+gh release' "$RELEASE") == 0 ]] || fail "a gh release call inside a run block: $(grep -n 'gh release' "$RELEASE")"
-  grep -qE 'gh release create "\$GITHUB_REF_NAME" --repo "\$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento \$VERSION" --notes-file "\$RUNNER_TEMP/notes.md" dist/\* update/\*$' "$RELEASE" \
+  grep -qE 'gh release create "\$GITHUB_REF_NAME" --repo "\$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento \$VERSION" --notes-file notes/notes\.md dist/\* update/\*$' "$RELEASE" \
     || fail "draft command"
   # gh puts a notes file before generated notes, so the two never mix.
   if grep -qF -- '--generate-notes' "$RELEASE"; then fail "release.yml still asks gh to generate notes"; fi
-  grep -qF 'run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"' "$RELEASE" || fail "no step writes the notes"
+  grep -qF 'run: scripts/release-notes.sh files "$GITHUB_REF_NAME" notes' "$RELEASE" || fail "no step writes the notes"
   grep -q 'gh release create' <<<"$(job_body "$RELEASE" draft)" || fail "the draft command is not in the draft job"
-  [[ $(grep -c 'contents: write' "$RELEASE") == 1 ]] && grep -q 'contents: write' <<<"$(job_body "$RELEASE" draft)" \
-    || fail "contents: write outside the draft job"
+  [[ $(grep -c 'contents: write' "$RELEASE") == 2 ]] && grep -q 'contents: write' <<<"$(job_body "$RELEASE" notes)" \
+    && grep -q 'contents: write' <<<"$(job_body "$RELEASE" draft)" \
+    || fail "contents: write outside the notes and draft jobs"
 }
 
 # The notes come from GitHub's generate-notes API, which needs the job token (the draft job holds contents: write).
@@ -359,7 +366,7 @@ test_release_notes_step_has_the_token() {
   start=$(awk -v run="$run" 'NR < run && /^      - name:/ { start = NR } NR == run { print start; exit }' "$RELEASE")
   grep -qF 'GH_TOKEN: ${{ github.token }}' <<<"$(sed -n "${start},${run}p" "$RELEASE")" \
     || fail "the notes step has no GH_TOKEN"
-  grep -q 'scripts/release-notes\.sh' <<<"$(job_body "$RELEASE" draft)" || fail "the notes step is not in the draft job"
+  grep -q 'scripts/release-notes\.sh' <<<"$(job_body "$RELEASE" notes)" || fail "the notes step is not in the notes job"
 }
 
 # The attribution check is a shared template; it still pins every action to a commit.
@@ -375,8 +382,28 @@ test_attribution_check_is_pinned_and_reads_the_base() {
 # What's Changed walks back to the previous tag, which a shallow checkout does not have.
 test_release_notes_checkout_has_full_history() {
   [[ -f $RELEASE ]] || return 0
-  grep -q 'fetch-depth: 0' <<<"$(job_body "$RELEASE" draft)" || fail "the draft job checks out without fetch-depth: 0"
+  grep -q 'fetch-depth: 0' <<<"$(job_body "$RELEASE" notes)" || fail "the notes job checks out without fetch-depth: 0"
 }
+# The notes job never compiles, holds no secret, and gates its steps rather than itself, so a dry run still reaches checksums.
+test_release_notes_job_is_secret_free_and_never_skips_checksums() {
+  [[ -f $RELEASE ]] || return 0
+  local notes checksums
+  notes=$(job_body "$RELEASE" notes)
+  checksums=$(job_body "$RELEASE" checksums)
+  [[ -n $notes ]] || { fail "release.yml has no notes job"; return 0; }
+  grep -qxF '    needs: guard' <<<"$notes" || fail "notes does not need guard"
+  if grep -qE '^    if:' <<<"$notes"; then fail "the notes job has a job-level if, which would skip checksums"; fi
+  if grep -nE 'secrets\.|cargo|make |environment:' <<<"$notes"; then fail "the notes job builds or holds secrets"; fi
+  [[ $(grep -cxF "        if: github.ref_type == 'tag' && !inputs.dry_run" <<<"$notes") == 2 ]] || fail "notes steps are not gated"
+  grep -qF 'name: notes-${{ needs.guard.outputs.version }}' <<<"$notes" || fail "notes uploads no artifact"
+  grep -qxF '    needs: [guard, build, notes]' <<<"$checksums" || fail "checksums does not wait for notes"
+  grep -qF 'run: cp notes/notes.json dist/notes.json' <<<"$checksums" || fail "checksums does not add notes.json"
+  local add sums
+  add=$(grep -nF 'run: cp notes/notes.json dist/notes.json' "$RELEASE" | cut -d: -f1)
+  sums=$(grep -nF 'run: scripts/release.sh sums dist' "$RELEASE" | cut -d: -f1)
+  [[ -n $add && $add -lt $sums ]] || fail "notes.json is added after the sums"
+}
+
 
 # The updater lives only where the design puts it: no Apinata leftovers, no cargo packager signer,
 # no repository variables, and latest.json written in checksums and signed in attest only.
@@ -384,7 +411,7 @@ test_release_updater_pieces_sit_in_checksums_and_attest() {
   [[ -f $RELEASE ]] || return 0
   if grep -niE 'apinata|choco|signer|vars\.' "$RELEASE"; then fail "Apinata, signer or variable leftovers in release.yml"; fi
   local j
-  for j in guard build draft; do
+  for j in guard build draft notes; do
     if grep -n 'latest\.json' <<<"$(job_body "$RELEASE" "$j")"; then fail "$j touches latest.json"; fi
   done
   local step

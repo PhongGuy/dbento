@@ -128,6 +128,35 @@ manifest_fixture() {
     "dbento-${v}-x86_64-pc-windows-msvc.exe"; do
     printf '%s' "$f" >"$d/update/$f"
   done
+  printf '{"schema":1,"releases":[]}\n' >"$d/dist/notes.json"
+}
+
+test_manifest_names_the_release_notes() {
+  local d=$WORK/manifest-notes base=https://github.com/PhongGuy/dbento/releases/download/v1.2.3 m
+  manifest_fixture "$d" 1.2.3
+  bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 "$base" || { fail "manifest failed"; return 0; }
+  m=$d/update/latest.json
+  [[ $(jq -r .notes_asset.url "$m") == "$base/notes.json" ]] || fail "notes url: $(jq -r .notes_asset.url "$m")"
+  [[ $(jq -r .notes_asset.size "$m") == "$(wc -c <"$d/dist/notes.json" | tr -d ' ')" ]] || fail "notes size"
+  [[ $(jq -r .notes_asset.sha256 "$m") == "$(sha256sum "$d/dist/notes.json" | cut -d' ' -f1)" ]] || fail "notes sha256"
+  [[ $(jq -r 'keys | join(" ")' "$m") == "notes_asset pub_date targets version" ]] || fail "manifest keys: $(jq -r 'keys | join(" ")' "$m")"
+}
+
+test_manifest_refuses_a_release_without_notes() {
+  local d=$WORK/manifest-nonotes msg
+  manifest_fixture "$d" 1.2.3
+  rm "$d/dist/notes.json"
+  if msg=$(bash "$RELEASE_SH" manifest "$d/dist" "$d/update" 1.2.3 https://example.com/v1.2.3 2>&1); then fail "no notes still got a manifest"; fi
+  [[ $msg == *"needs $d/dist/notes.json"* ]] || fail "message: $msg"
+  [[ ! -e $d/update/latest.json ]] || fail "a manifest was left"
+}
+
+test_sums_list_the_release_notes() {
+  local d=$WORK/sums-notes
+  mkdir -p "$d"
+  printf a >"$d/dbento-1-x.tar.gz"; printf '{}\n' >"$d/notes.json"; printf x >"$d/other.json"
+  bash "$RELEASE_SH" sums "$d" || { fail "sums failed"; return 0; }
+  [[ $(cut -d' ' -f3 "$d/SHA256SUMS" | tr '\n' ' ') == "dbento-1-x.tar.gz notes.json " ]] || fail "sums: $(cat "$d/SHA256SUMS")"
 }
 
 test_manifest_lists_every_update_target() {

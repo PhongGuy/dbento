@@ -4,7 +4,8 @@
 use std::path::PathBuf;
 
 use dbento_core::update::{
-    self, Available, CheckError, InstallKind, Os, Product, Reason, UpdateConfig,
+    self, Available, CheckError, InstallKind, NotesError, Os, Product, Reason, UpdateConfig,
+    plain_text,
 };
 
 use crate::Exit;
@@ -49,6 +50,7 @@ pub(crate) async fn run(args: &SelfUpdateArgs) -> Exit {
     if args.check {
         return Exit::Refused;
     }
+    print_notes(&available).await;
     match local_kind() {
         InstallKind::NotOwned(reason) => {
             println!("This dbento is not updated in place: {reason}.");
@@ -56,6 +58,49 @@ pub(crate) async fn run(args: &SelfUpdateArgs) -> Exit {
             Exit::Ok
         }
         kind => install(&cfg, &available, &kind, args.yes).await,
+    }
+}
+
+// Prints what changed since this version, newest first. The notes are a courtesy: a failure to
+// load them is one line and never stops the offer. Every printed text passes through plain_text,
+// so no terminal control from the server or an error message reaches stdout.
+async fn print_notes(available: &Available) {
+    let notes = match update::release_notes(available).await {
+        Ok(notes) => notes,
+        Err(NotesError::NotPublished) => return,
+        Err(e) => {
+            println!(
+                "Release notes couldn't be loaded: {}",
+                plain_text(&e.to_string())
+            );
+            return;
+        }
+    };
+    let between = notes.between(env!("CARGO_PKG_VERSION"));
+    for entry in between.releases() {
+        let date = entry
+            .date()
+            .map(|d| format!(" ({})", plain_text(d)))
+            .unwrap_or_default();
+        println!();
+        println!("What's new in {}{date}", plain_text(entry.version()));
+        if let Some(intro) = entry.intro() {
+            println!("  {}", plain_text(intro));
+        }
+        for group in entry.groups() {
+            println!("  {}", plain_text(group.title()));
+            for item in group.items() {
+                let pr = item.pr().map(|n| format!(" (#{n})")).unwrap_or_default();
+                println!("    - {}{pr}", plain_text(item.text()));
+            }
+        }
+    }
+    if between.older_on_release_page() {
+        println!();
+        println!(
+            "Older changes are on the release page: {}",
+            update::RELEASES_URL
+        );
     }
 }
 

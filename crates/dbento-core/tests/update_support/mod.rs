@@ -76,6 +76,22 @@ pub fn manifest(version: &str, url: &str, body: &[u8]) -> String {
     manifest_as(version, "binary", url, body)
 }
 
+/// As `manifest`, with `notes` listed as the release notes asset at `notes_url`.
+pub fn manifest_with_notes(
+    version: &str,
+    url: &str,
+    body: &[u8],
+    notes_url: &str,
+    notes: &[u8],
+) -> String {
+    let asset = format!(
+        r#"{{"notes_asset":{{"url":"{notes_url}","size":{},"sha256":"{}"}},"#,
+        notes.len(),
+        sha256_hex(notes)
+    );
+    manifest(version, url, body).replacen('{', &asset, 1)
+}
+
 pub async fn mount(server: &MockServer, at: &str, response: ResponseTemplate) {
     Mock::given(method("GET"))
         .and(path(at))
