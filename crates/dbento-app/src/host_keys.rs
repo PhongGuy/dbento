@@ -185,15 +185,35 @@ impl<K> HostKeyGate<K> {
         }
     }
 
-    /// Answers the open question for (host, port), if any, and forgets it.
-    pub fn answer(&self, host: &str, port: u16, answer: HostKeyAnswer) {
+    /// Answers the open question for (host, port) only when it asks about `fingerprint`, and
+    /// forgets it; false when no such question is open (stale, replaced or answered).
+    pub fn answer(&self, host: &str, port: u16, fingerprint: &str, answer: HostKeyAnswer) -> bool {
         let mut state = self.state();
-        if let Some((fingerprint, open)) = state.pending.remove(&(host.to_owned(), port)) {
-            if answer == HostKeyAnswer::Trusted {
-                state.trusted.insert((host.to_owned(), port, fingerprint));
-            }
-            let _ = open.send(Some(answer));
+        let id = (host.to_owned(), port);
+        // A dialog answered after its question was replaced must not land on the newer key.
+        if state
+            .pending
+            .get(&id)
+            .is_none_or(|(asked, _)| asked != fingerprint)
+        {
+            return false;
         }
+        let Some((asked, open)) = state.pending.remove(&id) else {
+            return false;
+        };
+        if answer == HostKeyAnswer::Trusted {
+            state.trusted.insert((host.to_owned(), port, asked));
+        }
+        let _ = open.send(Some(answer));
+        true
+    }
+
+    /// Whether a question about `fingerprint` is open for (host, port) with at least one waiter.
+    pub fn is_open(&self, host: &str, port: u16, fingerprint: &str) -> bool {
+        self.state()
+            .pending
+            .get(&(host.to_owned(), port))
+            .is_some_and(|(asked, open)| asked == fingerprint && open.receiver_count() > 0)
     }
 
     /// Drops what this gate trusted for (host, port), after a retry still met an unknown key.
