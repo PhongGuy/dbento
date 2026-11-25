@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::TestServer;
+use crate::common::{TestServer, text, unfence};
 use dbento_testkit::{S3_ACCESS_KEY, S3_SECRET_VAR};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -140,4 +140,41 @@ async fn buckets_are_the_schemas() {
         json!([{"name": s3.bucket()}]),
         "the configured bucket"
     );
+}
+
+#[tokio::test]
+async fn hostile_keys_reach_the_text_block_escaped_and_round_trip_into_cat() {
+    let s3 = dbento_testkit::s3_moto().await;
+    let server = TestServer::s3(&s3, "read_only = true").await;
+    let result = server
+        .call(
+            "query",
+            q(&format!("ls -r 's3://{}/hostile/'", s3.bucket())),
+        )
+        .await;
+    let structured = result.structured_content.clone().expect("structured");
+    let block = text(&result);
+    for raw in ['\u{202e}', '\u{85}', '\u{1b}'] {
+        assert!(!block.contains(raw), "{raw:?} reached the text block raw");
+    }
+    assert!(
+        block.contains("\\u202e") && block.contains("\\u0085"),
+        "{block}"
+    );
+    let (_, parsed) = unfence(&block);
+    assert_eq!(parsed, structured, "the escapes decode to the exact keys");
+    let bidi = "hostile/bidi\u{202e}txt.exe";
+    let keys: Vec<&str> = structured["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r[1].as_str().unwrap())
+        .collect();
+    assert!(keys.contains(&bidi), "{keys:?}");
+    let quoted = dbento_core::quote_literal(
+        dbento_core::Engine::S3,
+        &format!("s3://{}/{bidi}", s3.bucket()),
+    );
+    let r = server.ok("query", q(&format!("cat {quoted}"))).await;
+    assert_eq!(r["rows"][0][0], "x", "the exact key reads its object");
 }

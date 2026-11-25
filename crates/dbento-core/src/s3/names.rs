@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 const MAX_NAME_BYTES: usize = 200;
 
 /// Characters that can disguise or reorder text: controls, line separators and bidi controls.
-fn hidden(c: char) -> bool {
+pub fn is_hidden_char(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
@@ -27,7 +27,7 @@ pub fn display_key(key: &str) -> String {
     for c in key.chars() {
         if c == '\\' {
             shown.push_str("\\\\");
-        } else if hidden(c) {
+        } else if is_hidden_char(c) {
             let _ = write!(shown, "\\u{{{:x}}}", u32::from(c));
         } else {
             shown.push(c);
@@ -44,7 +44,9 @@ pub fn suggested_file_name(key: &str) -> String {
     let segment = key.rsplit('/').find(|s| !s.is_empty()).unwrap_or_default();
     let kept: String = segment
         .chars()
-        .filter(|&c| !hidden(c) && !matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+        .filter(|&c| {
+            !is_hidden_char(c) && !matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*')
+        })
         .collect();
     let trimmed = trim_ends(&kept);
     let mut end = trimmed.len().min(MAX_NAME_BYTES);
