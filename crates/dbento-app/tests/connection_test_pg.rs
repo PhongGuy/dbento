@@ -22,6 +22,7 @@ fn test_connection_against_postgres_with_the_typed_password(cx: &mut TestAppCont
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))
@@ -83,6 +84,7 @@ fn a_passed_test_offers_the_servers_databases_under_database(cx: &mut TestAppCon
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))
@@ -175,6 +177,7 @@ fn test_a_renamed_connection_with_the_secret_stored_under_its_old_name(cx: &mut 
         store,
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))
@@ -217,6 +220,7 @@ fn a_test_then_all_on_the_server_saves_a_parent(cx: &mut TestAppContext) {
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))
@@ -280,6 +284,7 @@ fn choose_with_nothing_ticked_still_tests_and_lists(cx: &mut TestAppContext) {
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))

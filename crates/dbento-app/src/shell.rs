@@ -1536,6 +1536,7 @@ impl Shell {
             connection: conn.name().to_owned(),
             store: Arc::clone(&self.services.store),
             env: Arc::clone(&self.services.env),
+            ssh: self.services.ssh.clone(),
         };
         let log = self.history_log.clone();
         let model = cx.new(|_| {
@@ -1956,6 +1957,7 @@ impl Shell {
             connection: connection.to_owned(),
             store: Arc::clone(&self.services.store),
             env: Arc::clone(&self.services.env),
+            ssh: self.services.ssh.clone(),
         };
         // A set folder stands in for the platform ones, which are then never read.
         let (downloads, home) = match &self.download_folder {

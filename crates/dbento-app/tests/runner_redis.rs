@@ -35,6 +35,7 @@ fn spec_with(db: &RedisDb, extra: &str) -> (tempfile::TempDir, RunnerSpec) {
         connection: "rd".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == RD_SECRET_VAR).then(|| password.clone()).flatten()),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }

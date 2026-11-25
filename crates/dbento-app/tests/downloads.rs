@@ -46,6 +46,7 @@ fn stall_spec(port: u16) -> (tempfile::TempDir, RunnerSpec) {
         connection: "stall".into(),
         store: std::sync::Arc::new(dbento_core::MemoryStore::new()),
         env: std::sync::Arc::new(|v| (v == S3_SECRET_VAR).then(|| S3_SECRET.to_owned())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }

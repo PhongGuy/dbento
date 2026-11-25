@@ -329,6 +329,7 @@ pub struct RunnerSpec {
     pub connection: String,
     pub store: Arc<dyn SecretStore>,
     pub env: EnvLookup,
+    pub ssh: crate::ssh::SshContext,
 }
 
 /// The runner's session, shared with [`guarded`] so a panic can still close it.

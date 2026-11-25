@@ -8,11 +8,14 @@ use anyhow::{Context as _, bail};
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::persist::save_json;
 use dbento_app::settings::Settings;
+use dbento_app::ssh::SshContext;
 use dbento_app::team::{self, TeamHooks};
 use dbento_app::theme::Appearance;
 use dbento_app::updates::{self, UpdateHooks};
 use dbento_core::paths::{STATE_DIR_VAR, StatePaths};
-use dbento_core::{AccountRecord, MemoryStore, MemoryTokenStore, TeamFile, TeamToken, TokenStore};
+use dbento_core::{
+    AccountRecord, MemoryStore, MemoryTokenStore, SshEnv, TeamFile, TeamToken, TokenStore,
+};
 use gpui_kit::{App, AssetSource};
 use gpui_pilot_host::{Launch, PilotApp};
 
@@ -46,11 +49,14 @@ impl PilotApp for Dbento {
         // Secrets stay in memory, so a piloted run never reaches the keychain. The state
         // folder follows DBENTO_STATE_DIR so a QA run shares it with `dbento mcp`.
         let dir = state_dir(&launch.data_dir, std::env::var_os(STATE_DIR_VAR));
+        // SSH reads the real home and agent, as a user's run would.
+        let state = StatePaths::in_dir(&dir);
         let services = Services {
             paths: AppPaths::in_dir(&dir),
             store: Arc::new(MemoryStore::new()),
             env: Arc::new(|v| std::env::var(v).ok()),
             secrets_in_memory: false,
+            ssh: SshContext::new(SshEnv::from_env(&state), Some(state)),
         };
         seed_appearance(&dir, std::env::var(THEME_VAR).ok().as_deref())?;
         let workspace = workspace_arg(&launch.args)?;

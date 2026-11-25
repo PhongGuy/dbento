@@ -196,6 +196,7 @@ fn a_parked_postgres_stream_is_stopped_then_saved(cx: &mut TestAppContext) {
         connection: "pg".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::SECRET_VAR).then(|| pw.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let m = cx.new(|_| TabModel::with_tuning(spec, slow_idle()));
     // A cap past the table's size parks at the fetch window instead of the cap.
@@ -272,6 +273,7 @@ fn at_failing_commit(
         connection: "pg".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::SECRET_VAR).then(|| pw.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let m = cx.new(|_| TabModel::with_tuning(spec, RunnerTuning::default()));
     cx.update(|cx| {

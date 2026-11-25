@@ -221,6 +221,7 @@ mod settings_store;
 mod sidebar;
 mod smooth_scroll;
 mod sort_after_edit;
+mod ssh_link;
 mod staged;
 mod staged_rows;
 mod start;
