@@ -13,9 +13,10 @@ use testcontainers_modules::testcontainers::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::sshd::loopback_only;
 use super::{
-    ATTEMPT_LABEL, CERT_USER, ClientCert, NEXT_ATTEMPT, NEXT_DB, ServerTls, client_cert,
-    remove_labelled, retry_start, server_tls, sweep_orphans, wait_ready,
+    ATTEMPT_LABEL, CERT_USER, ClientCert, NEXT_ATTEMPT, NEXT_DB, OnNetwork, ServerTls, client_cert,
+    network_alias, remove_labelled, retry_start, server_tls, sweep_orphans, wait_ready,
 };
 
 /// The environment variable the generated connection reads its password from.
@@ -292,6 +293,55 @@ fn serve_tls<I: Image>(
 /// A fresh container; with `tls`, serving it and reached through "localhost", which its
 /// certificate names.
 async fn container(flavor: MyFlavor, tls: Option<&ServerTls>) -> MyDb {
+    let host = if tls.is_some() {
+        "localhost"
+    } else {
+        "127.0.0.1"
+    };
+    launch(flavor, tls, host, |r| r, |r| r).await
+}
+
+/// A fresh `mysql:8.4` container on `network`, named a fresh alias, URL variables ignored;
+/// with `tls`, serving a certificate that names only the alias. Only port 3306 is published,
+/// on 127.0.0.1, where the `MyDb`'s own logins reach it without TLS.
+pub async fn mysql_on(network: &str, tls: bool) -> (MyDb, OnNetwork) {
+    let alias = network_alias("mysql");
+    let tls = tls.then(|| server_tls(&[&alias]));
+    let on_network = |r: ContainerRequest<Mysql>| {
+        r.with_network(network.to_owned())
+            .with_container_name(alias.clone())
+            .with_host_config_modifier(|h| loopback_only(h, &["3306/tcp"]))
+    };
+    let db = launch(
+        MyFlavor::Mysql,
+        tls.as_ref(),
+        "127.0.0.1",
+        on_network,
+        |r| r,
+    )
+    .await;
+    let id = match &db.container {
+        Some(Held::Mysql(c)) => c.id().to_owned(),
+        Some(Held::Mariadb(c)) => c.id().to_owned(),
+        None => String::new(),
+    };
+    let on = OnNetwork {
+        alias,
+        id,
+        ca_pem: tls.map(|t| t.ca_pem),
+    };
+    (db, on)
+}
+
+/// Starts a container of `flavor`, serving `tls` and shaped further by the closure for its
+/// image, then makes a fresh database reached through `host`.
+async fn launch(
+    flavor: MyFlavor,
+    tls: Option<&ServerTls>,
+    host: &str,
+    mysql: impl Fn(ContainerRequest<Mysql>) -> ContainerRequest<Mysql>,
+    mariadb: impl Fn(ContainerRequest<Mariadb>) -> ContainerRequest<Mariadb>,
+) -> MyDb {
     let permit = slots(flavor)
         .acquire_owned()
         .await
@@ -299,22 +349,17 @@ async fn container(flavor: MyFlavor, tls: Option<&ServerTls>) -> MyDb {
     sweep_orphans().await;
     let (held, port) = match flavor {
         MyFlavor::Mysql => {
-            let c = start::<Mysql>(MYSQL_TAG, flavor, |r| serve_tls(r, tls)).await;
+            let c = start::<Mysql>(MYSQL_TAG, flavor, |r| mysql(serve_tls(r, tls))).await;
             let port = c.get_host_port_ipv4(3306).await;
             (Held::Mysql(c), port)
         }
         MyFlavor::Mariadb => {
-            let c = start::<Mariadb>(MARIADB_TAG, flavor, |r| serve_tls(r, tls)).await;
+            let c = start::<Mariadb>(MARIADB_TAG, flavor, |r| mariadb(serve_tls(r, tls))).await;
             let port = c.get_host_port_ipv4(3306).await;
             (Held::Mariadb(c), port)
         }
     };
     let port = port.expect("no mapped MySQL port");
-    let host = if tls.is_some() {
-        "localhost"
-    } else {
-        "127.0.0.1"
-    };
     let mut db = fresh_database(host, port, "root", "").await;
     db.container = Some(held);
     db._permit = Some(permit);

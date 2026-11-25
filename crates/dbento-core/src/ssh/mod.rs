@@ -7,6 +7,7 @@ mod auth;
 mod known_hosts;
 mod link;
 mod resolve;
+pub(crate) mod stream;
 pub use known_hosts::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,
     trust_host_key, user_known_hosts_lists,

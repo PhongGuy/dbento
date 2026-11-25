@@ -1,6 +1,11 @@
-use ::redis::{ConnectionAddr, ProtocolVersion, Value, parse_redis_value};
+use std::sync::Arc;
 
-use super::{client, rustls_cause, server_info};
+use ::redis::{ConnectionAddr, ProtocolVersion, Value, parse_redis_value};
+use rustls::pki_types::pem::PemObject as _;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::TlsAcceptor;
+
+use super::{client, rustls_cause, server_info, tls_wrap};
 use crate::Secret;
 use crate::session::{ConnectError, Flavor};
 use crate::workspace::Workspace;
@@ -85,4 +90,84 @@ fn a_rustls_error_is_found_stored_directly_or_inside_an_io_error() {
     // A host that is no TLS server name is neither shape: it is `Open`, not `Tls`.
     let name = rustls::pki_types::ServerName::try_from("bad name").unwrap_err();
     assert!(rustls_cause(&::redis::RedisError::from(name)).is_none());
+}
+
+/// A server presenting `tls`'s certificate, demanding a client certificate from its CA when
+/// `client_auth` is set.
+fn acceptor(tls: &dbento_testkit::NamedTls, client_auth: bool) -> TlsAcceptor {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let pem = |text: &str| {
+        CertificateDer::pem_slice_iter(text.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let builder = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
+        .with_safe_default_protocol_versions()
+        .unwrap();
+    let builder = if client_auth {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add_parsable_certificates(pem(&tls.ca_pem));
+        let verifier =
+            rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
+                .build()
+                .unwrap();
+        builder.with_client_cert_verifier(verifier)
+    } else {
+        builder.with_no_client_auth()
+    };
+    let key = PrivateKeyDer::from_pem_slice(tls.key_pem.as_bytes()).unwrap();
+    TlsAcceptor::from(Arc::new(
+        builder.with_single_cert(pem(&tls.cert_pem), key).unwrap(),
+    ))
+}
+
+#[tokio::test]
+async fn the_tunneled_handshake_verifies_the_configured_host_against_tls_ca() {
+    let tls = dbento_testkit::named_tls(&["cache.internal"]);
+    for (host, ok) in [("cache.internal", true), ("other.internal", false)] {
+        let (d, ws) = workspace(&format!(
+            "host = \"{host}\"\ntls = \"verify\"\ntls_ca = \"ca.pem\"\nsecret = \"none\""
+        ));
+        std::fs::write(d.path().join("ca.pem"), &tls.ca_pem).unwrap();
+        let (client, server_end) = tokio::io::duplex(64 * 1024);
+        let acceptor = acceptor(&tls, false);
+        let served = tokio::spawn(async move { acceptor.accept(server_end).await.is_ok() });
+        match tls_wrap(ws.declared("c").unwrap(), None, client).await {
+            Ok(stream) => {
+                assert!(ok, "{host} was accepted");
+                assert!(served.await.unwrap());
+                drop(stream);
+            }
+            Err(ConnectError::Tls { message, .. }) => {
+                assert!(!ok, "{host}: {message}");
+                assert!(message.contains("tls_ca"), "{message}");
+            }
+            Err(other) => panic!("{host}: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_tunneled_handshake_presents_the_configured_client_certificate() {
+    let tls = dbento_testkit::named_tls(&["cache.internal"]);
+    for (pair, ok) in [(true, true), (false, false)] {
+        let keys = if pair {
+            "tls_cert = \"me.crt\"\ntls_key = \"me.key\"\n"
+        } else {
+            ""
+        };
+        let (d, ws) = workspace(&format!(
+            "host = \"cache.internal\"\ntls = \"verify\"\ntls_ca = \"ca.pem\"\nsecret = \"none\"\n{keys}"
+        ));
+        std::fs::write(d.path().join("ca.pem"), &tls.ca_pem).unwrap();
+        std::fs::write(d.path().join("me.crt"), &tls.client.cert_pem).unwrap();
+        std::fs::write(d.path().join("me.key"), &tls.client.key_pem).unwrap();
+        let (client, server_end) = tokio::io::duplex(64 * 1024);
+        let acceptor = acceptor(&tls, true);
+        let served = tokio::spawn(async move { acceptor.accept(server_end).await.is_ok() });
+        // Under TLS 1.3 the client finishes first; the server's verdict is the one that counts.
+        let wrapped = tls_wrap(ws.declared("c").unwrap(), None, client).await;
+        assert_eq!(served.await.unwrap(), ok, "pair {pair}");
+        drop(wrapped);
+    }
 }
