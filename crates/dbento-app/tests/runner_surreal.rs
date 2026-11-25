@@ -29,6 +29,7 @@ fn sr_spec(db: &SrDb, login: (&str, &str), extra: &str) -> (tempfile::TempDir, R
         connection: "sr".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == SR_SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }

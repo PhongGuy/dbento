@@ -79,7 +79,7 @@ use crate::query_files::{ask_name, name_problem, query_rel};
 use crate::query_tab::{QueryTab, QueryTabEvent, TOOLBAR_HEIGHT, toolbar_level};
 use crate::recent_tabs::Recent;
 use crate::rename_secret::{
-    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, still_renamed,
+    adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, stays_line, still_renamed,
 };
 use crate::restore::plan_restore;
 use crate::results_pane::ResultView;
@@ -1536,6 +1536,7 @@ impl Shell {
             connection: conn.name().to_owned(),
             store: Arc::clone(&self.services.store),
             env: Arc::clone(&self.services.env),
+            ssh: self.services.ssh.clone(),
         };
         let log = self.history_log.clone();
         let model = cx.new(|_| {
@@ -1956,6 +1957,7 @@ impl Shell {
             connection: connection.to_owned(),
             store: Arc::clone(&self.services.store),
             env: Arc::clone(&self.services.env),
+            ssh: self.services.ssh.clone(),
         };
         // A set folder stands in for the platform ones, which are then never read.
         let (downloads, home) = match &self.download_folder {
@@ -3469,7 +3471,8 @@ impl Shell {
         let jobs: Vec<_> = secret_renames(old, &new)
             .into_iter()
             .map(|r| {
-                let keys = rename_keys(old, &new, &r);
+                // Resolving the SSH login reads ~/.ssh/config here, once per tunnelled rename.
+                let keys = rename_keys(old, &new, &r, self.services.ssh.home());
                 let asked = new.declared(&r.to).cloned();
                 (r, keys, asked)
             })
@@ -3505,6 +3508,10 @@ impl Shell {
                     }
                 };
                 lines.extend(env_lines(&r, held, &env));
+                // Said before the movable check, so a rename that moves nothing still says it.
+                if let Some(line) = stays_line(&r, &keys, held) {
+                    let _ = cx.update(|w, cx| show_error("SSH password not moved", line, w, cx));
+                }
                 if !held.movable() {
                     continue;
                 }
@@ -4500,9 +4507,10 @@ impl Shell {
         // A rename is not applied yet, so stored secrets are still under the old name.
         let renamed = previous.filter(|p| *p != name);
         form.update(cx, |f, cx| f.set_test(TestState::Testing, cx));
-        let (store, env) = (
+        let (store, env, ssh) = (
             Arc::clone(&self.services.store),
             Arc::clone(&self.services.env),
+            self.services.ssh.clone(),
         );
         let attempt = crate::tokio_bridge::spawn(cx, async move {
             let plan = Arc::new(plan);
@@ -4538,6 +4546,7 @@ impl Shell {
                 Some(typed) => Some(typed),
                 None => {
                     let (plan, name) = (Arc::clone(&plan), name.clone());
+                    let (store, env) = (Arc::clone(&store), Arc::clone(&env));
                     tokio::task::spawn_blocking(move || {
                         let ws = plan.workspace();
                         let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
@@ -4555,13 +4564,25 @@ impl Shell {
                     .map_err(|e| e.to_string())??
                 }
             };
+            // SSH secrets are read under the name as typed, never a rename's old name.
+            let ssh_secrets = {
+                let (plan, name, ssh) = (Arc::clone(&plan), name.clone(), ssh.clone());
+                tokio::task::spawn_blocking(move || {
+                    let ws = plan.workspace();
+                    let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
+                    crate::ssh::ssh_secrets(ws, &conn, &ssh, &*store, &*env)
+                })
+                .await
+                .map_err(|e| e.to_string())??
+            };
             let ws = plan.workspace();
             let conn = ws.connection(&name).ok_or_else(|| missing(&name))?;
             let mut options = SessionOptions::default();
             options.key_passphrase = key_passphrase;
+            ssh.apply(&mut options, ssh_secrets);
             let mut session = connect(ws, &conn, secret, options)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| crate::ssh::connect_message(&name, &e, &ssh))?;
             // The server's databases fill Database's suggestions. The session connected, so a
             // list the engine lacks, the login may not read or the server stalls on leaves the
             // test passed.

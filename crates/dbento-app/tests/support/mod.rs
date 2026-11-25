@@ -33,11 +33,16 @@ pub fn init_tokio(cx: &mut TestAppContext) {
 }
 /// Services over files in `dir`, an empty in-memory keychain and no environment.
 pub fn services(dir: &Path) -> Services {
+    // SSH reads a temp home under `dir` with no agent, never the real ones.
+    let state = dbento_core::StatePaths::in_dir(dir);
+    let home = dbento_core::SshHome::new(dir.join("ssh-home"), "tester");
+    let env = dbento_core::SshEnv::new(home, state.ssh_known_hosts.clone());
     Services {
         paths: AppPaths::in_dir(dir),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::new(Some(env), Some(state)),
     }
 }
 /// Points the window's first save dialog at `dir`, so no test reads a user folder.
@@ -141,6 +146,7 @@ pub fn spec(fx: &Fx, conn: &str) -> RunnerSpec {
         connection: conn.into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(|_| None),
+        ssh: dbento_app::ssh::SshContext::none(),
     }
 }
 pub const MANY: &str = "WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r WHERE x < 5000) SELECT x FROM r";
@@ -439,6 +445,7 @@ pub async fn pg_spec(extra: &str) -> (dbento_testkit::PgDb, tempfile::TempDir, R
         connection: "pg".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (db, dir, spec)
 }
@@ -458,6 +465,7 @@ pub fn my_spec(db: &dbento_testkit::MyDb, extra: &str) -> (tempfile::TempDir, Ru
         connection: "my".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::MY_SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }
@@ -477,6 +485,7 @@ pub fn ms_spec(db: &dbento_testkit::MsDb, extra: &str) -> (tempfile::TempDir, Ru
         connection: "ms".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::MS_SECRET_VAR).then(|| password.clone())),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }
@@ -502,6 +511,7 @@ pub fn redis_spec(
         connection: "rd".into(),
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == var).then(|| password.clone()).flatten()),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }
@@ -901,6 +911,7 @@ pub fn s3_spec(s3: &dbento_testkit::S3Moto, extra: &str) -> (tempfile::TempDir, 
         env: Arc::new(|v| {
             (v == dbento_testkit::S3_SECRET_VAR).then(|| dbento_testkit::S3_SECRET.to_owned())
         }),
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     (dir, spec)
 }

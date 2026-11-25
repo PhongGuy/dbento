@@ -50,6 +50,7 @@ fn no_secret_reaches_the_app_files(cx: &mut TestAppContext) {
         store: Arc::new(dbento_core::MemoryStore::new()),
         env: Arc::new(move |v| (v == dbento_testkit::SECRET_VAR).then(|| pw.clone())),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(ws.path().into()), cx))

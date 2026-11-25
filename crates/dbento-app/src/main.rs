@@ -11,11 +11,12 @@ use std::time::Duration;
 
 use dbento_app::app::{AppPaths, Services, start};
 use dbento_app::launch::{self, Launch, LaunchError};
+use dbento_app::ssh::SshContext;
 use dbento_app::team::{self, TeamHooks};
 use dbento_core::paths::{STATE_DIR_VAR, StatePaths};
 use dbento_core::{
-    KeychainStore, KeychainTokenStore, MemoryStore, MemoryTokenStore, SecretStore, TimedStore,
-    TimedTokenStore, TokenStore,
+    KeychainStore, KeychainTokenStore, MemoryStore, MemoryTokenStore, SecretStore, SshEnv,
+    TimedStore, TimedTokenStore, TokenStore,
 };
 use gpui_kit::AppContext;
 
@@ -96,6 +97,7 @@ fn main() {
                     store,
                     env: Arc::new(|v| std::env::var(v).ok()),
                     secrets_in_memory,
+                    ssh: SshContext::new(SshEnv::from_env(&state_paths), Some(state_paths.clone())),
                 };
                 cx.update(|cx| {
                     // The schedule's first tick waits for `start` to install the settings store.

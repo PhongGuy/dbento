@@ -111,6 +111,7 @@ fn a_mysql_connection_opens_and_marks_its_configured_database(cx: &mut TestAppCo
         store: std::sync::Arc::clone(&spec.store),
         env: std::sync::Arc::clone(&spec.env),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, _shell) = cx
         .update(|cx| dbento_app::app::start(services, Some(dir.path().into()), cx))

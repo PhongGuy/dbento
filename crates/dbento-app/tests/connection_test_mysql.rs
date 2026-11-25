@@ -46,6 +46,7 @@ fn a_new_mysql_connection_tests_saves_and_keeps_its_password_in_the_keychain(
         store: Arc::clone(&store),
         env: Arc::new(|_| None),
         secrets_in_memory: false,
+        ssh: dbento_app::ssh::SshContext::none(),
     };
     let (win, shell) = cx
         .update(|cx| start(services, Some(dir.path().into()), cx))

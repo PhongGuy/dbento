@@ -85,6 +85,8 @@ pub struct Services {
     pub env: EnvLookup,
     /// The keychain was unreachable at start, so `store` lasts until quit.
     pub secrets_in_memory: bool,
+    /// The SSH environment, state folder and host-key gate every connect carries.
+    pub ssh: crate::ssh::SshContext,
 }
 
 /// What the app remembers between runs, kept at [`AppPaths::state`].

@@ -34,6 +34,7 @@ use crate::runner::{
     Runner, RunnerSpec, RunnerTuning, SourceColumns, StatementEnd, StopReason,
 };
 use crate::settings;
+use crate::ssh::connect_message;
 use crate::staged::{self, EditHistory, GridRow, StagedEdits};
 use crate::tokio_bridge;
 
@@ -2807,6 +2808,7 @@ impl TabModel {
             let found = runner::resolve(&spec).await?;
             let mut options = catalog_options(found.conn.statement_timeout());
             options.key_passphrase = found.key_passphrase;
+            spec.ssh.apply(&mut options, found.ssh_secrets);
             let mut session = dbento_core::connect(
                 &spec.workspace,
                 &found.conn,
@@ -2816,7 +2818,7 @@ impl TabModel {
             .await
             .map_err(|e| match &found.hint {
                 Some(h) => format!("{e}\nhint: {h}"),
-                None => e.to_string(),
+                None => connect_message(&spec.connection, &e, &spec.ssh),
             })?;
             let read = read_rows(&mut session, &sql, max_rows).await;
             // A read-only session leaves no write for close to report.
@@ -3026,9 +3028,16 @@ impl TabModel {
             let found = runner::resolve(&spec).await.map_err(Err)?;
             let mut options = dbento_core::SessionOptions::default();
             options.key_passphrase = found.key_passphrase;
+            spec.ssh.apply(&mut options, found.ssh_secrets);
+            // A connect failure becomes a message so an SSH one carries its fix.
             dbento_core::apply_with(&spec.workspace, &found.conn, found.secret, options, batch)
                 .await
-                .map_err(Ok)
+                .map_err(|e| {
+                    if let ApplyError::Connect(c) = &e {
+                        return Err(connect_message(&spec.connection, c, &spec.ssh));
+                    }
+                    Ok(e)
+                })
         });
         self.save_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
