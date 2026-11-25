@@ -114,6 +114,7 @@ test_docs_name_no_apinata_and_only_the_guide_names_update_files() {
   if grep -nE 'latest\.json|\.app\.tar\.gz' "$README"; then fail "README names an update-only file"; fi
   need "$DOC" 'latest.json'
   need "$DOC" '.app.tar.gz'
+  need "$DOC" 'notes.json'
 }
 
 test_releasing_doc_covers_update_signing() {

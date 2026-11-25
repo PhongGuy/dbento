@@ -105,10 +105,37 @@ jobs:
           path: target/update/${{ runner.os == 'Linux' && 'linux' || runner.os == 'macOS' && 'macos' || 'windows' }}/
           if-no-files-found: error
 
+  # Builds the draft body and notes.json from the published release bodies and this tag's generated notes.
+  # Its steps are gated rather than the job, so a dry run still reaches checksums.
+  notes:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # generate-notes is a Contents write endpoint; it saves nothing
+    steps:
+      # Full history and tags, so the notes can find the previous tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Write the release notes
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/release-notes.sh files "$GITHUB_REF_NAME" notes
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        with:
+          name: notes-${{ needs.guard.outputs.version }}
+          path: notes/
+          if-no-files-found: error
+
   # Adds the stable-named copies and SHA256SUMS, writes the unsigned update manifest on a tag release,
   # and hands dist/ and update/ on as one artifact.
   checksums:
-    needs: [guard, build]
+    needs: [guard, build, notes]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -130,6 +157,15 @@ jobs:
         env:
           VERSION: ${{ needs.guard.outputs.version }}
         run: scripts/release.sh stable dist "$VERSION"
+      # notes.json joins dist/ before the sums, so SHA256SUMS lists it and the attestation covers it.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        with:
+          name: notes-${{ needs.guard.outputs.version }}
+          path: notes
+      - name: Add the release notes
+        if: github.ref_type == 'tag' && !inputs.dry_run
+        run: cp notes/notes.json dist/notes.json
       # write_sums is GNU-only, which is why the sums run here and not on the build runners.
       - name: Write SHA256SUMS
         run: scripts/release.sh sums dist
@@ -149,7 +185,7 @@ jobs:
           if-no-files-found: error
 
   # Signs latest.json, then attests every release file, so a download verifies with gh attestation verify.
-  # It compiles nothing and runs only the distro minisign, base64 and shell builtins; the signing key
+  # It compiles nothing and runs only the distro minisign, base64, jq, coreutils and shell builtins; the signing key
   # lives on the sign step alone. The release environment makes a tag run wait here for the owner's approval.
   attest:
     needs: [guard, checksums]
@@ -186,6 +222,22 @@ jobs:
               -m update/latest.json -x update/latest.json.minisig
           base64 -w0 update/latest.json.minisig > update/latest.json.sig
           rm update/latest.json.minisig
+      # The signed manifest must name this notes.json exactly, within the size cap the client enforces.
+      - name: Check the release notes
+        if: hashFiles('update/latest.json') != ''
+        shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          url=$(jq -er .notes_asset.url update/latest.json)
+          want_size=$(jq -er .notes_asset.size update/latest.json)
+          want_sha=$(jq -er .notes_asset.sha256 update/latest.json)
+          size=$(stat -c %s dist/notes.json)
+          sha=$(sha256sum dist/notes.json | cut -d' ' -f1)
+          [[ $url == */releases/download/v$VERSION/notes.json ]] || { echo "notes_asset url $url is not this release's" >&2; exit 1; }
+          [[ $size == "$want_size" ]] || { echo "notes.json is $size bytes, the manifest says $want_size" >&2; exit 1; }
+          ((size <= 49152)) || { echo "notes.json is $size bytes, over the 49152 cap" >&2; exit 1; }
+          [[ $sha == "$want_sha" ]] || { echo "notes.json sha256 $sha does not match the manifest" >&2; exit 1; }
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
@@ -201,29 +253,23 @@ jobs:
 
   # Drafts the release from the signed set the attest job attested.
   draft:
-    needs: [guard, checksums, attest]
+    needs: [guard, checksums, attest, notes]
     if: github.ref_type == 'tag' && !inputs.dry_run
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write # create the draft release and upload its files
     steps:
-      # Full history and tags, so the notes can find the previous tag.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: signed-${{ needs.guard.outputs.version }}
-      # The script splices GitHub's label-grouped notes into the shared layout, so gh is not asked to generate them again.
-      - name: Write the release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: scripts/release-notes.sh "$GITHUB_REF_NAME" >"$RUNNER_TEMP/notes.md"
+      # The notes job spliced GitHub's label-grouped notes into the shared layout, so gh is not asked to generate them again.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes-${{ needs.guard.outputs.version }}
+          path: notes
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.guard.outputs.version }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file "$RUNNER_TEMP/notes.md" dist/* update/*
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Dbento $VERSION" --notes-file notes/notes.md dist/* update/*
