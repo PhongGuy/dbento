@@ -1,6 +1,8 @@
 //! Tool failures as an AI client sees them: an `isError` result with a fixed code.
 
-use dbento_core::{ConnectError, Engine, ExecuteError, IntrospectError, OpenError, SecretError};
+use dbento_core::{
+    ConnectError, Engine, ExecuteError, HostKeyProblem, IntrospectError, OpenError, SecretError,
+};
 use rmcp::ErrorData;
 use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock};
@@ -62,14 +64,54 @@ impl ToolError {
         ToolError::new("secret", e.to_string())
     }
 
-    /// The session did not open; a missing SQLite file counts as no connection, and its
-    /// message leaves out the local path as every other message does.
+    /// The session did not open; a missing SQLite file counts as no connection. No message
+    /// carries a local path, so an SSH failure whose core text can name a known_hosts, identity
+    /// or ssh config file is reworded to its host, port, line and fingerprint, or a fixed text.
     pub(crate) fn from_connect(e: &ConnectError) -> Self {
         match e {
             ConnectError::NotFound { .. } => ToolError::new(
                 "no_connection",
                 "the connection's database file does not exist".to_owned(),
             ),
+            ConnectError::SshHostKeyUnknown { .. } => ToolError::new("ssh_host_key", e.to_string()),
+            ConnectError::SshHostKeyChanged {
+                host,
+                port,
+                fingerprint,
+                line,
+                problem,
+                ..
+            } => {
+                let verb = match problem {
+                    HostKeyProblem::Changed => "differs from",
+                    HostKeyProblem::Revoked => "is revoked at",
+                    HostKeyProblem::Unreadable => "cannot be read at",
+                    _ => "is refused at",
+                };
+                ToolError::new(
+                    "ssh_host_key",
+                    format!(
+                        "the SSH host key of {host}:{port} {verb} line {line} of a known_hosts \
+                         file ({fingerprint}); the user must resolve it"
+                    ),
+                )
+            }
+            ConnectError::SshConnect { address, .. } => {
+                ToolError::new("ssh", format!("cannot reach the SSH server {address}"))
+            }
+            ConnectError::SshAuth { .. } => ToolError::new(
+                "ssh",
+                "SSH login to this connection's server failed; run `dbento query` on it or open \
+                 it in the app to see which methods were tried"
+                    .to_owned(),
+            ),
+            ConnectError::SshUnsupported { .. } => ToolError::new(
+                "ssh",
+                "this connection's SSH settings use something Dbento cannot do yet; run \
+                 `dbento query` on it to see what"
+                    .to_owned(),
+            ),
+            ConnectError::SshTunnel { .. } => ToolError::new("ssh", e.to_string()),
             _ => ToolError::new("connect", e.to_string()),
         }
     }
@@ -308,6 +350,119 @@ mod tests {
         ];
         for (e, code) in cases {
             assert_eq!(e.code(), code, "{}", e.message());
+        }
+    }
+
+    #[test]
+    fn ssh_errors_map_to_their_own_codes() {
+        let key =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEpl7XIrO05PhGnrhKwH5QLVhB9hgippRySbUyJFSjRd";
+        let cases = [
+            (
+                ConnectError::SshHostKeyUnknown {
+                    host: "h".into(),
+                    port: 22,
+                    key: dbento_core::HostKey::from_openssh("h", 22, key).unwrap(),
+                },
+                "ssh_host_key",
+            ),
+            (
+                ConnectError::SshHostKeyChanged {
+                    host: "h".into(),
+                    port: 22,
+                    fingerprint: "SHA256:x".into(),
+                    file: "/k".into(),
+                    line: 1,
+                    problem: dbento_core::HostKeyProblem::Changed,
+                },
+                "ssh_host_key",
+            ),
+            (
+                ConnectError::SshConnect {
+                    address: "h:22".into(),
+                    message: "m".into(),
+                },
+                "ssh",
+            ),
+            (
+                ConnectError::SshAuth {
+                    message: "m".into(),
+                },
+                "ssh",
+            ),
+            (
+                ConnectError::SshUnsupported {
+                    message: "m".into(),
+                },
+                "ssh",
+            ),
+            (
+                ConnectError::SshTunnel {
+                    message: "m".into(),
+                },
+                "ssh",
+            ),
+        ];
+        for (e, code) in cases {
+            let t = ToolError::from_connect(&e);
+            assert_eq!(t.code(), code, "{e}");
+        }
+    }
+
+    #[test]
+    fn ssh_messages_leave_out_local_paths() {
+        let changed = ToolError::from_connect(&ConnectError::SshHostKeyChanged {
+            host: "bastion".into(),
+            port: 2222,
+            fingerprint: "SHA256:abc".into(),
+            file: "/home/u/.ssh/known_hosts".into(),
+            line: 7,
+            problem: dbento_core::HostKeyProblem::Revoked,
+        });
+        for part in ["bastion:2222", "SHA256:abc", "line 7", "revoked"] {
+            assert!(
+                changed.message().contains(part),
+                "{part}: {}",
+                changed.message()
+            );
+        }
+        let auth = ToolError::from_connect(&ConnectError::SshAuth {
+            message: "key /home/u/.ssh/id_ed25519: rejected".into(),
+        });
+        let unsupported = ToolError::from_connect(&ConnectError::SshUnsupported {
+            message: "Match in /home/u/.ssh/config is not supported yet".into(),
+        });
+        let connect = ToolError::from_connect(&ConnectError::SshConnect {
+            address: "bastion:22".into(),
+            message: "cannot read /home/u/.ssh/config: denied".into(),
+        });
+        assert!(
+            connect.message().contains("bastion:22"),
+            "{}",
+            connect.message()
+        );
+        for t in [&changed, &auth, &unsupported, &connect] {
+            assert!(!t.message().contains("/home"), "{}", t.message());
+        }
+    }
+
+    #[test]
+    fn every_unsupported_ssh_setting_reads_one_fixed_text() {
+        for message in [
+            "SSH tunnels for MySQL are not available yet",
+            "no home directory to read SSH settings from",
+            "Match in /home/u/.ssh/config is not supported yet",
+        ] {
+            let t = ToolError::from_connect(&ConnectError::SshUnsupported {
+                message: message.into(),
+            });
+            assert_eq!(
+                (t.code(), t.message()),
+                (
+                    "ssh",
+                    "this connection's SSH settings use something Dbento cannot do yet; run `dbento query` on it to see what"
+                )
+            );
         }
     }
 

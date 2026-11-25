@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use dbento_core::SshEnv;
 use rmcp::ServiceExt;
 
 pub use server::DbentoServer;
@@ -35,6 +36,7 @@ pub struct McpOptions {
     history_file: Option<PathBuf>,
     approvals_dir: Option<PathBuf>,
     env_lookup: EnvLookup,
+    ssh_env: Option<SshEnv>,
 }
 
 impl McpOptions {
@@ -48,6 +50,7 @@ impl McpOptions {
             history_file: None,
             approvals_dir: None,
             env_lookup: Arc::new(|name| std::env::var(name).ok()),
+            ssh_env: None,
         }
     }
 
@@ -82,6 +85,13 @@ impl McpOptions {
         lookup: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) -> Self {
         self.env_lookup = Arc::new(lookup);
+        self
+    }
+
+    /// The SSH home, known_hosts and agent for tunnelled connections; unset, the
+    /// environment's (`SshEnv::from_env` of `StatePaths::from_env`).
+    pub fn ssh_env(mut self, env: SshEnv) -> Self {
+        self.ssh_env = Some(env);
         self
     }
 }
