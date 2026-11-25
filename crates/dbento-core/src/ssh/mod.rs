@@ -1,4 +1,10 @@
-//! SSH tunnels: how a connection's `ssh` table is resolved before a tunnel opens.
+//! SSH tunnels: how a connection's `ssh` table is resolved before a tunnel opens, and
+//! which host keys are trusted.
 
+mod known_hosts;
 mod resolve;
+pub use known_hosts::{
+    ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,
+    trust_host_key, user_known_hosts_lists,
+};
 pub use resolve::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};
