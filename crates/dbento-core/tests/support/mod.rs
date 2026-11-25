@@ -163,6 +163,21 @@ pub enum Cell {
     Bytes(Vec<u8>),
 }
 
+/// A browsed row as `(column, value)` pairs in the target's column order.
+pub fn loaded(target: &EditTarget, cells: &[Cell]) -> Vec<(String, EditValue)> {
+    assert_eq!(
+        target.columns().len(),
+        cells.len(),
+        "the browse must select the target's columns"
+    );
+    target
+        .columns()
+        .iter()
+        .map(|c| c.name().to_owned())
+        .zip(cells.iter().map(edit_value))
+        .collect()
+}
+
 /// A delivered cell as the value the grid would stage for it.
 pub fn edit_value(cell: &Cell) -> EditValue {
     match cell {

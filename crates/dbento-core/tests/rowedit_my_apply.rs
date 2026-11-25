@@ -19,6 +19,7 @@ fn update(id: &str, set: &[(&str, EditValue)]) -> Change {
     Change::Update {
         key: row_key(&[("id", val(id))]),
         set: pairs(set),
+        expected: vec![],
     }
 }
 
@@ -130,6 +131,7 @@ async fn inserts_deletes_and_an_all_default_insert_commit() {
             },
             Change::Delete {
                 key: row_key(&[("id", val("3"))]),
+                expected: vec![],
             },
         ];
         fx.apply_changes(&target, changes)

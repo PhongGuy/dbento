@@ -32,6 +32,7 @@ async fn a_row_locked_elsewhere_fails_after_about_five_seconds() {
         let change = Change::Update {
             key: row_key(&[("id", val("1"))]),
             set: pairs(&[("n", val("9"))]),
+            expected: vec![],
         };
         let r = tokio::time::timeout(
             Duration::from_secs(30),
@@ -61,6 +62,7 @@ async fn a_non_strict_browse_session_still_applies_strictly() {
         let change = Change::Update {
             key: row_key(&[("id", val("1"))]),
             set: pairs(&[("v", val("abcdef"))]),
+            expected: vec![],
         };
         match rejected(fx.apply_changes(&target, vec![change]).await).as_slice() {
             [ChangeOutcome::Failed(m)] => assert!(m.contains("Data too long"), "{label}: {m}"),
@@ -89,6 +91,7 @@ async fn key_text_is_read_in_the_browse_sessions_time_zone() {
         let change = Change::Update {
             key: row_key(&[("t", val("2024-01-01 05:00:00"))]),
             set: pairs(&[("n", val("2"))]),
+            expected: vec![],
         };
         fx.apply_changes(&target, vec![change])
             .await
@@ -133,7 +136,14 @@ async fn a_key_update_returns_the_key_the_database_stored() {
         for (table, key, set, stored) in cases {
             let target = fx.target(table).await;
             let applied = fx
-                .apply_changes(&target, vec![Change::Update { key, set }])
+                .apply_changes(
+                    &target,
+                    vec![Change::Update {
+                        key,
+                        set,
+                        expected: vec![],
+                    }],
+                )
                 .await
                 .unwrap();
             assert_eq!(applied.written_key(0), Some(&stored), "{label} {table}");
@@ -153,6 +163,7 @@ async fn a_note_does_not_fail_a_change() {
         let change = Change::Update {
             key: row_key(&[("k", val("1"))]),
             set: pairs(&[("dc", val("1.005"))]),
+            expected: vec![],
         };
         fx.apply_changes(&target, vec![change])
             .await

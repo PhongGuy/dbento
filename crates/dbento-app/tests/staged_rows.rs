@@ -49,7 +49,7 @@ fn inserts_follow_the_loaded_changes_in_the_order_added() {
     s.add_row(vec![(1, "name".into(), text("first"))]);
     s.stage(2, key("3"), 1, "name", &text("c"), text("x"));
     s.add_row(vec![]);
-    s.delete(0, key("1"));
+    s.delete(0, key("1"), vec![]);
     let (changes, rows) = s.changes();
     assert_eq!(
         rows,
@@ -63,10 +63,14 @@ fn inserts_follow_the_loaded_changes_in_the_order_added() {
     assert_eq!(
         changes,
         vec![
-            Change::Delete { key: key("1") },
+            Change::Delete {
+                key: key("1"),
+                expected: vec![]
+            },
             Change::Update {
                 key: key("3"),
                 set: vec![("name".into(), text("x"))],
+                expected: vec![("name".into(), text("c"))],
             },
             Change::Insert {
                 values: vec![("name".into(), text("first"))],
@@ -117,7 +121,7 @@ fn staging_a_marked_row_back_to_its_value_drops_the_mark_with_the_row() {
 fn revert_row_drops_one_rows_edit_and_its_mark() {
     let mut s = StagedEdits::default();
     s.stage(0, key("1"), 1, "name", &text("b"), text("y"));
-    s.delete(4, key("5"));
+    s.delete(4, key("5"), vec![]);
     let (_, rows) = s.changes();
     s.set_outcomes(
         &rows,

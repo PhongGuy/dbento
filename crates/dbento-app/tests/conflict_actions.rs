@@ -7,7 +7,7 @@ use crate::support::{
 use dbento_app::results_pane::ResultsPane;
 use dbento_app::staged::{Fresh, GridRow, fresh_text, was_fresh_text};
 use dbento_app::tab_model::TabModel;
-use dbento_core::{CellRef, EditValue, RelationKind};
+use dbento_core::{CellRef, Change, EditValue, RelationKind, RowKey};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ElementId, Entity, Focusable as _, TestAppContext};
 
@@ -320,4 +320,147 @@ fn a_conflicting_delete_says_its_row_is_gone(cx: &mut TestAppContext) {
         label_of(cx, o.win, "record-fresh-row").as_deref(),
         Some("now in database: row deleted")
     );
+}
+
+/// 'mine' staged on id 1, 'theirs' written elsewhere, and the save refused.
+fn overwritten(cx: &mut TestAppContext, fx: &Fx) -> Entity<TabModel> {
+    let m = ready(cx, fx, "t");
+    assert!(
+        m.update(cx, |m, cx| m.stage_cell(0, 1, "mine", cx)),
+        "id 1 stages"
+    );
+    exec(fx, "UPDATE t SET name = 'theirs' WHERE id = 1");
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
+    wait_idle(cx, &m);
+    assert_eq!(
+        m.read_with(cx, |m, _| m.conflicts().to_vec()),
+        [GridRow::Loaded(0)],
+        "the overwritten row conflicts"
+    );
+    wait_unlocked(cx, fx);
+    m
+}
+fn reload(cx: &mut TestAppContext, m: &Entity<TabModel>) {
+    assert!(
+        m.update(cx, |m, cx| m.reload_conflicts(cx)),
+        "the reload starts"
+    );
+    wait_real(cx, "the reload", |cx| {
+        m.read_with(cx, |m, _| !m.reloading())
+    });
+}
+fn save_and_commit(cx: &mut TestAppContext, m: &Entity<TabModel>) {
+    assert!(m.update(cx, |m, cx| m.save(cx)), "the save starts");
+    wait_prompt(cx, m);
+    m.update(cx, |m, cx| m.commit(cx));
+    wait_idle(cx, m);
+}
+
+#[gpui_kit::test]
+fn reloading_a_conflict_rebaselines_it_so_the_next_save_applies(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = overwritten(cx, &fx);
+    reload(cx, &m);
+    m.read_with(cx, |m, _| {
+        assert_eq!(
+            m.fresh_at(GridRow::Loaded(0), 1),
+            Some(Fresh::Value(CellRef::Text("theirs")))
+        );
+        let base = m.edits().baseline(0).expect("a baseline");
+        assert!(base.contains(&("name".to_string(), EditValue::Text("theirs".into()))));
+        assert_eq!(m.edits().cell(0, 1), Some(&EditValue::Text("mine".into())));
+    });
+    save_and_commit(cx, &m);
+    assert_eq!(value_of(&fx, "t", "name", 1), "mine");
+    assert!(m.read_with(cx, |m, _| m.edits().baseline(0).is_none()));
+}
+
+#[gpui_kit::test]
+fn a_cell_reverted_and_staged_again_after_a_reload_keeps_the_reloaded_baseline(
+    cx: &mut TestAppContext,
+) {
+    let fx = fixture(T, "");
+    let m = overwritten(cx, &fx);
+    reload(cx, &m);
+    assert!(m.update(cx, |m, cx| m.revert_cell(GridRow::Loaded(0), 1, cx)));
+    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "mine2", cx)));
+    assert_eq!(
+        m.read_with(cx, |m, _| m.edits().changes().0),
+        vec![Change::Update {
+            key: RowKey::new(vec![("id".into(), EditValue::Text("1".into()))]),
+            set: vec![("name".into(), EditValue::Text("mine2".into()))],
+            expected: vec![("name".into(), EditValue::Text("theirs".into()))],
+        }]
+    );
+    save_and_commit(cx, &m);
+    assert_eq!(value_of(&fx, "t", "name", 1), "mine2");
+}
+
+#[gpui_kit::test]
+fn a_reloaded_delete_conflict_deletes_on_the_next_save(cx: &mut TestAppContext) {
+    let fx = fixture(T, "");
+    let m = ready(cx, &fx, "t");
+    assert!(m.update(cx, |m, cx| m.delete_row(0, cx)));
+    exec(&fx, "UPDATE t SET name = 'theirs' WHERE id = 1");
+    assert!(m.update(cx, |m, cx| m.save(cx)));
+    wait_idle(cx, &m);
+    assert_eq!(
+        m.read_with(cx, |m, _| m.conflicts().to_vec()),
+        [GridRow::Loaded(0)]
+    );
+    wait_unlocked(cx, &fx);
+    reload(cx, &m);
+    save_and_commit(cx, &m);
+    assert_eq!(fx.count("SELECT count(*) FROM t WHERE id = 1"), 0);
+}
+
+#[gpui_kit::test]
+fn reloading_a_postgres_conflict_rebaselines_it_so_the_next_save_applies(cx: &mut TestAppContext) {
+    init_tokio(cx);
+    let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
+    let _enter = rt.enter();
+    let setup = "CREATE TABLE t(id int PRIMARY KEY, name text, at timestamptz, f float8, j json); \
+                 INSERT INTO t VALUES \
+                 (1, 'b', '2026-01-02 03:04:05+00', 0.1, '{\"a\": 1}'), \
+                 (2, 'a', '2026-06-07 08:09:10.5+02', 1e-7, '[ 1,2 ]');";
+    let (db, _dir, m) = pg_ready(cx, &rt, setup, "t");
+    assert!(m.update(cx, |m, cx| m.stage_cell(0, 1, "mine", cx)));
+    assert!(m.update(cx, |m, cx| m.delete_row(1, cx)));
+    rt.block_on(async {
+        db.admin()
+            .await
+            .batch_execute("UPDATE t SET name = 'theirs' WHERE id = 1")
+            .await
+            .unwrap()
+    });
+    assert!(m.update(cx, |m, cx| m.save(cx)));
+    wait_idle(cx, &m);
+    assert_eq!(
+        m.read_with(cx, |m, _| m.conflicts().to_vec()),
+        [GridRow::Loaded(0)]
+    );
+    reload(cx, &m);
+    m.read_with(cx, |m, _| {
+        assert_eq!(
+            m.fresh_at(GridRow::Loaded(0), 1),
+            Some(Fresh::Value(CellRef::Text("theirs")))
+        );
+    });
+    // Row 1 was never touched elsewhere, so its delete must not conflict on its typed values.
+    save_and_commit(cx, &m);
+    let (name, left): (String, i64) = rt.block_on(async {
+        let c = db.admin().await;
+        let name = c
+            .query_one("SELECT name FROM t WHERE id = 1", &[])
+            .await
+            .unwrap()
+            .get(0);
+        let left = c
+            .query_one("SELECT count(*) FROM t WHERE id = 2", &[])
+            .await
+            .unwrap()
+            .get(0);
+        (name, left)
+    });
+    assert_eq!((name.as_str(), left), ("mine", 0));
 }

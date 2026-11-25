@@ -11,8 +11,9 @@ use dbento_app::browse::BrowseEvent;
 use dbento_app::history::HistoryLog;
 use dbento_app::results_pane::skip_notice;
 use dbento_app::runner::{Event, RunnerSpec, RunnerTuning, StatementEnd};
+use dbento_app::staged::{GridRow, edit_value};
 use dbento_app::tab_model::{CapView, Continuation, Expiry, TabModel};
-use dbento_core::{CellRef, EditValue, History, HistoryEntry, HistoryFilter, RelationRef};
+use dbento_core::{CellRef, Change, EditValue, History, HistoryEntry, HistoryFilter, RelationRef};
 use gpui_kit::{AppContext as _, Entity, TestAppContext};
 
 const LITE: &str = "CREATE TABLE t(id INTEGER PRIMARY KEY, g INTEGER, v TEXT); \
@@ -353,5 +354,47 @@ fn a_continuation_adds_its_time_to_the_browse(cx: &mut TestAppContext) {
         });
         assert_eq!(m.results()[0].elapsed, Some(before + own));
         assert_eq!(m.elapsed_at(0, later), Some(before + own));
+    });
+}
+
+#[gpui_kit::test]
+fn staged_edits_expect_what_the_store_still_holds_after_a_continuation(cx: &mut TestAppContext) {
+    let fx = fixture(LITE, "");
+    let m = browsing(cx, &fx, "t", tuning(), "");
+    ended(cx, &m);
+    assert_eq!(
+        m.read_with(cx, |m, _| m.continuation()),
+        Some(Continuation::Keyset)
+    );
+    assert!(m.update(cx, |m, cx| m.stage_cell(5, 2, "w", cx)));
+    assert!(m.update(cx, |m, cx| m.delete_row(7, cx)));
+    assert!(m.update(cx, |m, cx| m.continue_browse(cx)));
+    ended(cx, &m);
+    // A run asks first and drops nothing, so the staged rows still index the loaded rows.
+    assert!(!m.update(cx, |m, cx| m.request_run("SELECT 1".into(), cx)));
+    m.read_with(cx, |m, _| {
+        assert!(m.discard_question().is_some());
+        let store = &m.results()[0].store;
+        assert!(store.rows() > 8);
+        let (changes, rows) = m.edits().changes();
+        assert_eq!(rows, vec![GridRow::Loaded(5), GridRow::Loaded(7)]);
+        for (change, at) in changes.into_iter().zip(rows) {
+            let GridRow::Loaded(row) = at else {
+                panic!("{at:?}")
+            };
+            let expected = match change {
+                Change::Update { expected, .. } | Change::Delete { expected, .. } => expected,
+                other @ (Change::Insert { .. } | _) => panic!("{other:?}"),
+            };
+            assert!(!expected.is_empty());
+            for (name, value) in expected {
+                let col = store
+                    .columns()
+                    .iter()
+                    .position(|c| c.name() == name)
+                    .unwrap();
+                assert_eq!(edit_value(store.cell(row, col).unwrap()), Some(value));
+            }
+        }
     });
 }

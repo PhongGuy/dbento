@@ -3,7 +3,8 @@
 
 use std::fmt::Write as _;
 
-use super::{Change, EditBatch, EditValue, RowKey};
+use super::target::mysql_bytes;
+use super::{Change, EditBatch, EditTarget, EditValue, RowKey};
 use crate::introspect::{quote_ident, quote_literal};
 use crate::workspace::Engine;
 
@@ -58,12 +59,18 @@ pub(crate) struct BoundStatement {
     pub(crate) returning: bool,
     /// MySQL: the SELECT that reads back the key an Update wrote; `returning` is true on it.
     pub(crate) reread: Option<Box<BoundStatement>>,
+    /// The read run before the write; None when `expected` is empty or the write reads itself.
+    pub(crate) guard: Option<Box<BoundStatement>>,
+    /// The expected values in the order the guard returns its columns.
+    pub(crate) expected: Vec<EditValue>,
 }
 
 /// One bound statement per change, in batch order. An Update that writes an identity
 /// column, or moves a Postgres row its ctid locates, also returns the identity, so the
 /// caller learns the key the database stored; a target whose rules refuse it never does.
 /// MySQL has no RETURNING, so such an Update carries a re-read of the key instead.
+/// An Update with expected values carries a guard that reads them first (a locking read
+/// on Postgres and MySQL), as does a SQLite or MySQL Delete; a Postgres Delete returns them.
 pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
     let target = batch.target();
     let identity = target.identity();
@@ -82,16 +89,61 @@ pub(crate) fn bound(batch: &EditBatch) -> Vec<BoundStatement> {
                 sql.push_str(&g.returning());
             }
             let reread = match c {
-                Change::Update { key, set } if batch.dialect() == Dialect::Mysql => {
+                Change::Update { key, set, .. } if batch.dialect() == Dialect::Mysql => {
                     Gen::new(batch, true).reread(key, set).map(Box::new)
                 }
                 Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => None,
+            };
+            // A Postgres or MySQL guard locks the row it reads, so no other writer can change it
+            // before the write; a Postgres Update that rewrites the identity takes the
+            // key-share-blocking lock.
+            let (guard, expected) = match c {
+                Change::Update { key, set, expected } if !expected.is_empty() => {
+                    let lock = match batch.dialect() {
+                        Dialect::Postgres if set.iter().any(|(col, _)| identity.contains(col)) => {
+                            " FOR UPDATE"
+                        }
+                        Dialect::Postgres => " FOR NO KEY UPDATE",
+                        Dialect::Mysql => " FOR UPDATE",
+                        Dialect::Sqlite => "",
+                    };
+                    let guard = Gen::new(batch, true).guard(key, expected, lock);
+                    let values = expected.iter().map(|(_, v)| v.clone()).collect();
+                    (Some(Box::new(guard)), values)
+                }
+                // A MySQL Delete locks the row it reads, as an Update does; SQLite already
+                // holds the database write lock.
+                Change::Delete { key, expected }
+                    if batch.dialect() != Dialect::Postgres && !expected.is_empty() =>
+                {
+                    let lock = match batch.dialect() {
+                        Dialect::Mysql => " FOR UPDATE",
+                        Dialect::Sqlite | Dialect::Postgres => "",
+                    };
+                    let guard = Gen::new(batch, true).guard(key, expected, lock);
+                    let values = expected.iter().map(|(_, v)| v.clone()).collect();
+                    (Some(Box::new(guard)), values)
+                }
+                // A Postgres Delete reads its guarded columns back as it deletes, so a row
+                // lock is never needed; the caller compares the returned row and rolls back.
+                Change::Delete { expected, .. }
+                    if batch.dialect() == Dialect::Postgres && !expected.is_empty() =>
+                {
+                    sql.push_str(&g.returning_read(expected));
+                    let values = expected.iter().map(|(_, v)| v.clone()).collect();
+                    (None, values)
+                }
+                Change::Update { .. } | Change::Insert { .. } | Change::Delete { .. } => {
+                    (None, Vec::new())
+                }
             };
             BoundStatement {
                 sql,
                 params: g.params,
                 returning,
                 reread,
+                guard,
+                expected,
             }
         })
         .collect()
@@ -105,6 +157,33 @@ pub fn render_sql(batch: &EditBatch) -> String {
         .map(|c| Gen::new(batch, false).change(c) + ";")
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The SELECT that reads every target column of the row `key` names, in target order and
+/// in the form a guard reads it, without a lock.
+pub(super) fn read_row(target: &EditTarget, dialect: Dialect, key: &RowKey) -> BoundStatement {
+    let batch = EditBatch {
+        target: target.clone(),
+        changes: Vec::new(),
+        dialect,
+    };
+    let mut g = Gen::new(&batch, true);
+    let cols = target
+        .columns()
+        .iter()
+        .map(|c| g.read_form(c.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rel = g.relation(true);
+    let filter = g.key(key);
+    BoundStatement {
+        sql: format!("SELECT {cols} FROM {rel} WHERE {filter}"),
+        params: g.params,
+        returning: false,
+        reread: None,
+        guard: None,
+        expected: Vec::new(),
+    }
 }
 
 /// Bytes as Postgres `bytea` hex input: `\x` and lowercase hex.
@@ -151,7 +230,7 @@ impl<'a> Gen<'a> {
     /// SET or VALUES are rendered before the key so parameters number in that order.
     fn change(&mut self, change: &Change) -> String {
         match change {
-            Change::Update { key, set } => {
+            Change::Update { key, set, .. } => {
                 let rel = self.relation(true);
                 let set = set
                     .iter()
@@ -186,7 +265,7 @@ impl<'a> Gen<'a> {
                     .join(", ");
                 format!("INSERT INTO {rel} ({cols}) VALUES ({vals})")
             }
-            Change::Delete { key } => {
+            Change::Delete { key, .. } => {
                 let rel = self.relation(true);
                 format!("DELETE FROM {rel} WHERE {}", self.key(key))
             }
@@ -214,6 +293,20 @@ impl<'a> Gen<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         format!(" RETURNING {cols}")
+    }
+
+    /// ` RETURNING` the `expected` columns, in that order, in the form a guard reads them.
+    fn returning_read(&self, expected: &[(String, EditValue)]) -> String {
+        format!(" RETURNING {}", self.read_list(expected))
+    }
+
+    /// The `expected` columns, in that order, each in its read form.
+    fn read_list(&self, expected: &[(String, EditValue)]) -> String {
+        expected
+            .iter()
+            .map(|(c, _)| self.read_form(c))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// The SELECT that reads back the key an Update with `set` left on the row `key` named:
@@ -253,7 +346,57 @@ impl<'a> Gen<'a> {
             params: self.params,
             returning: true,
             reread: None,
+            guard: None,
+            expected: Vec::new(),
         })
+    }
+
+    /// The SELECT that reads the `expected` columns, in that order, of the row `key` names,
+    /// so the caller can compare them with the loaded values before writing; `lock` is the
+    /// row-locking clause it ends with, if any.
+    fn guard(
+        mut self,
+        key: &RowKey,
+        expected: &[(String, EditValue)],
+        lock: &str,
+    ) -> BoundStatement {
+        let cols = self.read_list(expected);
+        let rel = self.relation(true);
+        let filter = self.key(key);
+        BoundStatement {
+            sql: format!("SELECT {cols} FROM {rel} WHERE {filter}{lock}"),
+            params: self.params,
+            returning: false,
+            reread: None,
+            guard: None,
+            expected: Vec::new(),
+        }
+    }
+
+    /// The form a read selects `column` in to get the value a browse shows: on SQLite the
+    /// column itself, on Postgres its output text, on MySQL its text unless its type always
+    /// reads as bytes. The Postgres NULL test is on the datum, as `IS NULL` also holds for a
+    /// composite whose fields are all NULL, which browses as `(,)`.
+    fn read_form(&self, column: &str) -> String {
+        let c = self.ident(column);
+        match self.dialect() {
+            Dialect::Sqlite => c,
+            Dialect::Mysql => {
+                let bytes = self
+                    .batch
+                    .target()
+                    .column(column)
+                    .is_some_and(|col| mysql_bytes(col.meta()));
+                if bytes {
+                    c
+                } else {
+                    format!("CAST({c} AS CHAR)")
+                }
+            }
+            Dialect::Postgres => format!(
+                "CASE WHEN pg_catalog.num_nonnulls({c}) = 0 THEN NULL ELSE pg_catalog.format('%s', {c}) END"
+            ),
+        }
     }
 
     fn key(&mut self, key: &RowKey) -> String {
