@@ -29,6 +29,7 @@ pub mod grid;
 pub mod grid_menu;
 pub mod history;
 pub mod history_panel;
+pub mod host_keys;
 pub mod identity;
 pub mod inspector;
 pub mod key_view;

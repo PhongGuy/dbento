@@ -116,6 +116,7 @@ mod history_mcp;
 mod history_open;
 mod history_panel;
 mod history_pg;
+mod host_keys;
 mod inspector_dock;
 mod inspector_look;
 mod inspector_refs;
