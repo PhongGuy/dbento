@@ -1,0 +1,11 @@
+{
+  "query_optimization": {
+    "r_total_time_ms": 6.43295e-4
+  },
+  "query_block": {
+    "select_id": 1,
+    "table": {
+      "message": "No tables used"
+    }
+  }
+}

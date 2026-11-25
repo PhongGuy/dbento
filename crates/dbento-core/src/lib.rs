@@ -16,16 +16,19 @@ mod workspace;
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, DurationError, Engine, Folder,
     FormattedDuration, InitError, MAX_QUERY_FILE_BYTES, OpenError, QueryFileError, ResolveError,
-    SavedQuery, SecretSource, TlsMode, Workspace, format_duration, parse_duration,
-    valid_database_name,
+    SavedQuery, SecretSource, SshAuth, SshConfig, TlsMode, Workspace, format_duration,
+    parse_duration, valid_database_name,
 };
+
+mod ssh;
+pub use ssh::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};
 
 mod form;
 pub use form::{ConnectionForm, FieldKind, FormField, FormSection, connection_form};
 
 mod edit;
 mod write;
-pub use edit::{ConnectionSpec, Edit, EditError, EditPlan, WriteError, plan_edit};
+pub use edit::{ConnectionSpec, Edit, EditError, EditPlan, SshSpec, WriteError, plan_edit};
 
 mod approval;
 pub use approval::{
@@ -45,15 +48,16 @@ pub use paths::StatePaths;
 
 mod rename_secret;
 pub use rename_secret::{
-    Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, adopt_secret, secret_renames, seen_text,
-    seen_workspace,
+    Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, SshAdopted, SshPasswordMove, adopt_secret,
+    adopt_ssh_secrets, secret_renames, seen_text, seen_workspace,
 };
 
 mod secrets;
 pub use secrets::{
-    MemoryStore, Secret, SecretError, SecretKey, SecretStore, TimedStore, key_passphrase_env_var,
-    move_secret, resolve_key_passphrase, resolve_secret, secret_env_var, secret_hint,
-    tls_key_is_encrypted,
+    MemoryStore, Secret, SecretError, SecretKey, SecretStore, SshSecrets, TimedStore,
+    key_passphrase_env_var, move_secret, resolve_key_passphrase, resolve_secret,
+    resolve_ssh_secrets, secret_env_var, secret_hint, ssh_key_passphrase_env_var,
+    ssh_password_env_var, tls_key_is_encrypted,
 };
 
 #[cfg(feature = "keychain")]
@@ -116,6 +120,7 @@ pub use objects::{
     IndexInfo, ObjectRef, RelationObjects, RoutineInfo, RoutineKind, SchemaObjects, TriggerInfo,
     TriggerState, TypeInfo, TypeKind,
 };
+pub mod message;
 mod mongo;
 mod mssql;
 mod mysql;
@@ -163,8 +168,8 @@ mod sqlite;
 mod rowedit;
 pub use rowedit::{
     Applied, ApplyError, BatchError, Browse, BrowseError, Change, ChangeOutcome, EditBatch,
-    EditColumn, EditTarget, EditValue, Keyset, RowKey, Sort, apply, apply_with, browse_sql,
-    key_filter, render_sql,
+    EditColumn, EditTarget, EditValue, Keyset, NotEditable, RowKey, Sort, apply, apply_with,
+    browse_sql, key_filter, render_sql,
 };
 
 pub mod import;

@@ -1,0 +1,72 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "2.84"
+    },
+    "table": {
+      "table_name": "n",
+      "access_type": "ALL",
+      "rows_examined_per_scan": 3,
+      "rows_produced_per_join": 3,
+      "filtered": "100.00",
+      "cost_info": {
+        "read_cost": "2.54",
+        "eval_cost": "0.30",
+        "prefix_cost": "2.84",
+        "data_read_per_join": "48"
+      },
+      "used_columns": [
+        "i"
+      ],
+      "materialized_from_subquery": {
+        "using_temporary_table": true,
+        "dependent": false,
+        "cacheable": true,
+        "query_block": {
+          "union_result": {
+            "using_temporary_table": false,
+            "query_specifications": [
+              {
+                "dependent": false,
+                "cacheable": true,
+                "query_block": {
+                  "select_id": 2,
+                  "message": "No tables used"
+                }
+              },
+              {
+                "dependent": false,
+                "cacheable": true,
+                "query_block": {
+                  "select_id": 3,
+                  "recursive": true,
+                  "cost_info": {
+                    "query_cost": "2.72"
+                  },
+                  "table": {
+                    "table_name": "n",
+                    "access_type": "ALL",
+                    "rows_examined_per_scan": 2,
+                    "rows_produced_per_join": 1,
+                    "filtered": "50.00",
+                    "cost_info": {
+                      "read_cost": "2.62",
+                      "eval_cost": "0.10",
+                      "prefix_cost": "2.73",
+                      "data_read_per_join": "16"
+                    },
+                    "used_columns": [
+                      "i"
+                    ],
+                    "attached_condition": "(`n`.`i` < 5)"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

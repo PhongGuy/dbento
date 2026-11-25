@@ -6,7 +6,7 @@ use dbento_app::results_pane::{ResultMark, displayed, result_mark, summary};
 use dbento_app::runner::{StatementEnd, StopReason};
 use dbento_app::status_bar::{StatusMark, status_mark, status_subject};
 use dbento_app::tab_model::{PlanResult, StatementResult};
-use dbento_core::{ColumnInfo, ExecuteError, ExplainMode};
+use dbento_core::{ColumnInfo, Engine, ExecuteError, ExplainMode};
 use gpui_kit::TestAppContext;
 use std::sync::Arc;
 
@@ -81,7 +81,11 @@ fn a_skipped_statement_is_the_status_subject_without_a_check(cx: &mut TestAppCon
 #[test]
 fn a_skipped_explain_body_says_skipped() {
     let mut r = ended(0, "UPDATE t SET x = 0", Some(StatementEnd::Skipped));
-    r.plan = Some(PlanResult::new(ExplainMode::Analyze, false));
+    r.plan = Some(PlanResult::new(
+        Engine::Postgres,
+        ExplainMode::Analyze,
+        false,
+    ));
     assert_eq!(
         result_mark(&r, None, false),
         ResultMark::Skipped,
@@ -173,7 +177,7 @@ fn run_all_that_fails_shows_the_failed_statement(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn an_explain_waiting_on_its_question_does_not_say_explaining(cx: &mut TestAppContext) {
     init(cx);
-    let pending = PlanResult::new(ExplainMode::Analyze, false);
+    let pending = PlanResult::new(Engine::Postgres, ExplainMode::Analyze, false);
     let win = cx.add_window(|window, cx| PlanView::new(&pending, window, cx).waiting(true));
     assert_eq!(
         label_of(cx, win.into(), "plan-pending").as_deref(),

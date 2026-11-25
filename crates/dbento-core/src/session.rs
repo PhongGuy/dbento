@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Secret;
 #[cfg(feature = "s3")]
 use crate::aws::AwsCancel;
 use crate::capacity::CapacityUnits;
@@ -16,9 +15,10 @@ use crate::capacity::CapacityUnits;
 use crate::duckdb::{DuckCancel, DuckDriver};
 #[cfg(feature = "dynamodb")]
 use crate::dynamo::{driver::DynamoSession, stream::DynamoCancel};
-use crate::explain::{ExplainOutput, ExplainRequest};
-use crate::fkeys::{ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
+use crate::explain::{ExplainMode, ExplainOutput, ExplainRequest};
+use crate::fkeys::{FkDirection, ForeignKey, pg_foreign_keys, sort_keys, sqlite_foreign_keys};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
+use crate::message::{GroupInfo, MessageError, MessagePage, MessageRead, Position, SourceRef};
 #[cfg(feature = "mongodb")]
 use crate::mongo::driver::{MongoCancel, MongoDriver};
 use crate::mssql::{MssqlCancel, MssqlDriver};
@@ -32,7 +32,9 @@ use crate::redis::browse::{KeyBrowseError, KeyPage, KeyRead, KeyScan, KeyValuePa
 use crate::redis::catalog::CommandDoc;
 #[cfg(feature = "redis")]
 use crate::redis::driver::{NO_TABLES, RedisCancel, RedisSession};
-use crate::rowedit::{EditTarget, EditValue, Param, pg_edit_target, sqlite_edit_target};
+use crate::rowedit::{
+    EditTarget, EditValue, Param, mysql_edit_target, pg_edit_target, sqlite_edit_target,
+};
 #[cfg(feature = "s3")]
 use crate::s3::driver::{NO_TABLES as S3_NO_TABLES, S3Session};
 use crate::s3::{
@@ -44,6 +46,7 @@ use crate::sqlite::{SqliteCancel, SqliteDriver};
 use crate::surreal::{cancel::SurrealCancel, driver::SurrealDriver};
 use crate::value::{ColumnInfo, ResultBatch};
 use crate::workspace::{ConnectionConfig, Engine, Workspace};
+use crate::{Secret, SshSecrets};
 
 /// Per-session overrides of the connection's configuration.
 #[non_exhaustive]
@@ -55,6 +58,8 @@ pub struct SessionOptions {
     pub statement_timeout: Option<Duration>,
     /// Decrypts an encrypted `tls_key`; see [`crate::resolve_key_passphrase`].
     pub key_passphrase: Option<Secret>,
+    /// The SSH password and key passphrase; see [`crate::resolve_ssh_secrets`].
+    pub ssh_secrets: SshSecrets,
     /// The session runs only SQL that Dbento generated, so a database may enforce read-only
     /// by transaction alone. Other engines ignore it.
     pub trusted_sql: bool,
@@ -527,6 +532,8 @@ pub(crate) struct ConnectParams<'a> {
     pub(crate) conn: &'a ConnectionConfig,
     pub(crate) secret: Option<&'a Secret>,
     pub(crate) key_passphrase: Option<&'a Secret>,
+    #[allow(dead_code)] // the SSH connect in session.rs reads it
+    pub(crate) ssh_secrets: SshSecrets,
     pub(crate) read_only: bool,
     pub(crate) timeout: Option<Duration>,
     /// See [`SessionOptions::trusted_sql`]. Only DuckDB reads it.
@@ -645,6 +652,7 @@ pub async fn connect(
         conn,
         secret: secret.as_ref(),
         key_passphrase: opts.key_passphrase.as_ref(),
+        ssh_secrets: opts.ssh_secrets,
         read_only,
         timeout,
         #[cfg(feature = "duckdb")]
@@ -1161,7 +1169,8 @@ impl Session {
         match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_edit_target(d, rel).await,
             SessionInner::Postgres(d) => pg_edit_target(d, rel).await,
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
+            SessionInner::Mysql(d) => mysql_edit_target(d, rel).await,
+            SessionInner::Mssql(_) => Err(IntrospectError::Unsupported {
                 what: "edit targets",
             }),
             #[cfg(feature = "duckdb")]
@@ -1192,7 +1201,8 @@ impl Session {
     }
 
     /// Keys of `rel` in both directions: outgoing first, then by the far relation, then by
-    /// columns. An unknown schema or relation has none.
+    /// columns. An unknown schema or relation has none. On MySQL a key whose columns on `rel`'s
+    /// side include a BIT or FLOAT column is left out, since no literal matches those values.
     pub async fn foreign_keys(
         &mut self,
         rel: &RelationRef,
@@ -1200,7 +1210,11 @@ impl Session {
         let mut keys = match &mut self.inner {
             SessionInner::Sqlite(d) => sqlite_foreign_keys(d, rel).await?,
             SessionInner::Postgres(d) => pg_foreign_keys(d, rel).await?,
-            SessionInner::Mysql(d) => crate::mysql::catalog::foreign_keys(d, rel).await?,
+            SessionInner::Mysql(d) => {
+                let keys = crate::mysql::catalog::foreign_keys(d, rel).await?;
+                let columns = crate::mysql::catalog::columns(d, rel).await?;
+                matchable_mysql_keys(keys, &columns)
+            }
             SessionInner::Mssql(d) => crate::mssql::catalog::foreign_keys(d, rel).await?,
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => {
@@ -1411,6 +1425,44 @@ impl Session {
         }
     }
 
+    /// One page of messages from `r.source`: browsed either way, or followed forward. Redis
+    /// only; every other engine is `Unsupported`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn read_messages(&mut self, r: &MessageRead) -> Result<MessagePage, MessageError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.read_messages(r).await,
+            _ => Err(no_streams()),
+        }
+    }
+
+    /// The consumer groups of stream `s`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn stream_groups(&mut self, s: &SourceRef) -> Result<Vec<GroupInfo>, MessageError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.stream_groups(s).await,
+            _ => Err(no_streams()),
+        }
+    }
+
+    /// One page of `group`'s delivered and unacknowledged messages of stream `s`, forward from
+    /// `from`.
+    #[cfg_attr(not(feature = "redis"), allow(unused_variables))] // only Redis reads it
+    pub async fn pending(
+        &mut self,
+        s: &SourceRef,
+        group: &str,
+        from: Position,
+        want: u32,
+    ) -> Result<MessagePage, MessageError> {
+        match &mut self.inner {
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(d) => d.pending(s, group, from, want).await,
+            _ => Err(no_streams()),
+        }
+    }
+
     /// For each of `columns`, the column of `rel` it reads, or None when it is computed or
     /// reads another table. SQLite and MySQL answer from the columns alone, Postgres with one
     /// catalog query.
@@ -1445,41 +1497,95 @@ impl Session {
     }
 
     /// Runs `request` and returns its output. On Postgres every block it opens is rolled back,
-    /// also on error, cancel or drop; on SQLite the statement is only planned. A request built
-    /// for the other engine is `ExecuteError::Unsupported`.
+    /// also on error, cancel or drop; on SQLite the statement is only planned. On MySQL a plan
+    /// never runs the statement, while ANALYZE runs a confirmed read for real, on MariaDB
+    /// through `ANALYZE FORMAT=JSON`. A request that fails `explain_sql` is refused unsent,
+    /// as `ExecuteError::Unsupported`.
     pub async fn explain(
         &mut self,
         request: &ExplainRequest,
     ) -> Result<ExplainOutput, ExecuteError> {
-        // `sql` is a public field, so a request edited after its check is checked again here:
-        // one statement, and that statement an EXPLAIN, or nothing reaches the database.
-        if crate::ranges::statement_ranges(request.engine, &request.sql).len() != 1 {
-            return Err(ExecuteError::Unsupported {
-                reason: "an explain runs exactly one statement".to_owned(),
-            });
-        }
-        if !crate::classify::leading_keyword(&request.sql).eq_ignore_ascii_case("EXPLAIN") {
-            return Err(ExecuteError::Unsupported {
-                reason: "an explain request must hold an EXPLAIN".to_owned(),
-            });
-        }
-        match (&mut self.inner, request.engine) {
-            (SessionInner::Postgres(d), Engine::Postgres) => d
-                .explain(&request.sql)
-                .await
-                .map(ExplainOutput::from_postgres),
-            (SessionInner::Sqlite(d), Engine::Sqlite) => {
-                let rows = d.explain(&request.sql).await?;
+        let (sql, form) = self.explain_form(request)?;
+        match (&mut self.inner, form) {
+            (SessionInner::Postgres(d), _) => {
+                d.explain(&sql).await.map(ExplainOutput::from_postgres)
+            }
+            (SessionInner::Sqlite(d), _) => {
+                let rows = d.explain(&sql).await?;
                 Ok(ExplainOutput::from_sqlite(&rows))
             }
-            _ => Err(ExecuteError::Unsupported {
-                reason: "the explain was built for another engine".to_owned(),
-            }),
+            (SessionInner::Mysql(d), form) => {
+                // The parser follows the form matched, never the request's public `mode`.
+                let maria = d.server().flavor == Flavor::Mariadb;
+                // MySQL 9 sessions may print JSON v2, which the plan parser does not read.
+                let pin_v1 = form == ExplainMode::Plan && !maria;
+                let raw = d.explain(&sql, pin_v1).await?;
+                Ok(match (form, maria) {
+                    (_, true) => ExplainOutput::from_mariadb_json(raw),
+                    (ExplainMode::Plan, false) => ExplainOutput::from_mysql_json(raw),
+                    (ExplainMode::Analyze, false) => ExplainOutput::from_mysql_tree(raw),
+                })
+            }
+            _ => Err(another_engine()),
         }
     }
 
-    /// Runs one statement with bound parameters and returns the rows it changed. Used only
-    /// by `apply` on its private session, so it bypasses the script and settle machinery.
+    /// Re-checks `request` against this session and returns the exact text it sends.
+    pub fn explain_sql(&self, request: &ExplainRequest) -> Result<String, ExecuteError> {
+        self.explain_form(request).map(|(sql, _)| sql)
+    }
+
+    /// The text `explain_sql` returns and the form it matched. The request's fields are
+    /// public, so a request edited after its check must still be one statement, an EXPLAIN,
+    /// and on MySQL exactly one of the two forms built for its statement.
+    fn explain_form(
+        &self,
+        request: &ExplainRequest,
+    ) -> Result<(String, ExplainMode), ExecuteError> {
+        let unsupported = |reason: &str| ExecuteError::Unsupported {
+            reason: reason.to_owned(),
+        };
+        let one = |sql: &str| crate::ranges::statement_ranges(request.engine, sql).len() == 1;
+        if !one(&request.sql) {
+            return Err(unsupported("an explain runs exactly one statement"));
+        }
+        if !crate::classify::leading_keyword(&request.sql).eq_ignore_ascii_case("EXPLAIN") {
+            return Err(unsupported("an explain request must hold an EXPLAIN"));
+        }
+        let (sql, form) = match (&self.inner, request.engine) {
+            (SessionInner::Postgres(_), Engine::Postgres)
+            | (SessionInner::Sqlite(_), Engine::Sqlite) => (request.sql.clone(), request.mode),
+            (SessionInner::Mysql(d), Engine::Mysql) => {
+                let t = request.statement.trim();
+                if request.sql == format!("EXPLAIN FORMAT=JSON {t}") {
+                    (request.sql.clone(), ExplainMode::Plan)
+                } else if request.sql == format!("EXPLAIN ANALYZE FORMAT=TREE {t}") {
+                    // ANALYZE runs the statement with no rollback, so it must be a confirmed read.
+                    if crate::classify::mysql_classification(t).writes != Writes::No {
+                        return Err(unsupported(
+                            "ANALYZE runs only statements confirmed to read",
+                        ));
+                    }
+                    let sql = if d.server().flavor == Flavor::Mariadb {
+                        format!("ANALYZE FORMAT=JSON {t}")
+                    } else {
+                        request.sql.clone()
+                    };
+                    (sql, ExplainMode::Analyze)
+                } else {
+                    return Err(unsupported("the explain does not match its statement"));
+                }
+            }
+            _ => return Err(another_engine()),
+        };
+        if !one(&sql) {
+            return Err(unsupported("an explain runs exactly one statement"));
+        }
+        Ok((sql, form))
+    }
+
+    /// Runs one statement with bound parameters and returns the rows it changed (matched, on
+    /// MySQL). Used only by `apply` on its private session, so it bypasses the script machinery.
     pub(crate) async fn run_bound(
         &mut self,
         sql: &str,
@@ -1488,7 +1594,8 @@ impl Session {
         match &mut self.inner {
             SessionInner::Sqlite(d) => d.run_bound(sql, params).await,
             SessionInner::Postgres(d) => d.run_bound(sql, params).await,
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
+            SessionInner::Mysql(d) => d.run_bound(sql, params).await,
+            SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
             #[cfg(feature = "surrealdb")]
@@ -1523,7 +1630,8 @@ impl Session {
                         .collect()
                 })
                 .collect()),
-            SessionInner::Mysql(_) | SessionInner::Mssql(_) => Err(bound_unsupported()),
+            SessionInner::Mysql(d) => d.query_bound(sql, params).await,
+            SessionInner::Mssql(_) => Err(bound_unsupported()),
             #[cfg(feature = "duckdb")]
             SessionInner::Duckdb(_) => Err(bound_unsupported()),
             #[cfg(feature = "surrealdb")]
@@ -1536,6 +1644,29 @@ impl Session {
             SessionInner::Dynamodb(_) => Err(bound_unsupported()),
             #[cfg(feature = "s3")]
             SessionInner::S3(_) => Err(bound_unsupported()),
+        }
+    }
+
+    /// The `(Level, Message)` rows of `SHOW WARNINGS` after the last bound statement on MySQL;
+    /// empty when that statement left none, and always empty on other engines.
+    pub(crate) async fn bound_warnings(&mut self) -> Result<Vec<(String, String)>, ExecuteError> {
+        match &mut self.inner {
+            SessionInner::Mysql(d) => d.bound_warnings().await,
+            SessionInner::Sqlite(_) | SessionInner::Postgres(_) | SessionInner::Mssql(_) => {
+                Ok(Vec::new())
+            }
+            #[cfg(feature = "duckdb")]
+            SessionInner::Duckdb(_) => Ok(Vec::new()),
+            #[cfg(feature = "surrealdb")]
+            SessionInner::Surreal(_) => Ok(Vec::new()),
+            #[cfg(feature = "mongodb")]
+            SessionInner::Mongodb(_) => Ok(Vec::new()),
+            #[cfg(feature = "redis")]
+            SessionInner::Redis(_) => Ok(Vec::new()),
+            #[cfg(feature = "dynamodb")]
+            SessionInner::Dynamodb(_) => Ok(Vec::new()),
+            #[cfg(feature = "s3")]
+            SessionInner::S3(_) => Ok(Vec::new()),
         }
     }
 
@@ -1936,6 +2067,40 @@ fn bound_unsupported() -> ExecuteError {
 fn no_objects() -> ObjectBrowseError {
     ObjectBrowseError::Unsupported {
         reason: "only an S3 session has objects to browse".to_owned(),
+    }
+}
+
+/// What every engine without streams answers to a message call.
+fn no_streams() -> MessageError {
+    MessageError::Unsupported {
+        reason: "only a Redis session has streams to read".to_owned(),
+    }
+}
+
+/// `keys` without those whose columns on the browsed side are BIT or FLOAT in `columns`: a
+/// browse filtered on such a key would come back empty or wrong. MySQL names ignore case.
+fn matchable_mysql_keys(keys: Vec<ForeignKey>, columns: &[ColumnMeta]) -> Vec<ForeignKey> {
+    let inexact: Vec<&str> = columns
+        .iter()
+        .filter(|c| crate::rowedit::mysql_inexact(c))
+        .map(ColumnMeta::name)
+        .collect();
+    keys.into_iter()
+        .filter(|k| {
+            let own = match k.direction() {
+                FkDirection::Outgoing => k.columns(),
+                FkDirection::Incoming => k.referenced_columns(),
+            };
+            !own.iter()
+                .any(|c| inexact.iter().any(|i| i.eq_ignore_ascii_case(c)))
+        })
+        .collect()
+}
+
+/// The refusal of a request built for an engine other than the session's.
+fn another_engine() -> ExecuteError {
+    ExecuteError::Unsupported {
+        reason: "the explain was built for another engine".to_owned(),
     }
 }
 

@@ -1,6 +1,6 @@
 //! The plan tree's keys, labels and highlight, and the view inside the results pane.
 use crate::support::{init, label_of, opened, present};
-use dbento_app::plan_view::{HOT_SHARE, PlanTree, PlanView, TreeKey, header_text};
+use dbento_app::plan_view::{HOT_SHARE, PlanTree, PlanView, TreeKey, header_text, plan_note};
 use dbento_app::tab_model::PlanResult;
 use dbento_core::{Engine, ExplainMode, ExplainOutput, Plan, explain_request};
 use gpui_kit::test::TestWindowExt as _;
@@ -111,13 +111,13 @@ fn a_plan_result_shows_the_tree_then_raw_and_a_run_shows_the_grid(cx: &mut TestA
 #[gpui_kit::test]
 fn output_that_does_not_parse_opens_raw_with_the_error(cx: &mut TestAppContext) {
     init(cx);
-    let mut result = PlanResult::new(ExplainMode::Plan, false);
+    let mut result = PlanResult::new(Engine::Postgres, ExplainMode::Plan, false);
     result.output = Some(Arc::new(ExplainOutput::from_postgres("{".to_owned())));
     let win = cx.add_window(|window, cx| PlanView::new(&result, window, cx));
     assert!(present(cx, win.into(), "plan-parse-error"));
     assert!(present(cx, win.into(), "plan-raw"));
     assert!(!present(cx, win.into(), "plan-tree"));
-    let pending = PlanResult::new(ExplainMode::Plan, false);
+    let pending = PlanResult::new(Engine::Postgres, ExplainMode::Plan, false);
     let win = cx.add_window(|window, cx| PlanView::new(&pending, window, cx));
     assert!(present(cx, win.into(), "plan-pending"));
 }
@@ -136,7 +136,7 @@ fn a_failed_explain_shows_the_error_not_the_plan_view(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_explorer_tree_keys_walk_the_plan_tree_once_it_has_focus(cx: &mut TestAppContext) {
     init(cx);
-    let mut result = PlanResult::new(ExplainMode::Analyze, false);
+    let mut result = PlanResult::new(Engine::Postgres, ExplainMode::Analyze, false);
     result.output = Some(Arc::new(ExplainOutput::from_postgres(ANALYZE.to_owned())));
     let win = cx.add_window(|window, cx| PlanView::new(&result, window, cx));
     let selected = |cx: &mut TestAppContext| {
@@ -199,7 +199,7 @@ fn a_plan_result_hides_the_export_button(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_narrow_plan_header_keeps_the_toggle_whole(cx: &mut TestAppContext) {
     init(cx);
-    let mut result = PlanResult::new(ExplainMode::Analyze, false);
+    let mut result = PlanResult::new(Engine::Postgres, ExplainMode::Analyze, false);
     result.output = Some(Arc::new(ExplainOutput::from_postgres(ANALYZE.to_owned())));
     let win: gpui_kit::AnyWindowHandle = cx
         .add_window(|window, cx| PlanView::new(&result, window, cx))
@@ -215,4 +215,26 @@ fn a_narrow_plan_header_keeps_the_toggle_whole(cx: &mut TestAppContext) {
     let wide = toggle_at(cx, 1200.);
     let narrow = toggle_at(cx, 200.);
     assert_eq!(narrow, wide, "the toggle shrank in a narrow header");
+}
+
+#[test]
+fn the_note_says_what_each_engine_did() {
+    let note = |engine, mode, unavailable| plan_note(&PlanResult::new(engine, mode, unavailable));
+    assert_eq!(
+        note(Engine::Sqlite, ExplainMode::Plan, true),
+        Some("SQLite has no ANALYZE timings; showing the query plan")
+    );
+    assert_eq!(
+        note(Engine::Mysql, ExplainMode::Plan, true),
+        Some(
+            "Plan only: ANALYZE runs only statements confirmed to read; this one writes or could not be checked."
+        )
+    );
+    assert_eq!(
+        note(Engine::Postgres, ExplainMode::Analyze, false),
+        Some("ANALYZE ran in a transaction that was rolled back")
+    );
+    assert_eq!(note(Engine::Mysql, ExplainMode::Analyze, false), None);
+    assert_eq!(note(Engine::Mysql, ExplainMode::Plan, false), None);
+    assert_eq!(note(Engine::Postgres, ExplainMode::Plan, false), None);
 }

@@ -23,12 +23,7 @@ fn workspace() -> (tempfile::TempDir, dbento_core::Workspace) {
 #[test]
 fn the_chip_names_the_engine_as_the_pickers_write_it() {
     let (_dir, ws) = workspace();
-    for (name, engine) in [
-        ("my", "MySQL"),
-        ("maria", "MariaDB"),
-        ("mg", "MongoDB"),
-        ("dy", "DynamoDB"),
-    ] {
+    for (name, engine) in [("mg", "MongoDB"), ("dy", "DynamoDB")] {
         assert_eq!(
             not_editable_text(ws.declared(name).unwrap()),
             Some(format!(
@@ -42,7 +37,7 @@ fn the_chip_names_the_engine_as_the_pickers_write_it() {
 #[test]
 fn an_engine_that_edits_rows_has_no_chip() {
     let (_dir, ws) = workspace();
-    for name in ["pg", "lite"] {
+    for name in ["pg", "lite", "my", "maria"] {
         assert_eq!(
             not_editable_text(ws.declared(name).unwrap()),
             None,

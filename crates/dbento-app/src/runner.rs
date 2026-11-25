@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_channel::{Receiver, Sender, TryRecvError};
+use dbento_core::message::{
+    GroupInfo, MessageError, MessagePage, MessageRead, Position, SourceRef,
+};
 use dbento_core::{
     CancelHandle, ColumnInfo, ConnectionConfig, EditTarget, Engine, ExecuteError, ExplainMode,
     ExplainOutput, ExplainRequest, ForeignKey, KeyBrowseError, KeyRead, KeyValuePage, Limits,
@@ -27,6 +30,31 @@ pub type SourceColumns = Result<Vec<Option<String>>, String>;
 
 /// The answer to `Command::ReadKey`: one page of the key's value, or why there is none.
 pub type KeyValueAnswer = Result<KeyValuePage, String>;
+
+/// One stream call on the tab's session.
+#[derive(Debug)]
+pub enum MessageCall {
+    Read(MessageRead),
+    Groups(SourceRef),
+    Pending {
+        source: SourceRef,
+        group: String,
+        want: u32,
+    },
+}
+
+/// What a stream call answers.
+// One reply crosses a one-slot channel per call and is consumed at once, so its size never
+// matters and boxing the page would only make every caller clumsier.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum MessageReply {
+    Page(MessagePage),
+    Groups(Vec<GroupInfo>),
+}
+
+/// The answer to `Command::Messages`.
+pub type MessageAnswer = Result<MessageReply, MessageError>;
 
 /// What the view asks of its runner.
 #[derive(Debug)]
@@ -73,6 +101,12 @@ pub enum Command {
     ReadKey {
         read: KeyRead,
         reply: Sender<KeyValueAnswer>,
+    },
+    /// Run one stream call and send its answer on `reply`, connecting first. Sent only while no
+    /// run is active; a run in progress drops it, closing `reply` unanswered.
+    Messages {
+        call: MessageCall,
+        reply: Sender<MessageAnswer>,
     },
 }
 
@@ -426,6 +460,16 @@ async fn run(
             next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
             continue;
         }
+        if let Command::Messages { call, reply } = command {
+            ensure_open(&spec, &mut session, &events).await;
+            let result = match session.as_mut() {
+                Some(s) => message_call(s, call).await,
+                None => Err(MessageError::SessionClosed),
+            };
+            let _ = reply.try_send(result);
+            next = idle(&inbox, &mut session, &mut lost_settings, &events).await;
+            continue;
+        }
         let (run_id, work) = match command {
             Command::Run {
                 run_id,
@@ -442,7 +486,8 @@ async fn run(
             | Command::Connect
             | Command::Target { .. }
             | Command::SourceColumns { .. }
-            | Command::ReadKey { .. } => {
+            | Command::ReadKey { .. }
+            | Command::Messages { .. } => {
                 next = idle(&inbox, &mut session, &mut lost_settings, &events).await; // a Confirm, Skip, Pull or Fetch nobody waits for
                 continue;
             }
@@ -522,6 +567,22 @@ async fn read_value(s: &mut Session, read: KeyRead) -> Result<KeyValuePage, KeyB
             s.read_key(&again).await
         }
         r => r,
+    }
+}
+
+/// Answers one stream call on `s`; pending entries are always listed from the group's start.
+async fn message_call(s: &mut Session, call: MessageCall) -> MessageAnswer {
+    match call {
+        MessageCall::Read(read) => s.read_messages(&read).await.map(MessageReply::Page),
+        MessageCall::Groups(source) => s.stream_groups(&source).await.map(MessageReply::Groups),
+        MessageCall::Pending {
+            source,
+            group,
+            want,
+        } => s
+            .pending(&source, &group, Position::Start, want)
+            .await
+            .map(MessageReply::Page),
     }
 }
 
@@ -843,7 +904,8 @@ impl Ctx<'_> {
                 | Command::Connect
                 | Command::Target { .. }
                 | Command::SourceColumns { .. }
-                | Command::ReadKey { .. } => {}
+                | Command::ReadKey { .. }
+                | Command::Messages { .. } => {}
             }
         }
     }
@@ -1049,6 +1111,20 @@ async fn run_script(
 /// writable session, since it executes the statement; a read-only one lets the engine refuse.
 async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'_>) -> After {
     let run_id = cx.run_id;
+    // The session re-checks the request first, so a refused one sends nothing and asks
+    // nothing, and Executing reports the text the database actually receives.
+    let sql = match session.explain_sql(request) {
+        Ok(sql) => sql,
+        Err(e) => {
+            cx.send(Event::Planned {
+                run_id,
+                result: Err(e),
+                elapsed: Duration::ZERO,
+            })
+            .await;
+            return After::Idle;
+        }
+    };
     let writes = (request.classification.as_ref())
         .filter(|c| request.mode == ExplainMode::Analyze && c.writes != Writes::No);
     if let Some(c) = writes
@@ -1082,7 +1158,7 @@ async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'
     cx.send(Event::Executing {
         run_id,
         stmt: 0,
-        sql: request.sql.clone(),
+        sql,
     })
     .await;
     // A Stop meanwhile cancels through the CancelHandle, so the explain itself ends early.
@@ -1120,7 +1196,8 @@ fn cut_by(command: Command, run_id: u64) -> Option<Flow> {
         | Command::Connect
         | Command::Target { .. }
         | Command::SourceColumns { .. }
-        | Command::ReadKey { .. } => None,
+        | Command::ReadKey { .. }
+        | Command::Messages { .. } => None,
     }
 }
 
@@ -1354,7 +1431,8 @@ async fn at_cap(
         | Command::Connect
         | Command::Target { .. }
         | Command::SourceColumns { .. }
-        | Command::ReadKey { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
+        | Command::ReadKey { .. }
+        | Command::Messages { .. }) => AtCap::End(cut_by(c, cx.run_id).unwrap_or(Flow::Hangup)),
     }
 }
 

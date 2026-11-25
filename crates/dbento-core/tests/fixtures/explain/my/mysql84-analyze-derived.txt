@@ -1,0 +1,5 @@
+-> Table scan on d  (cost=41.5..43.9 rows=10) (actual time=0.046..0.0468 rows=10 loops=1)
+    -> Materialize  (cost=41.2..41.2 rows=10) (actual time=0.0455..0.0455 rows=10 loops=1)
+        -> Filter: (count(0) > 1)  (cost=40.2 rows=10) (actual time=0.0105..0.0416 rows=10 loops=1)
+            -> Group aggregate: count(0)  (cost=40.2 rows=10) (actual time=0.00983..0.0401 rows=10 loops=1)
+                -> Covering index scan on cust using region  (cost=20.2 rows=200) (actual time=0.00624..0.0311 rows=200 loops=1)

@@ -44,6 +44,7 @@ use crate::keymap::{
     CancelQuery, Explain, ExplainAnalyze, FormatSql, RunAll, RunStatement, SaveEdits, SaveQuery,
     ToggleComment, all_keys_for, chip_keys, chord_list, keys_for, plus_keys,
 };
+use crate::message_view::{Follow, GroupRow, MessageView, Panel, dropped_text};
 use crate::nav::NavHistory;
 use crate::pick_row::{ConnectionPick, pick_row, pickable_connections};
 use crate::results_pane::{EditConnection, OpenTable, ResultsPane, RetryConnect, skip_notice};
@@ -280,8 +281,8 @@ pub fn explain_warning(err: &ExplainError, engine: Engine, title: &str) -> Strin
         ExplainError::NotExplainable => {
             let statements = match engine {
                 Engine::Sqlite => "SELECT, WITH, VALUES, INSERT, UPDATE, DELETE or REPLACE",
+                Engine::Mysql => "SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or REPLACE",
                 Engine::Postgres
-                | Engine::Mysql
                 | Engine::Mssql
                 | Engine::Duckdb
                 | Engine::Mongodb
@@ -1760,13 +1761,15 @@ impl Render for QueryTab {
         let format = formats(self.session_conn.engine());
         let staged = m.edits().len();
         let key_mode = self.key_title.is_some();
-        // A key tab shows its value's header, last error and whether pages remain.
+        // A key tab shows its value's header, last error and whether pages remain; a stream's
+        // tab pages through its message bar instead of Load more.
+        let messages = m.message_view().map(MessageBar::of);
         let key = self.key_title.is_some().then(|| {
             let view = m.key_view();
             (
                 view.and_then(KeyView::header).map(str::to_owned),
                 view.and_then(KeyView::error).map(str::to_owned),
-                view.is_some_and(KeyView::has_more),
+                view.is_some_and(KeyView::has_more) && messages.is_none(),
             )
         });
         // The summary appears once a statement has ended; its timing lives in the result footer.
@@ -2118,7 +2121,16 @@ impl Render for QueryTab {
             .child(toolbar)
             .children(self.disk_row(cx))
             .when_some(key, |d, (header, error, more)| {
-                d.child(key_pane(header, error, more, self.results.clone(), cx))
+                d.child(key_pane(
+                    KeyPane {
+                        header,
+                        error,
+                        more,
+                        messages,
+                    },
+                    self.results.clone(),
+                    cx,
+                ))
             })
             .when(self.key_title.is_none(), |d| {
                 d.child(
@@ -2152,15 +2164,55 @@ impl Render for QueryTab {
     }
 }
 
-// A key tab's body: the header line, the last read's error, the value grid, and Load more
-// while pages remain. Each line carries its text as its accessible name.
-fn key_pane(
+// What a stream tab's message bar and groups panel show, copied out of the model in render so
+// the pane never reads it.
+struct MessageBar {
+    follow: Follow,
+    polling: bool,
+    older: bool,
+    dropped: u64,
+    error: Option<String>,
+    groups: Option<Panel<Vec<GroupRow>>>,
+    pending: Option<(String, Panel<Vec<String>>)>,
+}
+
+impl MessageBar {
+    fn of(view: &MessageView) -> Self {
+        Self {
+            follow: view.follow(),
+            polling: view.polling(),
+            older: view.has_older(),
+            dropped: view.dropped(),
+            error: view.error().map(str::to_owned),
+            groups: view.groups().cloned(),
+            pending: view.pending().map(|(g, p)| (g.to_owned(), p.clone())),
+        }
+    }
+}
+
+// A key tab's body as render collects it: the value's header and error, whether Load more
+// shows, and a stream's message bar.
+struct KeyPane {
     header: Option<String>,
     error: Option<String>,
     more: bool,
+    messages: Option<MessageBar>,
+}
+
+// A key tab's body: the header line, the last read's error, a stream's message bar and groups
+// panel, the value grid, and Load more while pages remain. Each line carries its text as its
+// accessible name.
+fn key_pane(
+    pane: KeyPane,
     results: Entity<ResultsPane>,
     cx: &mut Context<QueryTab>,
 ) -> impl IntoElement {
+    let KeyPane {
+        header,
+        error,
+        more,
+        messages,
+    } = pane;
     let dim = theme::dim(cx);
     let theme = cx.theme();
     let (danger, border) = (theme.danger, theme.border);
@@ -2174,6 +2226,16 @@ fn key_pane(
             .px_2()
             .py_1()
             .child(text)
+    };
+    let (bar, groups) = match messages {
+        Some(mut m) => {
+            let panel = m
+                .groups
+                .take()
+                .map(|g| groups_panel(g, m.pending.take(), cx));
+            (Some(message_bar(m, panel.is_some(), cx)), panel)
+        }
+        None => (None, None),
     };
     div()
         .flex_1()
@@ -2189,6 +2251,8 @@ fn key_pane(
                 .border_color(border)
         }))
         .children(error.map(|e| line("key-error", e).text_color(danger)))
+        .children(bar)
+        .children(groups)
         .child(div().flex_1().min_h_0().child(results))
         .when(more, |d| {
             d.child(
@@ -2211,6 +2275,224 @@ fn key_pane(
                     ),
             )
         })
+}
+
+// A stream's bar: Follow toggles polling, Pause holds it, Older pages back, Groups opens the
+// panel; the dropped count and the last read's error follow on the right.
+fn message_bar(
+    bar: MessageBar,
+    groups_open: bool,
+    cx: &mut Context<QueryTab>,
+) -> impl IntoElement + use<> {
+    let dim = theme::dim(cx);
+    let theme = cx.theme();
+    let (danger, border) = (theme.danger, theme.border);
+    let following = bar.follow != Follow::Off;
+    let follow = if following { "Following" } else { "Follow" };
+    let pause = if bar.follow == Follow::Paused {
+        "Resume"
+    } else {
+        "Pause"
+    };
+    let follow_next = if following { Follow::Off } else { Follow::On };
+    let pause_next = if bar.follow == Follow::Paused {
+        Follow::On
+    } else {
+        Follow::Paused
+    };
+    // The bar's name says whether a poll is in flight, so a scenario can wait for it to land.
+    let name = if bar.polling {
+        "messages, polling"
+    } else {
+        "messages"
+    };
+    h_flex()
+        .id("message-bar")
+        .aria_label(name)
+        .test_support()
+        .flex_none()
+        .gap_1()
+        .p_1()
+        .border_b_1()
+        .border_color(border)
+        .child(
+            Button::new("message-follow")
+                .when(following, |b| b.primary())
+                .when(!following, |b| b.outline())
+                .xsmall()
+                .label(follow)
+                .accessibility_label(follow)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.model.update(cx, |m, cx| m.set_follow(follow_next, cx));
+                })),
+        )
+        .when(following, |d| {
+            d.child(
+                Button::new("message-pause")
+                    .outline()
+                    .xsmall()
+                    .label(pause)
+                    .accessibility_label(pause)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.update(cx, |m, cx| m.set_follow(pause_next, cx));
+                    })),
+            )
+        })
+        .when(bar.older, |d| {
+            d.child(
+                Button::new("message-older")
+                    .outline()
+                    .xsmall()
+                    .label("Older")
+                    .accessibility_label("Older")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.update(cx, |m, cx| {
+                            m.older_messages(cx);
+                        });
+                    })),
+            )
+        })
+        .child(
+            Button::new("message-groups")
+                .outline()
+                .xsmall()
+                .label("Groups")
+                .accessibility_label("Groups")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.model.update(cx, |m, cx| {
+                        if groups_open {
+                            m.close_groups(cx);
+                        } else {
+                            m.load_groups(cx);
+                        }
+                    });
+                })),
+        )
+        .when(bar.dropped > 0, |d| {
+            let text = dropped_text(bar.dropped);
+            d.child(
+                div()
+                    .id("message-dropped")
+                    .aria_label(text.clone())
+                    .test_support()
+                    .px_1()
+                    .text_xs()
+                    .text_color(dim)
+                    .child(text),
+            )
+        })
+        .children(bar.error.map(|e| {
+            div()
+                .id("message-error")
+                .aria_label(e.clone())
+                .test_support()
+                .px_1()
+                .text_xs()
+                .text_color(danger)
+                .child(e)
+        }))
+}
+
+// The groups panel under the bar, capped in height: one row per group, a click lists that
+// group's pending entries under its row.
+fn groups_panel(
+    groups: Panel<Vec<GroupRow>>,
+    pending: Option<(String, Panel<Vec<String>>)>,
+    cx: &mut Context<QueryTab>,
+) -> impl IntoElement + use<> {
+    let dim = theme::dim(cx);
+    let theme = cx.theme();
+    let (danger, border) = (theme.danger, theme.border);
+    let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+    let text_row = |id: SharedString, text: String| {
+        div()
+            .id(id)
+            .aria_label(text.clone())
+            .test_support()
+            .px_2()
+            .py_0p5()
+            .child(text)
+    };
+    let mut rows: Vec<AnyElement> = Vec::new();
+    match groups {
+        Panel::Loading => rows.push(
+            text_row(
+                "message-groups-loading".into(),
+                "Loading groups\u{2026}".into(),
+            )
+            .text_color(dim)
+            .into_any_element(),
+        ),
+        Panel::Failed(e) => rows.push(
+            text_row("message-groups-error".into(), e)
+                .text_color(danger)
+                .into_any_element(),
+        ),
+        Panel::Ready(list) if list.is_empty() => rows.push(
+            text_row("message-groups-empty".into(), "No consumer groups".into())
+                .text_color(dim)
+                .into_any_element(),
+        ),
+        Panel::Ready(list) => {
+            for (i, group) in list.into_iter().enumerate() {
+                let GroupRow { name, text } = group;
+                let open = pending.as_ref().is_some_and(|(g, _)| *g == name);
+                rows.push(
+                    text_row(format!("message-group-{i}").into(), text)
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let name = name.clone();
+                            this.model.update(cx, |m, cx| {
+                                m.load_pending(name, cx);
+                            });
+                        }))
+                        .into_any_element(),
+                );
+                if let Some((_, list)) = pending.as_ref().filter(|_| open) {
+                    rows.extend(pending_rows(list, &text_row, dim, danger));
+                }
+            }
+        }
+    }
+    div()
+        .id("message-groups-panel")
+        .flex_none()
+        .max_h(px(160.))
+        .overflow_y_scroll()
+        .py_0p5()
+        .border_b_1()
+        .border_color(border)
+        .font_family(mono)
+        .text_size(mono_size)
+        .children(rows)
+}
+
+// A group's pending entries, indented under its row; a failed read shows its error instead.
+fn pending_rows<E: Styled + IntoElement>(
+    pending: &Panel<Vec<String>>,
+    text_row: &impl Fn(SharedString, String) -> E,
+    dim: Hsla,
+    danger: Hsla,
+) -> Vec<AnyElement> {
+    match pending {
+        Panel::Loading => Vec::new(),
+        Panel::Failed(e) => vec![
+            text_row("message-pending-error".into(), e.clone())
+                .pl_6()
+                .text_color(danger)
+                .into_any_element(),
+        ],
+        Panel::Ready(list) => list
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                text_row(format!("message-pending-{i}").into(), p.clone())
+                    .pl_6()
+                    .text_color(dim)
+                    .into_any_element()
+            })
+            .collect(),
+    }
 }
 
 // Builds the editor menu; each item acts on the tab, the clipboard ones through the editor's

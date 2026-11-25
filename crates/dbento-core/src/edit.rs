@@ -11,7 +11,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, InlineTable, Item, Key, Table, Value};
 
-pub use dbento_workspace::ConnectionSpec;
+pub use dbento_workspace::{ConnectionSpec, SshSpec};
 
 /// One change to `dbento.toml`.
 // One edit is built per user action and consumed at once, so its size never matters and
@@ -631,19 +631,36 @@ fn put_folder(
 }
 
 /// Appends `[connections.<name>]` after the last table, so it never lands inside a
-/// later `[folders]` section, with the keys in the spec's order.
+/// later `[folders]` section, with the keys in the spec's order and its `ssh` table last.
 fn add_entry(doc: &mut DocumentMut, name: &str, spec: &ConnectionSpec) -> Result<(), EditError> {
     let last = last_position(doc.as_table()).unwrap_or(0);
-    let mut table = Table::new();
+    let mut table = new_table(values(spec));
     table.set_position(Some(last + 1));
     table.decor_mut().set_prefix("\n");
-    for (key, value) in values(spec) {
+    if let Some(ssh) = &spec.ssh {
+        table.insert("ssh", Item::Table(ssh_table(ssh)));
+    }
+    connections(doc)?.insert(name, Item::Table(table));
+    Ok(())
+}
+
+/// A table holding the present values, in order.
+fn new_table<const N: usize>(values: [(&'static str, Option<Value>); N]) -> Table {
+    let mut table = Table::new();
+    for (key, value) in values {
         if let Some(value) = value {
             table.insert(key, Item::Value(value));
         }
     }
-    connections(doc)?.insert(name, Item::Table(table));
-    Ok(())
+    table
+}
+
+/// The `ssh` sub-table; with no position it renders right after the entry visited before it.
+fn ssh_table(ssh: &SshSpec) -> Table {
+    let mut table = new_table(ssh_values(ssh));
+    table.set_position(None);
+    table.decor_mut().set_prefix("");
+    table
 }
 
 /// The highest document position of any table at or below `table`.
@@ -706,22 +723,8 @@ fn update_entry(
     new: &ConnectionSpec,
 ) -> Result<(), EditError> {
     let entry = entry_table(doc, name)?;
-    for ((key, before), (_, after)) in values(old).into_iter().zip(values(new)) {
-        if before.as_ref().map(ToString::to_string) == after.as_ref().map(ToString::to_string) {
-            continue;
-        }
-        match after {
-            None => {
-                entry.remove(key);
-            }
-            Some(mut value) => {
-                if let Some(Item::Value(previous)) = entry.get(key) {
-                    *value.decor_mut() = previous.decor().clone();
-                }
-                entry.insert(key, Item::Value(value));
-            }
-        }
-    }
+    update_keys(entry, values(old), values(new));
+    update_ssh(entry, name, old.ssh.as_ref(), new.ssh.as_ref())?;
     // Session settings are Postgres-only; inline, sub-table and dotted forms are all one key here.
     if new.engine != Engine::Postgres {
         entry.remove("settings");
@@ -730,6 +733,76 @@ fn update_entry(
         entry.remove("databases");
     }
     Ok(())
+}
+
+/// Rewrites each key whose value differs between `before` and `after`, keeping its decor.
+fn update_keys<const N: usize>(
+    table: &mut Table,
+    before: [(&'static str, Option<Value>); N],
+    after: [(&'static str, Option<Value>); N],
+) {
+    for ((key, before), (_, after)) in before.into_iter().zip(after) {
+        if before.as_ref().map(ToString::to_string) == after.as_ref().map(ToString::to_string) {
+            continue;
+        }
+        match after {
+            None => {
+                table.remove(key);
+            }
+            Some(mut value) => {
+                if let Some(Item::Value(previous)) = table.get(key) {
+                    *value.decor_mut() = previous.decor().clone();
+                }
+                table.insert(key, Item::Value(value));
+            }
+        }
+    }
+}
+
+/// Brings the entry's `ssh` table in line with the new spec: an unchanged one is left alone,
+/// a written one gets the same per-key update the entry gets, and an inline one is refused.
+fn update_ssh(
+    entry: &mut Table,
+    name: &str,
+    old: Option<&SshSpec>,
+    new: Option<&SshSpec>,
+) -> Result<(), EditError> {
+    if old == new {
+        return Ok(());
+    }
+    let Some(new) = new else {
+        entry.remove("ssh");
+        return Ok(());
+    };
+    match (old, entry.get_mut("ssh")) {
+        (Some(old), Some(Item::Table(table))) => {
+            update_keys(table, ssh_values(old), ssh_values(new));
+        }
+        (_, None) => {
+            entry.insert("ssh", Item::Table(ssh_table(new)));
+        }
+        (_, Some(_)) => {
+            return Err(EditError::Unmergeable {
+                entry: format!("{name}.ssh"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The `ssh` table's keys in the order a new table writes them.
+fn ssh_values(ssh: &SshSpec) -> [(&'static str, Option<Value>); 6] {
+    [
+        ("host", Some(Value::from(ssh.host.as_str()))),
+        ("port", ssh.port.map(|p| Value::from(i64::from(p)))),
+        ("user", ssh.user.as_deref().map(Value::from)),
+        ("auth", ssh.auth.map(|a| Value::from(a.name()))),
+        (
+            "identity_file",
+            ssh.identity_file.as_deref().map(Value::from),
+        ),
+        ("keepalive", ssh.keepalive.map(Value::from)),
+    ]
 }
 
 /// Every key in the order a new entry writes them, with its TOML value when present.

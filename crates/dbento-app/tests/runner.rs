@@ -831,7 +831,7 @@ fn ends(events: Vec<Event>) -> Vec<StatementEnd> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mysql_runs_asks_cancels_and_refuses_editing() {
+async fn mysql_runs_asks_cancels_and_describes_a_keyless_table() {
     for (flavor, db) in dbento_testkit::my_matrix().await {
         let (_dir, spec) = my_spec(&db, "");
         let r = spawn_on(&here(), spec);
@@ -912,12 +912,19 @@ async fn mysql_runs_asks_cancels_and_refuses_editing() {
             rel: RelationRef::new(db.database(), "t"),
         });
         loop {
-            if let Event::Target { result, .. } = next(&ev).await {
+            if let Event::Target {
+                result,
+                foreign_keys,
+                ..
+            } = next(&ev).await
+            {
+                let target = result.unwrap_or_else(|e| panic!("{flavor}: {e}"));
                 assert_eq!(
-                    result.err().as_deref(),
-                    Some("editing rows is not available on mysql yet"),
+                    target.not_editable(),
+                    Some(&dbento_core::NotEditable::NoKey),
                     "{flavor}"
                 );
+                assert!(foreign_keys.is_empty(), "{flavor}");
                 break;
             }
         }

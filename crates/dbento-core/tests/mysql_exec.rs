@@ -73,14 +73,14 @@ async fn a_server_error_carries_the_error_number_and_sqlstate() {
 }
 
 #[tokio::test]
-async fn edit_targets_stay_unsupported_on_mysql() {
+async fn a_missing_edit_target_leaves_the_mysql_session_usable() {
     for (label, fx) in my_fixtures("").await {
         let mut s = fx.session(SessionOptions::default()).await;
         let rel = RelationRef::new(fx.db.database(), "t");
         assert!(
             matches!(
                 s.edit_target(&rel).await,
-                Err(IntrospectError::Unsupported { .. })
+                Err(IntrospectError::Missing { .. })
             ),
             "{label}"
         );

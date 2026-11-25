@@ -1,8 +1,8 @@
 //! The MySQL engine as the workspace and capability layers see it, before any server.
 use dbento_core::{
-    Engine, ExplainError, ExplainMode, FormatOptions, IntrospectError, MemoryStore, OpenError,
-    RelationRef, SecretSource, TlsMode, Workspace, default_schema, explain_request, explain_text,
-    format_sql, line_comment_starts, quote_ident, secret_hint, single_source, splits_token,
+    Engine, ExplainMode, FormatOptions, IntrospectError, MemoryStore, OpenError, RelationRef,
+    SecretSource, TlsMode, Workspace, default_schema, explain_request, explain_text, format_sql,
+    line_comment_starts, quote_ident, secret_hint, single_source, splits_token,
 };
 
 fn ws_with(toml: &str) -> (tempfile::TempDir, Result<Workspace, OpenError>) {
@@ -83,7 +83,7 @@ fn mysql_refuses_other_engines_keys_and_needs_host_and_user() {
 fn capabilities_are_static_per_engine() {
     let my = Engine::Mysql.capabilities();
     assert!(my.schemas && my.password && my.tls);
-    assert!(!my.file && my.server_cancel && !my.edit_rows && !my.explain && my.table_definition);
+    assert!(!my.file && my.server_cancel && my.edit_rows && my.explain && my.table_definition);
     let pg = Engine::Postgres.capabilities();
     assert!(pg.schemas && pg.server_cancel && pg.password && pg.tls && pg.edit_rows && pg.explain);
     assert!(!pg.file && !pg.table_definition);
@@ -127,7 +127,7 @@ fn mysql_names_are_backtick_quoted_and_sources_need_a_database() {
 }
 
 #[test]
-fn the_formatter_reads_mysql_and_explain_refuses_it() {
+fn the_formatter_reads_mysql_and_explain_accepts_it() {
     let sql = "select 1 # c\nfrom t";
     assert_eq!(
         format_sql(Engine::Mysql, sql, &FormatOptions::default()),
@@ -135,11 +135,11 @@ fn the_formatter_reads_mysql_and_explain_refuses_it() {
     );
     assert_eq!(line_comment_starts(Engine::Mysql, sql), Some(vec![9]));
     assert!(splits_token(Engine::Mysql, sql, 0..3));
-    let explained = explain_request(Engine::Mysql, "SELECT 1", ExplainMode::Plan);
-    assert_eq!(explained.err(), Some(ExplainError::UnsupportedEngine));
+    let explained = explain_request(Engine::Mysql, "SELECT 1", ExplainMode::Plan).unwrap();
+    assert_eq!(explained.sql, "EXPLAIN FORMAT=JSON SELECT 1");
     assert_eq!(
-        explain_text(Engine::Mysql, "SELECT 1").err(),
-        Some(ExplainError::UnsupportedEngine)
+        explain_text(Engine::Mysql, "SELECT 1").unwrap(),
+        "EXPLAIN SELECT 1"
     );
 }
 

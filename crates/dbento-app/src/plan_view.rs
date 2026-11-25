@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
-use dbento_core::{ExplainMode, ExplainOutput, Plan};
+use dbento_core::{Engine, ExplainMode, ExplainOutput, Plan};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Editor, EditorState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
@@ -277,6 +277,22 @@ pub struct PlanView {
     scroll: UniformListScrollHandle,
 }
 
+/// The note shown above a plan, chosen by engine, mode and whether ANALYZE fell back.
+/// MySQL's ANALYZE runs outside any transaction it could roll back, so it claims none.
+pub fn plan_note(result: &PlanResult) -> Option<&'static str> {
+    if result.engine == Engine::Mysql {
+        result.analyze_unavailable.then_some(
+            "Plan only: ANALYZE runs only statements confirmed to read; this one writes or could not be checked.",
+        )
+    } else if result.analyze_unavailable {
+        Some("SQLite has no ANALYZE timings; showing the query plan")
+    } else if result.mode == ExplainMode::Analyze {
+        Some("ANALYZE ran in a transaction that was rolled back")
+    } else {
+        None
+    }
+}
+
 impl PlanView {
     /// A view of `result`: pending without output, Raw when the output did not parse.
     pub fn new(result: &PlanResult, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -297,13 +313,7 @@ impl PlanView {
                 state
             })
         });
-        let note = if result.analyze_unavailable {
-            Some("SQLite has no ANALYZE timings; showing the query plan")
-        } else if result.mode == ExplainMode::Analyze {
-            Some("ANALYZE ran in a transaction that was rolled back")
-        } else {
-            None
-        };
+        let note = plan_note(result);
         let shown = if tree.is_some() {
             Shown::Tree
         } else {

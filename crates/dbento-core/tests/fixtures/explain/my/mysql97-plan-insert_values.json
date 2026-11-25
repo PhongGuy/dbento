@@ -1,0 +1,10 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "table": {
+      "insert": true,
+      "table_name": "ord",
+      "access_type": "ALL"
+    }
+  }
+}

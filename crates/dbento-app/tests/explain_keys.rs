@@ -2,7 +2,7 @@
 use crate::support::{Opened, label_of, open_connection_row, opened, present, started, wait_real};
 use dbento_app::palette::PaletteCommand;
 use dbento_app::query_tab::{analyze_ask, explain_warning};
-use dbento_core::{Engine, ExplainError, ExplainMode, Unguarded, explain_request};
+use dbento_core::{Engine, ExplainMode, Unguarded, explain_request};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
 
@@ -74,6 +74,10 @@ fn explain_warnings_are_sentences_that_list_only_the_engines_statements() {
         let err = explain_request(engine, sql, ExplainMode::Plan).unwrap_err();
         let title = if engine == Engine::Postgres {
             "PostgreSQL"
+        } else if engine == Engine::Mysql {
+            "MySQL"
+        } else if engine == Engine::Mssql {
+            "SQL Server"
         } else {
             "SQLite"
         };
@@ -98,8 +102,13 @@ fn explain_warnings_are_sentences_that_list_only_the_engines_statements() {
         "Select one statement to explain."
     );
     assert_eq!(
-        explain_warning(&ExplainError::UnsupportedEngine, Engine::Mysql, "MySQL"),
-        "EXPLAIN is not available for MySQL yet."
+        warn(Engine::Mysql, "VACUUM"),
+        "Only SELECT, WITH, VALUES, TABLE, INSERT, UPDATE, DELETE or REPLACE can be explained \
+         on MySQL, and not after a block comment."
+    );
+    assert_eq!(
+        warn(Engine::Mssql, "SELECT 1"),
+        "EXPLAIN is not available for SQL Server yet."
     );
 }
 
@@ -164,13 +173,13 @@ fn the_toolbar_button_explains_too(cx: &mut TestAppContext) {
     assert!(present(cx, o.win, "plan-view"));
 }
 
-/// A MySQL connection that never connects; the tab opens and its preconnect fails quietly.
-const MY_CLOSED: &str = "dbento = 1\n[connections.my]\nengine = \"mysql\"\nhost = \"127.0.0.1\"\nport = 9\nuser = \"u\"\ndatabase = \"d\"\n";
+/// A SQL Server connection that never connects; the tab opens and its preconnect fails quietly.
+const MS_CLOSED: &str = "dbento = 1\n[connections.ms]\nengine = \"mssql\"\nhost = \"127.0.0.1\"\nport = 9\nuser = \"u\"\ndatabase = \"d\"\n";
 
 #[gpui_kit::test]
-fn mysql_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
-    let s = started(cx, MY_CLOSED);
-    open_connection_row(cx, s.win, "my");
+fn sql_server_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
+    let s = started(cx, MS_CLOSED);
+    open_connection_row(cx, s.win, "ms");
     assert!(present(cx, s.win, "format"));
     assert!(!present(cx, s.win, "explain"));
     assert!(!present(cx, s.win, "explain-tip"));
@@ -191,7 +200,8 @@ fn mysql_hides_explain_but_its_key_still_says_why(cx: &mut TestAppContext) {
     cx.update_window(s.win, |_, w, cx| w.press("ctrl-e", cx))
         .unwrap();
     wait_real(cx, "the unsupported notice", |cx| {
-        label_of(cx, s.win, "notice").as_deref() == Some("EXPLAIN is not available for MySQL yet.")
+        label_of(cx, s.win, "notice").as_deref()
+            == Some("EXPLAIN is not available for SQL Server yet.")
     });
 
     cx.update_window(s.win, |_, w, cx| w.right_click("editor", cx))

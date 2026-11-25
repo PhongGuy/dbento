@@ -65,7 +65,7 @@ Edit cells, add rows and delete rows in a browsed Postgres or SQLite table. Chan
 `dbento mcp` serves a workspace to an AI client over MCP on stdio, with ten tools: `list_connections`, `list_databases`, `list_schemas`, `list_tables`, `describe_table`, `query`, `explain`, `list_saved_queries`, `read_saved_query` and `execute`.
 
 - `query` always runs read-only, one statement in the connection's own language: SQL, a mongosh statement, SurrealQL, one Redis command, or PartiQL. Redis commands in the `@dangerous`, `@blocking`, `@scripting` and `@pubsub` categories are refused. It returns 100 rows by default and at most 1,000, about 64 KiB, under a statement timeout of 30 seconds by default.
-- `explain` shows the plan of one statement on Postgres and SQLite in the same read-only session, so an AI can preview an `UPDATE` or `DELETE` without running it. `ANALYZE` is refused.
+- `explain` shows the plan of one statement on Postgres, SQLite, MySQL and MariaDB in the same read-only session, so an AI can preview an `UPDATE` or `DELETE` without running it. On MySQL and MariaDB the read-only session refuses a plan of `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, so only reads can be explained there. `ANALYZE` is refused.
 - `list_saved_queries` and `read_saved_query` read the saved query files (`.sql`, `.js`, `.surql`, `.redis`, `.partiql`) under the workspace's `queries/` folder and nothing outside it, not even through a symlink.
 - `execute` never runs a write on its own. The first call files a request and answers `approval_required`; you approve or deny that exact call in the desktop app, and the AI's retry of the same call then runs it once or gets the denial. When you deny a call you can type a reason, and the AI gets it back with the denial. If the connection's target or session settings change after you approve, the old approval never runs against the changed connection; the AI gets `connection_changed` with a new request to approve.
 
@@ -288,7 +288,7 @@ Register `dbento mcp` as a stdio MCP server in your AI client. Most clients take
 
 ## Contributing
 
-Issues and pull requests are welcome. Building from source, the layout, the tests and checks, CI, the conventions for issues and pull requests, and the gpui-pilot QA setup are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues and pull requests from anyone are welcome, first ones included, and I'll help get a pull request over the line. What I check before merging is in [Sending a change](CONTRIBUTING.md#sending-a-change). Building from source, the layout, the tests and checks, CI, the conventions for issues and pull requests, and the gpui-pilot QA setup are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

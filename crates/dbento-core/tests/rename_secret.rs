@@ -249,3 +249,174 @@ fn a_failed_delete_reports_the_error_after_the_new_entry_is_written() {
     assert_eq!(value(&store, &key("b")).as_deref(), Some("old"));
     assert_eq!(value(&store, &key("a")).as_deref(), Some("old"));
 }
+
+/// Postgres `name` without a password, tunnelled through `jump` as `user`.
+fn tunnelled(name: &str, jump: &str, user: &str) -> String {
+    pg(
+        name,
+        "h",
+        "u",
+        "d",
+        &format!(
+            "secret = \"none\"\n[connections.{name}.ssh]\nhost = \"{jump}\"\nuser = \"{user}\"\n"
+        ),
+    )
+}
+
+#[test]
+fn a_tunnelled_rename_carries_its_ssh_slots() {
+    let r = renames(
+        &tunnelled("a", "jump", "ops"),
+        &tunnelled("b", "jump", "ops"),
+    );
+    assert_eq!(pairs(&r), pair("a", "b", RenameMatch::Exact));
+    assert!(r[0].ssh && !r[0].password && !r[0].passphrase);
+    let r = renames(
+        &tunnelled("a", "jump", "ops"),
+        &tunnelled("b", "jump", "dev"),
+    );
+    assert_eq!(pairs(&r), pair("a", "b", RenameMatch::SameLogin));
+    assert_eq!(r[0].changed, vec!["ssh"]);
+    assert!(r[0].ssh);
+}
+
+#[test]
+fn another_bastion_is_another_login() {
+    assert!(
+        renames(
+            &tunnelled("a", "jump", "ops"),
+            &tunnelled("b", "jump2", "ops")
+        )
+        .is_empty()
+    );
+    // Both keychain-backed, so only the ssh table's part in same_login can keep them apart.
+    let b = pg(
+        "b",
+        "h",
+        "u",
+        "d",
+        "[connections.b.ssh]\nhost = \"jump\"\nuser = \"ops\"\n",
+    );
+    assert!(renames(&pg("a", "h", "u", "d", ""), &b).is_empty());
+}
+
+#[test]
+fn a_connection_without_ssh_has_no_ssh_slots() {
+    let r = renames(&pg("a", "h", "u", "d", ""), &pg("b", "h", "u", "d", ""));
+    assert!(!r[0].ssh);
+}
+
+/// Workspaces before and after renaming `a` to `b`, with the one rename found between them.
+fn tunnel_rename(old_user: &str, new_user: &str) -> (Workspace, Workspace, SecretRename) {
+    let (old, new) = (
+        ws(&tunnelled("a", "jump", old_user)),
+        ws(&tunnelled("b", "jump", new_user)),
+    );
+    let r = secret_renames(&old, &new).remove(0);
+    (old, new, r)
+}
+
+/// An empty temporary home, or one whose `.ssh/config` is `config`.
+fn ssh_home(config: &str) -> (tempfile::TempDir, dbento_core::SshHome) {
+    let dir = tempfile::tempdir().unwrap();
+    if !config.is_empty() {
+        std::fs::create_dir_all(dir.path().join(".ssh")).unwrap();
+        std::fs::write(dir.path().join(".ssh/config"), config).unwrap();
+    }
+    let home = dbento_core::SshHome::new(dir.path(), "tester");
+    (dir, home)
+}
+
+#[test]
+fn both_ssh_slots_follow_a_rename() {
+    let (old, new, r) = tunnel_rename("ops", "ops");
+    let (_d, home) = ssh_home("");
+    let store = MemoryStore::new();
+    store
+        .set(
+            &SecretKey::ssh_password("/w", "a", "ops@jump:22"),
+            &Secret::new("pw"),
+        )
+        .unwrap();
+    store
+        .set(
+            &SecretKey::ssh_key_passphrase("/w", "a"),
+            &Secret::new("pp"),
+        )
+        .unwrap();
+    let moved = dbento_core::adopt_ssh_secrets(&store, &old, &new, &r, &home).unwrap();
+    assert_eq!(
+        moved.password,
+        dbento_core::SshPasswordMove::Moved(Adopted::Moved)
+    );
+    assert_eq!(moved.key_passphrase, Adopted::Moved);
+    let b_pw = store
+        .get(&SecretKey::ssh_password("/w", "b", "ops@jump:22"))
+        .unwrap();
+    assert_eq!(b_pw.unwrap().expose(), "pw");
+    assert!(
+        store
+            .get(&SecretKey::ssh_password("/w", "a", "ops@jump:22"))
+            .unwrap()
+            .is_none()
+    );
+    let b_pp = store
+        .get(&SecretKey::ssh_key_passphrase("/w", "b"))
+        .unwrap();
+    assert_eq!(b_pp.unwrap().expose(), "pp");
+}
+
+#[test]
+fn an_unresolvable_target_keeps_the_ssh_password_and_says_to_set_it() {
+    let (old, new, r) = tunnel_rename("ops", "ops");
+    let (_d, home) = ssh_home("Host jump\n  ProxyJump hop\n");
+    let store = MemoryStore::new();
+    let old_key = SecretKey::ssh_password("/w", "a", "ops@jump:22");
+    store.set(&old_key, &Secret::new("pw")).unwrap();
+    store
+        .set(
+            &SecretKey::ssh_key_passphrase("/w", "a"),
+            &Secret::new("pp"),
+        )
+        .unwrap();
+    let moved = dbento_core::adopt_ssh_secrets(&store, &old, &new, &r, &home).unwrap();
+    let dbento_core::SshPasswordMove::Kept { message } = &moved.password else {
+        panic!("{:?}", moved.password);
+    };
+    assert!(
+        message.contains("dbento secret set b --ssh-password"),
+        "{message}"
+    );
+    assert_eq!(
+        store.get(&old_key).unwrap().unwrap().expose(),
+        "pw",
+        "the entry stays"
+    );
+    assert_eq!(
+        moved.key_passphrase,
+        Adopted::Moved,
+        "the unpinned slot still moves"
+    );
+}
+
+#[test]
+fn a_changed_ssh_login_keeps_the_ssh_password() {
+    let (old, new, r) = tunnel_rename("ops", "dev");
+    let (_d, home) = ssh_home("");
+    let store = MemoryStore::new();
+    let old_key = SecretKey::ssh_password("/w", "a", "ops@jump:22");
+    store.set(&old_key, &Secret::new("pw")).unwrap();
+    let moved = dbento_core::adopt_ssh_secrets(&store, &old, &new, &r, &home).unwrap();
+    assert!(matches!(
+        moved.password,
+        dbento_core::SshPasswordMove::Kept { .. }
+    ));
+    assert!(store.get(&old_key).unwrap().is_some());
+    assert!(
+        store
+            .get(&SecretKey::ssh_password("/w", "b", "dev@jump:22"))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(moved.key_passphrase, Adopted::NothingStored);
+}
