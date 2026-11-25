@@ -19,8 +19,10 @@ pub(crate) struct ToolError {
     error_number: Option<String>,
     class: Option<u8>,
     state: Option<u8>,
-    request_id: Option<String>,
+    // Boxed so the error stays under the workspace's large-error threshold.
+    request_id: Option<Box<str>>,
     reason: Option<String>,
+    hint: Option<Box<str>>,
 }
 
 impl ToolError {
@@ -35,6 +37,7 @@ impl ToolError {
             state: None,
             request_id: None,
             reason: None,
+            hint: None,
         }
     }
 
@@ -127,6 +130,7 @@ impl ToolError {
                 sqlstate,
                 class,
                 state,
+                hint,
                 ..
             } => {
                 return ToolError {
@@ -140,6 +144,7 @@ impl ToolError {
                     state: *state,
                     request_id: None,
                     reason: None,
+                    hint: hint.as_deref().map(Box::from),
                 };
             }
             ExecuteError::ReadOnlyViolation { .. } => {
@@ -173,10 +178,12 @@ impl ToolError {
         error
     }
 
-    /// An introspection failed; a catalog answer of the wrong shape is still the database's.
+    /// An introspection failed; a catalog answer of the wrong shape is still the database's,
+    /// while an engine without that catalog is `unsupported`.
     pub(crate) fn from_introspect(e: &IntrospectError) -> Self {
         match e {
             IntrospectError::Execute(e) => ToolError::from_execute(e),
+            IntrospectError::Unsupported { .. } => ToolError::new("unsupported", e.to_string()),
             _ => ToolError::new("database", e.to_string()),
         }
     }
@@ -189,7 +196,7 @@ impl ToolError {
 
     /// The same failure naming the approval request it concerns.
     pub(crate) fn with_request_id(mut self, id: &str) -> Self {
-        self.request_id = Some(id.to_owned());
+        self.request_id = Some(id.into());
         self
     }
 
@@ -210,7 +217,7 @@ impl ToolError {
     }
 
     /// The `{"error": {...}}` object, with `sqlstate`, `error_number`, `class`, `state`,
-    /// `request_id` and `reason` only when set.
+    /// `request_id`, `reason` and `hint` only when set.
     fn to_value(&self) -> Value {
         let mut error = Map::new();
         error.insert("code".into(), json!(self.code));
@@ -232,6 +239,9 @@ impl ToolError {
         }
         if let Some(reason) = &self.reason {
             error.insert("reason".into(), json!(reason));
+        }
+        if let Some(hint) = &self.hint {
+            error.insert("hint".into(), json!(hint));
         }
         json!({ "error": error })
     }
@@ -505,5 +515,31 @@ mod tests {
         let cancelled = on(&ExecuteError::Cancelled, Engine::Mssql);
         assert_eq!(cancelled.code(), "cancelled");
         assert!(cancelled.message().contains("may have kept"));
+    }
+
+    #[test]
+    fn a_database_hint_reaches_the_client_and_is_absent_otherwise() {
+        let mut denied = ExecuteError::database("AccessDenied", "Access Denied");
+        if let ExecuteError::Database { hint, .. } = &mut denied {
+            *hint = Some("set buckets = [\"...\"] on the connection".to_owned());
+        }
+        let v = ToolError::from_execute(&denied).to_value();
+        assert_eq!(
+            v["error"]["hint"], "set buckets = [\"...\"] on the connection",
+            "{v}"
+        );
+        let v = ToolError::from_introspect(&IntrospectError::Execute(denied)).to_value();
+        assert!(
+            v["error"]["hint"].is_string(),
+            "introspection keeps it: {v}"
+        );
+        let v = ToolError::from_execute(&ExecuteError::database("42P01", "no")).to_value();
+        assert!(v["error"].get("hint").is_none(), "{v}");
+    }
+
+    #[test]
+    fn an_unsupported_introspection_is_unsupported_on_every_engine() {
+        let e = ToolError::from_introspect(&IntrospectError::Unsupported { what: "tables" });
+        assert_eq!(e.code(), "unsupported", "{}", e.message());
     }
 }

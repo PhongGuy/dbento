@@ -24,6 +24,7 @@ mod mssql;
 mod mysql;
 mod query;
 mod redis;
+mod s3;
 mod saved_queries;
 mod ssh;
 mod surreal;
