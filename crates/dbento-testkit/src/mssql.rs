@@ -16,9 +16,10 @@ use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
+use super::sshd::loopback_only;
 use super::{
-    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, ServerTls, engine, remove_labelled, retry_start,
-    server_tls, sweep_orphans,
+    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, OnNetwork, ServerTls, engine, network_alias,
+    remove_labelled, retry_start, server_tls, sweep_orphans,
 };
 
 /// The environment variable the generated connection reads its password from.
@@ -310,6 +311,40 @@ pub async fn mssql_tls() -> (MsDb, String) {
     (db, tls.ca_pem)
 }
 
+/// A fresh container on `network`, named a fresh alias, `DBENTO_MSSQL_URL` ignored; with
+/// `tls`, serving a certificate that names only the alias. Only port 1433 is published, on
+/// 127.0.0.1, where the `MsDb`'s own logins reach it.
+pub async fn mssql_on(network: &str, tls: bool) -> (MsDb, OnNetwork) {
+    let source = ms_source(|k| (k != URL_VAR).then(|| std::env::var(k).ok()).flatten());
+    if let Err(e) = source {
+        panic!("{e}");
+    }
+    let alias = network_alias("mssql");
+    let tls = tls.then(|| server_tls(&[&alias]));
+    // The cap and the loopback publish share one modifier, as a request keeps only the last.
+    let db = launch("127.0.0.1", |r| {
+        serve_tls(r, tls.as_ref())
+            .with_network(network.to_owned())
+            .with_container_name(alias.clone())
+            .with_host_config_modifier(|h| {
+                h.memory = Some(3 << 30);
+                loopback_only(h, &["1433/tcp"]);
+            })
+    })
+    .await;
+    let id = db
+        .container
+        .as_ref()
+        .map(|c| c.id().to_owned())
+        .unwrap_or_default();
+    let on = OnNetwork {
+        alias,
+        id,
+        ca_pem: tls.map(|t| t.ca_pem),
+    };
+    (db, on)
+}
+
 /// One SQL Server container at a time in this process; each takes 3 GB.
 fn slots() -> Arc<Semaphore> {
     static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -341,21 +376,30 @@ fn serve_tls(
 
 /// A fresh container; with `tls`, serving it and reached through "localhost".
 async fn container(tls: Option<&ServerTls>) -> MsDb {
-    let permit = slots()
-        .acquire_owned()
-        .await
-        .expect("the container semaphore is never closed");
-    sweep_orphans().await;
-    let c = start(|r| serve_tls(r, tls)).await;
-    let port = c
-        .get_host_port_ipv4(1433)
-        .await
-        .expect("no mapped SQL Server port");
     let host = if tls.is_some() {
         "localhost"
     } else {
         "127.0.0.1"
     };
+    launch(host, |r| serve_tls(r, tls)).await
+}
+
+/// A fresh container shaped by `with`, holding this process's slot, with a fresh database the
+/// `sa` login reaches through `host` and the published port.
+async fn launch(
+    host: &str,
+    with: impl Fn(ContainerRequest<MssqlServer>) -> ContainerRequest<MssqlServer>,
+) -> MsDb {
+    let permit = slots()
+        .acquire_owned()
+        .await
+        .expect("the container semaphore is never closed");
+    sweep_orphans().await;
+    let c = start(with).await;
+    let port = c
+        .get_host_port_ipv4(1433)
+        .await
+        .expect("no mapped SQL Server port");
     let mut db = fresh_database(host, port, "sa", MS_SA_PASSWORD).await;
     db.container = Some(c);
     db._permit = Some(permit);

@@ -52,6 +52,8 @@ mongodb = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
+rustls-native-certs = { workspace = true, optional = true }
 aws-sdk-dynamodb = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-smithy-http-client = { workspace = true, optional = true }
@@ -88,7 +90,7 @@ mongodb = ["dep:mongodb", "dep:bson", "dbento-testkit/mongodb"]
 # The SurrealDB engine: a WebSocket client and a CBOR reader, with no SurrealDB crate.
 surrealdb = ["dep:tokio-tungstenite", "dep:cbor4ii", "dep:half", "tokio/macros"]
 # The Redis and Valkey engine: redis-rs over tokio and rustls.
-redis = ["dep:redis", "dbento-testkit/redis"]
+redis = ["dep:redis", "dep:tokio-rustls", "dep:rustls-native-certs", "dbento-testkit/redis"]
 # The DynamoDB engine: the AWS SDK over ring rustls, without aws-config.
 dynamodb = [
     "dep:aws-sdk-dynamodb",
@@ -142,7 +144,7 @@ syn = { version = "2.0.119", features = ["extra-traits", "fold", "full", "visit"
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "test-util", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "test-util", "time"] }
 aws-smithy-types.workspace = true
 dbento-testkit = { path = "../dbento-testkit" }
 wiremock.workspace = true

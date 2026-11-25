@@ -13,9 +13,10 @@ use testcontainers_modules::testcontainers::{
 use testcontainers_modules::valkey::Valkey;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::sshd::loopback_only;
 use super::{
-    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, engine, remove_labelled, retry_start, sweep_orphans,
-    wait_ready,
+    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, OnNetwork, engine, network_alias, remove_labelled,
+    retry_start, server_tls, sweep_orphans, wait_ready,
 };
 
 /// The environment variable the generated connection reads its password from.
@@ -48,6 +49,7 @@ const URL_VAR: &str = "DBENTO_REDIS_URL";
 const URL_FORM: &str = "redis://[user[:password]@]host:port[/index]";
 const RD_PASSWORD: &str = "DbentoRedis9";
 const VALKEY_PORT: u16 = 6379;
+const MEMORY_CAP: i64 = 512 << 20;
 // The client's own 500 ms default is too short for the big seed commands.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -502,7 +504,7 @@ async fn container() -> RedisDb {
         .await
         .expect("the container semaphore is never closed");
     sweep_orphans().await;
-    let c = start().await;
+    let c = start(|r| r).await;
     let port = c
         .get_host_port_ipv4(VALKEY_PORT)
         .await
@@ -525,7 +527,85 @@ fn capped() -> ContainerRequest<Valkey> {
     Valkey::default()
         .with_tag(VALKEY_TAG)
         .with_cmd(["valkey-server", "--save", "", "--appendonly", "no"])
-        .with_host_config_modifier(|h| h.memory = Some(512 << 20))
+        .with_host_config_modifier(|h| h.memory = Some(MEMORY_CAP))
+}
+
+/// A fresh Valkey container on `network`, named a fresh alias and seeded like `redis_db`'s,
+/// publishing only its ports on 127.0.0.1. With `tls`, it also serves TLS on 6380 with a
+/// certificate naming only the alias; plain 6379 stays for the harness's own logins.
+pub async fn valkey_on(network: &str, tls: bool) -> (RedisDb, OnNetwork) {
+    let alias = network_alias("valkey");
+    let certs = tls.then(|| server_tls(&[&alias]));
+    let ports: &'static [&'static str] = if tls {
+        &["6379/tcp", "6380/tcp"]
+    } else {
+        &["6379/tcp"]
+    };
+    let permit = slots()
+        .acquire_owned()
+        .await
+        .expect("the container semaphore is never closed");
+    sweep_orphans().await;
+    let c = start(|r| {
+        // The modifier replaces capped()'s, so it carries the memory cap too.
+        let r = r
+            .with_network(network.to_owned())
+            .with_container_name(alias.clone())
+            .with_host_config_modifier(move |h| {
+                h.memory = Some(MEMORY_CAP);
+                loopback_only(h, ports);
+            });
+        let Some(certs) = &certs else { return r };
+        r.with_copy_to("/etc/dbento-tls/ca.pem", certs.ca_pem.clone().into_bytes())
+            .with_copy_to(
+                "/etc/dbento-tls/server.pem",
+                certs.cert_pem.clone().into_bytes(),
+            )
+            .with_copy_to(
+                "/etc/dbento-tls/server-key.pem",
+                certs.key_pem.clone().into_bytes(),
+            )
+            .with_cmd([
+                "valkey-server",
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+                "--tls-port",
+                "6380",
+                "--tls-cert-file",
+                "/etc/dbento-tls/server.pem",
+                "--tls-key-file",
+                "/etc/dbento-tls/server-key.pem",
+                "--tls-ca-cert-file",
+                "/etc/dbento-tls/ca.pem",
+                "--tls-auth-clients",
+                "no",
+            ])
+    })
+    .await;
+    let id = c.id().to_owned();
+    let port = c
+        .get_host_port_ipv4(VALKEY_PORT)
+        .await
+        .expect("no mapped Valkey port");
+    let db = seeded(
+        "127.0.0.1".to_owned(),
+        port,
+        None,
+        None,
+        0,
+        "",
+        Some(c),
+        permit,
+    )
+    .await;
+    let on = OnNetwork {
+        alias,
+        id,
+        ca_pem: certs.map(|t| t.ca_pem),
+    };
+    (db, on)
 }
 
 /// The labelled, capped request one start attempt (named by `attempt`) sends.
@@ -539,15 +619,18 @@ fn valkey_request(attempt: &str) -> ContainerRequest<Valkey> {
         .with_ready_conditions(Vec::new())
 }
 
-/// Starts the gate image labelled, retried when its host port turns out to be taken.
-async fn start() -> ContainerAsync<Valkey> {
+/// Starts the gate image labelled and shaped by `shape`, retried when its host port turns out
+/// to be taken.
+async fn start(
+    shape: impl Fn(ContainerRequest<Valkey>) -> ContainerRequest<Valkey>,
+) -> ContainerAsync<Valkey> {
     let container = retry_start(|_| {
         let attempt = format!(
             "{}-{}",
             std::process::id(),
             NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
         );
-        let request = valkey_request(&attempt);
+        let request = shape(valkey_request(&attempt));
         async move {
             match request.start().await {
                 Ok(container) => Ok(container),

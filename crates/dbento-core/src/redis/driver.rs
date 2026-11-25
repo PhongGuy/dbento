@@ -14,9 +14,12 @@ use ::redis::{
     TlsCertificates, Value,
 };
 use pkcs8::der::pem::{self, LineEnding};
-use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject as _;
+use rustls::pki_types::{CertificateDer, ServerName};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 use super::browse::KeyBrowseError;
 use super::classify::redis_classification;
@@ -33,6 +36,7 @@ use crate::session::{
     CancelHandle, Classification, ConnectError, ConnectParams, Driver, ExecuteError, ExtendError,
     Flavor, Limits, OnTruncate, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem, Writes,
 };
+use crate::ssh::{Dialer, SshLink};
 use crate::value::ColumnInfo;
 use crate::workspace::{ConnectionConfig, TlsMode};
 
@@ -59,6 +63,17 @@ pub(crate) struct Shared {
     timeout: Option<Duration>,
     cancel: Arc<RedisCancel>,
     state: Mutex<State>,
+    /// The connection driver this session spawned itself, when it dialled over SSH.
+    _driver: Option<DriverTask>,
+}
+
+/// Aborts the spawned connection driver when the session's state drops.
+struct DriverTask(tokio::task::AbortHandle);
+
+impl Drop for DriverTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// What the server's connection state is, as far as the session has seen it.
@@ -421,18 +436,31 @@ impl Driver for RedisSession {
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
         let target = conn.display_target();
-        let client = client(conn, params.secret, params.key_passphrase)?;
         // The driver bounds each round trip itself: a multiplexed connection's response
         // timeout can be set later but never cleared.
         let config = AsyncConnectionConfig::new()
             .set_connection_timeout(Some(CONNECT_TIMEOUT))
             .set_response_timeout(None);
-        let mut connection = within(
-            &target,
-            client.get_multiplexed_async_connection_with_config(&config),
-        )
-        .await?
-        .map_err(|e| dial_error(conn, &target, e))?;
+        let (mut connection, driver) = match &params.dialer {
+            Dialer::Direct => {
+                let client = client(conn, params.secret, params.key_passphrase)?;
+                let connection = within(
+                    &target,
+                    client.get_multiplexed_async_connection_with_config(&config),
+                )
+                .await?
+                .map_err(|e| dial_error(conn, &target, e))?;
+                (connection, None)
+            }
+            Dialer::Ssh(link) => {
+                let (connection, task) = within(
+                    &target,
+                    tunneled(link, conn, params.secret, params.key_passphrase, config),
+                )
+                .await??;
+                (connection, Some(DriverTask(task.abort_handle())))
+            }
+        };
 
         // redis-rs discards its own HELLO's reply, so the server is asked again.
         let hello = handshake(
@@ -494,6 +522,7 @@ impl Driver for RedisSession {
                     db: Some(db_index(conn)?),
                     in_multi: false,
                 }),
+                _driver: driver,
             }),
             server,
             cancel,
@@ -727,6 +756,23 @@ pub(crate) fn client(
     let invalid = |e: RedisError| ConnectError::Open {
         message: format!("{}: {e}", conn.display_target()),
     };
+    let info = addr
+        .into_connection_info()
+        .map_err(invalid)?
+        .set_redis_settings(redis_settings(conn, secret)?);
+    match tls_certificates(conn, passphrase)? {
+        Some(certs) => {
+            Client::build_with_tls(info, certs).map_err(|e| tls_error(conn, e.to_string()))
+        }
+        None => Client::open(info).map_err(invalid),
+    }
+}
+
+/// RESP3, the DB index, the login and the library name, as `client` sets them.
+fn redis_settings(
+    conn: &ConnectionConfig,
+    secret: Option<&Secret>,
+) -> Result<RedisConnectionInfo, ConnectError> {
     let mut settings = RedisConnectionInfo::default()
         .set_protocol(ProtocolVersion::RESP3)
         .set_db(i64::from(db_index(conn)?))
@@ -737,15 +783,38 @@ pub(crate) fn client(
     if let Some(secret) = secret {
         settings = settings.set_password(secret.expose());
     }
-    let info = addr
-        .into_connection_info()
-        .map_err(invalid)?
-        .set_redis_settings(settings);
-    match tls_certificates(conn, passphrase)? {
-        Some(certs) => {
-            Client::build_with_tls(info, certs).map_err(|e| tls_error(conn, e.to_string()))
-        }
-        None => Client::open(info).map_err(invalid),
+    Ok(settings)
+}
+
+/// A connection over an SSH channel to the configured host, wrapped in TLS under
+/// `tls = "verify"`. redis-rs keeps its own driver guard private, so the driver is spawned
+/// here and its handle returned for the session to abort.
+async fn tunneled(
+    link: &SshLink,
+    conn: &ConnectionConfig,
+    secret: Option<&Secret>,
+    passphrase: Option<&Secret>,
+    config: AsyncConnectionConfig,
+) -> Result<(MultiplexedConnection, tokio::task::JoinHandle<()>), ConnectError> {
+    let target = conn.display_target();
+    let host = conn.host().unwrap_or("127.0.0.1");
+    let channel = link.channel(host, conn.port().unwrap_or(6379)).await?;
+    let settings = redis_settings(conn, secret)?;
+    let failed = |e| dial_error(conn, &target, e);
+    // The plain and TLS streams give two driver types, so each branch spawns its own.
+    if conn.tls() == Some(TlsMode::Verify) {
+        let stream = tls_wrap(conn, passphrase, channel).await?;
+        let (connection, driver) =
+            MultiplexedConnection::new_with_config(&settings, stream, config)
+                .await
+                .map_err(failed)?;
+        Ok((connection, tokio::spawn(driver)))
+    } else {
+        let (connection, driver) =
+            MultiplexedConnection::new_with_config(&settings, channel, config)
+                .await
+                .map_err(failed)?;
+        Ok((connection, tokio::spawn(driver)))
     }
 }
 
@@ -766,20 +835,7 @@ fn tls_certificates(
     if conn.tls() != Some(TlsMode::Verify) {
         return Ok(None);
     }
-    let root_cert = match conn.tls_ca() {
-        Some(path) => {
-            let fail = |e: String| tls_error(conn, format!("{}: {e}", path.display()));
-            let bytes = std::fs::read(path).map_err(|e| fail(e.to_string()))?;
-            let certs = CertificateDer::pem_slice_iter(&bytes)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| fail(e.to_string()))?;
-            if certs.is_empty() {
-                return Err(fail("no certificates".to_owned()));
-            }
-            Some(bytes)
-        }
-        None => None,
-    };
+    let root_cert = tls_ca(conn)?.map(|(bytes, _)| bytes);
     // client_auth answers Some only when both paths are set.
     let client_tls = match (
         client_auth(conn, passphrase)?,
@@ -812,6 +868,87 @@ fn tls_certificates(
         client_tls,
         root_cert,
     }))
+}
+
+/// A `tls_ca` file's PEM bytes and the certificates parsed from them.
+type CaFile = (Vec<u8>, Vec<CertificateDer<'static>>);
+
+/// The `tls_ca` file, `None` when it is unset; an unreadable or empty file is a `Tls` error
+/// naming it.
+fn tls_ca(conn: &ConnectionConfig) -> Result<Option<CaFile>, ConnectError> {
+    let Some(path) = conn.tls_ca() else {
+        return Ok(None);
+    };
+    let fail = |e: String| tls_error(conn, format!("{}: {e}", path.display()));
+    let bytes = std::fs::read(path).map_err(|e| fail(e.to_string()))?;
+    let certs = CertificateDer::pem_slice_iter(&bytes)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| fail(e.to_string()))?;
+    if certs.is_empty() {
+        return Err(fail("no certificates".to_owned()));
+    }
+    Ok(Some((bytes, certs)))
+}
+
+/// The rustls client config redis-rs would build for `conn` under `tls = "verify"`: the
+/// `tls_ca` certificates alone when set, else the OS roots, plus the client pair when given.
+fn tls_config(
+    conn: &ConnectionConfig,
+    passphrase: Option<&Secret>,
+) -> Result<rustls::ClientConfig, ConnectError> {
+    let fail = |e: String| tls_error(conn, e);
+    let mut roots = rustls::RootCertStore::empty();
+    let certs = match tls_ca(conn)? {
+        Some((_, certs)) => certs,
+        // Like redis-rs, any certificate the OS store fails to load fails the connect.
+        None => {
+            let native = rustls_native_certs::load_native_certs();
+            if let Some(e) = native.errors.first() {
+                return Err(fail(format!("the system root certificates: {e}")));
+            }
+            native.certs
+        }
+    };
+    for cert in certs {
+        roots
+            .add(cert)
+            .map_err(|e| fail(format!("a trusted root certificate: {e}")))?;
+    }
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| fail(e.to_string()))?
+    .with_root_certificates(roots);
+    match client_auth(conn, passphrase)? {
+        Some((chain, key)) => builder
+            .with_client_auth_cert(chain, key)
+            .map_err(|e| fail(e.to_string())),
+        None => Ok(builder.with_no_client_auth()),
+    }
+}
+
+/// TLS over `stream` under the configured host; a failed handshake is `Tls` naming both ways out.
+pub(super) async fn tls_wrap<S: AsyncRead + AsyncWrite + Unpin>(
+    conn: &ConnectionConfig,
+    passphrase: Option<&Secret>,
+    stream: S,
+) -> Result<TlsStream<S>, ConnectError> {
+    let config = tls_config(conn, passphrase)?;
+    let target = conn.display_target();
+    let host = conn.host().unwrap_or("127.0.0.1").to_owned();
+    let name = ServerName::try_from(host)
+        .map_err(|e| tls_error(conn, format!("{target}: {e}; {TLS_WAYS_OUT}")))?;
+    TlsConnector::from(Arc::new(config))
+        .connect(name, stream)
+        .await
+        .map_err(|e| {
+            let cause = e
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                .map_or_else(|| e.to_string(), ToString::to_string);
+            tls_error(conn, format!("{target}: {cause}; {TLS_WAYS_OUT}"))
+        })
 }
 
 /// `f`, or a failed connect when it has not finished within `CONNECT_TIMEOUT`.

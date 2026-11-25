@@ -340,6 +340,49 @@ pub async fn pg_client_cert() -> (PgDb, ClientCert) {
     (start(image, "localhost").await, client)
 }
 
+/// An engine container on an [`SshNet`]'s network, as the bastion reaches it.
+pub struct OnNetwork {
+    /// The container's name, which is its DNS name on the network.
+    pub alias: String,
+    /// The container's id, for [`published_ips`].
+    pub id: String,
+    /// The CA that signed the server's certificate, when it serves TLS.
+    pub ca_pem: Option<String>,
+}
+
+/// A server certificate for some names and a [`CERT_USER`] client certificate, one CA behind both.
+pub struct NamedTls {
+    /// The CA's PEM.
+    pub ca_pem: String,
+    /// The server certificate's PEM.
+    pub cert_pem: String,
+    /// The server key's PEM.
+    pub key_pem: String,
+    /// A client certificate the same CA signed.
+    pub client: ClientCert,
+}
+
+/// A fresh CA, a server certificate naming `names` and a client certificate, all from it.
+pub fn named_tls(names: &[&str]) -> NamedTls {
+    let tls = server_tls(names);
+    let client = client_cert(&tls);
+    NamedTls {
+        ca_pem: tls.ca_pem,
+        cert_pem: tls.cert_pem,
+        key_pem: tls.key_pem,
+        client,
+    }
+}
+
+/// A container name for `engine` unique to this process, usable as a DNS label.
+pub(crate) fn network_alias(engine: &str) -> String {
+    format!(
+        "dbento-{engine}-{}-{}",
+        std::process::id(),
+        NEXT_DB.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// A client certificate for [`CERT_USER`] that the CA behind `tls` signed.
 pub(crate) fn client_cert(tls: &ServerTls) -> ClientCert {
     let key = KeyPair::generate().expect("client key");
@@ -938,6 +981,24 @@ impl Listener {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_aliases_are_distinct_dns_labels() {
+        let (a, b) = (network_alias("mysql"), network_alias("mysql"));
+        assert_ne!(a, b);
+        for alias in [&a, &b] {
+            assert!(
+                alias.len() <= 63 && alias.starts_with("dbento-mysql-"),
+                "{alias}"
+            );
+            assert!(
+                alias
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{alias}"
+            );
+        }
+    }
 
     const TAKEN: &str = "Docker responded with status code 500: rootlessport listen tcp :34037: bind: address already in use";
 

@@ -15,9 +15,10 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use super::sshd::loopback_only;
 use super::{
-    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, RETRY_BACKOFF, remove_labelled, retry, retry_start,
-    server_tls, wait_ready,
+    ATTEMPT_LABEL, NEXT_ATTEMPT, NEXT_DB, OnNetwork, RETRY_BACKOFF, network_alias, remove_labelled,
+    retry, retry_start, server_tls, wait_ready,
 };
 
 /// The gate image's tag.
@@ -277,6 +278,35 @@ pub async fn surreal_db() -> SrDb {
             seeded(server(SURREAL_TAG, &all, |r| r).await, true).await
         }
     }
+}
+
+/// A fresh seeded container (caps allow all) on `network`, named a fresh alias, the URL
+/// variable ignored. Only port 8000 is published, on 127.0.0.1, where the `SrDb`'s own setup
+/// reaches it.
+pub async fn surreal_on(network: &str) -> (SrDb, OnNetwork) {
+    let alias = network_alias("surreal");
+    let all = [("SURREAL_CAPS_ALLOW_ALL".to_owned(), "true".to_owned())];
+    let db = server(SURREAL_TAG, &all, |r| {
+        // The modifier replaces server()'s, so it carries the memory cap too.
+        r.with_network(network.to_owned())
+            .with_container_name(alias.clone())
+            .with_host_config_modifier(|h| {
+                h.memory = Some(2 << 30);
+                loopback_only(h, &["8000/tcp"]);
+            })
+    })
+    .await;
+    let id = db
+        .container
+        .as_ref()
+        .map(|c| c.id().to_owned())
+        .unwrap_or_default();
+    let on = OnNetwork {
+        alias,
+        id,
+        ca_pem: None,
+    };
+    (seeded(db, true).await, on)
 }
 
 /// The three root-level logins of [`SR_LOGINS`], each `DEFINE USER OVERWRITE ... ON ROOT`, with
