@@ -54,7 +54,7 @@ pub(crate) enum Ctl {
         limits: Limits,
         /// Present under `OnTruncate::Park`: the worker waits on it at a row cut.
         resume: Option<std_mpsc::Receiver<Option<u64>>>,
-        /// The stop guard's generation for this statement, taken when it was sent.
+        /// The stop guard's generation for this statement, taken when it was prepared.
         generation: u64,
         /// The session's statement timeout, counted from the worker's `begin`.
         timeout: Option<Duration>,
