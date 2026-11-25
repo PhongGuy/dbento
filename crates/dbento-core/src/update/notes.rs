@@ -5,11 +5,15 @@ use std::cmp::Ordering;
 
 use semver::Version;
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 
-use super::NotesError;
+use super::fetch::{agent, local_override};
+use super::{Available, NotesAsset, NotesError, Timeouts};
 
 // The contract caps every text so a hostile or broken document cannot flood a dialog.
 const TEXT_CAP: usize = 500;
+// No notes file may be larger than this, whatever the manifest lists.
+const NOTES_CAP: u64 = 64 * 1024;
 
 #[derive(Deserialize)]
 struct RawDoc {
@@ -314,4 +318,66 @@ fn non_empty(s: Option<&str>) -> Option<String> {
 
 fn semver(s: &str) -> Result<Version, NotesError> {
     Version::parse(s).map_err(|e| NotesError::Invalid(format!("version {s:?}: {e}")))
+}
+
+/// Fetches the release notes the offer's manifest lists, at most min(size, 64 KiB), checks size
+/// and SHA-256 before parsing, and parses them. Absent notes are [`NotesError::NotPublished`]; a
+/// malformed manifest entry is [`NotesError::Invalid`]; an over-cap listing is
+/// [`NotesError::TooLarge`] and sends no request.
+pub async fn release_notes(a: &Available) -> Result<ReleaseNotes, NotesError> {
+    let asset = match &a.notes_asset {
+        None => return Err(NotesError::NotPublished),
+        Some(Err(message)) => return Err(NotesError::Invalid(message.clone())),
+        Some(Ok(asset)) => asset.clone(),
+    };
+    if asset.size > NOTES_CAP {
+        return Err(NotesError::TooLarge);
+    }
+    let timeouts = a.timeouts;
+    let bytes = tokio::task::spawn_blocking(move || fetch_notes(&asset, &timeouts))
+        .await
+        .map_err(|e| NotesError::Offline(format!("{:?}", e.to_string())))??;
+    ReleaseNotes::parse(&bytes)
+}
+
+// Same agent and http rule as the artifact download, so no new header or host appears. One
+// byte past the listed size is read, so a longer body is told apart from an exact one.
+fn fetch_notes(asset: &NotesAsset, timeouts: &Timeouts) -> Result<Vec<u8>, NotesError> {
+    let https_only = !local_override(&asset.url);
+    let response = agent(timeouts, timeouts.manifest, https_only)
+        .get(&asset.url)
+        .call()
+        .map_err(notes_transport)?;
+    if !response.status().is_success() {
+        return Err(NotesError::Http(response.status().as_u16()));
+    }
+    let bytes = response
+        .into_body()
+        .into_with_config()
+        .limit(asset.size + 1)
+        .read_to_vec()
+        .map_err(|e| {
+            if matches!(e, ureq::Error::BodyExceedsLimit(_)) {
+                NotesError::SizeMismatch
+            } else {
+                notes_transport(e)
+            }
+        })?;
+    if bytes.len() as u64 != asset.size {
+        return Err(NotesError::SizeMismatch);
+    }
+    if hex::encode(Sha256::digest(&bytes)) != asset.sha256 {
+        return Err(NotesError::HashMismatch);
+    }
+    Ok(bytes)
+}
+
+// A time limit is `Timeout`; anything else could not reach the server. The message may echo
+// the URL, so it is quoted with `{:?}` to keep control characters off a terminal.
+fn notes_transport(e: ureq::Error) -> NotesError {
+    if matches!(e, ureq::Error::Timeout(_)) {
+        NotesError::Timeout
+    } else {
+        NotesError::Offline(format!("{:?}", e.to_string()))
+    }
 }

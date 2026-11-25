@@ -198,7 +198,7 @@ fn download_transport(e: ureq::Error) -> DownloadError {
 }
 
 /// An `http` URL that still passes the URL rule: a loopback override for local testing.
-fn local_override(url: &str) -> bool {
+pub(crate) fn local_override(url: &str) -> bool {
     Url::parse(url).is_ok_and(|u| u.scheme() == "http" && allowed(&u))
 }
 

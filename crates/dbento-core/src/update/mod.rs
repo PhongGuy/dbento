@@ -22,7 +22,9 @@ pub use error::{CheckError, DownloadError, InstallError, NotesError};
 pub use fetch::{check, download};
 pub use install::{InstallKind, RELEASE_BUILD, Reason, install_kind};
 pub use manifest::evaluate;
-pub use notes::{Between, Group, Item, NotesKind, ReleaseEntry, ReleaseNotes, plain_text};
+pub use notes::{
+    Between, Group, Item, NotesKind, ReleaseEntry, ReleaseNotes, plain_text, release_notes,
+};
 pub use sign::verify_manifest;
 
 /// The signed release manifest; its signature is at the same URL plus `.sig`.
@@ -168,6 +170,16 @@ pub struct Available {
     sha256: String,
     size: u64,
     pub(crate) timeouts: Timeouts,
+    // Validated apart from the offer: a bad entry spoils only the notes, never the update.
+    pub(crate) notes_asset: Option<Result<NotesAsset, String>>,
+}
+
+/// The release notes file a manifest lists, already checked against the URL and digest rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NotesAsset {
+    pub(crate) url: String,
+    pub(crate) size: u64,
+    pub(crate) sha256: String,
 }
 
 impl Available {

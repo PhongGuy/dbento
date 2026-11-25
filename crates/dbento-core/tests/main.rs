@@ -185,6 +185,7 @@ mod update_install;
 mod update_install_kind;
 mod update_manifest;
 mod update_notes;
+mod update_notes_fetch;
 mod update_signature;
 mod update_support;
 mod workspace_watch;

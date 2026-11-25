@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use semver::Version;
 use serde::Deserialize;
 
-use super::{Available, CheckError, Format, UpdateConfig, allowed};
+use super::{Available, CheckError, Format, NotesAsset, UpdateConfig, allowed};
 
 // Unknown fields are ignored so later manifests can add to the format.
 #[derive(Deserialize)]
@@ -13,6 +13,9 @@ struct Manifest {
     version: String,
     pub_date: Option<String>,
     targets: BTreeMap<String, Entry>,
+    // Read raw so that a malformed entry cannot fail the whole document.
+    #[serde(default)]
+    notes_asset: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -60,8 +63,7 @@ pub fn evaluate(manifest: &[u8], cfg: &UpdateConfig) -> Result<Option<Available>
             entry.url
         )));
     }
-    let lower_hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
-    if entry.sha256.len() != 64 || !entry.sha256.chars().all(lower_hex) {
+    if !is_sha256(&entry.sha256) {
         return Err(invalid(format!(
             "sha256 {:?} is not 64 lowercase hex",
             entry.sha256
@@ -75,5 +77,39 @@ pub fn evaluate(manifest: &[u8], cfg: &UpdateConfig) -> Result<Option<Available>
         sha256: entry.sha256,
         size: entry.size,
         timeouts: cfg.timeouts,
+        notes_asset: doc.notes_asset.as_ref().and_then(notes_asset),
     }))
+}
+
+/// 64 lowercase hex characters, the only digest spelling the release writes.
+fn is_sha256(s: &str) -> bool {
+    let lower_hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+    s.len() == 64 && s.chars().all(lower_hex)
+}
+
+/// Checks a listed notes asset by the download's rules; JSON `null` counts as absent.
+fn notes_asset(v: &serde_json::Value) -> Option<Result<NotesAsset, String>> {
+    (!v.is_null()).then(|| checked_notes_asset(v))
+}
+
+// Messages quote echoed text with `{:?}`, so no control character from the manifest survives.
+fn checked_notes_asset(v: &serde_json::Value) -> Result<NotesAsset, String> {
+    let text = |name: &str| v.get(name).and_then(serde_json::Value::as_str);
+    let url = text("url").ok_or("the notes asset has no string url")?;
+    if !url::Url::parse(url).is_ok_and(|u| allowed(&u)) {
+        return Err(format!("the notes URL must be https: {url:?}"));
+    }
+    let size = v
+        .get("size")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("the notes asset has no integer size")?;
+    let sha256 = text("sha256").ok_or("the notes asset has no string sha256")?;
+    if !is_sha256(sha256) {
+        return Err(format!("notes sha256 {sha256:?} is not 64 lowercase hex"));
+    }
+    Ok(NotesAsset {
+        url: url.to_owned(),
+        size,
+        sha256: sha256.to_owned(),
+    })
 }
