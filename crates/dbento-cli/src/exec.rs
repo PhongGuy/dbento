@@ -82,28 +82,10 @@ pub(crate) async fn execute(
     // Ctrl-C is taken over first, so a press during a slow connect abandons it cleanly.
     let interrupt =
         Interrupt::install().map_err(|e| anyhow::Error::new(e).context("cannot handle Ctrl-C"))?;
-    let store = crate::secret::store();
-    let secret = resolve_secret(ws, conn, &store, &|v| std::env::var(v).ok())?;
-    options.key_passphrase = resolve_key_passphrase(ws, conn, &store, &|v| std::env::var(v).ok())?;
-    let supplied = secret.is_some();
-    let connected = tokio::select! {
-        r = connect(ws, conn, secret, options) => r,
-        () = interrupt.wait() => {
-            eprintln!("interrupted");
-            return Ok(Exit::Failed);
-        }
-    };
-    let session = match connected {
+    let session = match open(ws, conn, options, &interrupt).await {
         Ok(session) => session,
-        Err(e) => {
-            // Only a missing secret gets the hint; a wrong one is the server's to report.
-            let hint = if supplied {
-                None
-            } else {
-                crate::secret::connect_hint(ws, conn, &store)
-            };
-            return Err(crate::secret::with_hint(e, hint));
-        }
+        Err(e) if e.is::<Interrupted>() => return Ok(Exit::Failed),
+        Err(e) => return Err(e),
     };
     if let Some(w) = session.server_warning() {
         eprintln!("warning: {w}");
@@ -146,6 +128,48 @@ pub(crate) async fn execute(
         }
     };
     Ok(exit)
+}
+
+/// A Ctrl-C press abandoned the connect; `open` has already said so.
+#[derive(Debug)]
+pub(crate) struct Interrupted;
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("interrupted")
+    }
+}
+
+impl std::error::Error for Interrupted {}
+
+/// Resolves `conn`'s secrets and connects, abandoning the connect on Ctrl-C with
+/// [`Interrupted`]. A failure with no secret supplied carries the hint on how to supply one.
+pub(crate) async fn open(
+    ws: &Workspace,
+    conn: &ConnectionConfig,
+    mut options: SessionOptions,
+    interrupt: &Interrupt,
+) -> anyhow::Result<Session> {
+    let store = crate::secret::store();
+    let secret = resolve_secret(ws, conn, &store, &|v| std::env::var(v).ok())?;
+    options.key_passphrase = resolve_key_passphrase(ws, conn, &store, &|v| std::env::var(v).ok())?;
+    let supplied = secret.is_some();
+    let connected = tokio::select! {
+        r = connect(ws, conn, secret, options) => r,
+        () = interrupt.wait() => {
+            eprintln!("interrupted");
+            return Err(Interrupted.into());
+        }
+    };
+    connected.map_err(|e| {
+        // Only a missing secret gets the hint; a wrong one is the server's to report.
+        let hint = if supplied {
+            None
+        } else {
+            crate::secret::connect_hint(ws, conn, &store)
+        };
+        crate::secret::with_hint(e, hint)
+    })
 }
 
 /// What one run executes, and on which connection.
@@ -477,5 +501,30 @@ mod tests {
         );
         let notes = read_only_notes(Engine::Dynamodb, "orders", ReadOnlyEnforcement::BestEffort);
         assert_eq!(notes.len(), 2, "{notes:?}");
+    }
+
+    #[test]
+    fn the_s3_best_effort_note_names_iam_and_the_reader_actions() {
+        let note = best_effort_note(Engine::S3, "assets");
+        assert!(
+            note.contains("'assets'") && note.contains("best effort"),
+            "{note}"
+        );
+        for want in [
+            "IAM",
+            "s3:ListAllMyBuckets",
+            "s3:ListBucket",
+            "s3:GetObject",
+        ] {
+            assert!(note.contains(want), "{want}: {note}");
+        }
+        assert!(
+            !note.contains("read_only_user") && !note.contains("SQL Server"),
+            "{note}"
+        );
+        assert_eq!(
+            read_only_notes(Engine::S3, "assets", ReadOnlyEnforcement::BestEffort).len(),
+            2
+        );
     }
 }

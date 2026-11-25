@@ -33,6 +33,7 @@ fn commit_writes_the_edit_and_runs_the_browse_again(cx: &mut TestAppContext) {
         vec![Change::Update {
             key: RowKey::new(vec![("id".into(), EditValue::Text("1".into()))]),
             set: vec![("name".into(), EditValue::Text("z".into()))],
+            expected: vec![],
         }],
     )
     .unwrap();

@@ -14,7 +14,7 @@ workspace = true
 mysql_async.workspace = true
 rusqlite.workspace = true
 sqlite3-parser.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-postgres.workspace = true
 pg_query.workspace = true
 sqlparser.workspace = true
@@ -97,7 +97,12 @@ dynamodb = [
     "dbento-testkit/dynamodb",
 ]
 # The S3 object browser: the AWS SDK over ring rustls, without aws-config.
-s3 = ["dep:aws-sdk-s3", "dep:aws-smithy-http-client", "dep:aws-smithy-runtime-api"]
+s3 = [
+    "dep:aws-sdk-s3",
+    "dep:aws-smithy-http-client",
+    "dep:aws-smithy-runtime-api",
+    "dbento-testkit/s3",
+]
 # The platform keychain as a SecretStore.
 keychain = [
     "dep:keyring-core",

@@ -30,6 +30,7 @@ fn update(id: &str, set: &[(&str, EditValue)]) -> Change {
     Change::Update {
         key: row_key(&[("id", val(id))]),
         set: pairs(set),
+        expected: vec![],
     }
 }
 
@@ -48,6 +49,7 @@ fn changes_for_t() -> Vec<Change> {
         },
         Change::Delete {
             key: row_key(&[("id", val("2"))]),
+            expected: vec![],
         },
     ]
 }
@@ -96,6 +98,7 @@ async fn rowid_tables_are_edited_through_their_alias() {
             vec![Change::Update {
                 key: row_key(&[("rowid", val("1"))]),
                 set: pairs(&[("b", val("z"))]),
+                expected: vec![],
             }],
         )
         .await
@@ -108,6 +111,7 @@ async fn rowid_tables_are_edited_through_their_alias() {
             vec![Change::Update {
                 key: row_key(&[("_rowid_", val("1"))]),
                 set: pairs(&[("b", val("2"))]),
+                expected: vec![],
             }],
         )
         .await
@@ -130,6 +134,7 @@ async fn null_text_keys_match_together_and_are_ambiguous() {
             vec![Change::Update {
                 key: row_key(&[("k", EditValue::Null)]),
                 set: pairs(&[("v", val("9"))]),
+                expected: vec![],
             }],
         )
         .await,
@@ -278,6 +283,7 @@ async fn untyped_keys_match_numbers_by_value() {
         .map(|r| Change::Update {
             key: RowKey::new(vec![("k".to_owned(), edit_value(&r[0]))]),
             set: pairs(&[("v", val("1"))]),
+            expected: vec![],
         })
         .collect();
     let applied = fx.apply_changes(&target, changes).await.unwrap();
@@ -356,6 +362,7 @@ async fn the_sqlite_torture_rows_round_trip_by_text() {
         vec![Change::Update {
             key: row_key(&[("id", val("11"))]),
             set: nulls,
+            expected: vec![],
         }],
     )
     .await
@@ -378,6 +385,7 @@ async fn the_sqlite_torture_rows_round_trip_by_text() {
             .map(|r| Change::Update {
                 key: RowKey::new(vec![("k".to_owned(), edit_value(&r[0]))]),
                 set: pairs(&[("v", val("1"))]),
+                expected: vec![],
             })
             .collect();
         let applied = fx.apply_changes(&target, changes).await.unwrap();
@@ -419,12 +427,14 @@ async fn typed_literals_run_directly_store_what_apply_stores_on_sqlite() {
                 ("s", val("4")),
                 ("u", val("5")),
             ]),
+            expected: vec![],
         },
         Change::Insert {
             values: pairs(&[("id", val("3")), ("n", val("007"))]),
         },
         Change::Delete {
             key: row_key(&[("id", val("2"))]),
+            expected: vec![],
         },
     ];
     let batch = EditBatch::new(target, changes).unwrap();

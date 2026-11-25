@@ -3,6 +3,8 @@
 mod cell;
 mod confirm;
 mod csv;
+#[cfg(feature = "s3")]
+mod download;
 mod exec;
 mod import;
 mod interrupt;
@@ -86,6 +88,9 @@ enum Command {
         #[command(flatten)]
         exec: exec::ExecArgs,
     },
+    /// Download one S3 object to a file, refusing to overwrite it unless `--force` is given.
+    #[cfg(feature = "s3")]
+    Download(download::DownloadArgs),
     /// Import connections and saved queries from another tool.
     Import {
         #[command(subcommand)]
@@ -348,6 +353,14 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
                 anyhow::bail!(why);
             }
             return exec::execute(&ws, &config, &sql, &exec).await;
+        }
+        #[cfg(feature = "s3")]
+        Command::Download(args) => {
+            let ws = open_workspace(cli.workspace.as_deref())?;
+            let config = ws
+                .resolve(args.conn())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return download::download(&ws, &config, &args).await;
         }
         Command::Import {
             source: ImportSource::Datagrip(args),

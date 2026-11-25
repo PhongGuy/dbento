@@ -162,13 +162,18 @@ mod duckdb;
 mod dynamo;
 mod s3;
 pub use s3::names::{display_key, suggested_file_name};
+pub use s3::{
+    DEFAULT_MAX_DOWNLOAD, DownloadError, DownloadOptions, DownloadReport, MAX_READ_BYTES,
+    ObjectBrowseError, ObjectChunk, ObjectCursor, ObjectKey, ObjectList, ObjectMeta, ObjectPage,
+    ObjectRead,
+};
 mod sqlite;
 
 mod rowedit;
 pub use rowedit::{
     Applied, ApplyError, BatchError, Browse, BrowseError, Change, ChangeOutcome, EditBatch,
-    EditColumn, EditTarget, EditValue, Keyset, NotEditable, RowKey, Sort, apply, apply_with,
-    browse_sql, key_filter, render_sql,
+    EditColumn, EditTarget, EditValue, Keyset, NotEditable, RereadError, RowKey, Sort, apply,
+    apply_with, browse_sql, key_filter, render_sql, reread,
 };
 
 pub mod import;

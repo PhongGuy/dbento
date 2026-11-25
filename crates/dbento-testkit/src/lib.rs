@@ -29,11 +29,15 @@ mod duck;
 mod dynamo;
 #[cfg(feature = "mongodb")]
 mod mongo;
+#[cfg(any(feature = "dynamodb", feature = "s3"))]
+mod moto;
 mod mssql;
 mod mysql;
 pub mod potluck;
 #[cfg(feature = "redis")]
 mod redis;
+#[cfg(feature = "s3")]
+mod s3;
 mod sshd;
 mod surreal;
 #[cfg(feature = "redis")]
@@ -44,8 +48,12 @@ pub use duck::duckdb_file;
 pub use dynamo::*;
 #[cfg(feature = "mongodb")]
 pub use mongo::*;
+#[cfg(any(feature = "dynamodb", feature = "s3"))]
+pub use moto::{DySource, MOTO_TAG, dy_source};
 pub use mssql::*;
 pub use mysql::*;
+#[cfg(feature = "s3")]
+pub use s3::*;
 pub use sshd::*;
 pub use surreal::*;
 

@@ -290,17 +290,19 @@ pub(crate) async fn pg_edit_target(
     Ok(target)
 }
 
-/// The settings that shape a type's output and input text, beyond those fixed at startup.
-const PG_PINNED: [&str; 5] = [
+/// The browse session's settings that shape a type's output and input text.
+const PG_PINNED: [&str; 6] = [
     "DateStyle",
     "IntervalStyle",
     "TimeZone",
     "extra_float_digits",
     "lc_monetary",
+    "bytea_output",
 ];
 const PG_PINNED_SQL: &str = "SELECT pg_catalog.current_setting('DateStyle'), \
 pg_catalog.current_setting('IntervalStyle'), pg_catalog.current_setting('TimeZone'), \
-pg_catalog.current_setting('extra_float_digits'), pg_catalog.current_setting('lc_monetary')";
+pg_catalog.current_setting('extra_float_digits'), pg_catalog.current_setting('lc_monetary'), \
+pg_catalog.current_setting('bytea_output')";
 
 /// Describes a SQLite table or view for editing; an unknown schema or relation is `Unexpected`.
 pub(crate) async fn sqlite_edit_target(
@@ -558,6 +560,36 @@ pub(crate) fn mysql_inexact(meta: &ColumnMeta) -> bool {
         .next()
         .unwrap_or_default();
     base.eq_ignore_ascii_case("float") || base.eq_ignore_ascii_case("bit")
+}
+
+/// Whether a MySQL column's values always come back as bytes, the rule the driver's decoder
+/// applies: BIT, VECTOR, the geometry types and the binary string types.
+pub(crate) fn mysql_bytes(meta: &ColumnMeta) -> bool {
+    const BYTES: [&str; 17] = [
+        "bit",
+        "vector",
+        "binary",
+        "varbinary",
+        "tinyblob",
+        "blob",
+        "mediumblob",
+        "longblob",
+        "geometry",
+        "point",
+        "linestring",
+        "polygon",
+        "multipoint",
+        "multilinestring",
+        "multipolygon",
+        "geometrycollection",
+        "geomcollection",
+    ];
+    let base = meta
+        .type_name()
+        .split(['(', ' '])
+        .next()
+        .unwrap_or_default();
+    BYTES.iter().any(|b| base.eq_ignore_ascii_case(b))
 }
 
 /// The identity columns: PRIMARY wherever it sits, else the first given unique index whose

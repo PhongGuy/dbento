@@ -3,11 +3,10 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use aws_sdk_dynamodb::types::AttributeValue;
-use tokio::sync::watch;
 
 use super::client::{DynamoClient, StatementRequest};
 use super::columns::{self, ColumnModel, Item};
@@ -19,51 +18,7 @@ use crate::session::{
 };
 use crate::value::{BatchBuilder, ColumnInfo, MAX_BATCH_BYTES};
 
-/// Cancels by generation: `cancel` bumps it, a delivered cancel or `spend` spends it.
-#[derive(Debug)]
-pub(crate) struct DynamoCancel {
-    generation: watch::Sender<u64>,
-    spent: AtomicU64,
-}
-
-impl DynamoCancel {
-    pub(crate) fn new() -> Self {
-        DynamoCancel {
-            generation: watch::Sender::new(0),
-            spent: AtomicU64::new(0),
-        }
-    }
-
-    pub(crate) fn cancel(&self) {
-        // `send_modify` counts the cancel even with no statement listening.
-        self.generation.send_modify(|g| *g += 1);
-    }
-
-    pub(crate) fn spend(&self) {
-        let generation = *self.generation.borrow();
-        self.spent.store(generation, Ordering::Relaxed);
-    }
-
-    /// `Err(Cancelled)` at once for an unspent cancel, or when one arrives while `f` runs, which
-    /// drops `f`.
-    pub(crate) async fn guard<F: Future>(&self, f: F) -> Result<F::Output, ExecuteError> {
-        let mut generation = self.generation.subscribe();
-        // Discards `wait_for`'s reply here: it holds the channel's lock, which `spend` needs.
-        let cancelled = async {
-            let unspent = |g: &u64| *g != self.spent.load(Ordering::Relaxed);
-            let _ = generation.wait_for(unspent).await;
-        };
-        // Biased so an unspent cancel wins before `f` is first polled, and nothing is sent.
-        tokio::select! {
-            biased;
-            () = cancelled => {
-                self.spend();
-                Err(ExecuteError::Cancelled)
-            }
-            out = f => Ok(out),
-        }
-    }
-}
+pub(crate) use crate::aws::AwsCancel as DynamoCancel;
 
 /// What a session and its streams share.
 pub(crate) struct Shared {

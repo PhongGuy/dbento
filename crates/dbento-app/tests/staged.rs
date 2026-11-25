@@ -1,8 +1,8 @@
 //! The staged edit set and the words the save flow shows.
 use crate::support::{edit_target, fixture};
 use dbento_app::staged::{
-    GridRow, PREVIEW_LINES, RowEdit, StagedEdits, commit_error_text, edit_value, outcome_text,
-    pending_label, preview, prompt_detail, prompt_title, rejection_text, row_key,
+    GridRow, PREVIEW_LINES, RowEdit, StagedEdits, cell_of, commit_error_text, edit_value,
+    outcome_text, pending_label, preview, prompt_detail, prompt_title, rejection_text, row_key,
 };
 use dbento_core::{
     ApplyError, CellRef, Change, ChangeOutcome, EditBatch, EditValue, ExecuteError, RelationRef,
@@ -43,10 +43,12 @@ fn one_change_per_row_with_set_columns_in_grid_order() {
             Change::Update {
                 key: key("1"),
                 set: vec![("name".into(), text("y"))],
+                expected: vec![("name".into(), text("b"))],
             },
             Change::Update {
                 key: key("3"),
                 set: vec![("name".into(), text("x")), ("note".into(), text("n"))],
+                expected: vec![("name".into(), text("c")), ("note".into(), EditValue::Null)],
             },
         ]
     );
@@ -56,12 +58,24 @@ fn one_change_per_row_with_set_columns_in_grid_order() {
 fn a_delete_replaces_the_rows_cell_edits_and_refuses_later_ones() {
     let mut s = StagedEdits::default();
     s.stage(1, key("2"), 1, "name", &text("a"), text("q"));
-    s.delete(1, key("2"));
-    assert_eq!(s.row(1), Some(&RowEdit::Delete { key: key("2") }));
+    s.delete(1, key("2"), vec![]);
+    assert_eq!(
+        s.row(1),
+        Some(&RowEdit::Delete {
+            key: key("2"),
+            expected: vec![]
+        })
+    );
     assert!(s.is_deleted(1));
     assert_eq!(s.cell(1, 1), None);
     assert!(!s.stage(1, key("2"), 1, "name", &text("a"), text("r")));
-    assert_eq!(s.changes().0, vec![Change::Delete { key: key("2") }]);
+    assert_eq!(
+        s.changes().0,
+        vec![Change::Delete {
+            key: key("2"),
+            expected: vec![]
+        }]
+    );
     assert_eq!(s.len(), 1);
 }
 
@@ -69,8 +83,8 @@ fn a_delete_replaces_the_rows_cell_edits_and_refuses_later_ones() {
 fn outcomes_mark_their_rows_until_cleared() {
     let mut s = StagedEdits::default();
     s.stage(0, key("1"), 1, "name", &text("b"), text("y"));
-    s.delete(4, key("5"));
-    s.delete(6, key("7"));
+    s.delete(4, key("5"), vec![]);
+    s.delete(6, key("7"), vec![]);
     let (_, rows) = s.changes();
     s.set_outcomes(
         &rows,
@@ -133,7 +147,7 @@ fn staged_changes_make_a_valid_batch() {
     );
     let mut s = StagedEdits::default();
     s.stage(0, key("1"), 1, "name", &text("b"), text("z"));
-    s.delete(3, key("4"));
+    s.delete(3, key("4"), vec![]);
     assert!(EditBatch::new(edit_target(&fx, "t"), s.changes().0).is_ok());
 }
 
@@ -249,4 +263,144 @@ fn the_preview_shows_built_in_casts_unqualified_and_leaves_literals_alone() {
          m = 'ok'::public.mood, \"pg_catalog.text\" = E'\\\\'''::varchar \
          WHERE ctid = '(0,2)'::tid;"
     );
+}
+
+#[test]
+fn an_update_expects_the_loaded_value_of_each_set_column() {
+    let mut s = StagedEdits::default();
+    s.stage(2, key("3"), 2, "note", &EditValue::Null, text("n"));
+    s.stage(2, key("3"), 1, "name", &text("c"), text("x"));
+    s.stage(2, key("3"), 1, "name", &text("c"), text("x2"));
+    assert_eq!(
+        s.changes().0,
+        vec![Change::Update {
+            key: key("3"),
+            set: vec![("name".into(), text("x2")), ("note".into(), text("n"))],
+            expected: vec![("name".into(), text("c")), ("note".into(), EditValue::Null)],
+        }]
+    );
+}
+
+#[test]
+fn an_unstaged_cell_drops_its_expected_value() {
+    let only_name = vec![Change::Update {
+        key: key("1"),
+        set: vec![("name".into(), text("z"))],
+        expected: vec![("name".into(), text("b"))],
+    }];
+    let mut s = StagedEdits::default();
+    s.stage(0, key("1"), 1, "name", &text("b"), text("z"));
+    s.stage(0, key("1"), 2, "note", &EditValue::Null, text("n"));
+    assert!(s.revert_cell(0, 2));
+    assert_eq!(s.changes().0, only_name);
+    s.stage(0, key("1"), 2, "note", &EditValue::Null, text("n"));
+    s.stage(0, key("1"), 2, "note", &EditValue::Null, EditValue::Null);
+    assert_eq!(s.changes().0, only_name);
+}
+
+#[test]
+fn a_delete_expects_the_loaded_columns_it_was_given() {
+    let loaded: Vec<(String, EditValue)> = vec![
+        ("id".into(), text("2")),
+        ("name".into(), text("a")),
+        ("note".into(), EditValue::Null),
+    ];
+    let mut s = StagedEdits::default();
+    s.stage(1, key("2"), 1, "name", &text("a"), text("q"));
+    s.delete(1, key("2"), loaded.clone());
+    assert_eq!(
+        s.row(1),
+        Some(&RowEdit::Delete {
+            key: key("2"),
+            expected: loaded.clone()
+        })
+    );
+    assert_eq!(
+        s.changes().0,
+        vec![Change::Delete {
+            key: key("2"),
+            expected: loaded
+        }]
+    );
+}
+
+#[test]
+fn a_baseline_replaces_the_staged_values_of_the_guarded_columns() {
+    let mut s = StagedEdits::default();
+    s.stage(0, key("1"), 1, "name", &text("b"), text("mine"));
+    s.delete(
+        1,
+        key("2"),
+        vec![("id".into(), text("2")), ("name".into(), text("a"))],
+    );
+    s.rebaseline(
+        0,
+        vec![
+            ("id".into(), text("1")),
+            ("name".into(), text("theirs")),
+            ("note".into(), EditValue::Null),
+        ],
+    );
+    s.rebaseline(
+        1,
+        vec![
+            ("id".into(), text("2")),
+            ("name".into(), text("a2")),
+            ("note".into(), text("x")),
+        ],
+    );
+    assert_eq!(
+        s.changes().0,
+        vec![
+            Change::Update {
+                key: key("1"),
+                set: vec![("name".into(), text("mine"))],
+                expected: vec![("name".into(), text("theirs"))],
+            },
+            Change::Delete {
+                key: key("2"),
+                expected: vec![("id".into(), text("2")), ("name".into(), text("a2"))],
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_baseline_outlives_reverts_but_not_clear() {
+    let mut s = StagedEdits::default();
+    s.stage(0, key("1"), 1, "name", &text("b"), text("mine"));
+    s.rebaseline(0, vec![("name".into(), text("theirs"))]);
+    assert!(s.revert_cell(0, 1));
+    assert!(s.is_empty());
+    assert_eq!(
+        s.baseline(0),
+        Some(&[("name".to_string(), text("theirs"))][..])
+    );
+    s.stage(0, key("1"), 1, "name", &text("b"), text("mine2"));
+    assert_eq!(
+        s.changes().0,
+        vec![Change::Update {
+            key: key("1"),
+            set: vec![("name".into(), text("mine2"))],
+            expected: vec![("name".into(), text("theirs"))],
+        }]
+    );
+    assert!(s.revert_row(0));
+    assert!(s.baseline(0).is_some());
+    s.clear();
+    assert_eq!(s.baseline(0), None);
+    assert_eq!(s, StagedEdits::default());
+}
+
+#[test]
+fn an_edit_value_reads_back_as_the_cell_it_came_from() {
+    for cell in [
+        CellRef::Null,
+        CellRef::Text("q"),
+        CellRef::Bytes(b"\x00\xff"),
+    ] {
+        let value = edit_value(cell).unwrap();
+        assert_eq!(cell_of(&value), Some(cell));
+    }
+    assert_eq!(cell_of(&EditValue::Default), None);
 }
