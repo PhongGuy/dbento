@@ -1,6 +1,4 @@
 //! Region, credential and HTTP helpers shared by the AWS engines.
-// With only S3, nothing calls these until its driver lands.
-#![cfg_attr(not(feature = "dynamodb"), allow(dead_code, unused_imports))]
 
 mod cancel;
 mod creds;
