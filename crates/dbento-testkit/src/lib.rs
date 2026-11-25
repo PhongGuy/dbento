@@ -375,10 +375,6 @@ pub fn named_tls(names: &[&str]) -> NamedTls {
 }
 
 /// A container name for `engine` unique to this process, usable as a DNS label.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the engine fixtures on an SshNet are its callers")
-)]
 pub(crate) fn network_alias(engine: &str) -> String {
     format!(
         "dbento-{engine}-{}-{}",

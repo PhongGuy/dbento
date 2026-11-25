@@ -746,7 +746,7 @@ pub async fn connect(
     // engine without a tunnelled driver yet is refused before anything is dialled.
     let ssh = match conn.ssh() {
         None => None,
-        Some(_) if conn.engine() != Engine::Postgres => {
+        Some(_) if ![Engine::Postgres, Engine::Mssql].contains(&conn.engine()) => {
             return Err(ConnectError::SshUnsupported {
                 message: format!(
                     "SSH tunnels for {} are not available yet",

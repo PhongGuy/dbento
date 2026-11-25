@@ -17,13 +17,14 @@ use tiberius::error::TokenError;
 use tiberius::{AttentionHandle, AuthMethod, Config, EncryptionLevel};
 use tokio::sync::{Notify, mpsc, oneshot};
 
+use crate::Secret;
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
 use crate::session::{
     CancelHandle, ConnectError, ConnectParams, Driver, ExecuteError, ExtendError, Limits,
     OnTruncate, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem,
 };
 use crate::value::ColumnInfo;
-use crate::workspace::TlsMode;
+use crate::workspace::{ConnectionConfig, TlsMode};
 use conn::{Ctl, Event, Request};
 
 /// TCP, login and the version query share this bound, as MySQL's connect does.
@@ -281,31 +282,13 @@ impl Driver for MssqlDriver {
 
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
-        let mut config = Config::new();
-        config.host(conn.host().unwrap_or("localhost"));
-        config.port(conn.port().unwrap_or(1433));
-        if let Some(database) = conn.database() {
-            config.database(database);
-        }
-        config.authentication(AuthMethod::sql_server(
-            conn.user().unwrap_or_default(),
-            params.secret.map_or("", |s| s.expose()),
-        ));
-        // Off still encrypts the login packet, so its certificate is taken as it comes.
-        match conn.tls() {
-            Some(TlsMode::Off) => {
-                config.encryption(EncryptionLevel::Off);
-                config.trust_cert();
-            }
-            Some(TlsMode::Verify) | None => {
-                config.encryption(EncryptionLevel::Required);
-                if let Some(ca) = conn.tls_ca() {
-                    config.trust_cert_ca(ca.display());
-                }
-            }
-        }
-        config.command_timeout(None);
-        config.application_name("dbento");
+        let config = tiberius_config(conn, params.secret);
+        // The socket goes where tiberius would open it itself: no host or "." is the local server.
+        let dial_host = match conn.host() {
+            None | Some(".") => "localhost",
+            Some(h) => h,
+        };
+        let dial = (dial_host.to_owned(), conn.port().unwrap_or(1433));
         let host = conn.host().unwrap_or_default().to_owned();
         let reader = conn
             .read_only_user()
@@ -319,8 +302,15 @@ impl Driver for MssqlDriver {
             reader,
             settings_changed: Arc::clone(&settings_changed),
         };
-        let (requests, server, cancel) =
-            conn::start(config, host, conn.display_target(), rules).await?;
+        let (requests, server, cancel) = conn::start(
+            config,
+            host,
+            dial,
+            conn.display_target(),
+            rules,
+            params.dialer.clone(),
+        )
+        .await?;
         Ok(MssqlDriver {
             requests,
             server,
@@ -444,6 +434,37 @@ impl Driver for MssqlDriver {
     fn read_only_level(&self, requested: bool) -> Option<ReadOnlyEnforcement> {
         requested.then(|| self.enforcement())
     }
+}
+
+/// The tiberius settings for `conn`: the configured host stays both the address and the TLS
+/// name, whichever way the socket is dialled.
+fn tiberius_config(conn: &ConnectionConfig, secret: Option<&Secret>) -> Config {
+    let mut config = Config::new();
+    config.host(conn.host().unwrap_or("localhost"));
+    config.port(conn.port().unwrap_or(1433));
+    if let Some(database) = conn.database() {
+        config.database(database);
+    }
+    config.authentication(AuthMethod::sql_server(
+        conn.user().unwrap_or_default(),
+        secret.map_or("", |s| s.expose()),
+    ));
+    // Off still encrypts the login packet, so its certificate is taken as it comes.
+    match conn.tls() {
+        Some(TlsMode::Off) => {
+            config.encryption(EncryptionLevel::Off);
+            config.trust_cert();
+        }
+        Some(TlsMode::Verify) | None => {
+            config.encryption(EncryptionLevel::Required);
+            if let Some(ca) = conn.tls_ca() {
+                config.trust_cert_ca(ca.display());
+            }
+        }
+    }
+    config.command_timeout(None);
+    config.application_name("dbento");
+    config
 }
 
 /// A failed login as a `ConnectError`: a refused certificate is `Tls` with the fix in Dbento's
@@ -687,5 +708,39 @@ mod tests {
             | ConnectError::SshHostKeyChanged { .. }
             | ConnectError::SshTunnel { .. }) => panic!("{other:?}"),
         }
+    }
+
+    fn declared(keys: &str) -> (tempfile::TempDir, crate::Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "dbento = 1\n[connections.m]\nengine = \"mssql\"\nhost = \"db.internal\"\nuser = \"u\"\nsecret = \"none\"\n{keys}\n"
+        );
+        std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+        let ws = crate::Workspace::open(dir.path()).unwrap();
+        (dir, ws)
+    }
+
+    #[test]
+    fn the_config_keeps_the_configured_host_as_address_and_tls_name() {
+        let (_d, ws) = declared("tls = \"verify\"");
+        let config = tiberius_config(ws.declared("m").unwrap(), None);
+        assert_eq!(config.get_addr(), "db.internal:1433");
+        let shown = format!("{config:?}");
+        assert!(shown.contains("host: Some(\"db.internal\")"), "{shown}");
+        assert!(shown.contains("hostname_in_certificate: None"), "{shown}");
+    }
+
+    #[test]
+    fn an_ssh_table_leaves_the_config_unchanged() {
+        let (_d, direct) = declared("tls = \"verify\"");
+        let (_e, tunneled) = declared(
+            "tls = \"verify\"\n[connections.m.ssh]\nhost = \"bastion.example\"\nuser = \"me\"\nauth = \"password\"",
+        );
+        let a = format!("{:?}", tiberius_config(direct.declared("m").unwrap(), None));
+        let b = format!(
+            "{:?}",
+            tiberius_config(tunneled.declared("m").unwrap(), None)
+        );
+        assert_eq!(a, b);
     }
 }

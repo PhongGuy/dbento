@@ -166,6 +166,7 @@ mod ssh_auth;
 mod ssh_host_keys;
 mod ssh_known_hosts;
 mod ssh_link;
+mod ssh_mssql;
 mod ssh_postgres;
 mod ssh_resolve;
 mod ssh_secrets;
