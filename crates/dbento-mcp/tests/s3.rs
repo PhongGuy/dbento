@@ -4,6 +4,7 @@
 #![cfg(feature = "s3")]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::common::{TestServer, text, unfence};
 use dbento_testkit::{S3_ACCESS_KEY, S3_SECRET_VAR};
@@ -261,5 +262,161 @@ async fn a_sqlite_result_named_like_cat_is_still_cut() {
         r["rows"][0][0]["text"].as_str().map(str::len),
         Some(4 << 10),
         "the generic 4 KiB cut"
+    );
+}
+
+#[tokio::test]
+async fn the_listing_and_the_tools_speak_of_s3() {
+    let stub = stub(0).await;
+    let server = TestServer::s3_toml(&stub_toml(&stub.endpoint, ""), |o| o).await;
+    let list = server.ok("list_connections", json!({})).await;
+    let c = &list["connections"][0];
+    assert_eq!(
+        (&c["engine"], &c["language"], &c["read_only_enforcement"]),
+        (&json!("s3"), &json!("S3 commands"), &json!("best_effort")),
+        "{c}"
+    );
+    assert!(
+        c["session"].as_str().unwrap().contains("s3:GetObject"),
+        "{c}"
+    );
+    let tools = server.tools().await;
+    let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "describe_table",
+            "execute",
+            "explain",
+            "list_connections",
+            "list_databases",
+            "list_saved_queries",
+            "list_schemas",
+            "list_tables",
+            "query",
+            "read_saved_query"
+        ],
+        "no tool downloads or reaches the disk"
+    );
+    let about = |name: &str| {
+        let t = tools.iter().find(|t| t.name == name).unwrap();
+        t.description.as_deref().unwrap().to_owned()
+    };
+    assert!(about("list_connections").contains("s3"), "list_connections");
+    let schemas = about("list_schemas");
+    assert!(
+        schemas.contains("S3") && schemas.contains("bucket"),
+        "{schemas}"
+    );
+    let query = about("query");
+    for word in [
+        "S3",
+        "ls -r",
+        "stat",
+        "cat",
+        "s3://",
+        "''",
+        "size",
+        "truncated",
+    ] {
+        assert!(query.contains(word), "{word}: {query}");
+    }
+    for tool in ["explain", "execute"] {
+        assert!(about(tool).contains("S3"), "{tool}: {}", about(tool));
+    }
+    for tool in ["list_saved_queries", "read_saved_query"] {
+        assert!(about(tool).contains(".s3"), "{tool}: {}", about(tool));
+    }
+    let says = server.instructions().unwrap_or_default();
+    assert!(says.contains(".s3") && says.contains("ls 's3://"), "{says}");
+    assert_eq!(
+        stub.seen.load(Ordering::SeqCst),
+        0,
+        "listing never connects"
+    );
+}
+
+#[tokio::test]
+async fn execute_and_explain_turn_s3_commands_away_and_a_saved_s3_query_reads() {
+    let stub = stub(usize::MAX).await;
+    let toml = stub_toml(&stub.endpoint, "buckets = [\"logs\"]").replace("read_only = true\n", "");
+    let server = TestServer::s3_toml(&toml, |o| o).await;
+    let ls = "ls 's3://logs/'";
+    let e = server.err("execute", q(ls)).await;
+    assert_eq!(e["code"], "not_a_write", "{e}");
+    let e = server.err("explain", q(ls)).await;
+    assert_eq!(e["code"], "unsupported", "{e}");
+    std::fs::create_dir_all(server.root().join("queries/ob")).unwrap();
+    std::fs::write(server.root().join("queries/ob/list.s3"), ls).unwrap();
+    let r = server
+        .ok("read_saved_query", json!({"path": "queries/ob/list.s3"}))
+        .await;
+    assert_eq!(
+        (&r["connection"], &r["sql"]),
+        (&json!("ob"), &json!(ls)),
+        "{r}"
+    );
+}
+
+#[tokio::test]
+async fn a_listing_stops_at_max_rows_or_at_the_byte_budget() {
+    let s3 = dbento_testkit::s3_moto().await;
+    let pad = "k".repeat(250);
+    for i in 0..300 {
+        s3.put(&format!("wide/{i:03}-{pad}"), b"w".to_vec(), None)
+            .await;
+    }
+    let server = TestServer::s3(&s3, "read_only = true").await;
+    let ls = format!("ls -r 's3://{}/wide/'", s3.bucket());
+    let r = server
+        .ok(
+            "query",
+            json!({"connection": "ob", "sql": ls.as_str(), "max_rows": 50}),
+        )
+        .await;
+    assert_eq!(
+        (&r["row_count"], &r["truncated"], &r["truncated_by"]),
+        (&json!(50), &json!(true), &json!("rows")),
+        "{}",
+        r["truncated_by"]
+    );
+    assert_eq!(r["rows"][0][1], format!("wide/000-{pad}"), "listing order");
+    let r = server
+        .ok(
+            "query",
+            json!({"connection": "ob", "sql": ls.as_str(), "max_rows": 1000}),
+        )
+        .await;
+    assert_eq!(
+        (&r["truncated"], &r["truncated_by"]),
+        (&json!(true), &json!("bytes")),
+        "{}",
+        r["row_count"]
+    );
+    let rows = r["row_count"].as_u64().unwrap();
+    assert!(
+        (150..300).contains(&rows),
+        "{rows} rows of 260 to 340 bytes each fill 64 KiB"
+    );
+}
+
+#[tokio::test]
+async fn a_stalled_endpoint_answers_timeout_within_the_bound() {
+    let stub = stub(1).await;
+    let toml = stub_toml(&stub.endpoint, "buckets = [\"stall\"]");
+    let server = TestServer::s3_toml(&toml, |o| o.timeout(Duration::from_secs(1))).await;
+    let started = Instant::now();
+    let e = server.err("query", q("cat 's3://stall/k'")).await;
+    assert_eq!(e["code"], "timeout", "{e}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        stub.seen.load(Ordering::SeqCst),
+        2,
+        "the connect ping, then the stalled read"
     );
 }
