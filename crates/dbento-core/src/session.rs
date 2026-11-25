@@ -742,11 +742,12 @@ pub async fn connect(
         bounds: opts.bounds,
         ws_dir: ws.dir(),
     };
-    // A connection with an ssh table never connects directly: the link opens first, and an
-    // engine without a tunnelled driver yet is refused before anything is dialled. A gated engine
-    // is admitted only when its feature is on, so the link never opens for one this build lacks.
+    // A connection with an ssh table never connects directly: the link opens first. The workspace
+    // already refuses engines without a TCP server, so this refuses only an engine this build
+    // lacks, before anything is dialled.
     let tunnelled = [Engine::Postgres, Engine::Mssql, Engine::Mysql].contains(&conn.engine())
-        || (cfg!(feature = "redis") && conn.engine() == Engine::Redis);
+        || (cfg!(feature = "redis") && conn.engine() == Engine::Redis)
+        || (cfg!(feature = "surrealdb") && conn.engine() == Engine::Surrealdb);
     let ssh = match conn.ssh() {
         None => None,
         Some(_) if !tunnelled => {

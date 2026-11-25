@@ -138,7 +138,7 @@ impl Driver for SurrealDriver {
         // A login that fails leaves a socket no session will own, so it is closed here.
         let opened = tokio::time::timeout(CONNECT_TIMEOUT, async {
             let call_bound = params.bounds.call.unwrap_or(CALL_BOUND);
-            let rpc = Rpc::open(conn, params.key_passphrase, call_bound).await?;
+            let rpc = Rpc::open(conn, params.key_passphrase, call_bound, &params.dialer).await?;
             let logged = login(&rpc, conn, params.secret, params.read_only).await;
             if logged.is_err() {
                 rpc.close("connect failed".to_owned());

@@ -85,12 +85,17 @@ async fn connect_offline(text: &str, name: &str) -> Option<ConnectError> {
         .err()
 }
 
+// The workspace refuses every engine without a TCP server at load, so only a build lacking an
+// engine's feature still reaches the session's refusal; a build with it dials the SSH server.
 #[tokio::test]
-async fn an_engine_without_ssh_support_yet_refuses_before_any_network() {
+async fn a_tunnelled_engine_this_build_lacks_refuses_before_any_network() {
     let text = "dbento = 1\n[connections.m]\nengine = \"surrealdb\"\nhost = \"db.internal\"\nnamespace = \"n\"\ndatabase = \"d\"\ntls = \"off\"\n[connections.m.ssh]\nhost = \"127.0.0.1\"\nport = 1\n";
     match connect_offline(text, "m").await {
-        Some(e @ ConnectError::SshUnsupported { .. }) => {
+        Some(e @ ConnectError::SshUnsupported { .. }) if !cfg!(feature = "surrealdb") => {
             assert!(e.to_string().contains("surrealdb"), "{e}");
+        }
+        Some(ConnectError::SshConnect { address, .. }) if cfg!(feature = "surrealdb") => {
+            assert_eq!(address, "127.0.0.1:1");
         }
         other => panic!("{other:?}"),
     }

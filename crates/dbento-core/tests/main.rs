@@ -173,6 +173,7 @@ mod ssh_redis;
 mod ssh_resolve;
 mod ssh_secrets;
 mod ssh_support;
+mod ssh_surreal;
 mod ssh_topology;
 mod ssh_tunnel;
 mod statement_ranges;
