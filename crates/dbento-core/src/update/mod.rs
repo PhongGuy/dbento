@@ -7,6 +7,7 @@ mod error;
 mod fetch;
 mod install;
 mod manifest;
+mod notes;
 mod sign;
 
 use std::borrow::Cow;
@@ -17,10 +18,11 @@ use std::time::Duration;
 use url::{Host, Url};
 
 pub use apply::{install, staging_dir, sweep_staged};
-pub use error::{CheckError, DownloadError, InstallError};
+pub use error::{CheckError, DownloadError, InstallError, NotesError};
 pub use fetch::{check, download};
 pub use install::{InstallKind, RELEASE_BUILD, Reason, install_kind};
 pub use manifest::evaluate;
+pub use notes::{Between, Group, Item, NotesKind, ReleaseEntry, ReleaseNotes, plain_text};
 pub use sign::verify_manifest;
 
 /// The signed release manifest; its signature is at the same URL plus `.sig`.
@@ -29,6 +31,9 @@ pub const MANIFEST_URL: &str =
 
 /// The page a user downloads releases from by hand.
 pub const DOWNLOAD_PAGE: &str = "https://github.com/PhongGuy/dbento/releases/latest";
+
+/// The page listing every release, for versions the release notes no longer reach.
+pub const RELEASES_URL: &str = "https://github.com/PhongGuy/dbento/releases";
 
 /// Which program is asking about updates.
 #[non_exhaustive]

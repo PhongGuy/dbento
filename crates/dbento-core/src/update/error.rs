@@ -93,3 +93,36 @@ pub enum InstallError {
         message: String,
     },
 }
+
+/// Why the release notes could not be loaded. The update itself is still offered.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NotesError {
+    /// The manifest lists no release notes for this release.
+    #[error("this release has no release notes")]
+    NotPublished,
+    /// The server could not be reached.
+    #[error("could not reach the release notes server: {0}")]
+    Offline(String),
+    /// The server took longer than its time limit.
+    #[error("the release notes server timed out")]
+    Timeout,
+    /// The server answered with a non-success status.
+    #[error("the release notes server answered HTTP {0}")]
+    Http(u16),
+    /// The file is larger than any release notes may be.
+    #[error("the release notes are too large")]
+    TooLarge,
+    /// The file is longer or shorter than the manifest states.
+    #[error("the release notes are not the size the manifest states")]
+    SizeMismatch,
+    /// The file's SHA-256 differs from the manifest's.
+    #[error("the release notes do not match their checksum")]
+    HashMismatch,
+    /// The file uses a schema this version does not read.
+    #[error("the release notes use unsupported schema {0}")]
+    UnsupportedSchema(u64),
+    /// The file is not valid release notes.
+    #[error("the release notes are invalid: {0}")]
+    Invalid(String),
+}
