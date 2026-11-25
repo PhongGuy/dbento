@@ -9,6 +9,7 @@
 #[cfg(test)]
 mod bound_tests;
 pub(crate) mod catalog;
+pub(crate) mod dial;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -26,6 +27,7 @@ use pkcs8::der::pem::{self, LineEnding};
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
+use self::dial::{Dialed, MyDial};
 use crate::Secret;
 use crate::classify::{mysql_changes_settings, mysql_classification, mysql_counts_rows};
 use crate::introspect::{ColumnMeta, IntrospectError, RelationList, RelationRef, SchemaInfo};
@@ -357,7 +359,7 @@ impl MysqlCancel {
 
 /// Stops the session's running statement from a short-lived side connection.
 pub(crate) struct KillDoor {
-    opts: Opts,
+    dial: MyDial,
     /// The session connection's server thread id.
     thread: u32,
     /// The connection's display target, for the line an unreachable kill writes.
@@ -385,9 +387,10 @@ impl KillDoor {
     /// that ended while it connected is spared. A server error reply still counts as `Sent`.
     pub(crate) async fn kill_if(&self, still: impl Fn() -> bool + Send) -> Kill {
         let attempt = async {
-            let side = match Conn::new(self.opts.clone()).await {
+            let side = match self.dial.conn().await {
                 Ok(side) => side,
-                Err(e) => return Kill::Unreachable(e.to_string()),
+                Err(Dialed::Ssh(e)) => return Kill::Unreachable(e.to_string()),
+                Err(Dialed::Mysql(e)) => return Kill::Unreachable(e.to_string()),
             };
             let mut side = Guarded::new(side);
             let kill = if !still() {
@@ -829,7 +832,7 @@ impl Driver for MysqlDriver {
 
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
-        // Every file is read and checked here, before any I/O; side connections reuse `opts`.
+        // Every file is read and checked here, before any I/O; side connections reuse its dial.
         let ssl = match conn.tls() {
             Some(TlsMode::Verify) => Some(ssl_opts(conn, params.key_passphrase)?),
             _ => None,
@@ -846,10 +849,12 @@ impl Driver for MysqlDriver {
             .init(vec!["SET NAMES utf8mb4"])
             .ssl_opts(ssl)
             .into();
+        let dial = MyDial::new(opts, conn, &params.dialer);
         let handshake = async {
-            let mut c = Conn::new(opts.clone())
-                .await
-                .map_err(|e| connect_error(conn, &e))?;
+            let mut c = dial.conn().await.map_err(|e| match e {
+                Dialed::Ssh(e) => e,
+                Dialed::Mysql(e) => connect_error(conn, &e),
+            })?;
             let (version, lower_case, opened_on): (String, u8, Option<String>) = c
                 .query_first("SELECT VERSION(), @@lower_case_table_names, DATABASE()")
                 .await
@@ -882,7 +887,7 @@ impl Driver for MysqlDriver {
                 ),
             })??;
         let door = Arc::new(KillDoor {
-            opts,
+            dial,
             thread: c.id(),
             target: conn.display_target(),
         });
@@ -2242,7 +2247,7 @@ mod tests {
     #[test]
     fn a_stop_is_in_flight_before_its_kill_is_sent() {
         let door = Arc::new(KillDoor {
-            opts: Opts::from(OptsBuilder::default()),
+            dial: MyDial::direct(Opts::from(OptsBuilder::default())),
             thread: 1,
             target: "test".to_owned(),
         });
