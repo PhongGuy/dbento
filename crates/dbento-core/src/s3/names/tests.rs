@@ -1,5 +1,5 @@
 // Through the crate root, so the public re-export is what is tested.
-use crate::{display_key, suggested_file_name};
+use crate::{display_key, is_hidden_char, suggested_file_name};
 
 #[test]
 fn plain_keys_display_unchanged() {
@@ -113,4 +113,22 @@ fn superscript_and_console_device_names_are_reserved_too() {
         );
     }
     assert_eq!(suggested_file_name("dir/COM10"), "COM10");
+}
+
+#[test]
+fn the_hidden_predicate_is_the_set_display_key_escapes() {
+    for c in [
+        '\n', '\u{1b}', '\u{7f}', '\u{85}', '\u{9f}', '\u{61c}', '\u{200e}', '\u{2028}',
+        '\u{202e}', '\u{2066}', '\u{2069}',
+    ] {
+        assert!(is_hidden_char(c), "{c:?} is hidden");
+        assert_ne!(
+            display_key(&c.to_string()),
+            c.to_string(),
+            "{c:?} is escaped"
+        );
+    }
+    for c in ['a', 'é', '日', '🍱', ' ', '\\', '\''] {
+        assert!(!is_hidden_char(c), "{c:?} is shown");
+    }
 }

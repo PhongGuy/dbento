@@ -25,7 +25,7 @@ redis = ["dbento-core/redis", "dbento-testkit/redis"]
 # Forwarded so a default edge to core cannot switch DynamoDB on through feature unification.
 dynamodb = ["dbento-core/dynamodb", "dbento-testkit/dynamodb"]
 # Forwarded so a default edge to core cannot switch S3 on through feature unification.
-s3 = ["dbento-core/s3"]
+s3 = ["dbento-core/s3", "dbento-testkit/s3"]
 
 [dependencies]
 dbento-core = { path = "../dbento-core", default-features = false, features = ["keychain"] }
@@ -43,7 +43,7 @@ rmcp = { workspace = true, features = ["client"] }
 dbento-testkit = { path = "../dbento-testkit" }
 rusqlite.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "time", "io-util"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "io-util", "net"] }
 
 [[test]]
 name = "integration"
