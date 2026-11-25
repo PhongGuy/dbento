@@ -94,6 +94,10 @@ fn download_asks_for_a_file_lands_it_and_replaces_only_what_was_chosen(cx: &mut 
     let s3 = rt.block_on(s3_moto());
     let s = s3_window(cx, &s3);
     let out = tempfile::tempdir().unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let start = first.path().to_path_buf();
+    s.shell
+        .update(cx, |sh, _| sh.set_download_folder(start.clone()));
     let dest = out.path().join("hello.txt");
     open(cx, &s, s3.bucket(), "text/hello.txt");
     wait_real(cx, "the preview", |cx| {
@@ -101,7 +105,14 @@ fn download_asks_for_a_file_lands_it_and_replaces_only_what_was_chosen(cx: &mut 
     });
     click_id(cx, s.win, "object-download");
     let target = dest.clone();
-    cx.simulate_new_path_selection(move |_| Some(target));
+    cx.simulate_new_path_selection(move |dir| {
+        assert_eq!(
+            dir,
+            start.as_path(),
+            "the first dialog opens in the set folder"
+        );
+        Some(target)
+    });
     wait_real(cx, "the file", |_| dest.exists());
     let d = s.shell.read_with(cx, |sh, _| sh.downloads().clone());
     wait_real(cx, "the strip", |cx| {
@@ -165,6 +176,56 @@ fn the_window_close_names_a_running_download_and_cancels_it(cx: &mut TestAppCont
     assert!(
         std::fs::read_dir(out.path()).unwrap().next().is_none(),
         "no file and no partial file"
+    );
+    drop(listener);
+}
+
+fn stall_toml(port: u16) -> String {
+    format!(
+        "dbento = 1\n[connections.stall]\nengine = \"s3\"\nregion = \"us-east-1\"\nendpoint = \"http://127.0.0.1:{port}\"\naccess_key_id = \"AKIDSTALL\"\nsecret = {{ env = \"{S3_SECRET_VAR}\" }}\nbuckets = [\"b\"]\n"
+    )
+}
+
+#[gpui_kit::test]
+fn download_on_an_undeclared_connection_says_why(cx: &mut TestAppContext) {
+    let s = window(cx, &stall_toml(9));
+    let shell = s.shell.clone();
+    cx.update_window(s.win, |_, w, cx| {
+        shell.update(cx, |sh, cx| {
+            sh.download_object("gone", dbento_core::ObjectKey::new("b", "k.txt"), w, cx)
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let notice = label_of(cx, s.win, "notice");
+    assert_eq!(
+        notice.as_deref(),
+        Some("Cannot download k.txt: connection gone is not in this workspace."),
+    );
+}
+
+#[gpui_kit::test]
+fn an_object_refused_by_a_running_tab_leaves_its_title(cx: &mut TestAppContext) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let s = window(cx, &stall_toml(port));
+    let shell = s.shell.clone();
+    cx.update_window(s.win, |_, w, cx| {
+        shell.update(cx, |sh, cx| sh.open_sql("stall", "ls 's3://b/'", w, cx))
+    })
+    .unwrap();
+    let tab = s.shell.read_with(cx, |sh, _| sh.tab().unwrap().clone());
+    tab.update(cx, |t, cx| t.run_all(cx));
+    assert!(
+        tab.read_with(cx, |t, cx| t.model().read(cx).running()),
+        "the run holds the tab"
+    );
+    let before = tab.read_with(cx, |t, _| t.title());
+    tab.update(cx, |t, cx| t.open_object("b".into(), "k.txt".into(), cx));
+    assert_eq!(tab.read_with(cx, |t, _| t.title()), before);
+    assert!(
+        tab.read_with(cx, |t, cx| t.model().read(cx).object_view().is_none()),
+        "no object"
     );
     drop(listener);
 }

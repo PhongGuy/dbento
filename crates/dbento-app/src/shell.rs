@@ -406,6 +406,8 @@ pub struct Shell {
     downloads: Entity<Downloads>,
     // The folder the last download went to, where the next save dialog opens.
     last_download_dir: Option<PathBuf>,
+    // Stands in for the platform downloads folder when set, so a test reads no user folder.
+    download_folder: Option<PathBuf>,
     _downloads_notify: Subscription,
     // The open workspace's team sync, when the folder is bound and team mode is installed,
     // and the observation that redraws the window when its status changes.
@@ -598,6 +600,7 @@ impl Shell {
         let mut shell = Shell {
             downloads,
             last_download_dir: None,
+            download_folder: None,
             _downloads_notify: downloads_notify,
             services,
             history_log,
@@ -1933,7 +1936,19 @@ impl Shell {
         let Some(ws) = self.workspace.clone() else {
             return;
         };
-        if self.closing || ws.connection(connection).is_none() {
+        if self.closing {
+            return;
+        }
+        if ws.connection(connection).is_none() {
+            let text = format!(
+                "Cannot download {}: connection {connection} is not in this workspace.",
+                suggested_file_name(&key.key)
+            );
+            let notice = ui::Notice {
+                text,
+                kind: ui::NoticeKind::Warning,
+            };
+            ui::notice(window, cx, notice);
             return;
         }
         let spec = RunnerSpec {
@@ -1942,8 +1957,11 @@ impl Shell {
             store: Arc::clone(&self.services.store),
             env: Arc::clone(&self.services.env),
         };
-        let downloads = dirs::download_dir();
-        let home = dirs::home_dir();
+        // A set folder stands in for the platform ones, which are then never read.
+        let (downloads, home) = match &self.download_folder {
+            Some(dir) => (Some(dir.clone()), None),
+            None => (dirs::download_dir(), dirs::home_dir()),
+        };
         let dir = download_dir(
             self.last_download_dir.as_deref(),
             downloads.as_deref(),
@@ -1977,6 +1995,12 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// Sets the folder the first save dialog opens in, in place of the platform's downloads
+    /// folder.
+    pub fn set_download_folder(&mut self, dir: PathBuf) {
+        self.download_folder = Some(dir);
     }
 
     /// The window's downloads.
@@ -2900,6 +2924,14 @@ impl Shell {
                             db,
                             key,
                         } => this.open_key(*connection, *db, key.clone(), window, cx),
+                        SidebarEvent::OpenObject {
+                            connection,
+                            bucket,
+                            key,
+                        } => this.open_object(*connection, bucket.clone(), key.clone(), window, cx),
+                        SidebarEvent::DownloadObject { connection, key } => {
+                            this.download_object(connection, key.clone(), window, cx)
+                        }
                         SidebarEvent::Definition {
                             connection,
                             object,

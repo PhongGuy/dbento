@@ -271,3 +271,21 @@ fn an_empty_bucket_says_so() {
         (RowKind::Empty, "no objects", "s3.logs:empty")
     );
 }
+
+#[test]
+fn the_filter_matches_a_bucket_on_its_escaped_name() {
+    let mut t = CatalogTree::new();
+    t.set_object_browser("s3");
+    let req = t.toggle(&NodeKey::Connection("s3".into())).unwrap();
+    answer(
+        &mut t,
+        req,
+        CatalogData::Schemas(vec![SchemaInfo::new("a\u{1b}b"), SchemaInfo::new("logs")]),
+    );
+    let shown: Vec<String> = t
+        .rows("s3", 0, "u{1b}")
+        .into_iter()
+        .map(|r| r.aria)
+        .collect();
+    assert_eq!(shown, ["s3.a\\u{1b}b"], "the bucket matches as it shows");
+}

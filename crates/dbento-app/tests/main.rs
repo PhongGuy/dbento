@@ -148,6 +148,7 @@ mod not_editable;
 mod notice;
 mod object_preview;
 mod object_tree;
+mod object_tree_window;
 mod object_window;
 mod objects;
 mod open;

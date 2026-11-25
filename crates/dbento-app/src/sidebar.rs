@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dbento_core::{
-    Color, ConnectionConfig, Databases, Definition, Engine, FolderPath, KeyKind, ObjectRef,
-    RelationKind, RelationRef, Workspace, WorkspaceItem, quote_ident,
+    Color, ConnectionConfig, Databases, Definition, Engine, FolderPath, KeyKind, ObjectKey,
+    ObjectRef, RelationKind, RelationRef, Workspace, WorkspaceItem, quote_ident, quote_literal,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -42,7 +42,7 @@ use crate::keys::{
     KeyFilter, display_key, filter_text, folder_count_text, parse_key_filter, ttl_text, type_name,
 };
 use crate::link::{LinkState, shows_read_only};
-use crate::objects::size_words;
+use crate::objects::{s3_url, size_words};
 use crate::runner::RunnerSpec;
 use crate::schema_tree::{
     CatalogRow, CatalogTree, INFERRED_COLUMN_TOOLTIP, LoadRequest, NodeKey, ObjectGroup,
@@ -119,7 +119,8 @@ pub enum SidebarEvent {
         /// The object to show.
         object: ObjectRef,
     },
-    /// Open a new tab on the named connection holding `sql` and run it: a DynamoDB index.
+    /// Open a new tab on the named connection holding `sql` and run it: a DynamoDB index or an
+    /// S3 listing.
     OpenIndex {
         /// The connection's name.
         connection: String,
@@ -134,6 +135,22 @@ pub enum SidebarEvent {
         db: u32,
         /// The key's name, which may not be UTF-8.
         key: Vec<u8>,
+    },
+    /// Open S3 object `key` of `bucket` in its own object tab.
+    OpenObject {
+        /// The connection's index into `Workspace::connections`.
+        connection: usize,
+        /// The bucket.
+        bucket: String,
+        /// The object's raw key.
+        key: String,
+    },
+    /// Ask where to save S3 object `key`, then download it.
+    DownloadObject {
+        /// The connection's name.
+        connection: String,
+        /// The object.
+        key: ObjectKey,
     },
     /// A definition load's answer, or its error message.
     Definition {
@@ -189,6 +206,11 @@ enum Selection {
         db: u32,
         key: Vec<u8>,
     },
+    S3Object {
+        conn: String,
+        bucket: String,
+        key: String,
+    },
     /// A Load more or failed row, by the node it sits under and its own dotted path.
     Status {
         key: NodeKey,
@@ -233,11 +255,16 @@ fn row_selection(row: &SidebarRow) -> Option<Selection> {
                 key: r.key.clone(),
                 aria: r.aria.clone(),
             }),
+            // An S3 object shares its level's node, so it selects by its bucket and key.
+            RowKind::Object(item) => Some(Selection::S3Object {
+                conn: node_connection(&r.key).to_owned(),
+                bucket: node_bucket(&r.key)?.0.to_owned(),
+                key: item.key.clone(),
+            }),
             RowKind::Column { .. }
             | RowKind::Loading
             | RowKind::Truncated
             | RowKind::Empty
-            | RowKind::Object(_)
             | RowKind::Database { invalid: Some(_) } => None,
         },
     }
@@ -258,13 +285,39 @@ fn node_db(key: &NodeKey) -> Option<u32> {
     }
 }
 
-// Marks every connection whose engine browses keys, dropping marks the workspace no longer
-// earns, so a renamed or re-engined connection does not keep its old tree.
+// The bucket and level prefix an S3 tree node lists: a bucket row's root or a prefix.
+fn node_bucket(key: &NodeKey) -> Option<(&str, &str)> {
+    match key {
+        NodeKey::Schema { schema, .. } => Some((schema, "")),
+        NodeKey::Prefix { bucket, prefix, .. } => Some((bucket, prefix)),
+        NodeKey::Connection(_)
+        | NodeKey::Kind { .. }
+        | NodeKey::Relation { .. }
+        | NodeKey::RelationGroup { .. }
+        | NodeKey::SchemaGroup { .. }
+        | NodeKey::Objects(_)
+        | NodeKey::KeyFolder { .. } => None,
+    }
+}
+
+// The `ls` text that lists one S3 level, the URL quoted as the store's literal.
+fn listing_sql(bucket: &str, prefix: &str) -> String {
+    let url = format!("s3://{bucket}/{prefix}");
+    format!("ls {}", quote_literal(Engine::S3, &url))
+}
+
+// Marks every connection whose engine browses keys or objects, dropping marks the workspace
+// no longer earns, so a renamed or re-engined connection does not keep its old tree.
 fn mark_key_browsers(tree: &mut CatalogTree, ws: &Workspace) {
     tree.clear_key_browsers();
+    tree.clear_object_browsers();
     for c in ws.connections() {
-        if c.engine().capabilities().key_browser {
+        let caps = c.engine().capabilities();
+        if caps.key_browser {
             tree.set_key_browser(c.name());
+        }
+        if caps.object_browser {
+            tree.set_object_browser(c.name());
         }
     }
 }
@@ -389,7 +442,9 @@ impl Sidebar {
         let name = match self.selection.as_ref()? {
             Selection::Connection(name) => name,
             Selection::Node(key) | Selection::Status { key, .. } => node_connection(key),
-            Selection::Object { conn, .. } | Selection::Key { conn, .. } => conn,
+            Selection::Object { conn, .. }
+            | Selection::Key { conn, .. }
+            | Selection::S3Object { conn, .. } => conn,
             Selection::Folder(_) => return None,
         };
         self.workspace.connection(name).map(|_| name.to_owned())
@@ -1108,6 +1163,33 @@ impl Sidebar {
         });
     }
 
+    fn open_s3_object(&mut self, conn: &str, bucket: String, key: String, cx: &mut Context<Self>) {
+        let connections = self.workspace.connections();
+        if let Some(connection) = connections.iter().position(|c| c.name() == conn) {
+            cx.emit(SidebarEvent::OpenObject {
+                connection,
+                bucket,
+                key,
+            });
+        }
+    }
+
+    // Asks the next page of the S3 level `key` lists, if it is one; false otherwise, so a
+    // bucket named like a Redis DB never reaches the key pager.
+    fn load_more_objects(&mut self, key: &NodeKey, cx: &mut Context<Self>) -> bool {
+        let conn = node_connection(key);
+        if !self.tree.is_object_browser(conn) {
+            return false;
+        }
+        if let Some((bucket, prefix)) = node_bucket(key)
+            && let Some(request) = self.tree.load_more_objects(conn, bucket, prefix)
+        {
+            self.send(request, cx);
+        }
+        cx.notify();
+        true
+    }
+
     // A DynamoDB index has no definition, so opening one runs its PartiQL SELECT instead;
     // any other object shows its definition where the engine keeps one.
     fn open_object(&mut self, connection: String, object: ObjectRef, cx: &mut Context<Self>) {
@@ -1185,6 +1267,14 @@ impl Sidebar {
             self.open_key(&conn, db, key, cx);
             return;
         }
+        if let Some(Selection::S3Object { conn, bucket, key }) = self.selection.clone() {
+            self.open_s3_object(&conn, bucket, key, cx);
+            return;
+        }
+        if let Some(Selection::Node(key @ NodeKey::Prefix { .. })) = self.selection.clone() {
+            self.toggle_node(key, cx);
+            return;
+        }
         let Some(Selection::Node(NodeKey::Relation { conn, rel })) = self.selection.clone() else {
             cx.propagate();
             return;
@@ -1210,6 +1300,7 @@ impl Sidebar {
             SidebarRow::Catalog(..) | SidebarRow::Explorer(_) => None,
         });
         match kind {
+            Some(RowKind::LoadMore) if self.load_more_objects(key, cx) => {}
             Some(RowKind::LoadMore) => {
                 if let Some(db) = node_db(key)
                     && let Some(request) = self.tree.load_more_keys(node_connection(key), db)
@@ -1328,7 +1419,10 @@ impl Sidebar {
             },
             // An object row is a leaf, though it carries its group's key.
             SidebarRow::Catalog(r, ..)
-                if matches!(r.kind, RowKind::SchemaObject { .. } | RowKind::Key(_)) =>
+                if matches!(
+                    r.kind,
+                    RowKind::SchemaObject { .. } | RowKind::Key(_) | RowKind::Object(_)
+                ) =>
             {
                 None
             }
@@ -1834,6 +1928,11 @@ impl Sidebar {
                     if *conn == conn_name && Some(*db) == node_db(&row.key) && *key == item.name),
             RowKind::Failed { .. } | RowKind::LoadMore => matches!(&self.selection,
                 Some(Selection::Status { aria, .. }) if *aria == row.aria),
+            RowKind::Object(item) => matches!(&self.selection,
+                Some(Selection::S3Object { conn, bucket, key })
+                    if *conn == conn_name
+                        && Some(bucket.as_str()) == node_bucket(&row.key).map(|b| b.0)
+                        && *key == item.key),
             RowKind::Schema
             | RowKind::Kind(_)
             | RowKind::Relation(_)
@@ -1844,7 +1943,6 @@ impl Sidebar {
             | RowKind::Empty
             | RowKind::KeyFolder { .. }
             | RowKind::Prefix { .. }
-            | RowKind::Object(_)
             | RowKind::Database { .. } => {
                 expandable && self.selection.as_ref() == Some(&Selection::Node(row.key.clone()))
             }
@@ -1902,6 +2000,8 @@ impl Sidebar {
                         // A database row is a child connection, so its double click toggles it
                         // as on any connection row; Enter opens its query.
                         (NodeKey::Connection(_), None, 2) => this.toggle_node(key.clone(), cx),
+                        // A prefix opens its level on a double click, as its chevron does.
+                        (NodeKey::Prefix { .. }, None, 2) => this.toggle_node(key.clone(), cx),
                         _ => {}
                     }
                 }))
@@ -1934,6 +2034,30 @@ impl Sidebar {
                     if e.click_count() == 2 {
                         this.open_key(&conn, db, key.clone(), cx);
                     }
+                }))
+        } else if let (RowKind::Object(item), Some((bucket, _))) =
+            (&row.kind, node_bucket(&row.key))
+        {
+            // An object selects on a click and opens its tab on the double click's second.
+            let (conn, bucket, key) = (conn_name.clone(), bucket.to_owned(), item.key.clone());
+            base.cursor_pointer()
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    window.focus(&this.focus, cx);
+                    let selection = Selection::S3Object {
+                        conn: conn.clone(),
+                        bucket: bucket.clone(),
+                        key: key.clone(),
+                    };
+                    this.set_selection(selection, cx);
+                    if e.click_count() == 2 {
+                        this.open_s3_object(&conn, bucket.clone(), key.clone(), cx);
+                    }
+                }))
+        } else if row.kind == RowKind::LoadMore && self.tree.is_object_browser(&conn_name) {
+            let key = row.key.clone();
+            base.cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.load_more_objects(&key, cx);
                 }))
         } else if let (RowKind::LoadMore, Some(db)) = (&row.kind, node_db(&row.key)) {
             let conn = conn_name.clone();
@@ -2504,6 +2628,10 @@ pub fn menu_icon(id: &str) -> Option<IconName> {
         "tree-menu-open-key" => Icons::FileText,
         "tree-menu-filter-keys" => Icons::Search,
         "tree-menu-clear-key-filter" => Icons::X,
+        "tree-menu-open-listing" => Icons::Table2,
+        "tree-menu-preview" => Icons::FileText,
+        "tree-menu-download" => Icons::Download,
+        "tree-menu-copy-key" | "tree-menu-copy-url" => Icons::Copy,
         _ => return None,
     })
 }
@@ -2780,6 +2908,12 @@ fn catalog_menu(
             "tree-menu-copy-name" => item.on_click(copy(match (&t.kind, &t.node) {
                 (RowKind::Key(k), _) => display_key(&k.name),
                 (RowKind::KeyFolder { prefix, .. }, _) => format!("{}*", display_key(prefix)),
+                // A bucket name is the store's text, so it copies as its row shows it.
+                (RowKind::Schema, NodeKey::Schema { schema, .. })
+                    if engine.capabilities().object_browser =>
+                {
+                    dbento_core::display_key(schema)
+                }
                 (RowKind::Schema, NodeKey::Schema { schema, .. }) => schema.clone(),
                 (
                     RowKind::Schema
@@ -2853,6 +2987,51 @@ fn catalog_menu(
             "tree-menu-retry" => {
                 item.on_click(on_sidebar(weak, move |s, cx| s.retry(node.clone(), cx)))
             }
+            "tree-menu-open-listing" => match node_bucket(&t.node) {
+                Some((bucket, prefix)) => {
+                    let sql = listing_sql(bucket, prefix);
+                    item.on_click(on_sidebar(weak, move |_, cx| {
+                        cx.emit(SidebarEvent::OpenIndex {
+                            connection: conn.clone(),
+                            sql: sql.clone(),
+                        })
+                    }))
+                }
+                None => continue,
+            },
+            // Both copy the escaped text the row shows, never the raw key.
+            "tree-menu-copy-key" | "tree-menu-copy-url" => {
+                let (Some((bucket, _)), Some(key)) = (node_bucket(&t.node), s3_row_key(&t.kind))
+                else {
+                    continue;
+                };
+                item.on_click(copy(if entry.id == "tree-menu-copy-key" {
+                    dbento_core::display_key(key)
+                } else {
+                    s3_url(bucket, key)
+                }))
+            }
+            "tree-menu-preview" => match (&t.kind, node_bucket(&t.node)) {
+                (RowKind::Object(o), Some((bucket, _))) => {
+                    let (bucket, key) = (bucket.to_owned(), o.key.clone());
+                    item.on_click(on_sidebar(weak, move |s, cx| {
+                        s.open_s3_object(&conn, bucket.clone(), key.clone(), cx)
+                    }))
+                }
+                _ => continue,
+            },
+            "tree-menu-download" => match (&t.kind, node_bucket(&t.node)) {
+                (RowKind::Object(o), Some((bucket, _))) => {
+                    let key = ObjectKey::new(bucket, &o.key);
+                    item.on_click(on_sidebar(weak, move |_, cx| {
+                        cx.emit(SidebarEvent::DownloadObject {
+                            connection: conn.clone(),
+                            key: key.clone(),
+                        })
+                    }))
+                }
+                _ => continue,
+            },
             "tree-menu-copy-error" => match &t.kind {
                 RowKind::Failed { message } => item.on_click(copy(message.clone())),
                 RowKind::Schema
@@ -2876,6 +3055,28 @@ fn catalog_menu(
         menu = menu.item(item);
     }
     menu
+}
+
+// The raw key an S3 prefix or object row stands for.
+fn s3_row_key(kind: &RowKind) -> Option<&str> {
+    match kind {
+        RowKind::Prefix { prefix } => Some(prefix),
+        RowKind::Object(o) => Some(&o.key),
+        RowKind::Schema
+        | RowKind::Kind(_)
+        | RowKind::Relation(_)
+        | RowKind::Column { .. }
+        | RowKind::Group(_)
+        | RowKind::SchemaObject { .. }
+        | RowKind::Loading
+        | RowKind::Failed { .. }
+        | RowKind::Truncated
+        | RowKind::Empty
+        | RowKind::KeyFolder { .. }
+        | RowKind::Key(_)
+        | RowKind::LoadMore
+        | RowKind::Database { .. } => None,
+    }
 }
 
 // A menu click handler that runs `f` on the sidebar, if it still exists.

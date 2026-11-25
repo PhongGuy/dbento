@@ -1034,14 +1034,20 @@ impl QueryTab {
     }
 
     /// Turns this tab into S3 object `key`'s view in `bucket`: the editor gives way to the
-    /// object's header and preview, and the tab keeps no draft.
+    /// object's header and preview, and the tab keeps no draft. A tab whose model refuses
+    /// the object (running, fenced or closed) stays as it was.
     pub fn open_object(&mut self, bucket: String, key: String, cx: &mut Context<Self>) {
-        self.key_title = Some(ObjectView::new(bucket.clone(), key.clone()).title());
+        let title = ObjectView::new(bucket.clone(), key.clone()).title();
+        if !self
+            .model
+            .update(cx, |m, cx| m.open_object(bucket, key, cx))
+        {
+            return;
+        }
+        self.key_title = Some(title);
         self.object_editor = None;
         self.draft = None;
         self.draft_task = None;
-        self.model
-            .update(cx, |m, cx| m.open_object(bucket, key, cx));
         cx.notify();
     }
 

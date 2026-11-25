@@ -1416,9 +1416,10 @@ impl TabModel {
     }
 
     /// Shows S3 object `key` in `bucket`: its HEAD and a preview of its first bytes, read now.
-    pub fn open_object(&mut self, bucket: String, key: String, cx: &mut Context<Self>) {
+    /// False, changing nothing, while the tab is closed, fenced or running.
+    pub fn open_object(&mut self, bucket: String, key: String, cx: &mut Context<Self>) -> bool {
         if self.closed || self.fence.is_some() || self.running {
-            return;
+            return false;
         }
         self.key_task = None;
         self.results.clear();
@@ -1427,7 +1428,7 @@ impl TabModel {
             self.start_runner(cx);
         }
         let Some(runner) = &self.runner else {
-            return;
+            return false;
         };
         let (reply, answer) = async_channel::bounded(1);
         runner.send(Command::ReadObject {
@@ -1451,6 +1452,7 @@ impl TabModel {
             });
         }));
         cx.notify();
+        true
     }
 
     /// The S3 object this tab shows, if any.

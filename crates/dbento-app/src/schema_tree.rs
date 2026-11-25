@@ -1133,6 +1133,11 @@ impl CatalogTree {
         self.object_browsers.insert(conn.to_owned());
     }
 
+    /// Whether `conn` is marked as an S3 object browser.
+    pub fn is_object_browser(&self, conn: &str) -> bool {
+        self.object_browsers.contains(conn)
+    }
+
     /// Unmarks every object browser, so a workspace install can mark its own afresh.
     pub fn clear_object_browsers(&mut self) {
         self.object_browsers.clear();
@@ -1637,9 +1642,14 @@ impl CatalogTree {
                 conn: conn.to_owned(),
                 schema: s.name().to_owned(),
             };
-            let matched = w.matches(s.name());
-            let expanded = self.expanded.contains(&skey);
             let bucket = self.object_browsers.contains(conn);
+            // A bucket matches on the escaped name its row shows.
+            let matched = if bucket {
+                w.matches(&display_object_key(s.name()))
+            } else {
+                w.matches(s.name())
+            };
+            let expanded = self.expanded.contains(&skey);
             let children = match self.key_db(conn, s.name()) {
                 _ if !expanded => Vec::new(),
                 Some(db) => self.key_rows(&w, db, s.name(), depth + 1, matched),
@@ -2573,6 +2583,9 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
     let copy_qualified = entry("tree-menu-copy-qualified", "Copy qualified name");
     let refresh = entry("tree-menu-refresh", "Refresh");
     let view_definition = entry("tree-menu-view-definition", "View definition");
+    let open_listing = entry("tree-menu-open-listing", "Open listing");
+    let copy_key = entry("tree-menu-copy-key", "Copy key");
+    let copy_url = entry("tree-menu-copy-url", "Copy s3:// URL");
     // Counting, INSERT templates and qualified names are SQL text; a SurrealQL engine gets none.
     let language = engine.capabilities().language;
     let sql = language == QueryLanguage::Sql;
@@ -2630,6 +2643,10 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
             entry("tree-menu-clear-key-filter", "Clear filter"),
             refresh,
         ],
+        // An S3 bucket opens as an `ls` listing rather than a blank query.
+        RowKind::Schema if engine.capabilities().object_browser => {
+            vec![open_listing, copy_name, refresh]
+        }
         RowKind::Schema => vec![new_query("New query"), copy_name, refresh],
         RowKind::Kind(_) => vec![new_query("New query"), refresh],
         RowKind::Column { .. } => [copy_name].into_iter().chain(copy_qualified).collect(),
@@ -2669,7 +2686,16 @@ pub fn catalog_entries(kind: &RowKind, engine: Engine, cx: &App) -> Vec<MenuEntr
         // A child connection's session items come from the connection menu, ahead of these.
         RowKind::Database { .. } => vec![copy_name],
         RowKind::LoadMore => Vec::new(),
-        RowKind::Prefix { .. } | RowKind::Object(_) => Vec::new(),
+        RowKind::Prefix { .. } => vec![open_listing, copy_key, copy_url, refresh],
+        RowKind::Object(_) => vec![
+            MenuEntry {
+                keys: keys_for(&OpenSelected, cx),
+                ..entry("tree-menu-preview", "Preview")
+            },
+            entry("tree-menu-download", "Download\u{2026}"),
+            copy_key,
+            copy_url,
+        ],
     }
 }
 
