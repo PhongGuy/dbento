@@ -120,17 +120,11 @@ fn ssh_is_offered_exactly_where_core_tunnels() {
     for e in [Engine::Postgres, Engine::Mysql, Engine::Mssql] {
         assert!(takes_ssh(e), "{e:?}");
     }
-    for e in [
-        Engine::Sqlite,
-        Engine::Duckdb,
-        Engine::Mongodb,
-        Engine::Dynamodb,
-        Engine::S3,
-    ] {
+    for e in [Engine::Sqlite, Engine::Duckdb, Engine::Dynamodb, Engine::S3] {
         assert!(!takes_ssh(e), "{e:?}");
     }
     // Feature-gated in core; the app follows whatever this build of core says.
-    for e in [Engine::Redis, Engine::Surrealdb] {
+    for e in [Engine::Redis, Engine::Surrealdb, Engine::Mongodb] {
         assert_eq!(takes_ssh(e), ssh_tunnels(e), "{e:?}");
     }
 }

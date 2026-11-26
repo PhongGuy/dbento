@@ -26,17 +26,16 @@ const REFUSED_DRAIN: u64 = 64 * 1024;
 
 /// A SOCKS5 server on `127.0.0.1` with fresh random credentials. Dropping it closes the port
 /// and ends every relay.
-// The MongoDB driver is the first caller outside the tests.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct SocksEndpoint {
     addr: SocketAddr,
     user: String,
     pass: String,
+    // Read by the connect error mapping that labels a refused member.
+    #[cfg_attr(not(test), allow(dead_code))]
     refusal: Arc<Mutex<Option<String>>>,
     task: AbortHandle,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl SocksEndpoint {
     /// [`SocksEndpoint::start_with`] at [`HANDSHAKE_DEADLINE`].
     pub(crate) async fn start(dialer: Dialer) -> io::Result<SocksEndpoint> {
@@ -85,6 +84,7 @@ impl SocksEndpoint {
         self.addr.port()
     }
 
+    #[cfg(test)]
     pub(crate) fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -95,6 +95,7 @@ impl SocksEndpoint {
     }
 
     /// Why the most recent CONNECT could not reach its target, if one could not.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn last_refusal(&self) -> Option<String> {
         self.refusal
             .lock()

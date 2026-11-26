@@ -164,6 +164,7 @@ async fn lost_server() -> MongoDriver {
     let client = Client::with_options(ClientOptions::parse(uri).await.unwrap()).unwrap();
     MongoDriver {
         client,
+        socks: None,
         server: ServerInfo {
             flavor: Flavor::MongoDb,
             version: (8, 0, 0),

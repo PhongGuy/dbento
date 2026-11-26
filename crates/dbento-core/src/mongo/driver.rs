@@ -12,7 +12,7 @@ use bson::{Bson, Document, RawDocumentBuf, doc};
 use mongodb::Client;
 use mongodb::action::Action;
 use mongodb::error::{Error, ErrorKind};
-use mongodb::options::{ClientOptions, Tls};
+use mongodb::options::{ClientOptions, Socks5Proxy, Tls};
 use tokio::sync::watch;
 
 use super::catalog;
@@ -29,6 +29,8 @@ use crate::session::{
     CancelHandle, Classification, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError,
     ExtendError, Flavor, Limits, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem, Writes,
 };
+use crate::ssh::Dialer;
+use crate::ssh::socks::SocksEndpoint;
 use crate::value::ColumnInfo;
 use crate::workspace::ConnectionConfig;
 
@@ -64,6 +66,9 @@ pub(crate) struct Shared {
 
 pub(crate) struct MongoDriver {
     pub(super) client: Client,
+    /// The loopback SOCKS5 server a tunnelled client dials through; declared after `client`
+    /// so the client shuts down before its proxy goes away.
+    pub(super) socks: Option<SocksEndpoint>,
     pub(super) server: ServerInfo,
     pub(super) uri_database: String,
     pub(super) shared: Arc<Shared>,
@@ -174,6 +179,11 @@ impl MongoDriver {
             .unwrap_or(ReadOnlyEnforcement::BestEffort)
     }
 
+    /// The SOCKS5 port a tunnelled session's client dials through.
+    pub(crate) fn proxy_port(&self) -> Option<u16> {
+        self.socks.as_ref().map(SocksEndpoint::port)
+    }
+
     pub(crate) fn settings_changed(&self) -> bool {
         self.shared.settings_changed.load(Ordering::Relaxed)
     }
@@ -196,6 +206,16 @@ impl Driver for MongoDriver {
         driver_syntax(uri).map_err(|reason| ConnectError::Open {
             message: format!("connection `{}`: {reason}", conn.name()),
         })?;
+        // A tunnelled client reaches every member, seed or advertised, through a SOCKS5 server
+        // that dials over the SSH link, so member names resolve on the bastion's side.
+        let socks = match &params.dialer {
+            Dialer::Ssh(_) => Some(SocksEndpoint::start(params.dialer.clone()).await.map_err(
+                |e| ConnectError::SshTunnel {
+                    message: format!("cannot open the local SOCKS endpoint for MongoDB: {e}"),
+                },
+            )?),
+            Dialer::Direct => None,
+        };
         // Open refused a password and the syntax check just refused text the driver would quote,
         // so neither this text nor an error built from it carries one.
         let mut options = ClientOptions::parse(uri).await.map_err(fail)?;
@@ -205,6 +225,16 @@ impl Driver for MongoDriver {
             credential.password = params.secret.map(|s| s.expose().to_owned());
         }
         resolve_tls_paths(&mut options, params.ws_dir);
+        if let Some(ep) = &socks {
+            let (user, pass) = ep.credentials();
+            options.socks5_proxy = Some(
+                Socks5Proxy::builder()
+                    .host("127.0.0.1")
+                    .port(ep.port())
+                    .authentication((user.to_owned(), pass.to_owned()))
+                    .build(),
+            );
+        }
         let client = Client::with_options(options).map_err(fail)?;
 
         // These commands need no privileges, so an unauthenticated session gets this far and
@@ -241,6 +271,7 @@ impl Driver for MongoDriver {
         let database = conn.database().unwrap_or_default().to_owned();
         Ok(MongoDriver {
             client,
+            socks,
             server: ServerInfo {
                 flavor: Flavor::MongoDb,
                 version,

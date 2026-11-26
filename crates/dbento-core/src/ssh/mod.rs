@@ -19,11 +19,13 @@ pub use link::{SshEnv, probe_host_key, ssh_channel_check};
 pub use resolve::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};
 
 /// Whether a connection on `engine` can reach its server through SSH in this build:
-/// Postgres, MySQL/MariaDB and SQL Server always; Redis and SurrealDB with their features.
+/// Postgres, MySQL/MariaDB and SQL Server always; Redis, SurrealDB and MongoDB with their
+/// features.
 pub fn ssh_tunnels(engine: Engine) -> bool {
     [Engine::Postgres, Engine::Mssql, Engine::Mysql].contains(&engine)
         || (cfg!(feature = "redis") && engine == Engine::Redis)
         || (cfg!(feature = "surrealdb") && engine == Engine::Surrealdb)
+        || (cfg!(feature = "mongodb") && engine == Engine::Mongodb)
 }
 
 /// The SSH secrets of `conn`: none without an `ssh` table or when it does not resolve
@@ -56,13 +58,8 @@ mod tests {
         }
         assert_eq!(ssh_tunnels(Engine::Redis), cfg!(feature = "redis"));
         assert_eq!(ssh_tunnels(Engine::Surrealdb), cfg!(feature = "surrealdb"));
-        for e in [
-            Engine::Sqlite,
-            Engine::Duckdb,
-            Engine::Mongodb,
-            Engine::Dynamodb,
-            Engine::S3,
-        ] {
+        assert_eq!(ssh_tunnels(Engine::Mongodb), cfg!(feature = "mongodb"));
+        for e in [Engine::Sqlite, Engine::Duckdb, Engine::Dynamodb, Engine::S3] {
             assert!(!ssh_tunnels(e), "{e:?}");
         }
     }
