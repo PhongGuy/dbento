@@ -132,6 +132,7 @@ mod keymap_rebuild;
 mod keymap_table;
 mod launch_args;
 mod layout;
+mod legacy_secrets;
 mod link_state;
 mod local_sort;
 mod lone_schema;

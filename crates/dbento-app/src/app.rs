@@ -172,6 +172,9 @@ impl WindowState {
 /// How many workspaces' sessions the state file keeps.
 pub const MAX_SESSIONS: usize = 10;
 
+/// The session format that pins database passwords; sessions saved before it read as 0.
+pub const PIN_EPOCH: u8 = 1;
+
 /// One workspace's open tabs, left to right, and which was active.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -188,6 +191,11 @@ pub struct WorkspaceSession {
     /// comments; absent from sessions saved before it was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seen: Option<String>,
+    /// 0 for a session last written before passwords were pinned; every save writes PIN_EPOCH.
+    pub pin_epoch: u8,
+    /// The pre-upgrade `seen` text, kept until a migration pass finishes cleanly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_baseline: Option<String>,
 }
 
 /// One saved tab: where it runs, its draft id and the saved query it edits.

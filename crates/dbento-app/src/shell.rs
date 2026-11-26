@@ -41,7 +41,7 @@ use gpui_kit::{
 };
 
 use crate::app::{
-    BrowseSaved, SavedState, Services, SortSaved, TabState, TableState, WindowState,
+    BrowseSaved, PIN_EPOCH, SavedState, Services, SortSaved, TabState, TableState, WindowState,
     WorkspaceSession, recent_status,
 };
 use crate::approvals::{
@@ -435,6 +435,8 @@ pub struct Shell {
     workspace: Option<Arc<Workspace>>,
     // The installed workspace's connection list as the session keeps it, computed once per install.
     seen: Option<String>,
+    // The pre-upgrade connection list frozen at open, until a migration pass clears it.
+    legacy_baseline: Option<String>,
     sidebar: Option<Entity<Sidebar>>,
     tabs: Vec<Entity<QueryTab>>,
     // Per tab, index for index: the model observation the status bar follows, the tab's own
@@ -673,6 +675,7 @@ impl Shell {
             requested: dir.clone(),
             workspace: None,
             seen: None,
+            legacy_baseline: None,
             sidebar: None,
             tabs: Vec::new(),
             tab_observes: Vec::new(),
@@ -1062,6 +1065,8 @@ impl Shell {
                 .map(|s| s.read(cx).collapsed_paths())
                 .unwrap_or_default(),
             seen: self.seen.clone(),
+            pin_epoch: PIN_EPOCH,
+            legacy_baseline: self.legacy_baseline.clone(),
         };
         self.update_saved(move |s| s.put_session(session.clone()), cx);
     }
@@ -2898,6 +2903,7 @@ impl Shell {
     fn clear_workspace(&mut self) {
         self.workspace = None;
         self.seen = None;
+        self.legacy_baseline = None;
         self.sidebar = None;
         self._sidebar_events = None;
         self._sidebar_notify = None;
@@ -2923,7 +2929,14 @@ impl Shell {
         match Workspace::open(&dir) {
             Ok(ws) => {
                 // Read the last installed list before any save of this folder replaces it.
-                let previous = self.saved.session(ws.dir()).and_then(|s| s.seen.clone());
+                let session = self.saved.session(ws.dir());
+                let previous = session.and_then(|s| s.seen.clone());
+                // A session an older app wrote holds the evidence its passwords sit unpinned;
+                // a newer one carries the evidence it froze, until a pass clears it.
+                let frozen = session.and_then(|s| match s.pin_epoch {
+                    0 => s.seen.clone(),
+                    _ => s.legacy_baseline.clone(),
+                });
                 let ws = Arc::new(ws);
                 let opened = Arc::clone(&ws);
                 let services = self.services.clone();
@@ -3037,6 +3050,7 @@ impl Shell {
                 // Recent entries name the real folder, so a link or `..` path adds no duplicate.
                 let real = ws.dir().to_path_buf();
                 self.seen = seen_text(&ws);
+                self.legacy_baseline = frozen.clone();
                 self.workspace = Some(ws);
                 self.watch_generation = self.watch_generation.wrapping_add(1);
                 self.start_watch(&real, window, cx);
@@ -3056,6 +3070,12 @@ impl Shell {
                     move |s| {
                         s.remember_workspace(&real);
                         s.last_workspace = Some(dir.clone());
+                        // Freezing here, on a write no restore skips, keeps the snapshot on
+                        // disk even when the restore that follows saves nothing.
+                        if let Some(kept) = s.sessions.iter_mut().find(|k| k.workspace == real) {
+                            kept.pin_epoch = PIN_EPOCH;
+                            kept.legacy_baseline = frozen.clone();
+                        }
                     },
                     cx,
                 );
