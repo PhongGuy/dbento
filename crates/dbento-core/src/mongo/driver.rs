@@ -12,7 +12,7 @@ use bson::{Bson, Document, RawDocumentBuf, doc};
 use mongodb::Client;
 use mongodb::action::Action;
 use mongodb::error::{Error, ErrorKind};
-use mongodb::options::{ClientOptions, Socks5Proxy, Tls};
+use mongodb::options::{ClientOptions, ResolverConfig, Socks5Proxy, Tls};
 use tokio::sync::watch;
 
 use super::catalog;
@@ -221,7 +221,17 @@ impl Driver for MongoDriver {
         let fail = |e| connect_error(conn, refusal(), e);
         // Open refused a password and the syntax check just refused text the driver would quote,
         // so neither this text nor an error built from it carries one.
-        let mut options = ClientOptions::parse(uri).await.map_err(fail)?;
+        let mut parse = ClientOptions::parse(uri);
+        if let Some(addr) = params.mongo_dns {
+            parse = parse.resolver_config(ResolverConfig::name_server(addr));
+        }
+        let mut options = parse.await.map_err(|e| {
+            if socks.is_some() && matches!(*e.kind, ErrorKind::DnsResolve { .. }) {
+                srv_error(conn, &e.kind)
+            } else {
+                fail(e)
+            }
+        })?;
         options.app_name = Some("dbento".to_owned());
         let limit = fill_timeouts(&mut options);
         if let Some(credential) = &mut options.credential {
@@ -610,6 +620,18 @@ fn connect_error(conn: &ConnectionConfig, refusal: Option<String>, e: Error) -> 
             ConnectError::SshTunnel { message }
         }
         _ => open_error(conn, e),
+    }
+}
+
+/// A tunnelled SRV or TXT lookup that failed: it ran on this machine, so a name only the
+/// bastion's DNS knows fails here, and the error says so.
+fn srv_error(conn: &ConnectionConfig, kind: &ErrorKind) -> ConnectError {
+    ConnectError::Open {
+        message: format!(
+            "{}: the SRV and TXT records of a mongodb+srv uri are resolved on this machine, \
+             not on the SSH server; list the hosts in a mongodb:// uri instead ({kind})",
+            conn.display_target()
+        ),
     }
 }
 

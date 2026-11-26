@@ -32,3 +32,12 @@ P2
           0.5.1; 0.6.0 only reformats the code, so its exported tokens match.
   Files: Cargo.toml (Cargo.toml.orig left as shipped)
   Upstream: none filed (project rule: own issue and local workaround)
+
+P3
+  Change: ResolverConfig::name_server(SocketAddr) builds a config with one
+          UDP nameserver on any port, so Dbento's tests can answer the SRV
+          and TXT lookups of a mongodb+srv uri from an in-process responder
+          on loopback and never reach public DNS. Test-only, `#[doc(hidden)]`,
+          never called outside tests.
+  Files: src/client/options/resolver_config.rs
+  Upstream: none filed (project rule: own issue and local workaround)
