@@ -79,19 +79,18 @@ fn a_rename_moves_the_secret_and_the_saved_queries(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    store
-        .set(&SecretKey::new(&dir, "nopg"), &Secret::new("pw"))
-        .unwrap();
+    let old = fx.ws.secret_target("nopg").unwrap();
+    store.set(&old, &Secret::new("pw")).unwrap();
     std::fs::create_dir_all(dir.join("queries/nopg")).unwrap();
     std::fs::write(dir.join("queries/nopg/a.sql"), "SELECT 1").unwrap();
     let f = edit_form(cx, win, &shell, "nopg");
     set(cx, win, &f, Field::Name, "pg2");
     click_id(cx, win, "conn-save");
-    let new = SecretKey::new(&dir, "pg2");
+    let new = old.renamed("pg2");
     wait_real(cx, "the moved secret", |_| {
         store.get(&new).unwrap().is_some()
     });
-    assert!(store.get(&SecretKey::new(&dir, "nopg")).unwrap().is_none());
+    assert!(store.get(&old).unwrap().is_none());
     wait_real(cx, "the moved folder", |_| {
         dir.join("queries/pg2/a.sql").exists()
     });
@@ -136,9 +135,8 @@ fn a_failed_apply_moves_no_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    store
-        .set(&SecretKey::new(&dir, "nopg"), &Secret::new("pw"))
-        .unwrap();
+    let old = fx.ws.secret_target("nopg").unwrap();
+    store.set(&old, &Secret::new("pw")).unwrap();
     let f = edit_form(cx, win, &shell, "nopg");
     std::fs::write(
         dir.join("dbento.toml"),
@@ -153,8 +151,8 @@ fn a_failed_apply_moves_no_secret(cx: &mut TestAppContext) {
             .contains("changed since it was loaded")
     );
     cx.run_until_parked();
-    assert!(store.get(&SecretKey::new(&dir, "pg2")).unwrap().is_none());
-    assert!(store.get(&SecretKey::new(&dir, "nopg")).unwrap().is_some());
+    assert!(store.get(&old.renamed("pg2")).unwrap().is_none());
+    assert!(store.get(&old).unwrap().is_some());
 }
 
 #[gpui_kit::test]
@@ -213,7 +211,7 @@ fn delete_asks_then_removes_the_entry_and_secret_but_keeps_queries(cx: &mut Test
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    let key = SecretKey::new(&dir, "nopg");
+    let key = fx.ws.secret_target("nopg").unwrap();
     store.set(&key, &Secret::new("pw")).unwrap();
     std::fs::create_dir_all(dir.join("queries/nopg")).unwrap();
     edit_form(cx, win, &shell, "nopg");
@@ -310,7 +308,7 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    let old = SecretKey::new(&dir, "nopg");
+    let old = fx.ws.secret_target("nopg").unwrap();
     store.set(&old, &Secret::new("pw")).unwrap();
     let f = edit_form(cx, win, &shell, "nopg");
     set(cx, win, &f, Field::Name, "lite2");
@@ -323,7 +321,9 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
         store.get(&old).unwrap().is_none()
     });
     cx.run_until_parked();
-    assert!(store.get(&SecretKey::new(&dir, "lite2")).unwrap().is_none());
+    assert!(store.get(&old.renamed("lite2")).unwrap().is_none());
+    let lite2 = SecretKey::password(&dir, "lite2", &support::pin_of(&dir, "lite2"));
+    assert!(store.get(&lite2).unwrap().is_none());
     assert!(
         std::fs::read_to_string(dir.join("dbento.toml"))
             .unwrap()
@@ -335,7 +335,7 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
 fn a_switch_away_from_the_keychain_removes_its_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
-    let key = SecretKey::new(fx.ws.dir(), "nopg");
+    let key = fx.ws.secret_target("nopg").unwrap();
     store.set(&key, &Secret::new("pw")).unwrap();
     edit_form(cx, win, &shell, "nopg");
     cx.update_window(win, |_, w, cx| w.within("conn-secret").click(2usize, cx))

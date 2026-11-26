@@ -165,12 +165,10 @@ fn test_a_renamed_connection_with_the_secret_stored_under_its_old_name(cx: &mut 
     )
     .unwrap();
     let store = Arc::new(dbento_core::MemoryStore::new());
-    dbento_core::SecretStore::set(
-        &*store,
-        &dbento_core::SecretKey::new(dir.path(), "old"),
-        &dbento_core::Secret::new(db.password()),
-    )
-    .unwrap();
+    let ws = dbento_core::Workspace::open(dir.path()).unwrap();
+    let old =
+        dbento_core::SecretKey::password(ws.dir(), "old", &support::pin_of(dir.path(), "old"));
+    dbento_core::SecretStore::set(&*store, &old, &dbento_core::Secret::new(db.password())).unwrap();
     let files = tempfile::tempdir().unwrap();
     let services = Services {
         paths: AppPaths::in_dir(files.path()),
