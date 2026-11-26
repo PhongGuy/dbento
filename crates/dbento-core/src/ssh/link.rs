@@ -135,6 +135,12 @@ impl SshLink {
         })
     }
 
+    /// The runtime the SSH connection lives on, where its channels must be served.
+    #[cfg(feature = "mongodb")]
+    pub(crate) fn runtime(&self) -> &tokio::runtime::Handle {
+        &self.runtime
+    }
+
     /// Opens a `direct-tcpip` channel to `host`:`port`, which the SSH server resolves.
     pub(crate) async fn channel(&self, host: &str, port: u16) -> Result<SshStream, ConnectError> {
         let refused = |why: String| ConnectError::SshTunnel {

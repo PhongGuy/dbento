@@ -1,13 +1,195 @@
-//! The server half of a SOCKS5 handshake (RFC 1928 with RFC 1929 login): it reads a CONNECT
-//! request from any stream and answers with the fixed reply shapes the MongoDB driver expects.
-
-#![cfg_attr(not(test), allow(dead_code))] // the tunnel's SOCKS endpoint is the only caller
+//! A SOCKS5 server (RFC 1928 with RFC 1929 login) on loopback that carries each CONNECT over a
+//! [`Dialer`], so the MongoDB driver reaches every member through the session's SSH link.
 
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
+use tokio::task::{AbortHandle, JoinSet};
+
+use super::Dialer;
+use super::stream::{self, DialError};
+
+/// How long a client has to finish its handshake once it holds a slot.
+pub(crate) const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+/// How many handshakes may run at once; later clients wait for a slot.
+pub(crate) const HANDSHAKE_SLOTS: usize = 64;
+/// The most a refused client may still send before its socket is dropped.
+const REFUSED_DRAIN: u64 = 64 * 1024;
+
+/// A SOCKS5 server on `127.0.0.1` with fresh random credentials. Dropping it closes the port
+/// and ends every relay.
+// The MongoDB driver is the first caller outside the tests.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct SocksEndpoint {
+    addr: SocketAddr,
+    user: String,
+    pass: String,
+    refusal: Arc<Mutex<Option<String>>>,
+    task: AbortHandle,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl SocksEndpoint {
+    /// [`SocksEndpoint::start_with`] at [`HANDSHAKE_DEADLINE`].
+    pub(crate) async fn start(dialer: Dialer) -> io::Result<SocksEndpoint> {
+        Self::start_with(dialer, HANDSHAKE_DEADLINE).await
+    }
+
+    /// Binds a loopback port and serves it on the link's runtime (the caller's for `Direct`),
+    /// giving each client `deadline` to finish its handshake.
+    pub(crate) async fn start_with(
+        dialer: Dialer,
+        deadline: Duration,
+    ) -> io::Result<SocksEndpoint> {
+        let user = credential()?;
+        let pass = credential()?;
+        let runtime = match &dialer {
+            Dialer::Ssh(link) => link.runtime().clone(),
+            Dialer::Direct => tokio::runtime::Handle::current(),
+        };
+        // The listener registers with the reactor of the runtime that will serve it.
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        std_listener.set_nonblocking(true)?;
+        let listener = {
+            let _entered = runtime.enter();
+            TcpListener::from_std(std_listener)?
+        };
+        let addr = listener.local_addr()?;
+        let refusal = Arc::new(Mutex::new(None));
+        let serve = Serve {
+            dialer,
+            user: user.clone(),
+            pass: pass.clone(),
+            refusal: Arc::clone(&refusal),
+            deadline,
+        };
+        let task = runtime.spawn(serve.run(listener)).abort_handle();
+        Ok(SocksEndpoint {
+            addr,
+            user,
+            pass,
+            refusal,
+            task,
+        })
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.addr.port()
+    }
+
+    pub(crate) fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// The login the endpoint accepts: `(user, password)`.
+    pub(crate) fn credentials(&self) -> (&str, &str) {
+        (&self.user, &self.pass)
+    }
+
+    /// Why the most recent CONNECT could not reach its target, if one could not.
+    pub(crate) fn last_refusal(&self) -> Option<String> {
+        self.refusal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Drop for SocksEndpoint {
+    fn drop(&mut self) {
+        // Aborting needs no runtime; the task's JoinSet then aborts every relay with it.
+        self.task.abort();
+    }
+}
+
+/// 32 random bytes as 43 characters of unpadded base64url.
+fn credential() -> io::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(io::Error::other)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// The accept task's state, shared by every connection it serves.
+#[derive(Clone)]
+struct Serve {
+    dialer: Dialer,
+    user: String,
+    pass: String,
+    refusal: Arc<Mutex<Option<String>>>,
+    deadline: Duration,
+}
+
+impl Serve {
+    /// Accepts until aborted; every connection runs in the JoinSet so aborting this task ends
+    /// them all, and finished ones are reaped as the loop goes.
+    async fn run(self, listener: TcpListener) {
+        let slots = Arc::new(Semaphore::new(HANDSHAKE_SLOTS));
+        let mut connections = JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((client, _)) => {
+                            connections.spawn(self.clone().serve(client, Arc::clone(&slots)));
+                        }
+                        // Out of descriptors, say: back off rather than spin on the error.
+                        Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+                    }
+                }
+                Some(_) = connections.join_next(), if !connections.is_empty() => {}
+            }
+        }
+    }
+
+    /// The handshake holds a slot and runs under the deadline; the dial and relay do not.
+    async fn serve(self, mut client: TcpStream, slots: Arc<Semaphore>) {
+        let target = {
+            let Ok(_slot) = slots.acquire_owned().await else {
+                return;
+            };
+            let handshake = async {
+                match negotiate(&mut client, &self.user, &self.pass).await {
+                    Ok(target) => Some(target),
+                    Err(_) => {
+                        // Closing with unread input makes the kernel send a reset, so the
+                        // refused client gets a FIN and a bounded drain before the drop.
+                        let _ = client.shutdown().await;
+                        let mut rest = (&mut client).take(REFUSED_DRAIN);
+                        let _ = tokio::io::copy(&mut rest, &mut tokio::io::sink()).await;
+                        None
+                    }
+                }
+            };
+            match tokio::time::timeout(self.deadline, handshake).await {
+                Ok(Some(target)) => target,
+                Ok(None) | Err(_) => return,
+            }
+        };
+        match stream::dial(&self.dialer, &target.host, target.port).await {
+            Ok(mut db) => {
+                if reply(&mut client, REP_SUCCESS).await.is_ok() {
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut db).await;
+                }
+            }
+            Err(e) => {
+                let why = match e {
+                    DialError::Ssh(e) => e.to_string(),
+                    DialError::Io(e) => e.to_string(),
+                };
+                *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = Some(why);
+                let _ = reply(&mut client, REP_FAILURE).await;
+            }
+        }
+    }
+}
 
 pub(crate) const REP_SUCCESS: u8 = 0x00;
 pub(crate) const REP_FAILURE: u8 = 0x01;
@@ -41,8 +223,8 @@ pub(crate) enum Refusal {
     AddressNotSupported,
     BadDomain,
     PortZero,
-    // Only the endpoint reads the error; the tests match the variant alone.
-    Io(#[cfg_attr(test, allow(dead_code))] io::Error),
+    // Kept for debugging; the endpoint drops a refused client without reading why.
+    Io(#[allow(dead_code)] io::Error),
 }
 
 impl From<io::Error> for Refusal {
