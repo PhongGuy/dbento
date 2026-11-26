@@ -4,8 +4,9 @@
 use std::sync::Arc;
 
 use dbento_core::{
-    ConnectError, ConnectionConfig, HostKey, HostKeyProblem, SecretStore, SessionOptions, SshEnv,
-    SshHome, SshSecrets, StatePaths, Workspace, ssh_secrets_for,
+    ConnectError, ConnectionConfig, HostKey, HostKeyProblem, Secret, SecretError, SecretKey,
+    SecretStore, SessionOptions, SshEnv, SshHome, SshSecrets, StatePaths, Workspace, move_secret,
+    resolve_ssh, ssh_secrets_for,
 };
 
 use crate::host_keys::{HostKeyAnswer, HostKeyGate, HostKeyPrompt};
@@ -138,6 +139,8 @@ fn changed_hint(
 ) -> Option<String> {
     let path = file.display();
     if problem == HostKeyProblem::Changed {
+        // The command is pasted into a POSIX shell: single quotes, each `'` closed and escaped.
+        let quoted = format!("'{}'", path.to_string().replace('\'', r"'\''"));
         let ours = ctx.state.as_ref().map(|s| s.ssh_known_hosts.as_path()) == Some(file);
         // ssh-keygen names a non-default port in OpenSSH's bracketed form, quoted for the shell.
         let ident = if port == 22 {
@@ -151,7 +154,7 @@ fn changed_hint(
             )
         } else {
             format!(
-                "The SSH server's host key changed in {path}. If it was rotated on purpose, remove the old entry with `ssh-keygen -R {ident} -f {path}`, then connect again."
+                "The SSH server's host key changed in {path}. If it was rotated on purpose, remove the old entry with `ssh-keygen -R {ident} -f {quoted}`, then connect again."
             )
         })
     } else if problem == HostKeyProblem::Revoked {
@@ -193,4 +196,144 @@ pub fn connect_message(conn: &str, e: &ConnectError, ctx: &SshContext) -> String
         Some(h) => format!("{e}\nhint: {h}"),
         None => e.to_string(),
     }
+}
+
+/// Whether `e` is an SSH failure (every Ssh* variant, SshUnsupported included).
+pub fn is_ssh_failure(e: &ConnectError) -> bool {
+    matches!(
+        e,
+        ConnectError::SshConnect { .. }
+            | ConnectError::SshAuth { .. }
+            | ConnectError::SshUnsupported { .. }
+            | ConnectError::SshHostKeyUnknown { .. }
+            | ConnectError::SshHostKeyChanged { .. }
+            | ConnectError::SshTunnel { .. }
+    )
+}
+
+/// A connect failure as one message: an SSH failure is `connect_message` (its fix, never the
+/// database-secret `db_hint`); any other keeps `db_hint` as a `\nhint: ` line.
+pub fn failure_text(
+    conn: &str,
+    e: &ConnectError,
+    db_hint: Option<&str>,
+    ctx: &SshContext,
+) -> String {
+    match db_hint {
+        Some(h) if !is_ssh_failure(e) => format!("{e}\nhint: {h}"),
+        Some(_) | None => connect_message(conn, e, ctx),
+    }
+}
+
+/// `not_trusted`'s message and fix as one text: "{message}\nhint: {fix}".
+pub fn not_trusted_text(conn: &str, host: &str, port: u16, answer: HostKeyAnswer) -> String {
+    let f = not_trusted(conn, host, port, answer);
+    match f.fix {
+        Some(fix) => format!("{}\nhint: {fix}", f.message),
+        None => f.message,
+    }
+}
+
+/// What a written connection edit does to the SSH keychain entries, in order: moves, drops,
+/// then the typed secrets land at `password_to` / `passphrase_to`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SshFollow {
+    /// Entries carried to the saved connection: the password pair first, then the passphrase.
+    pub moves: Vec<(SecretKey, SecretKey)>,
+    /// Entries nothing reads any more: the password first, then the passphrase.
+    pub drops: Vec<SecretKey>,
+    /// The saved connection's pinned password entry.
+    pub password_to: Option<SecretKey>,
+    /// The saved connection's passphrase entry.
+    pub passphrase_to: Option<SecretKey>,
+    /// Why the saved connection has no password entry.
+    pub problem: Option<String>,
+}
+
+/// `old_name` in `base` became `name` in `now` (equal for an edit, absent in `base` for a new
+/// one). Same login on a rename moves; a gone table drops both; another login drops the old
+/// password; unresolvable `now` keeps the old entry. Reads `~/.ssh/config`: off the UI thread.
+pub fn ssh_follow(
+    base: &Workspace,
+    old_name: &str,
+    now: &Workspace,
+    name: &str,
+    home: Option<&SshHome>,
+) -> SshFollow {
+    let mut follow = SshFollow::default();
+    let was = base.declared(old_name).filter(|c| c.ssh().is_some());
+    let is = now.declared(name).filter(|c| c.ssh().is_some());
+    let login = |ws: &Workspace, conn: &ConnectionConfig| -> Result<String, String> {
+        let home = home.ok_or_else(|| NO_HOME.to_owned())?;
+        resolve_ssh(conn, ws.dir(), home)
+            .map(|r| r.login())
+            .map_err(|e| {
+                format!(
+                    "the SSH settings of {} cannot be resolved: {e}",
+                    conn.name()
+                )
+            })
+    };
+    // The old password entry is only reachable through the login it was pinned to.
+    let old_login = was.and_then(|c| login(base, c).ok());
+    let old_password = old_login
+        .as_deref()
+        .and_then(|l| base.ssh_password_target(old_name, l));
+    let old_passphrase = was.and_then(|_| base.ssh_key_passphrase_target(old_name));
+    let Some(is) = is else {
+        follow.drops.extend(old_password);
+        follow.drops.extend(old_passphrase);
+        return follow;
+    };
+    let new_login = match login(now, is) {
+        Ok(l) => Some(l),
+        Err(problem) => {
+            follow.problem = Some(problem);
+            None
+        }
+    };
+    follow.password_to = new_login
+        .as_deref()
+        .and_then(|l| now.ssh_password_target(name, l));
+    follow.passphrase_to = now.ssh_key_passphrase_target(name);
+    // Another login drops the old pinned password; the same one moves it on a rename. An
+    // unresolvable new login leaves the old entry where it is.
+    if let (Some(from), Some(to)) = (old_password, follow.password_to.clone()) {
+        if old_login != new_login {
+            follow.drops.push(from);
+        } else if from != to {
+            follow.moves.push((from, to));
+        }
+    }
+    if let (Some(from), Some(to)) = (old_passphrase, follow.passphrase_to.clone())
+        && from != to
+    {
+        follow.moves.push((from, to));
+    }
+    follow
+}
+
+/// Carries out `follow` on `store`: moves, drops, then stores the typed `password` and
+/// `passphrase` at their entries (a typed secret without an entry is not stored).
+pub fn apply_follow(
+    store: &dyn SecretStore,
+    follow: &SshFollow,
+    password: Option<&Secret>,
+    passphrase: Option<&Secret>,
+) -> Result<(), SecretError> {
+    for (from, to) in &follow.moves {
+        move_secret(store, from, to)?;
+    }
+    for key in &follow.drops {
+        store.delete(key)?;
+    }
+    for (key, secret) in [
+        (&follow.password_to, password),
+        (&follow.passphrase_to, passphrase),
+    ] {
+        if let (Some(key), Some(secret)) = (key, secret) {
+            store.set(key, secret)?;
+        }
+    }
+    Ok(())
 }

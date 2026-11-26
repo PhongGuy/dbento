@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use tokio::sync::watch;
 
+use crate::confirm::{Ask, Choice};
+
 /// One unknown host key the user is asked about; `key` is what trusting stores.
 #[derive(Debug, Clone)]
 pub struct HostKeyPrompt<K> {
@@ -185,15 +187,35 @@ impl<K> HostKeyGate<K> {
         }
     }
 
-    /// Answers the open question for (host, port), if any, and forgets it.
-    pub fn answer(&self, host: &str, port: u16, answer: HostKeyAnswer) {
+    /// Answers the open question for (host, port) only when it asks about `fingerprint`, and
+    /// forgets it; false when no such question is open (stale, replaced or answered).
+    pub fn answer(&self, host: &str, port: u16, fingerprint: &str, answer: HostKeyAnswer) -> bool {
         let mut state = self.state();
-        if let Some((fingerprint, open)) = state.pending.remove(&(host.to_owned(), port)) {
-            if answer == HostKeyAnswer::Trusted {
-                state.trusted.insert((host.to_owned(), port, fingerprint));
-            }
-            let _ = open.send(Some(answer));
+        let id = (host.to_owned(), port);
+        // A dialog answered after its question was replaced must not land on the newer key.
+        if state
+            .pending
+            .get(&id)
+            .is_none_or(|(asked, _)| asked != fingerprint)
+        {
+            return false;
         }
+        let Some((asked, open)) = state.pending.remove(&id) else {
+            return false;
+        };
+        if answer == HostKeyAnswer::Trusted {
+            state.trusted.insert((host.to_owned(), port, asked));
+        }
+        let _ = open.send(Some(answer));
+        true
+    }
+
+    /// Whether a question about `fingerprint` is open for (host, port) with at least one waiter.
+    pub fn is_open(&self, host: &str, port: u16, fingerprint: &str) -> bool {
+        self.state()
+            .pending
+            .get(&(host.to_owned(), port))
+            .is_some_and(|(asked, open)| asked == fingerprint && open.receiver_count() > 0)
     }
 
     /// Drops what this gate trusted for (host, port), after a retry still met an unknown key.
@@ -263,4 +285,55 @@ where
         }
         Gated::Failed(e)
     })
+}
+
+/// The question for an unknown key: Don't trust (0, Enter and Escape) or Trust and connect (1).
+pub fn host_key_ask(connection: &str, host: &str, port: u16, fingerprint: &str) -> Ask {
+    let choice = |id, label: &'static str| Choice {
+        id,
+        label: label.into(),
+        danger: false,
+    };
+    Ask {
+        title: format!("Trust the SSH host key of {host}:{port}?").into(),
+        detail: Some(
+            format!(
+                "Dbento has not seen this SSH server before ({connection} connects through it). \
+                 Check the fingerprint with the server's administrator before you trust it.\n\
+                 {fingerprint}"
+            )
+            .into(),
+        ),
+        sql: None,
+        language: "text",
+        choices: vec![
+            choice("host-key-reject", "Don't trust"),
+            choice("host-key-trust", "Trust and connect"),
+        ],
+        default: 0,
+        cancel: 0,
+    }
+}
+
+/// Serves `prompts` in order until the channel closes or `decide` returns None. A prompt whose
+/// question is no longer open is Declined without calling `decide`; answers go back under the
+/// prompt's own fingerprint. None declines and ends the loop, dropping `prompts` to unregister.
+pub async fn serve_prompts<K>(
+    prompts: HostKeyPrompts<K>,
+    gate: Arc<HostKeyGate<K>>,
+    mut decide: impl AsyncFnMut(&HostKeyPrompt<K>) -> Option<HostKeyAnswer>,
+) {
+    while let Ok(p) = prompts.recv().await {
+        // Every waiter left before the question came up: clear it rather than show it.
+        if !gate.is_open(&p.host, p.port, &p.fingerprint) {
+            gate.answer(&p.host, p.port, &p.fingerprint, HostKeyAnswer::Declined);
+            continue;
+        }
+        let got = decide(&p).await;
+        let answer = got.unwrap_or(HostKeyAnswer::Declined);
+        gate.answer(&p.host, p.port, &p.fingerprint, answer);
+        if got.is_none() {
+            return;
+        }
+    }
 }

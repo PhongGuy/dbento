@@ -1,5 +1,7 @@
 //! One question per SSH server however many sessions meet its unknown key, and one retry.
-use dbento_app::host_keys::{Gated, HostKeyAnswer, HostKeyGate, HostKeyPrompt, with_trust};
+use dbento_app::host_keys::{
+    Gated, HostKeyAnswer, HostKeyGate, HostKeyPrompt, serve_prompts, with_trust,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -42,7 +44,7 @@ async fn sessions_meeting_one_unknown_key_share_one_question() {
         "the prompt"
     );
     eventually("both waiting", || gate.waiting("bastion", 22) == 2).await;
-    gate.answer("bastion", 22, HostKeyAnswer::Trusted);
+    gate.answer("bastion", 22, "SHA256:k", HostKeyAnswer::Trusted);
     assert_eq!(first.await.unwrap(), HostKeyAnswer::Trusted, "first");
     assert_eq!(second.await.unwrap(), HostKeyAnswer::Trusted, "second");
     assert!(prompts.try_recv().is_err(), "one question only");
@@ -66,8 +68,8 @@ async fn different_servers_are_asked_separately() {
         vec!["one".to_owned(), "two".to_owned()],
         "two questions"
     );
-    gate.answer("one", 22, HostKeyAnswer::Trusted);
-    gate.answer("two", 22, HostKeyAnswer::Declined);
+    gate.answer("one", 22, "SHA256:1", HostKeyAnswer::Trusted);
+    gate.answer("two", 22, "SHA256:2", HostKeyAnswer::Declined);
     assert_eq!(one.await.unwrap(), HostKeyAnswer::Trusted, "one");
     assert_eq!(two.await.unwrap(), HostKeyAnswer::Declined, "two");
 }
@@ -85,7 +87,7 @@ async fn a_different_key_while_asking_conflicts() {
         "never shares the open question"
     );
     assert!(prompts.try_recv().is_err(), "and asks nothing new");
-    gate.answer("bastion", 22, HostKeyAnswer::Declined);
+    gate.answer("bastion", 22, "SHA256:k", HostKeyAnswer::Declined);
     assert_eq!(
         first.await.unwrap(),
         HostKeyAnswer::Declined,
@@ -101,7 +103,7 @@ async fn an_answered_question_is_asked_again_next_time() {
         let a = Arc::clone(&gate);
         let waiter = tokio::spawn(async move { a.wait(prompt("bastion", "SHA256:k")).await });
         prompts.recv().await.unwrap();
-        gate.answer("bastion", 22, HostKeyAnswer::Declined);
+        gate.answer("bastion", 22, "SHA256:k", HostKeyAnswer::Declined);
         assert_eq!(waiter.await.unwrap(), HostKeyAnswer::Declined, "declined");
     }
 }
@@ -147,7 +149,7 @@ async fn a_trusted_key_retries_the_connect_once() {
     let g = Arc::clone(&gate);
     let answerer = tokio::spawn(async move {
         let p = prompts.recv().await.unwrap();
-        g.answer(&p.host, p.port, HostKeyAnswer::Trusted);
+        g.answer(&p.host, p.port, &p.fingerprint, HostKeyAnswer::Trusted);
     });
     let tries = AtomicUsize::new(0);
     let got = with_trust(&gate, unknown, || {
@@ -167,7 +169,7 @@ async fn a_declined_key_is_not_retried() {
     let g = Arc::clone(&gate);
     let answerer = tokio::spawn(async move {
         let p = prompts.recv().await.unwrap();
-        g.answer(&p.host, p.port, HostKeyAnswer::Declined);
+        g.answer(&p.host, p.port, &p.fingerprint, HostKeyAnswer::Declined);
     });
     let tries = AtomicUsize::new(0);
     let got = with_trust(&gate, unknown, || {
@@ -199,7 +201,7 @@ async fn a_trust_that_did_not_take_retries_once_then_asks_again() {
     let g = Arc::clone(&gate);
     let answerer = tokio::spawn(async move {
         let p = prompts.recv().await.unwrap();
-        g.answer(&p.host, p.port, HostKeyAnswer::Trusted);
+        g.answer(&p.host, p.port, &p.fingerprint, HostKeyAnswer::Trusted);
         prompts
     });
     let tries = AtomicUsize::new(0);
@@ -216,7 +218,7 @@ async fn a_trust_that_did_not_take_retries_once_then_asks_again() {
     let g = Arc::clone(&gate);
     let next = tokio::spawn(async move { g.wait(prompt("bastion", "SHA256:k")).await });
     prompts.recv().await.unwrap();
-    gate.answer("bastion", 22, HostKeyAnswer::Declined);
+    gate.answer("bastion", 22, "SHA256:k", HostKeyAnswer::Declined);
     assert_eq!(next.await.unwrap(), HostKeyAnswer::Declined, "asked again");
 }
 
@@ -227,7 +229,7 @@ async fn a_session_late_to_a_trusted_key_retries_without_asking() {
     let a = Arc::clone(&gate);
     let first = tokio::spawn(async move { a.wait(prompt("bastion", "SHA256:k")).await });
     prompts.recv().await.unwrap();
-    gate.answer("bastion", 22, HostKeyAnswer::Trusted);
+    gate.answer("bastion", 22, "SHA256:k", HostKeyAnswer::Trusted);
     assert_eq!(first.await.unwrap(), HostKeyAnswer::Trusted, "first");
     // This session met the key before it was stored and reports it only after the answer.
     let tries = AtomicUsize::new(0);
@@ -246,7 +248,7 @@ async fn a_session_late_to_a_trusted_key_retries_without_asking() {
         asked.fingerprint, "SHA256:other",
         "a trust covers only the key trusted"
     );
-    gate.answer("bastion", 22, HostKeyAnswer::Declined);
+    gate.answer("bastion", 22, "SHA256:other", HostKeyAnswer::Declined);
     assert_eq!(
         another.await.unwrap(),
         HostKeyAnswer::Declined,
@@ -296,10 +298,132 @@ async fn a_gone_handler_or_a_gone_waiter_never_strands_a_wait() {
         "other",
         "the new handler still asks"
     );
-    gate.answer("other", 22, HostKeyAnswer::Declined);
+    gate.answer("other", 22, "SHA256:o", HostKeyAnswer::Declined);
     assert_eq!(
         still.await.unwrap(),
         HostKeyAnswer::Declined,
         "and its answer lands"
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_for_another_key_trusts_nothing() {
+    let gate = HostKeyGate::new();
+    let prompts = gate.prompts();
+    let a = Arc::clone(&gate);
+    let first = tokio::spawn(async move { a.wait(prompt("bastion", "SHA256:a")).await });
+    let old = prompts.recv().await.unwrap();
+    assert!(gate.answer("bastion", 22, "SHA256:a", HostKeyAnswer::Declined));
+    assert_eq!(
+        first.await.unwrap(),
+        HostKeyAnswer::Declined,
+        "the first question"
+    );
+    // The server now shows another key; its question is open when the old dialog answers.
+    let b = Arc::clone(&gate);
+    let second = tokio::spawn(async move { b.wait(prompt("bastion", "SHA256:b")).await });
+    prompts.recv().await.unwrap();
+    assert!(
+        !gate.answer(
+            &old.host,
+            old.port,
+            &old.fingerprint,
+            HostKeyAnswer::Trusted
+        ),
+        "a late answer acts on nothing"
+    );
+    assert_eq!(
+        gate.waiting("bastion", 22),
+        1,
+        "the newer question is still open"
+    );
+    assert!(gate.answer("bastion", 22, "SHA256:b", HostKeyAnswer::Declined));
+    assert_eq!(
+        second.await.unwrap(),
+        HostKeyAnswer::Declined,
+        "the newer question"
+    );
+    // Neither key was trusted, so the next wait for either asks again.
+    let c = Arc::clone(&gate);
+    let again = tokio::spawn(async move { c.wait(prompt("bastion", "SHA256:b")).await });
+    assert_eq!(
+        prompts.recv().await.unwrap().fingerprint,
+        "SHA256:b",
+        "asked again"
+    );
+    assert!(gate.answer("bastion", 22, "SHA256:b", HostKeyAnswer::Declined));
+    assert_eq!(again.await.unwrap(), HostKeyAnswer::Declined);
+}
+
+#[tokio::test]
+async fn a_closed_question_is_not_open() {
+    let gate = HostKeyGate::new();
+    let prompts = gate.prompts();
+    assert!(
+        !gate.is_open("bastion", 22, "SHA256:k"),
+        "nothing asked yet"
+    );
+    let a = Arc::clone(&gate);
+    let gone = tokio::spawn(async move { a.wait(prompt("bastion", "SHA256:k")).await });
+    prompts.recv().await.unwrap();
+    eventually("one waiter", || gate.waiting("bastion", 22) == 1).await;
+    assert!(
+        gate.is_open("bastion", 22, "SHA256:k"),
+        "open while someone waits"
+    );
+    assert!(
+        !gate.is_open("bastion", 22, "SHA256:other"),
+        "not for another key"
+    );
+    gone.abort();
+    let _ = gone.await;
+    assert!(
+        !gate.is_open("bastion", 22, "SHA256:k"),
+        "every waiter went away"
+    );
+    let b = Arc::clone(&gate);
+    let answered = tokio::spawn(async move { b.wait(prompt("bastion", "SHA256:k")).await });
+    prompts.recv().await.unwrap();
+    assert!(gate.answer("bastion", 22, "SHA256:k", HostKeyAnswer::Declined));
+    assert_eq!(answered.await.unwrap(), HostKeyAnswer::Declined);
+    assert!(!gate.is_open("bastion", 22, "SHA256:k"), "answered");
+}
+
+#[tokio::test]
+async fn the_loop_skips_a_closed_question_and_stops_when_the_window_goes() {
+    let gate = HostKeyGate::new();
+    let prompts = gate.prompts();
+    // A question whose only waiter left before the loop reached it.
+    let a = Arc::clone(&gate);
+    let gone = tokio::spawn(async move { a.wait(prompt("bastion", "SHA256:k")).await });
+    eventually("the first question", || gate.waiting("bastion", 22) == 1).await;
+    gone.abort();
+    let _ = gone.await;
+    let shown = AtomicUsize::new(0);
+    let serve = serve_prompts(
+        prompts,
+        Arc::clone(&gate),
+        async |p: &HostKeyPrompt<String>| {
+            assert_eq!(p.fingerprint, "SHA256:k");
+            // The first question shown is declined; at the second the window is gone.
+            (shown.fetch_add(1, Ordering::SeqCst) == 0).then_some(HostKeyAnswer::Declined)
+        },
+    );
+    let waits = async {
+        let first = gate.wait(prompt("bastion", "SHA256:k")).await;
+        assert_eq!(first, HostKeyAnswer::Declined, "shown and declined");
+        assert_eq!(
+            shown.load(Ordering::SeqCst),
+            1,
+            "the closed question was never shown"
+        );
+        let second = gate.wait(prompt("bastion", "SHA256:k")).await;
+        assert_eq!(second, HostKeyAnswer::Declined, "a gone window declines");
+    };
+    tokio::join!(serve, waits);
+    assert_eq!(
+        shown.load(Ordering::SeqCst),
+        2,
+        "and the loop stopped there"
     );
 }

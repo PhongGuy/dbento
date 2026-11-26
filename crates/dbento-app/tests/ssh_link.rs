@@ -1,10 +1,13 @@
 //! The app's SSH plumbing: the context every connect carries, the SSH secrets a connect gets
 //! and the fixes SSH failures show.
 use dbento_app::host_keys::{HostKeyAnswer, HostKeyPrompt};
+use dbento_app::runner::{Command, Event, RunnerSpec, spawn_on};
 use dbento_app::ssh::{
     AUTH_HINT, CONNECT_HINT, NO_HOME, SshContext, TUNNEL_HINT, UNKNOWN_KEY_HINT, connect_message,
     not_trusted, ssh_hint, ssh_secrets, unknown_key,
 };
+use dbento_app::ssh::{SshFollow, apply_follow, ssh_follow};
+use dbento_app::ssh::{failure_text, is_ssh_failure, not_trusted_text};
 use dbento_core::{
     ConnectError, HostKey, HostKeyProblem, MemoryStore, Secret, SecretError, SecretKey,
     SecretStore, SessionOptions, SshEnv, SshHome, SshSecrets, StatePaths, Workspace,
@@ -204,7 +207,7 @@ fn a_changed_key_in_another_file_points_at_ssh_keygen() {
     assert_eq!(
         ssh_hint("tun", &e, &ctx(dir.path())).as_deref(),
         Some(
-            "The SSH server's host key changed in /home/u/.ssh/known_hosts. If it was rotated on purpose, remove the old entry with `ssh-keygen -R '[jump]:2222' -f /home/u/.ssh/known_hosts`, then connect again."
+            "The SSH server's host key changed in /home/u/.ssh/known_hosts. If it was rotated on purpose, remove the old entry with `ssh-keygen -R '[jump]:2222' -f '/home/u/.ssh/known_hosts'`, then connect again."
         )
     );
 }
@@ -355,13 +358,7 @@ const UNREACHABLE: &str = "dbento = 1\n[connections.tun]\nengine = \"postgres\"\
 
 /// Writes the alias into the SSH home `support::services` gives the app (D-b7).
 fn alias_home(s: &Started) {
-    let ssh = s.files.path().join("ssh-home").join(".ssh");
-    std::fs::create_dir_all(&ssh).unwrap();
-    std::fs::write(
-        ssh.join("config"),
-        "Host dbento-test-jump\n  HostName 127.0.0.1\n  Port 9\n",
-    )
-    .unwrap();
+    alias_at(s.files.path());
 }
 
 #[gpui_kit::test]
@@ -411,4 +408,273 @@ fn test_connection_tunnels_through_the_apps_ssh_home_and_shows_the_ssh_fix(
         "dialled through the app's SSH home: {failed}"
     );
     assert!(failed.contains(CONNECT_HINT), "with the SSH fix: {failed}");
+}
+
+#[test]
+fn every_ssh_variant_is_an_ssh_failure() {
+    let key = HostKey::from_openssh("jump", 22, KEY).unwrap();
+    let ssh = [
+        ConnectError::SshConnect {
+            address: "jump:22".into(),
+            message: "refused".into(),
+        },
+        ConnectError::SshAuth {
+            message: "no method left".into(),
+        },
+        ConnectError::SshUnsupported {
+            message: "Match".into(),
+        },
+        ConnectError::SshHostKeyUnknown {
+            host: "jump".into(),
+            port: 22,
+            key,
+        },
+        changed(PathBuf::from("/k"), 22, HostKeyProblem::Changed),
+        ConnectError::SshTunnel {
+            message: "no forward".into(),
+        },
+    ];
+    for e in &ssh {
+        assert!(is_ssh_failure(e), "{e:?}");
+    }
+    let db = ConnectError::Refused {
+        address: "db:5432".into(),
+        message: "refused".into(),
+    };
+    assert!(!is_ssh_failure(&db));
+}
+
+#[test]
+fn an_ssh_failure_text_drops_the_database_secret_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = ctx(dir.path());
+    let auth = ConnectError::SshAuth {
+        message: "no method left".into(),
+    };
+    assert_eq!(
+        failure_text("tun", &auth, Some("set DBENTO_SECRET_TUN"), &c),
+        format!("{auth}\nhint: {AUTH_HINT}")
+    );
+    let db = ConnectError::Refused {
+        address: "db:5432".into(),
+        message: "refused".into(),
+    };
+    assert_eq!(
+        failure_text("tun", &db, Some("set DBENTO_SECRET_TUN"), &c),
+        format!("{db}\nhint: set DBENTO_SECRET_TUN"),
+        "a database failure keeps it"
+    );
+    assert_eq!(failure_text("tun", &db, None, &c), db.to_string());
+}
+
+#[test]
+fn a_declined_question_reads_as_one_text() {
+    let f = not_trusted("tun", "jump", 22, HostKeyAnswer::Declined);
+    assert_eq!(
+        not_trusted_text("tun", "jump", 22, HostKeyAnswer::Declined),
+        format!("{}\nhint: {}", f.message, f.fix.unwrap())
+    );
+}
+
+/// UNREACHABLE with its database password left to the (empty) keychain, so the database
+/// secret hint would ride along.
+const UNREACHABLE_KEYCHAIN: &str = "dbento = 1\n[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.tun.ssh]\nhost = \"dbento-test-jump\"\nuser = \"ops\"\nauth = \"password\"\n";
+
+/// Writes the `dbento-test-jump` alias into the SSH home `support::services(files)` gives.
+fn alias_at(files: &Path) {
+    let ssh = files.join("ssh-home").join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(
+        ssh.join("config"),
+        "Host dbento-test-jump\n  HostName 127.0.0.1\n  Port 9\n",
+    )
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ssh_failure_leaves_out_the_database_secret_hint() {
+    let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(dir.path().join("dbento.toml"), UNREACHABLE_KEYCHAIN).unwrap();
+    alias_at(files.path());
+    let services = crate::support::services(files.path());
+    let spec = RunnerSpec {
+        workspace: Arc::new(Workspace::open(dir.path()).unwrap()),
+        connection: "tun".into(),
+        store: services.store,
+        env: services.env,
+        ssh: services.ssh,
+    };
+    let r = spawn_on(&crate::support::here(), spec);
+    let ev = r.events();
+    r.send(Command::Connect);
+    match crate::support::next_event(&ev).await {
+        Event::ConnectFailed { message, fix } => {
+            assert!(
+                message.contains("127.0.0.1:9"),
+                "the SSH address: {message}"
+            );
+            assert!(
+                !message.contains("dbento secret set"),
+                "no database hint: {message}"
+            );
+            assert_eq!(fix.as_deref(), Some(CONNECT_HINT));
+        }
+        other @ (Event::Connected { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
+    }
+}
+
+fn at(body: &str) -> Workspace {
+    Workspace::from_text(
+        PathBuf::from("/w"),
+        Path::new("/w/dbento.toml"),
+        &format!("dbento = 1\n{body}"),
+    )
+    .unwrap()
+}
+fn pg(name: &str) -> String {
+    format!(
+        "[connections.{name}]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n"
+    )
+}
+fn tun(name: &str, ssh_user: &str) -> String {
+    format!(
+        "{}[connections.{name}.ssh]\nhost = \"jump\"\nuser = \"{ssh_user}\"\n",
+        pg(name)
+    )
+}
+fn pw(name: &str, login: &str) -> SecretKey {
+    SecretKey::ssh_password("/w", name, login)
+}
+fn pp(name: &str) -> SecretKey {
+    SecretKey::ssh_key_passphrase("/w", name)
+}
+fn home() -> (tempfile::TempDir, SshHome) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = SshHome::new(dir.path(), "tester");
+    (dir, home)
+}
+
+#[test]
+fn a_new_tunnelled_connection_stores_at_its_pinned_entries() {
+    let (_d, home) = home();
+    let f = ssh_follow(&at(""), "a", &at(&tun("a", "ops")), "a", Some(&home));
+    assert_eq!(
+        f,
+        SshFollow {
+            password_to: Some(pw("a", "ops@jump:22")),
+            passphrase_to: Some(pp("a")),
+            ..SshFollow::default()
+        }
+    );
+}
+
+#[test]
+fn a_rename_on_the_same_login_moves_both_entries() {
+    let (_d, home) = home();
+    let f = ssh_follow(
+        &at(&tun("a", "ops")),
+        "a",
+        &at(&tun("b", "ops")),
+        "b",
+        Some(&home),
+    );
+    assert_eq!(
+        f.moves,
+        vec![
+            (pw("a", "ops@jump:22"), pw("b", "ops@jump:22")),
+            (pp("a"), pp("b"))
+        ]
+    );
+    assert!(f.drops.is_empty(), "{f:?}");
+    assert_eq!(f.password_to, Some(pw("b", "ops@jump:22")));
+}
+
+#[test]
+fn dropping_the_ssh_table_drops_both_entries() {
+    let (_d, home) = home();
+    let f = ssh_follow(&at(&tun("a", "ops")), "a", &at(&pg("a")), "a", Some(&home));
+    assert_eq!(f.drops, vec![pw("a", "ops@jump:22"), pp("a")]);
+    assert_eq!((f.password_to, f.passphrase_to), (None, None));
+}
+
+#[test]
+fn another_ssh_login_drops_the_old_password_and_keeps_the_passphrase() {
+    let (_d, home) = home();
+    let f = ssh_follow(
+        &at(&tun("a", "ops")),
+        "a",
+        &at(&tun("a", "dev")),
+        "a",
+        Some(&home),
+    );
+    assert_eq!(f.drops, vec![pw("a", "ops@jump:22")]);
+    assert!(f.moves.is_empty(), "{f:?}");
+    assert_eq!(f.password_to, Some(pw("a", "dev@jump:22")));
+}
+
+#[test]
+fn without_a_home_the_password_has_no_entry_and_says_why() {
+    let f = ssh_follow(&at(""), "a", &at(&tun("a", "ops")), "a", None);
+    assert_eq!(f.password_to, None);
+    assert_eq!(f.passphrase_to, Some(pp("a")));
+    assert_eq!(f.problem.as_deref(), Some(NO_HOME));
+}
+
+#[test]
+fn apply_follow_moves_then_stores_the_typed_password() {
+    let (_d, home) = home();
+    let store = MemoryStore::new();
+    store.set(&pp("a"), &Secret::new("x")).unwrap();
+    let f = ssh_follow(
+        &at(&tun("a", "ops")),
+        "a",
+        &at(&tun("b", "ops")),
+        "b",
+        Some(&home),
+    );
+    apply_follow(&store, &f, Some(&Secret::new("x")), None).unwrap();
+    let held = |k: &SecretKey| store.get(k).unwrap().is_some();
+    assert!(
+        held(&pw("b", "ops@jump:22")),
+        "the typed password lands at the new entry"
+    );
+    assert!(held(&pp("b")), "the passphrase moved");
+    assert!(!held(&pp("a")), "the old passphrase entry is gone");
+    assert!(
+        !held(&pw("a", "ops@jump:22")),
+        "nothing left at the old password entry"
+    );
+}
+
+#[test]
+fn the_ssh_keygen_path_is_quoted_for_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = changed(
+        PathBuf::from("/home/u/it's here/known_hosts"),
+        22,
+        HostKeyProblem::Changed,
+    );
+    let hint = ssh_hint("tun", &e, &ctx(dir.path())).unwrap();
+    assert!(
+        hint.contains(r"`ssh-keygen -R jump -f '/home/u/it'\''s here/known_hosts'`"),
+        "{hint}"
+    );
 }

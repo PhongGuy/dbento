@@ -24,7 +24,8 @@ mod ssh;
 pub use ssh::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, ResolvedSsh, SshEnv, SshHome,
     SshResolveError, TrustHostKeyError, forget_host_key, probe_host_key, resolve_ssh,
-    ssh_channel_check, ssh_secrets_for, ssh_warnings, trust_host_key, user_known_hosts_lists,
+    ssh_channel_check, ssh_secrets_for, ssh_tunnels, ssh_warnings, trust_host_key,
+    user_known_hosts_lists,
 };
 
 mod form;

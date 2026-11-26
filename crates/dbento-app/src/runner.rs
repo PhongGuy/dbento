@@ -797,9 +797,10 @@ async fn open_or_fix(
             Gated::Failed(e) => {
                 let fix = fix_hint(ConnectCause::Connect(&e))
                     .or_else(|| ssh_hint(&spec.connection, &e, &spec.ssh));
+                // An SSH failure's own fix comes first; the database-secret hint would mislead.
                 let message = match &hint {
-                    Some(h) => format!("{e}\nhint: {h}"),
-                    None => e.to_string(),
+                    Some(h) if !ssh::is_ssh_failure(&e) => format!("{e}\nhint: {h}"),
+                    Some(_) | None => e.to_string(),
                 };
                 ConnectFailure::new(message, fix)
             }

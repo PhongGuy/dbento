@@ -70,6 +70,7 @@ pub mod shell;
 pub mod sidebar;
 pub mod smooth_scroll;
 pub mod ssh;
+pub mod ssh_form;
 pub mod staged;
 pub mod statements;
 pub mod status_bar;
