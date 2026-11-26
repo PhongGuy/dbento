@@ -201,7 +201,6 @@ impl Driver for MongoDriver {
 
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
-        let fail = |e| open_error(conn, e);
         let uri = conn.uri().unwrap_or_default();
         driver_syntax(uri).map_err(|reason| ConnectError::Open {
             message: format!("connection `{}`: {reason}", conn.name()),
@@ -216,6 +215,10 @@ impl Driver for MongoDriver {
             )?),
             Dialer::Direct => None,
         };
+        // A failure reads the endpoint's refusal as it stands then, so the error names the
+        // member the bastion could not reach rather than the driver's selection timeout.
+        let refusal = || socks.as_ref().and_then(SocksEndpoint::last_refusal);
+        let fail = |e| connect_error(conn, refusal(), e);
         // Open refused a password and the syntax check just refused text the driver would quote,
         // so neither this text nor an error built from it carries one.
         let mut options = ClientOptions::parse(uri).await.map_err(fail)?;
@@ -257,7 +260,15 @@ impl Driver for MongoDriver {
             };
             Ok((build, enforcement))
         };
-        let (build, enforcement) = within(limit, conn.display_target(), handshake).await?;
+        // The handshake's own errors ride inside, so only `within`'s timeout can become the
+        // recorded refusal.
+        let (build, enforcement) =
+            within(limit, conn.display_target(), async { Ok(handshake.await) })
+                .await
+                .map_err(|timeout| match refusal() {
+                    Some(message) => ConnectError::SshTunnel { message },
+                    None => timeout,
+                })??;
 
         let text = build.get_str("version").ok();
         let version = text
@@ -585,6 +596,21 @@ async fn within<T>(
                 limit.as_secs()
             ),
         })?
+}
+
+/// What a failed connect means: the endpoint's recorded SSH refusal when the driver saw only a
+/// selection timeout or a proxy error, else `open_error`.
+fn connect_error(conn: &ConnectionConfig, refusal: Option<String>, e: Error) -> ConnectError {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ErrorKind has too many variants to list; the rest share one arm"
+    )]
+    match (refusal, &*e.kind) {
+        (Some(message), ErrorKind::ServerSelection { .. } | ErrorKind::ProxyConnect { .. }) => {
+            ConnectError::SshTunnel { message }
+        }
+        _ => open_error(conn, e),
+    }
 }
 
 // Reads `e.kind`, not `e`, because `Error`'s `Display` dumps the server's reply as hex.

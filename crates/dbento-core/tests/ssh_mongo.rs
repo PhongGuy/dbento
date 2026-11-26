@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::ssh_support::{Tunnel, engine_tunnel, password};
 use crate::support::read;
-use dbento_core::ssh_channel_check;
+use dbento_core::{ConnectError, ssh_channel_check};
 use dbento_testkit::{SSH_PASSWORD, SshNet, mongo_on, published_ips, ssh_net};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -127,4 +127,19 @@ async fn the_sessions_socks_port_refuses_a_wrong_login() {
     let mut rest = Vec::new();
     raw.read_to_end(&mut rest).await.unwrap();
     assert_eq!(rest, [1, 1]);
+}
+
+#[tokio::test]
+async fn a_member_the_bastion_cannot_resolve_fails_with_the_ssh_refusal() {
+    let net = ssh_net().await;
+    let host = format!("nowhere-{}.dbento.test", std::process::id());
+    let uri = format!("mongodb://{host}:27017/app?serverSelectionTimeoutMS=2000");
+    let t = mg_tunnel(&net, &uri, "");
+    match t.session("mg", None).await {
+        Err(ConnectError::SshTunnel { message }) => assert!(
+            message.contains(&format!("would not open a channel to {host}:27017")),
+            "{message}"
+        ),
+        other => panic!("{:?}", other.err()),
+    }
 }

@@ -30,8 +30,6 @@ pub(crate) struct SocksEndpoint {
     addr: SocketAddr,
     user: String,
     pass: String,
-    // Read by the connect error mapping that labels a refused member.
-    #[cfg_attr(not(test), allow(dead_code))]
     refusal: Arc<Mutex<Option<String>>>,
     task: AbortHandle,
 }
@@ -95,7 +93,6 @@ impl SocksEndpoint {
     }
 
     /// Why the most recent CONNECT could not reach its target, if one could not.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn last_refusal(&self) -> Option<String> {
         self.refusal
             .lock()

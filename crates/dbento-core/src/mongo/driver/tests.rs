@@ -268,3 +268,41 @@ fn find_one_and_modify_shows_its_value_or_nothing() {
     let missing = doc! { "lastErrorObject": { "n": 0 }, "value": null, "ok": 1 };
     assert_eq!(shown(&op, missing).unwrap(), None);
 }
+
+fn mongo_conn() -> ConnectionConfig {
+    let text =
+        "dbento = 1\n[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb://127.0.0.1:1/\"\n";
+    let ws = crate::workspace::Workspace::from_text(
+        std::path::PathBuf::from("/ws"),
+        Path::new("/ws/dbento.toml"),
+        text,
+    )
+    .unwrap();
+    ws.declared("c").unwrap().clone()
+}
+
+#[tokio::test]
+async fn a_recorded_ssh_refusal_replaces_a_selection_timeout_and_nothing_else() {
+    let driver = lost_server().await;
+    let e = driver
+        .client
+        .database("admin")
+        .run_command(doc! { "ping": 1 })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&*e.kind, ErrorKind::ServerSelection { .. }),
+        "{:?}",
+        e.kind
+    );
+    let refusal = "the SSH server would not open a channel to m9:27017 (resolved on the SSH server): it could not connect there";
+    let tunnelled = connect_error(&mongo_conn(), Some(refusal.to_owned()), e.clone());
+    assert!(
+        matches!(&tunnelled, ConnectError::SshTunnel { message } if message == refusal),
+        "{tunnelled:?}"
+    );
+    assert!(matches!(
+        connect_error(&mongo_conn(), None, e),
+        ConnectError::Open { .. }
+    ));
+}

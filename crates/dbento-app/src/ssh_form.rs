@@ -10,11 +10,22 @@ use crate::connection_dialog::parse_port;
 /// The note under the database host while SSH is on.
 pub const SSH_HOST_NOTE: &str =
     "The database host is resolved on the SSH server: localhost means the SSH server itself.";
+/// The note under the SSH section for MongoDB, whose hosts come from `uri`.
+pub const SSH_MONGO_HOST_NOTE: &str = "Hosts in the URI, and the members a replica set reports, are resolved on the SSH server; mongodb+srv records are looked up on this machine.";
 /// The note shown while SSH is on and TLS is off.
 pub const SSH_PLAINTEXT_NOTE: &str =
     "TLS is off, so the leg from the SSH server to the database is not encrypted.";
 /// The warning under an absolute identity file outside the home folder.
 pub const SSH_IDENTITY_WARNING: &str = "This path is outside your home folder and may not exist on a teammate's machine; prefer a path under ~/.ssh.";
+
+/// The note under the SSH section for `engine`.
+pub fn ssh_host_note(engine: Engine) -> &'static str {
+    if engine == Engine::Mongodb {
+        SSH_MONGO_HOST_NOTE
+    } else {
+        SSH_HOST_NOTE
+    }
+}
 
 /// The auth choice, in the order of the `conn-ssh-auth` segments: Default, Agent, Key, Password.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

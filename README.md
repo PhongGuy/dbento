@@ -177,7 +177,7 @@ A Postgres or SQL Server connection can also reach the other databases on its se
 
 ### SSH tunnels
 
-A Postgres, MySQL or MariaDB, SQL Server, SurrealDB or Redis connection can go through an SSH server, written as an `ssh` sub-table under the connection. `host` can be a `Host` alias from `~/.ssh/config`, which also supplies the port, user and key unless `dbento.toml` sets them. The connection's own `host` is then resolved on the SSH server's side, and TLS still checks the database's name, not the tunnel's.
+A Postgres, MySQL or MariaDB, SQL Server, SurrealDB, MongoDB or Redis connection can go through an SSH server, written as an `ssh` sub-table under the connection. `host` can be a `Host` alias from `~/.ssh/config`, which also supplies the port, user and key unless `dbento.toml` sets them. The connection's own `host` is then resolved on the SSH server's side, and TLS still checks the database's name, not the tunnel's. For MongoDB the hosts in `uri` and the members a replica set reports are resolved on the SSH server, while a `mongodb+srv` uri's SRV and TXT records are looked up on this machine.
 
 ```toml
 [connections.app-prod.ssh]

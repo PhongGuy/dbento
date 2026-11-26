@@ -2,7 +2,9 @@
 //! notes, and written to dbento.toml as an `ssh` table under the entry.
 use crate::support::{self, click_id, fill, form, label_of, opened, present, wait_real};
 use dbento_app::connection_dialog::Field;
-use dbento_app::ssh_form::{SSH_HOST_NOTE, SSH_IDENTITY_WARNING, SSH_PLAINTEXT_NOTE};
+use dbento_app::ssh_form::{
+    SSH_HOST_NOTE, SSH_IDENTITY_WARNING, SSH_MONGO_HOST_NOTE, SSH_PLAINTEXT_NOTE,
+};
 use dbento_core::{Secret, SecretKey, SecretStore};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, ScrollDelta, TestAppContext, point, px};
@@ -238,5 +240,23 @@ fn renaming_in_the_form_carries_both_ssh_entries(cx: &mut TestAppContext) {
     assert!(
         st.get(&pp(&dir, "tun")).unwrap().is_none(),
         "old passphrase entry gone"
+    );
+}
+
+#[gpui_kit::test]
+fn a_mongodb_form_shows_where_its_hosts_resolve(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    click_id(cx, o.win, "connection-new");
+    form(cx, &o);
+    segment(cx, &o, "conn-engine", 6);
+    assert!(present(cx, o.win, "conn-ssh"), "the tick shows for MongoDB");
+    click_id(cx, o.win, "conn-ssh");
+    assert_eq!(
+        label_of(cx, o.win, "conn-ssh-note").as_deref(),
+        Some(SSH_MONGO_HOST_NOTE)
+    );
+    assert!(
+        !present(cx, o.win, "conn-ssh-plaintext"),
+        "TLS lives in the uri"
     );
 }
