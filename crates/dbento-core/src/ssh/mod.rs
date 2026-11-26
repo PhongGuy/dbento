@@ -7,6 +7,8 @@ mod auth;
 mod known_hosts;
 mod link;
 mod resolve;
+#[cfg(feature = "mongodb")]
+pub(crate) mod socks;
 pub(crate) mod stream;
 pub use known_hosts::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,
