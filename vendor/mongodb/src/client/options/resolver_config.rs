@@ -73,6 +73,7 @@ impl ResolverConfig {
         }
     }
 
+    // Dbento P3: a single nameserver on any port, so tests answer SRV and TXT lookups locally.
     /// Test-only: one UDP nameserver at `addr`, which may listen on any port.
     #[doc(hidden)]
     pub fn name_server(addr: std::net::SocketAddr) -> Self {

@@ -233,5 +233,7 @@ fn a_socket_host_is_found_anywhere_in_the_seed_list() {
         "mongodb://app@db:27017,%2Ftmp%2Fm.sock/shop?tls=true"
     ));
     assert!(!has_socket_host("mongodb://db.sockets.internal:27017/shop"));
+    // The suffix is matched case-sensitively, as the driver matches it.
+    assert!(!has_socket_host("mongodb://h.SOCK/x"));
     assert!(!has_socket_host("mongodb+srv://cluster0.example.net/shop"));
 }

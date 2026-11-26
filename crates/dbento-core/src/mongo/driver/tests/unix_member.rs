@@ -44,7 +44,7 @@ fn answer(command: &str, me: &str, hosts: &RawArrayBuf) -> RawDocumentBuf {
 }
 
 // Reads OP_MSG requests and answers each by its command name, until the client hangs up.
-async fn serve(mut socket: TcpStream, me: String, hosts: RawArrayBuf) {
+pub(super) async fn serve(mut socket: TcpStream, me: String, hosts: RawArrayBuf) {
     let mut header = [0; 16];
     while socket.read_exact(&mut header).await.is_ok() {
         let len = i32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
