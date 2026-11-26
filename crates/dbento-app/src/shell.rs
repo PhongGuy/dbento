@@ -5182,8 +5182,10 @@ impl Shell {
         let had_key = ws.declared(name).is_some_and(|c| c.tls_key().is_some());
         self.install_workspace(plan.into_workspace(), window, cx);
         self.close_connection_form(window, cx);
+        // The pre-pinning entry under the bare name goes too, as `dbento secret delete` does.
         if let Some(key) = ws.secret_target(name).filter(|_| had_keychain) {
             self.remove_secret(key, window, cx);
+            self.remove_secret(SecretKey::legacy_password(ws.dir(), name), window, cx);
         }
         if let Some(key) = ws.key_passphrase_target(name).filter(|_| had_key) {
             self.remove_secret(key, window, cx);

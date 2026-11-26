@@ -239,6 +239,26 @@ fn delete_asks_then_removes_the_entry_and_secret_but_keeps_queries(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn delete_also_drops_the_legacy_password(cx: &mut TestAppContext) {
+    let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
+    let key = fx.ws.secret_target("nopg").unwrap();
+    let legacy = SecretKey::legacy_password(fx.ws.dir(), "nopg");
+    store.set(&key, &Secret::new("x")).unwrap();
+    store.set(&legacy, &Secret::new("x")).unwrap();
+    edit_form(cx, win, &shell, "nopg");
+    click_id(cx, win, "conn-delete");
+    wait_real(cx, "the question", |cx| present(cx, win, "delete-ok"));
+    click_id(cx, win, "delete-ok");
+    wait_real(cx, "the removed secret", |_| {
+        store.get(&key).unwrap().is_none()
+    });
+    wait_real(cx, "the removed legacy password", |_| {
+        store.get(&legacy).unwrap().is_none()
+    });
+}
+
+#[gpui_kit::test]
 fn the_env_note_names_both_variables(cx: &mut TestAppContext) {
     support::init(cx);
     support::init_tokio(cx);
