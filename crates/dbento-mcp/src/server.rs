@@ -8,7 +8,7 @@ use std::time::Duration;
 use dbento_core::{
     ColumnMeta, ConnectionConfig, Databases, RelationKind, RelationRef, SecretStore,
     SessionOptions, SshEnv, SshSecrets, StatePaths, Workspace, connect, resolve_key_passphrase,
-    resolve_secret, ssh_secrets_for,
+    resolve_secret, secret_hint, ssh_secrets_for,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{ToolCallContext, schema_for_output};
@@ -325,15 +325,20 @@ impl DbentoServer {
             .clone()
             .or_else(|| StatePaths::from_env().and_then(|paths| SshEnv::from_env(&paths)));
         let ssh_env_for_secrets = ssh_env.clone();
-        let (secret, key_passphrase, ssh_secrets) = tokio::task::spawn_blocking(move || {
+        let (secret, key_passphrase, ssh_secrets, hint) = tokio::task::spawn_blocking(move || {
             let secret = resolve_secret(&ws, &conn, &*store, &*env);
+            // A missed password is worth a hint on a failed connect; a found one never is.
+            let hint = match &secret {
+                Ok(None) => secret_hint(&ws, &conn, &*store),
+                Ok(Some(_)) | Err(_) => None,
+            };
             let key_passphrase = resolve_key_passphrase(&ws, &conn, &*store, &*env);
             let ssh_secrets = match &ssh_env_for_secrets {
                 Some(ssh_env) => ssh_secrets_for(&ws, &conn, ssh_env, &*store, &*env),
                 None => Ok(SshSecrets::default()),
             };
             secret
-                .and_then(|s| Ok((s, key_passphrase?, ssh_secrets?)))
+                .and_then(|s| Ok((s, key_passphrase?, ssh_secrets?, hint)))
                 .map_err(|e| ToolError::from_secret(&e))
         })
         .await
@@ -349,7 +354,7 @@ impl DbentoServer {
         ));
         let session = connect(&found.ws, &found.conn, secret, options)
             .await
-            .map_err(|e| ToolError::from_connect(&e))?;
+            .map_err(|e| ToolError::from_connect(&e).with_hint(hint))?;
         Ok(Opened {
             dir: found.ws.dir().to_path_buf(),
             conn: found.conn.clone(),

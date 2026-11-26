@@ -87,7 +87,7 @@ fn the_env_fallbacks_are_named_like_the_others() {
 #[test]
 fn the_slots_are_distinct_and_a_rename_keeps_the_login() {
     let keys = [
-        SecretKey::new("/w", "tun"),
+        SecretKey::legacy_password("/w", "tun"),
         SecretKey::key_passphrase("/w", "tun"),
         SecretKey::ssh_password("/w", "tun", "ops@jump:22"),
         SecretKey::ssh_password("/w", "tun", "ops@jump2:22"),

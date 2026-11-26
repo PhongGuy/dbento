@@ -278,3 +278,38 @@ fn import_secrets_debug_shows_ids_only_and_the_new_codes_are_snake_case() {
         ("auth_model", Some("postgres_pgpass"))
     );
 }
+
+#[test]
+fn an_imported_password_is_pinned_to_the_imported_server() {
+    let ws = existing(&[]);
+    let set = set_of(vec![pg("orders", "db.example")]);
+    let store = MemoryStore::new();
+    let given = secrets(&[("id-orders-db.example", "x")]);
+    let out = import(ws.path(), &set, OnConflict::Rename, &given, &store, &no_env);
+    assert_eq!(out.stored(), ["orders"], "the password was stored");
+    let opened = Workspace::open(ws.path()).unwrap();
+    let conn = opened.declared("orders").unwrap();
+    let pinned = SecretKey::password(opened.dir(), "orders", &conn.secret_pin());
+    assert_eq!(
+        store.get(&pinned).unwrap().unwrap().expose(),
+        "x",
+        "under the pinned key"
+    );
+    let legacy = SecretKey::legacy_password(opened.dir(), "orders");
+    assert!(
+        store.get(&legacy).unwrap().is_none(),
+        "nothing under the unpinned account"
+    );
+    let text = std::fs::read_to_string(ws.path().join("dbento.toml")).unwrap();
+    let moved = Workspace::from_text(
+        opened.dir().to_path_buf(),
+        &opened.dir().join("dbento.toml"),
+        &text.replace("db.example", "other.example"),
+    )
+    .unwrap();
+    let elsewhere = moved.secret_target("orders").unwrap();
+    assert!(
+        store.get(&elsewhere).unwrap().is_none(),
+        "another host misses the entry"
+    );
+}

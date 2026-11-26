@@ -29,19 +29,18 @@ fn a_menu_rename_moves_the_secret_and_the_saved_queries(cx: &mut TestAppContext)
     let dir = s
         .shell
         .read_with(cx, |sh, _| sh.workspace().unwrap().dir().to_path_buf());
-    store
-        .set(&SecretKey::new(&dir, "pg"), &Secret::new("pw"))
-        .unwrap();
+    let old = SecretKey::password(&dir, "pg", &support::pin_of(&dir, "pg"));
+    store.set(&old, &Secret::new("pw")).unwrap();
     std::fs::create_dir_all(dir.join("queries/pg")).unwrap();
     std::fs::write(dir.join("queries/pg/a.sql"), "SELECT 1").unwrap();
     right_click(cx, &s, connection_id("pg"));
     click_id(cx, s.win, "menu-rename");
     name(cx, &s, "pg2");
-    let new = SecretKey::new(&dir, "pg2");
+    let new = old.renamed("pg2");
     wait_real(cx, "the moved secret", |_| {
         store.get(&new).unwrap().is_some()
     });
-    assert!(store.get(&SecretKey::new(&dir, "pg")).unwrap().is_none());
+    assert!(store.get(&old).unwrap().is_none());
     assert!(dir.join("queries/pg2/a.sql").exists());
     assert!(s.toml().contains("[connections.pg2]"), "{}", s.toml());
     assert!(present(cx, s.win, connection_id("pg2")));
@@ -110,7 +109,7 @@ fn a_menu_delete_asks_then_removes_the_entry_and_secret(cx: &mut TestAppContext)
     let dir = s
         .shell
         .read_with(cx, |sh, _| sh.workspace().unwrap().dir().to_path_buf());
-    let key = SecretKey::new(&dir, "pg");
+    let key = SecretKey::password(&dir, "pg", &support::pin_of(&dir, "pg"));
     store.set(&key, &Secret::new("pw")).unwrap();
     right_click(cx, &s, connection_id("pg"));
     click_id(cx, s.win, "menu-delete");

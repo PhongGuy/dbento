@@ -79,13 +79,22 @@ fn keys_ab(extra: &str) -> dbento_app::rename_secret::RenameKeys {
     rename_keys(&old, &new, &secret_renames(&old, &new)[0], None)
 }
 
+/// The password keys `keys_ab(extra)` pairs: `a` pinned in the old file, `b` in the new.
+fn passwords_ab(extra: &str) -> (SecretKey, SecretKey) {
+    let (old, new) = (
+        at_w(&pg("a", "x", "x", extra)),
+        at_w(&pg("b", "x", "x", extra)),
+    );
+    (
+        old.secret_target("a").unwrap(),
+        new.secret_target("b").unwrap(),
+    )
+}
+
 #[test]
 fn rename_keys_name_each_slot_both_sides_use() {
     let keys = keys_ab(KEY);
-    assert_eq!(
-        keys.password,
-        Some((SecretKey::new("/w", "a"), SecretKey::new("/w", "b")))
-    );
+    assert_eq!(keys.password, Some(passwords_ab(KEY)));
     assert_eq!(
         keys.passphrase,
         Some((
@@ -99,10 +108,9 @@ fn rename_keys_name_each_slot_both_sides_use() {
 #[test]
 fn probe_sees_which_slots_hold_and_adopt_moves_only_those() {
     let keys = keys_ab(KEY);
+    let (pw_a, pw_b) = passwords_ab(KEY);
     let store = MemoryStore::new();
-    store
-        .set(&SecretKey::new("/w", "a"), &Secret::new(SECRET))
-        .unwrap();
+    store.set(&pw_a, &Secret::new(SECRET)).unwrap();
     let held = probe(&store, &keys).unwrap();
     assert_eq!(
         held,
@@ -113,8 +121,8 @@ fn probe_sees_which_slots_hold_and_adopt_moves_only_those() {
     );
     assert!(held.movable());
     adopt_held(&store, &keys, held).unwrap();
-    assert!(store.get(&SecretKey::new("/w", "b")).unwrap().is_some());
-    assert!(store.get(&SecretKey::new("/w", "a")).unwrap().is_none());
+    assert!(store.get(&pw_b).unwrap().is_some());
+    assert!(store.get(&pw_a).unwrap().is_none());
     assert!(
         store
             .get(&SecretKey::key_passphrase("/w", "b"))
@@ -126,13 +134,10 @@ fn probe_sees_which_slots_hold_and_adopt_moves_only_those() {
 #[test]
 fn a_slot_already_filled_under_the_new_name_is_not_movable() {
     let keys = keys_ab("");
+    let (pw_a, pw_b) = passwords_ab("");
     let store = MemoryStore::new();
-    store
-        .set(&SecretKey::new("/w", "a"), &Secret::new(SECRET))
-        .unwrap();
-    store
-        .set(&SecretKey::new("/w", "b"), &Secret::new("typed"))
-        .unwrap();
+    store.set(&pw_a, &Secret::new(SECRET)).unwrap();
+    store.set(&pw_b, &Secret::new("typed")).unwrap();
     let held = probe(&store, &keys).unwrap();
     assert_eq!(
         held,
@@ -183,11 +188,31 @@ struct App {
     win: AnyWindowHandle,
     shell: Entity<dbento_app::shell::Shell>,
     store: Arc<dyn SecretStore>,
+    pins: std::cell::RefCell<std::collections::HashMap<String, dbento_core::SecretPin>>,
 }
 
 impl App {
+    /// The password key for `name`: pinned to `name`'s config while the file declares it,
+    /// else to the pin last seen for it, so an old name keeps the pin it was saved under.
     fn password(&self, name: &str) -> SecretKey {
-        SecretKey::new(&self.dir, name)
+        let declared = dbento_core::Workspace::open(&self.dir)
+            .ok()
+            .and_then(|ws| ws.declared(name).map(|c| c.secret_pin()));
+        let pin = match declared {
+            Some(pin) => {
+                self.pins.borrow_mut().insert(name.to_owned(), pin.clone());
+                pin
+            }
+            None => self.pins.borrow().get(name).cloned().unwrap_or_else(|| {
+                panic!("{name} was never declared; use password_as(name, pin_from)")
+            }),
+        };
+        SecretKey::password(&self.dir, name, &pin)
+    }
+    /// The password key for `name` pinned to `pin_from`'s current config, for a name the
+    /// file does not declare yet (a secret seeded ahead of an outside rename).
+    fn password_as(&self, name: &str, pin_from: &str) -> SecretKey {
+        SecretKey::password(&self.dir, name, &support::pin_of(&self.dir, pin_from))
     }
     fn passphrase(&self, name: &str) -> SecretKey {
         SecretKey::key_passphrase(&self.dir, name)
@@ -243,6 +268,7 @@ fn app(cx: &mut TestAppContext, body: &str, store: Arc<dyn SecretStore>, env: En
         win,
         shell,
         store,
+        pins: std::cell::RefCell::default(),
     };
     if body.contains("[connections.zw]") {
         a.save(&a.password("zw"));
@@ -276,7 +302,7 @@ fn a_secret_already_under_the_new_name_wins(cx: &mut TestAppContext) {
     );
     a.save(&a.password("nopg"));
     a.store
-        .set(&a.password("pg2"), &Secret::new("typed"))
+        .set(&a.password_as("pg2", "nopg"), &Secret::new("typed"))
         .unwrap();
     a.outside(cx, &format!("{}{}", pg("pg2", "x", "x", ""), zw("zw2")));
     a.witnessed(cx);
@@ -518,7 +544,7 @@ fn a_new_name_that_already_has_every_secret_asks_nothing(cx: &mut TestAppContext
     let a = app(cx, &with_zw(&pg("nopg", "x", "x", "")), memory(), no_env());
     a.save(&a.password("nopg"));
     a.store
-        .set(&a.password("pg2"), &Secret::new("typed"))
+        .set(&a.password_as("pg2", "nopg"), &Secret::new("typed"))
         .unwrap();
     renamed_to_y(&a, cx);
     a.witnessed(cx);
@@ -693,7 +719,7 @@ fn an_exact_rename_waiting_behind_a_question_rechecks_the_file(cx: &mut TestAppC
     click_id(cx, a.win, "rename-secret-keep");
     a.witnessed(cx);
     assert!(
-        !a.holds(&a.password("y")),
+        !a.holds(&a.password("y")) && !a.holds(&a.password("b").renamed("y")),
         "b's password never reaches the new host"
     );
     assert!(a.holds(&a.password("b")), "b's entry stays");

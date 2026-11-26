@@ -2213,59 +2213,11 @@ impl ConnectionConfig {
         self.session_key() == other.session_key()
     }
 
-    /// Whether a secret saved for one is sent to the same server as the same user by the other.
-    /// Name, colour, folder and session settings are ignored.
+    /// Whether a secret saved for one is sent to the same server as the same user by the other:
+    /// the engines and the secret pins are equal. Name, colour, folder and session settings
+    /// are ignored.
     pub fn same_login(&self, other: &ConnectionConfig) -> bool {
-        // Only the fields that pick the server and the account count; everything else shapes
-        // the session or the label, and a secret stays valid across those.
-        let ConnectionConfig {
-            name: _,
-            color: _,
-            folder: _,
-            effective_color: _,
-            mariadb: _,
-            read_only: _,
-            statement_timeout: _,
-            secret_source: _,
-            path: _,
-            file_path: _,
-            database: _,
-            tls: _,
-            tls_ca: _,
-            tls_cert: _,
-            tls_key: _,
-            settings: _,
-            read_only_user: _,
-            databases: _,
-            parent: _,
-            consistent_read: _,
-            virtual_hosted: _,
-            buckets: _,
-            engine,
-            host,
-            port,
-            user,
-            uri,
-            namespace,
-            auth_level,
-            region,
-            endpoint,
-            access_key_id,
-            ssh,
-        } = self;
-        // The tunnel's host and port decide which server a database host name means.
-        let tunnel = |s: &Option<SshConfig>| s.as_ref().map(|s| (s.host.clone(), s.port));
-        *engine == other.engine
-            && tunnel(ssh) == tunnel(&other.ssh)
-            && *host == other.host
-            && *port == other.port
-            && *user == other.user
-            && *uri == other.uri
-            && *namespace == other.namespace
-            && *auth_level == other.auth_level
-            && *region == other.region
-            && *endpoint == other.endpoint
-            && *access_key_id == other.access_key_id
+        self.engine == other.engine && self.secret_pin() == other.secret_pin()
     }
 
     /// The dbento.toml keys whose resolved values differ, in FORMAT.md order (`mariadb` reports

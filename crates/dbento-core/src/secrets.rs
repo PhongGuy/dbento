@@ -280,12 +280,33 @@ pub fn resolve_secret(
     }
 }
 
-/// For a keychain connection with a password, where a missing secret can be supplied, plus the
-/// keychain's reason when it is unavailable; `None` for `secret = "none"`, `{ env }` and SQLite.
+/// Who reads a missing-secret hint, which decides how the hint says to supply the password.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintAudience {
+    /// A terminal user, pointed at `dbento secret` commands.
+    Cli,
+    /// A desktop app user, pointed at the connection form.
+    App,
+}
+
+/// [`secret_hint_for`] worded for the CLI.
 pub fn secret_hint(
     ws: &Workspace,
     conn: &ConnectionConfig,
     store: &dyn SecretStore,
+) -> Option<String> {
+    secret_hint_for(ws, conn, store, HintAudience::Cli)
+}
+
+/// For a keychain connection with a password, where a missing secret can be supplied, worded
+/// for `audience`, plus the keychain's reason when it is unavailable; `None` for
+/// `secret = "none"`, `{ env }` and SQLite. A password saved before pinning changes the text.
+pub fn secret_hint_for(
+    ws: &Workspace,
+    conn: &ConnectionConfig,
+    store: &dyn SecretStore,
+    audience: HintAudience,
 ) -> Option<String> {
     if !conn.engine().capabilities().password
         || !matches!(conn.secret_source(), SecretSource::Keychain)
@@ -294,12 +315,35 @@ pub fn secret_hint(
     }
     let name = conn.secret_owner();
     let variable = secret_env_var(name);
-    let mut hint = format!(
-        "no secret was found for '{name}': run `dbento secret set {name}` or set {variable}"
-    );
-    if let Err(e @ SecretError::Unavailable { .. }) =
-        store.get(&SecretKey::for_connection(ws, conn))
-    {
+    // An unavailable keychain cannot answer for the legacy entry either, so only a readable
+    // one is asked whether an unpinned password is waiting for confirmation.
+    let unavailable = match store.get(&SecretKey::for_connection(ws, conn)) {
+        Err(e @ SecretError::Unavailable { .. }) => Some(e),
+        Ok(_) | Err(SecretError::Missing { .. } | SecretError::Failed { .. }) => None,
+    };
+    let legacy = unavailable.is_none()
+        && matches!(
+            store.get(&SecretKey::legacy_password(ws.dir(), name)),
+            Ok(Some(_))
+        );
+    let mut hint = match (audience, legacy) {
+        (HintAudience::Cli, false) => format!(
+            "no secret was found for '{name}': run `dbento secret set {name}` or set {variable}"
+        ),
+        (HintAudience::Cli, true) => format!(
+            "the saved password for '{name}' was stored before passwords were tied to their \
+             server; run `dbento secret pin {name}` to confirm this server, or \
+             `dbento secret set {name}`"
+        ),
+        (HintAudience::App, false) => format!(
+            "no password is saved for '{name}': edit the connection to enter it, or set {variable}"
+        ),
+        (HintAudience::App, true) => format!(
+            "the saved password for '{name}' is not sent until you confirm this server: edit \
+             the connection to enter it"
+        ),
+    };
+    if let Some(e) = unavailable {
         hint.push_str(&format!("; {e}"));
     }
     Some(hint)

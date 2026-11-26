@@ -15,6 +15,7 @@ mod folder;
 mod kinds;
 mod mongo_uri;
 mod secret_key;
+mod secret_pin;
 mod spec;
 mod workspace;
 
@@ -28,6 +29,7 @@ pub use mongo_uri::BAD_PORT as MONGO_BAD_PORT;
 pub use secret_key::SecretKey;
 #[doc(hidden)]
 pub use secret_key::Slot;
+pub use secret_pin::SecretPin;
 pub use spec::{ConnectionSpec, SshSpec};
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, Engine, Folder, InitError, MAX_QUERY_FILE_BYTES,

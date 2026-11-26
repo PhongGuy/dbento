@@ -915,3 +915,11 @@ pub fn s3_spec(s3: &dbento_testkit::S3Moto, extra: &str) -> (tempfile::TempDir, 
     };
     (dir, spec)
 }
+
+/// The pin of connection `name` as the dbento.toml at `dir` declares it now.
+pub fn pin_of(dir: &std::path::Path, name: &str) -> dbento_core::SecretPin {
+    let ws = Workspace::open(dir).unwrap();
+    ws.declared(name)
+        .unwrap_or_else(|| panic!("{name} is not declared in {}", dir.display()))
+        .secret_pin()
+}

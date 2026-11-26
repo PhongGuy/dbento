@@ -183,6 +183,10 @@ const DATABASES_CHOICES: [DatabasesChoice; 3] = [
 /// server has it, and an empty-Database Test opens it too.
 pub const POSTGRES_DATABASE: &str = "postgres";
 
+/// Shown while the edit points a saved keychain password at another server.
+pub const PIN_NOTE: &str =
+    "The saved password is not sent to the changed server; type it again to save it for this one.";
+
 // Database's help while a parent lists its databases (All or Choose).
 const PG_PARENT_DATABASE_HELP: &str = "The database the others are listed from.";
 const MSSQL_PARENT_DATABASE_HELP: &str =
@@ -296,6 +300,7 @@ pub struct ConnectionForm {
     base_dir: Option<PathBuf>,
     secrets_in_memory: bool,
     env_fallback: bool,
+    pin_moved: bool,
     test: TestState,
     // Held by the form's root so Ctrl+S reaches SaveConnection while no field has focus.
     focus: FocusHandle,
@@ -482,6 +487,7 @@ impl ConnectionForm {
             base_dir: None,
             secrets_in_memory,
             env_fallback: false,
+            pin_moved: false,
             test: TestState::Idle,
             focus: cx.focus_handle(),
             _folder_changes: folder_changes,
@@ -940,6 +946,14 @@ impl ConnectionForm {
         }
         cx.emit(ConnectionFormEvent::Edited);
         cx.notify();
+    }
+
+    /// Shows or hides the pin note; set by the shell, which knows the saved target.
+    pub fn set_pin_moved(&mut self, moved: bool, cx: &mut Context<Self>) {
+        if self.pin_moved != moved {
+            self.pin_moved = moved;
+            cx.notify();
+        }
     }
 
     /// Shows a Test connection state under the fields.
@@ -1562,6 +1576,7 @@ impl ConnectionForm {
         }
         if choice == SecretChoice::Keychain {
             rows.extend(self.env_note(cx));
+            rows.extend(self.pin_note(cx));
         }
         rows
     }
@@ -1923,6 +1938,23 @@ impl ConnectionForm {
             .text_xs()
             .text_color(theme::dim(cx))
             .child(says);
+        Some(note.into_any_element())
+    }
+
+    // The saved password stays with the server it was saved for, so an edit that points the
+    // connection elsewhere says the password must be typed again.
+    fn pin_note(&self, cx: &App) -> Option<AnyElement> {
+        if !self.pin_moved {
+            return None;
+        }
+        let note = div()
+            .id("conn-pin-note")
+            .aria_label(SharedString::from(PIN_NOTE))
+            .test_support()
+            .pl(px(LABEL_WIDTH + 12.))
+            .text_xs()
+            .text_color(theme::dim(cx))
+            .child(PIN_NOTE);
         Some(note.into_any_element())
     }
 

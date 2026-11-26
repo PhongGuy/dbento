@@ -4,10 +4,13 @@ use dbento_app::explorer::connection_id;
 use crate::support::{click_id, label_of, present, wait_real};
 use dbento_app::app::start;
 use dbento_app::connection_dialog::Field;
+use dbento_core::MemoryStore;
 use dbento_core::{Secret, SecretError, SecretKey, SecretStore};
+use gpui_kit::component::input::InputEvent;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// The app on a fixture with no tab open.
 fn idle_app(
@@ -79,19 +82,18 @@ fn a_rename_moves_the_secret_and_the_saved_queries(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    store
-        .set(&SecretKey::new(&dir, "nopg"), &Secret::new("pw"))
-        .unwrap();
+    let old = fx.ws.secret_target("nopg").unwrap();
+    store.set(&old, &Secret::new("pw")).unwrap();
     std::fs::create_dir_all(dir.join("queries/nopg")).unwrap();
     std::fs::write(dir.join("queries/nopg/a.sql"), "SELECT 1").unwrap();
     let f = edit_form(cx, win, &shell, "nopg");
     set(cx, win, &f, Field::Name, "pg2");
     click_id(cx, win, "conn-save");
-    let new = SecretKey::new(&dir, "pg2");
+    let new = old.renamed("pg2");
     wait_real(cx, "the moved secret", |_| {
         store.get(&new).unwrap().is_some()
     });
-    assert!(store.get(&SecretKey::new(&dir, "nopg")).unwrap().is_none());
+    assert!(store.get(&old).unwrap().is_none());
     wait_real(cx, "the moved folder", |_| {
         dir.join("queries/pg2/a.sql").exists()
     });
@@ -136,9 +138,8 @@ fn a_failed_apply_moves_no_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    store
-        .set(&SecretKey::new(&dir, "nopg"), &Secret::new("pw"))
-        .unwrap();
+    let old = fx.ws.secret_target("nopg").unwrap();
+    store.set(&old, &Secret::new("pw")).unwrap();
     let f = edit_form(cx, win, &shell, "nopg");
     std::fs::write(
         dir.join("dbento.toml"),
@@ -153,8 +154,8 @@ fn a_failed_apply_moves_no_secret(cx: &mut TestAppContext) {
             .contains("changed since it was loaded")
     );
     cx.run_until_parked();
-    assert!(store.get(&SecretKey::new(&dir, "pg2")).unwrap().is_none());
-    assert!(store.get(&SecretKey::new(&dir, "nopg")).unwrap().is_some());
+    assert!(store.get(&old.renamed("pg2")).unwrap().is_none());
+    assert!(store.get(&old).unwrap().is_some());
 }
 
 #[gpui_kit::test]
@@ -213,7 +214,7 @@ fn delete_asks_then_removes_the_entry_and_secret_but_keeps_queries(cx: &mut Test
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    let key = SecretKey::new(&dir, "nopg");
+    let key = fx.ws.secret_target("nopg").unwrap();
     store.set(&key, &Secret::new("pw")).unwrap();
     std::fs::create_dir_all(dir.join("queries/nopg")).unwrap();
     edit_form(cx, win, &shell, "nopg");
@@ -235,6 +236,26 @@ fn delete_asks_then_removes_the_entry_and_secret_but_keeps_queries(cx: &mut Test
     );
     assert!(dir.join("queries/nopg").exists());
     assert!(!present(cx, win, connection_id("nopg")));
+}
+
+#[gpui_kit::test]
+fn delete_also_drops_the_legacy_password(cx: &mut TestAppContext) {
+    let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
+    let key = fx.ws.secret_target("nopg").unwrap();
+    let legacy = SecretKey::legacy_password(fx.ws.dir(), "nopg");
+    store.set(&key, &Secret::new("x")).unwrap();
+    store.set(&legacy, &Secret::new("x")).unwrap();
+    edit_form(cx, win, &shell, "nopg");
+    click_id(cx, win, "conn-delete");
+    wait_real(cx, "the question", |cx| present(cx, win, "delete-ok"));
+    click_id(cx, win, "delete-ok");
+    wait_real(cx, "the removed secret", |_| {
+        store.get(&key).unwrap().is_none()
+    });
+    wait_real(cx, "the removed legacy password", |_| {
+        store.get(&legacy).unwrap().is_none()
+    });
 }
 
 #[gpui_kit::test]
@@ -310,7 +331,7 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
     let dir = fx.ws.dir().to_path_buf();
-    let old = SecretKey::new(&dir, "nopg");
+    let old = fx.ws.secret_target("nopg").unwrap();
     store.set(&old, &Secret::new("pw")).unwrap();
     let f = edit_form(cx, win, &shell, "nopg");
     set(cx, win, &f, Field::Name, "lite2");
@@ -323,7 +344,9 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
         store.get(&old).unwrap().is_none()
     });
     cx.run_until_parked();
-    assert!(store.get(&SecretKey::new(&dir, "lite2")).unwrap().is_none());
+    assert!(store.get(&old.renamed("lite2")).unwrap().is_none());
+    let lite2 = SecretKey::password(&dir, "lite2", &support::pin_of(&dir, "lite2"));
+    assert!(store.get(&lite2).unwrap().is_none());
     assert!(
         std::fs::read_to_string(dir.join("dbento.toml"))
             .unwrap()
@@ -335,7 +358,7 @@ fn a_rename_to_sqlite_removes_the_old_secret(cx: &mut TestAppContext) {
 fn a_switch_away_from_the_keychain_removes_its_secret(cx: &mut TestAppContext) {
     let store: Arc<dyn SecretStore> = Arc::new(dbento_core::MemoryStore::new());
     let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
-    let key = SecretKey::new(fx.ws.dir(), "nopg");
+    let key = fx.ws.secret_target("nopg").unwrap();
     store.set(&key, &Secret::new("pw")).unwrap();
     edit_form(cx, win, &shell, "nopg");
     cx.update_window(win, |_, w, cx| w.within("conn-secret").click(2usize, cx))
@@ -431,4 +454,189 @@ fn save_refuses_a_form_older_than_the_workspace(cx: &mut TestAppContext) {
     );
     assert!(present(cx, win, "conn-reload"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+/// The pinned password key for `name` as the file declares it now.
+fn pinned(dir: &std::path::Path, name: &str) -> SecretKey {
+    SecretKey::password(dir, name, &support::pin_of(dir, name))
+}
+
+#[gpui_kit::test]
+fn a_changed_login_drops_the_saved_password_and_stores_a_typed_one_under_the_new(
+    cx: &mut TestAppContext,
+) {
+    let store: Arc<dyn SecretStore> = Arc::new(MemoryStore::new());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
+    let dir = fx.ws.dir().to_path_buf();
+    let (old, legacy) = (
+        pinned(&dir, "nopg"),
+        SecretKey::legacy_password(&dir, "nopg"),
+    );
+    store.set(&old, &Secret::new("x")).unwrap();
+    store.set(&legacy, &Secret::new("x")).unwrap();
+    let f = edit_form(cx, win, &shell, "nopg");
+    set(cx, win, &f, Field::User, "y");
+    set(cx, win, &f, Field::Password, "x");
+    click_id(cx, win, "conn-save");
+    let new = pinned(&dir, "nopg");
+    assert_ne!(new, old, "the user is part of the pin");
+    wait_real(cx, "the typed password", |_| {
+        store.get(&new).unwrap().is_some()
+    });
+    assert!(
+        store.get(&old).unwrap().is_none(),
+        "the old login's entry is dropped"
+    );
+    assert!(
+        store.get(&legacy).unwrap().is_none(),
+        "a typed password drops the legacy entry"
+    );
+}
+
+#[gpui_kit::test]
+fn a_rename_to_another_login_moves_nothing(cx: &mut TestAppContext) {
+    let store: Arc<dyn SecretStore> = Arc::new(MemoryStore::new());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
+    let dir = fx.ws.dir().to_path_buf();
+    let old = pinned(&dir, "nopg");
+    store.set(&old, &Secret::new("x")).unwrap();
+    let f = edit_form(cx, win, &shell, "nopg");
+    set(cx, win, &f, Field::Name, "pg2");
+    set(cx, win, &f, Field::User, "y");
+    click_id(cx, win, "conn-save");
+    wait_real(cx, "the dropped entry", |_| {
+        store.get(&old).unwrap().is_none()
+    });
+    assert!(
+        store.get(&pinned(&dir, "pg2")).unwrap().is_none(),
+        "nothing reaches the new login"
+    );
+    assert!(
+        store.get(&old.renamed("pg2")).unwrap().is_none(),
+        "nor the old pin under the new name"
+    );
+}
+
+/// Sets `field` and reports the change as a keystroke does; `set_value` alone emits nothing.
+fn typed(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+    f: &Entity<dbento_app::connection_dialog::ConnectionForm>,
+    field: Field,
+    text: &str,
+) {
+    set(cx, win, f, field, text);
+    let state = f.read_with(cx, |f, _| f.input(field).clone());
+    state.update(cx, |_, cx| cx.emit(InputEvent::Change));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn the_form_says_the_saved_password_stays_behind_when_the_login_changes(cx: &mut TestAppContext) {
+    let (_fx, _files, win, shell) = idle_app(cx, Arc::new(MemoryStore::new()));
+    let f = edit_form(cx, win, &shell, "nopg");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "an untouched form has no note"
+    );
+    typed(cx, win, &f, Field::Database, "y");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "the database is not part of the target"
+    );
+    typed(cx, win, &f, Field::Name, "pg2");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "a rename alone keeps the password"
+    );
+    typed(cx, win, &f, Field::User, "y");
+    assert_eq!(
+        label_of(cx, win, "conn-pin-note").as_deref(),
+        Some(dbento_app::connection_dialog::PIN_NOTE),
+        "another login gets the note"
+    );
+    typed(cx, win, &f, Field::User, "x");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "back on the saved login the note goes"
+    );
+}
+
+#[gpui_kit::test]
+fn a_new_connection_shows_no_pin_note(cx: &mut TestAppContext) {
+    let (_fx, _files, win, _shell) = idle_app(cx, Arc::new(MemoryStore::new()));
+    click_id(cx, win, "connection-new");
+    wait_real(cx, "the dialog", |cx| present(cx, win, "conn-name"));
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "nothing is saved for a new connection"
+    );
+}
+
+/// A store that records every key read, so a test can prove a password was never sent.
+struct Reads {
+    inner: MemoryStore,
+    read: Mutex<Vec<SecretKey>>,
+}
+impl Reads {
+    fn new() -> Self {
+        Reads {
+            inner: MemoryStore::new(),
+            read: Mutex::new(Vec::new()),
+        }
+    }
+    fn saw(&self, k: &SecretKey) -> bool {
+        self.read.lock().unwrap().contains(k)
+    }
+}
+impl SecretStore for Reads {
+    fn get(&self, k: &SecretKey) -> Result<Option<Secret>, SecretError> {
+        self.read.lock().unwrap().push(k.clone());
+        self.inner.get(k)
+    }
+    fn set(&self, k: &SecretKey, s: &Secret) -> Result<(), SecretError> {
+        self.inner.set(k, s)
+    }
+    fn delete(&self, k: &SecretKey) -> Result<(), SecretError> {
+        self.inner.delete(k)
+    }
+}
+
+/// Renames `nopg` to `pg2` in the form, sets `user` when given, and runs Test connection;
+/// answers whether the old name's saved password was read.
+fn test_reads_old(cx: &mut TestAppContext, user: Option<&str>) -> bool {
+    let reads = Arc::new(Reads::new());
+    let store = Arc::clone(&reads) as Arc<dyn SecretStore>;
+    let (fx, _files, win, shell) = idle_app(cx, store);
+    let old = pinned(fx.ws.dir(), "nopg");
+    reads.inner.set(&old, &Secret::new("x")).unwrap();
+    let f = edit_form(cx, win, &shell, "nopg");
+    set(cx, win, &f, Field::Name, "pg2");
+    if let Some(user) = user {
+        set(cx, win, &f, Field::User, user);
+    }
+    reads.read.lock().unwrap().clear();
+    click_id(cx, win, "conn-test");
+    wait_real(cx, "the test result", |cx| {
+        label_of(cx, win, "conn-test-result").is_some_and(|l| l.starts_with("Failed: "))
+    });
+    reads.saw(&old)
+}
+
+#[gpui_kit::test]
+fn test_connection_during_a_rename_uses_the_saved_password_on_the_same_login(
+    cx: &mut TestAppContext,
+) {
+    assert!(
+        test_reads_old(cx, None),
+        "a rename alone tests with the saved password"
+    );
+}
+
+#[gpui_kit::test]
+fn test_connection_during_a_rename_to_another_login_never_reads_it(cx: &mut TestAppContext) {
+    assert!(
+        !test_reads_old(cx, Some("y")),
+        "the old login's password is never read"
+    );
 }

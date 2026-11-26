@@ -58,7 +58,7 @@ fn cases() -> Vec<(&'static str, bool, String, String)> {
         ),
         (
             "path",
-            false,
+            true,
             SQL.into(),
             "engine = \"sqlite\"\npath = \"b.db\"\n".into(),
         ),
@@ -128,9 +128,29 @@ fn cases() -> Vec<(&'static str, bool, String, String)> {
         ("uri", true, MG.into(), MG.replace("27017", "27018")),
         (
             "namespace",
-            true,
+            false,
             SR.into(),
             SR.replace("namespace = \"n\"", "namespace = \"m\""),
+        ),
+        (
+            "namespace",
+            true,
+            SR.replace("\"root\"", "\"namespace\""),
+            SR.replace("\"root\"", "\"namespace\"")
+                .replace("namespace = \"n\"", "namespace = \"m\""),
+        ),
+        (
+            "database",
+            true,
+            SR.replace("\"root\"", "\"database\""),
+            SR.replace("\"root\"", "\"database\"")
+                .replace("database = \"d\"", "database = \"e\""),
+        ),
+        (
+            "host",
+            false,
+            PG.into(),
+            PG.replace("db.internal", "DB.Internal."),
         ),
         (
             "auth_level",

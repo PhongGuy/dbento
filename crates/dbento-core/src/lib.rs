@@ -16,7 +16,7 @@ mod workspace;
 pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, DurationError, Engine, Folder,
     FormattedDuration, InitError, MAX_QUERY_FILE_BYTES, OpenError, QueryFileError, ResolveError,
-    SavedQuery, SecretSource, SshAuth, SshConfig, TlsMode, Workspace, format_duration,
+    SavedQuery, SecretPin, SecretSource, SshAuth, SshConfig, TlsMode, Workspace, format_duration,
     parse_duration, valid_database_name,
 };
 
@@ -51,6 +51,9 @@ pub use history::{
 pub mod paths;
 pub use paths::StatePaths;
 
+mod legacy_secret;
+pub use legacy_secret::{LegacyMigration, adopt_legacy_password, migrate_legacy_passwords};
+
 mod rename_secret;
 pub use rename_secret::{
     Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, SshAdopted, SshPasswordMove, adopt_secret,
@@ -59,9 +62,9 @@ pub use rename_secret::{
 
 mod secrets;
 pub use secrets::{
-    MemoryStore, Secret, SecretError, SecretKey, SecretStore, SshSecrets, TimedStore,
+    HintAudience, MemoryStore, Secret, SecretError, SecretKey, SecretStore, SshSecrets, TimedStore,
     key_passphrase_env_var, move_secret, resolve_key_passphrase, resolve_secret,
-    resolve_ssh_secrets, secret_env_var, secret_hint, ssh_key_passphrase_env_var,
+    resolve_ssh_secrets, secret_env_var, secret_hint, secret_hint_for, ssh_key_passphrase_env_var,
     ssh_password_env_var, tls_key_is_encrypted,
 };
 

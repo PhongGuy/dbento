@@ -216,7 +216,11 @@ mod targets {
     #[test]
     fn only_a_declared_connection_has_a_keychain_target() {
         let (_d, ws) = open(PARENT);
-        assert_eq!(ws.secret_target("pg"), Some(SecretKey::new(ws.dir(), "pg")));
+        let pin = ws.declared("pg").unwrap().secret_pin();
+        assert_eq!(
+            ws.secret_target("pg"),
+            Some(SecretKey::password(ws.dir(), "pg", &pin))
+        );
         assert_eq!(
             ws.key_passphrase_target("pg"),
             Some(SecretKey::key_passphrase(ws.dir(), "pg"))

@@ -122,7 +122,10 @@ fn a_rename_moves_the_saved_queries_folder() {
 fn move_secret_moves_only_what_is_there() {
     let store = MemoryStore::new();
     let dir = Path::new("/w");
-    let (old, new) = (SecretKey::new(dir, "lite"), SecretKey::new(dir, "lite2"));
+    let (old, new) = (
+        SecretKey::legacy_password(dir, "lite"),
+        SecretKey::legacy_password(dir, "lite2"),
+    );
     assert!(!move_secret(&store, &old, &new).unwrap());
     store.set(&old, &Secret::new("pw")).unwrap();
     assert!(move_secret(&store, &old, &new).unwrap());
@@ -134,7 +137,7 @@ fn move_secret_moves_only_what_is_there() {
 #[test]
 fn move_secret_onto_its_own_key_keeps_it() {
     let store = MemoryStore::new();
-    let key = SecretKey::new(Path::new("/w"), "lite");
+    let key = SecretKey::legacy_password(Path::new("/w"), "lite");
     assert!(!move_secret(&store, &key, &key).unwrap());
     store.set(&key, &Secret::new("pw")).unwrap();
     assert!(move_secret(&store, &key, &key).unwrap());

@@ -78,10 +78,9 @@ fn a_new_mysql_connection_tests_saves_and_keeps_its_password_in_the_keychain(
         support::label_of(cx, win, "conn-test-result").as_deref() == Some("Connected")
     });
     support::click_id(cx, win, "conn-save");
-    let key = SecretKey::new(
-        shell.read_with(cx, |s, _| s.workspace().unwrap().dir().to_path_buf()),
-        "my",
-    );
+    let dir_now = shell.read_with(cx, |s, _| s.workspace().unwrap().dir().to_path_buf());
+    // The key is pinned to the saved config, so it is built once the file declares `my`.
+    let key = SecretKey::password(&dir_now, "my", &support::pin_of(&dir_now, "my"));
     support::wait_real(cx, "the stored secret", |_| {
         store.get(&key).unwrap().is_some()
     });
