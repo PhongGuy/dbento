@@ -239,14 +239,7 @@ impl Driver for MongoDriver {
         }
         resolve_tls_paths(&mut options, params.ws_dir);
         if let Some(ep) = &socks {
-            let (user, pass) = ep.credentials();
-            options.socks5_proxy = Some(
-                Socks5Proxy::builder()
-                    .host("127.0.0.1")
-                    .port(ep.port())
-                    .authentication((user.to_owned(), pass.to_owned()))
-                    .build(),
-            );
+            options.socks5_proxy = Some(proxy_of(ep));
         }
         let client = Client::with_options(options).map_err(fail)?;
 
@@ -608,8 +601,22 @@ async fn within<T>(
         })?
 }
 
+/// The driver's proxy settings for `ep`: its loopback port and its login.
+fn proxy_of(ep: &SocksEndpoint) -> Socks5Proxy {
+    let (user, pass) = ep.credentials();
+    Socks5Proxy::builder()
+        .host("127.0.0.1")
+        .port(ep.port())
+        .authentication((user.to_owned(), pass.to_owned()))
+        .build()
+}
+
+/// The vendored driver's refusal to dial a Unix-socket member while a proxy is set.
+const UNIX_UNDER_PROXY: &str = "a Unix socket address cannot be reached through the proxy";
+
 /// What a failed connect means: the endpoint's recorded SSH refusal when the driver saw only a
-/// selection timeout or a proxy error, else `open_error`.
+/// selection timeout or a proxy error, the refused socket member when that error names one, else
+/// `open_error`.
 fn connect_error(conn: &ConnectionConfig, refusal: Option<String>, e: Error) -> ConnectError {
     #[allow(
         clippy::wildcard_enum_match_arm,
@@ -619,6 +626,15 @@ fn connect_error(conn: &ConnectionConfig, refusal: Option<String>, e: Error) -> 
         (Some(message), ErrorKind::ServerSelection { .. } | ErrorKind::ProxyConnect { .. }) => {
             ConnectError::SshTunnel { message }
         }
+        // The refusal reaches here inside a selection timeout's topology text, or on its own.
+        (
+            None,
+            ErrorKind::ServerSelection { message, .. } | ErrorKind::ProxyConnect { message, .. },
+        ) if message.contains(UNIX_UNDER_PROXY) => ConnectError::SshTunnel {
+            message: "a member of this deployment advertised a local socket, which cannot \
+                          be reached over SSH; the SSH server reaches TCP members only"
+                .to_owned(),
+        },
         _ => open_error(conn, e),
     }
 }

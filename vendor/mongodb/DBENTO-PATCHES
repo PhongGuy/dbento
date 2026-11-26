@@ -41,3 +41,13 @@ P3
           never called outside tests.
   Files: src/client/options/resolver_config.rs
   Upstream: none filed (project rule: own issue and local workaround)
+
+P4
+  Change: AsyncStream::connect refuses a ServerAddress::Unix with
+          ErrorKind::ProxyConnect when a SOCKS5 proxy is set, before any
+          local dial. The driver turns any member a server reports as
+          `*.sock` into a Unix address, so without this a server reached
+          through the proxy could make this machine dial a local socket.
+          The message leaves the path out. Without a proxy nothing changes.
+  Files: src/runtime/stream.rs
+  Upstream: none filed (project rule: own issue and local workaround)

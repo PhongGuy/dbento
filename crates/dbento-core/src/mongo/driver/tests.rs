@@ -9,6 +9,8 @@ use mongodb::options::{ClientOptions, Tls};
 use super::*;
 use crate::session::{Unguarded, Writes};
 
+mod unix_member;
+
 fn set(actions: &[&str]) -> BTreeSet<String> {
     actions.iter().map(|a| (*a).to_owned()).collect()
 }
