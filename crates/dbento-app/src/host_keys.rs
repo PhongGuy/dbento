@@ -316,9 +316,8 @@ pub fn host_key_ask(connection: &str, host: &str, port: u16, fingerprint: &str) 
 }
 
 /// Serves `prompts` in order until the channel closes or `decide` returns None. A prompt whose
-/// question is no longer open is answered Declined without calling `decide`. `decide`'s answer
-/// goes back under the prompt's own fingerprint; None answers Declined and ends the loop,
-/// dropping `prompts`, which unregisters the handler.
+/// question is no longer open is Declined without calling `decide`; answers go back under the
+/// prompt's own fingerprint. None declines and ends the loop, dropping `prompts` to unregister.
 pub async fn serve_prompts<K>(
     prompts: HostKeyPrompts<K>,
     gate: Arc<HostKeyGate<K>>,

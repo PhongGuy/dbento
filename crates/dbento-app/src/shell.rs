@@ -4793,9 +4793,8 @@ impl Shell {
     }
 
     // After a connection edit from `base` is written: a rename moves `queries/<old>/` before
-    // install, any open form closes, and the keychain follows off the UI thread (moved,
-    // removed, or the typed secrets stored). A failed folder move keeps the rename and says so.
-    // `typed` is the database password, the key passphrase, the SSH password and passphrase.
+    // install (a failed move keeps the rename and says so), the form closes, and the keychain
+    // follows off the UI thread. `typed` holds the DB and SSH passwords and key passphrases.
     #[allow(clippy::too_many_arguments)]
     fn finish_connection_write(
         &mut self,

@@ -250,10 +250,9 @@ pub struct SshFollow {
     pub problem: Option<String>,
 }
 
-/// `old_name` in `base` became `name` in `now` (equal names for an edit, absent in `base` for a
-/// new one). Same SSH login on a rename moves; a gone table drops both; another login drops
-/// the old password; an unresolvable `now` keeps the old entry and says why. Reads
-/// `~/.ssh/config` through `resolve_ssh`, so callers run it off the UI thread.
+/// `old_name` in `base` became `name` in `now` (equal for an edit, absent in `base` for a new
+/// one). Same login on a rename moves; a gone table drops both; another login drops the old
+/// password; unresolvable `now` keeps the old entry. Reads `~/.ssh/config`: off the UI thread.
 pub fn ssh_follow(
     base: &Workspace,
     old_name: &str,
