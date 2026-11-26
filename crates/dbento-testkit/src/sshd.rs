@@ -145,11 +145,16 @@ impl SshNet {
 
     /// How many TCP sessions on port 22 sshd holds established.
     pub async fn ssh_sessions(&self) -> usize {
-        // grep -c exits 1 on a zero count, so that code is a count too.
+        // Only sshd's own end counts: rootless podman forwards from the container's address,
+        // so the client end of the same connection is listed too.
         let out = exec_stdout(
             &self.sshd,
-            ["sh", "-c", "netstat -tn | grep -c ':22 .*ESTABLISHED'"],
-            &[0, 1],
+            [
+                "sh",
+                "-c",
+                "netstat -tn | awk '$4 ~ /:22$/ && $6 == \"ESTABLISHED\"' | wc -l",
+            ],
+            &[0],
         )
         .await;
         out.trim()

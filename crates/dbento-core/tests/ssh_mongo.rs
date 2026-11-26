@@ -62,11 +62,7 @@ async fn a_single_node_answers_over_tls_and_ssh_closes_with_the_session() {
             .len(),
         1
     );
-    // Rootless podman forwards from the container's own address, so one link can count twice.
-    assert!(
-        net.ssh_sessions().await > 0,
-        "no SSH link while the session is open"
-    );
+    assert_eq!(net.ssh_sessions().await, 1);
     drop(s);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while net.ssh_sessions().await > 0 {
