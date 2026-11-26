@@ -52,6 +52,7 @@ mod format_sql;
 mod future_sizes;
 mod history;
 mod key_browse_other_engines;
+mod legacy_secret;
 mod mongo_catalog;
 mod mongo_connect;
 mod mongo_crate;

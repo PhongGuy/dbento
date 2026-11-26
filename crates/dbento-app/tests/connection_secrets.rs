@@ -11,11 +11,13 @@ fn store(cx: &mut TestAppContext, o: &support::Opened) -> Arc<dyn SecretStore> {
     o.shell
         .read_with(cx, |s, _| Arc::clone(&s.services().store))
 }
+/// The password key the app uses for `name`, pinned to the config the file declares now.
 fn key(o: &support::Opened, cx: &mut TestAppContext, name: &str) -> SecretKey {
     let dir = o
         .shell
         .read_with(cx, |s, _| s.workspace().unwrap().dir().to_path_buf());
-    SecretKey::new(dir, name)
+    let pin = support::pin_of(&dir, name);
+    SecretKey::password(dir, name, &pin)
 }
 fn new_pg(cx: &mut TestAppContext, o: &support::Opened, name: &str, password: &str) {
     click_id(cx, o.win, "connection-new");
@@ -33,8 +35,11 @@ fn a_typed_password_goes_to_the_keychain_only(cx: &mut TestAppContext) {
     let o = opened(cx, "", "", 0);
     new_pg(cx, &o, "pg", "s3cr3t-Pw-9137");
     click_id(cx, o.win, "conn-save");
-    let (st, k) = (store(cx, &o), key(&o, cx, "pg"));
-    wait_real(cx, "the stored secret", |_| st.get(&k).unwrap().is_some());
+    let st = store(cx, &o);
+    wait_real(cx, "the stored secret", |cx| {
+        st.get(&key(&o, cx, "pg")).unwrap().is_some()
+    });
+    let k = key(&o, cx, "pg");
     assert_eq!(st.get(&k).unwrap().unwrap().expose(), "s3cr3t-Pw-9137");
     let text = std::fs::read_to_string(o.fx.dir.path().join("dbento.toml")).unwrap();
     assert!(!text.contains("s3cr3t"), "{text}");

@@ -26,5 +26,6 @@ mod query;
 mod redis;
 mod s3;
 mod saved_queries;
+mod secret_hint;
 mod ssh;
 mod surreal;

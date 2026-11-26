@@ -162,6 +162,15 @@ enum SecretAction {
         /// The connection name from dbento.toml.
         conn: String,
     },
+    /// Confirm that a password saved before passwords were tied to their server may be sent
+    /// to the connection's current server.
+    Pin {
+        /// The connection name from dbento.toml.
+        conn: String,
+        /// Confirm without a prompt; required without a terminal.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -500,8 +509,38 @@ async fn run(cli: Cli) -> anyhow::Result<Exit> {
                     };
                     eprintln!("deleted the {what} for '{conn}'");
                 }
+                SecretAction::Pin { conn, yes } => return pin_secret(&ws, &conn, yes).await,
             }
         }
+    }
+    Ok(Exit::Ok)
+}
+
+/// `dbento secret pin`: shows the target, asks a person at a terminal unless `--yes`
+/// answered, then moves the legacy password to the key of that target.
+async fn pin_secret(ws: &Workspace, conn: &str, yes: bool) -> anyhow::Result<Exit> {
+    let store = secret::store();
+    let plan = secret::plan_pin(ws, conn, &store, yes, confirm::stdin_is_terminal())?;
+    eprintln!("'{conn}' connects to {}", plan.target);
+    if plan.ask {
+        let interrupt = interrupt::Interrupt::install()
+            .map_err(|e| anyhow::Error::new(e).context("cannot handle Ctrl-C"))?;
+        let question = format!("send the saved password of '{conn}' to this server?");
+        if !confirm::confirm(&question, false, &interrupt).await {
+            return Ok(Exit::Refused);
+        }
+    }
+    match secret::pin(ws, conn, &store)? {
+        dbento_core::Adopted::Moved => {
+            eprintln!("the saved password of '{conn}' is now pinned to this server");
+        }
+        dbento_core::Adopted::TargetTaken => {
+            eprintln!("a password is already saved for this server; nothing changed");
+        }
+        dbento_core::Adopted::NothingStored => {
+            anyhow::bail!("the saved password of {conn:?} disappeared before it could be pinned")
+        }
+        _ => anyhow::bail!("the saved password of {conn:?} was not pinned"),
     }
     Ok(Exit::Ok)
 }

@@ -14,12 +14,13 @@ use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
     EditError, EditPlan, Engine, FolderPath, GrantState, HostKey, LogoutError, ObjectKey,
     ObjectRef, OpenError, RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError,
-    SecretKey, SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace,
-    WorkspaceItem, WorkspaceWatcher, WriteError, connect, display_key, move_secret, plan_edit,
-    resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames, seen_text,
+    SecretKey, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem,
+    WorkspaceWatcher, WriteError, connect, display_key, migrate_legacy_passwords, move_secret,
+    plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames, seen_text,
     seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted, trust_host_key,
 };
-use futures_util::future::{Either, join, join_all, select};
+use futures_util::FutureExt as _;
+use futures_util::future::{Either, Shared, join, join_all, select};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::ElementExt as _;
 use gpui_kit::base::{ObservedElement, ResizeHandleRenderer, ResizeHandleState};
@@ -41,7 +42,7 @@ use gpui_kit::{
 };
 
 use crate::app::{
-    BrowseSaved, SavedState, Services, SortSaved, TabState, TableState, WindowState,
+    BrowseSaved, PIN_EPOCH, SavedState, Services, SortSaved, TabState, TableState, WindowState,
     WorkspaceSession, recent_status,
 };
 use crate::approvals::{
@@ -74,6 +75,9 @@ use crate::keymap::{
 use crate::link::LinkState;
 use crate::nav::{Hop, NavHistory};
 use crate::palette::{self, Mode, PaletteCommand, PaletteEvent, PaletteInit, TableRef};
+use crate::password_follow::{
+    PasswordFollow, apply_password_follow, keychain_backed, password_follow, pin_moves,
+};
 use crate::persist::ChangeQueue;
 use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
@@ -132,10 +136,10 @@ async fn listed_within<E>(
 // One open saved query's read in a reload pass: the tab, what it knew then, what was read.
 type TabRead = (WeakEntity<QueryTab>, TabDisk, DiskRead);
 
-/// The secrets a connection form typed: the database password at its entry, the client key's
-/// passphrase, the SSH password and the SSH key passphrase.
+/// The secrets a connection form typed: the database password, the client key's passphrase,
+/// the SSH password and the SSH key passphrase.
 type TypedSecrets = (
-    Option<(SecretKey, Secret)>,
+    Option<Secret>,
     Option<Secret>,
     Option<Secret>,
     Option<Secret>,
@@ -435,6 +439,10 @@ pub struct Shell {
     workspace: Option<Arc<Workspace>>,
     // The installed workspace's connection list as the session keeps it, computed once per install.
     seen: Option<String>,
+    // The pre-upgrade connection list frozen at open, until a migration pass clears it.
+    legacy_baseline: Option<String>,
+    // The open's legacy password pass while it runs, shared so a keychain reader can await it.
+    migration: Option<Shared<Task<()>>>,
     sidebar: Option<Entity<Sidebar>>,
     tabs: Vec<Entity<QueryTab>>,
     // Per tab, index for index: the model observation the status bar follows, the tab's own
@@ -673,6 +681,8 @@ impl Shell {
             requested: dir.clone(),
             workspace: None,
             seen: None,
+            legacy_baseline: None,
+            migration: None,
             sidebar: None,
             tabs: Vec::new(),
             tab_observes: Vec::new(),
@@ -1021,6 +1031,58 @@ impl Shell {
         save_state(&self.state_file);
     }
 
+    // Moves legacy passwords under the pins the pre-upgrade file gave them, off the UI thread.
+    // The queued freeze is written first, so the baseline is on disk before the keychain is.
+    fn start_legacy_pass(
+        &mut self,
+        ws: &Arc<Workspace>,
+        cx: &mut Context<Self>,
+    ) -> Option<Shared<Task<()>>> {
+        let text = self.legacy_baseline.clone()?;
+        let (store, file, current) = (
+            Arc::clone(&self.services.store),
+            Arc::clone(&self.state_file),
+            Arc::clone(ws),
+        );
+        let (dir, generation) = (ws.dir().to_path_buf(), self.watch_generation);
+        // On the blocking pool, as the runner's lookups are, so a slow keychain holds no UI work.
+        let pass = crate::tokio_bridge::spawn(cx, async move {
+            tokio::task::spawn_blocking(move || {
+                save_state(&file);
+                let Some(baseline) = seen_workspace(&text, &current) else {
+                    return true;
+                };
+                migrate_legacy_passwords(&*store, &baseline)
+                    .iter()
+                    .all(|(_, r)| r.is_ok())
+            })
+            .await
+            .unwrap_or(false)
+        });
+        let task = cx.spawn(async move |this, cx| {
+            let clean = matches!(pass.await, Ok(true));
+            let _ = this.update(cx, |s, cx| {
+                if s.watch_generation == generation {
+                    s.migration = None;
+                    if clean {
+                        s.legacy_baseline = None;
+                    }
+                }
+                if clean {
+                    s.update_saved(
+                        move |st| {
+                            if let Some(x) = st.sessions.iter_mut().find(|x| x.workspace == dir) {
+                                x.legacy_baseline = None;
+                            }
+                        },
+                        cx,
+                    );
+                }
+            });
+        });
+        Some(task.shared())
+    }
+
     // Records the open tabs as this workspace's session, so the next start reopens them.
     fn save_session(&mut self, cx: &mut Context<Self>) {
         let Some(ws) = &self.workspace else {
@@ -1062,6 +1124,8 @@ impl Shell {
                 .map(|s| s.read(cx).collapsed_paths())
                 .unwrap_or_default(),
             seen: self.seen.clone(),
+            pin_epoch: PIN_EPOCH,
+            legacy_baseline: self.legacy_baseline.clone(),
         };
         self.update_saved(move |s| s.put_session(session.clone()), cx);
     }
@@ -1341,14 +1405,14 @@ impl Shell {
 
     // Shows tab `ix` as `activate` does, leaving the recent order alone for a Ctrl+Tab walk.
     fn show(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(ix) else {
+        let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
         };
         self.active = Some(ix);
         self.tab_scroll.scroll_to_item(ix);
         let model = tab.read(cx).model().clone();
         if model.read(cx).events().is_none() {
-            model.update(cx, |m, cx| m.connect(cx));
+            self.preconnect(&model, cx);
         }
         let editor = tab.read(cx).editor().clone();
         editor.update(cx, |e, cx| e.focus(window, cx));
@@ -1359,6 +1423,25 @@ impl Shell {
         self.follow_active(window, cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    // Connects `model` now, or once the open-time pass ends while one runs, so a restored tab
+    // reads its password only after legacy entries are pinned. A session started meanwhile wins.
+    fn preconnect(&mut self, model: &Entity<TabModel>, cx: &mut Context<Self>) {
+        let Some(gate) = self.migration.clone() else {
+            model.update(cx, |m, cx| m.connect(cx));
+            return;
+        };
+        let model = model.downgrade();
+        cx.spawn(async move |_, cx| {
+            gate.await;
+            let _ = model.update(cx, |m, cx| {
+                if m.events().is_none() {
+                    m.connect(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     // One Ctrl+Tab step: shows the next tab of the walk, back to older or forward to newer.
@@ -2898,6 +2981,8 @@ impl Shell {
     fn clear_workspace(&mut self) {
         self.workspace = None;
         self.seen = None;
+        self.legacy_baseline = None;
+        self.migration = None;
         self.sidebar = None;
         self._sidebar_events = None;
         self._sidebar_notify = None;
@@ -2923,7 +3008,14 @@ impl Shell {
         match Workspace::open(&dir) {
             Ok(ws) => {
                 // Read the last installed list before any save of this folder replaces it.
-                let previous = self.saved.session(ws.dir()).and_then(|s| s.seen.clone());
+                let session = self.saved.session(ws.dir());
+                let previous = session.and_then(|s| s.seen.clone());
+                // A session an older app wrote holds the evidence its passwords sit unpinned;
+                // a newer one carries the evidence it froze, until a pass clears it.
+                let frozen = session.and_then(|s| match s.pin_epoch {
+                    0 => s.seen.clone(),
+                    _ => s.legacy_baseline.clone(),
+                });
                 let ws = Arc::new(ws);
                 let opened = Arc::clone(&ws);
                 let services = self.services.clone();
@@ -3037,6 +3129,7 @@ impl Shell {
                 // Recent entries name the real folder, so a link or `..` path adds no duplicate.
                 let real = ws.dir().to_path_buf();
                 self.seen = seen_text(&ws);
+                self.legacy_baseline = frozen.clone();
                 self.workspace = Some(ws);
                 self.watch_generation = self.watch_generation.wrapping_add(1);
                 self.start_watch(&real, window, cx);
@@ -3056,9 +3149,16 @@ impl Shell {
                     move |s| {
                         s.remember_workspace(&real);
                         s.last_workspace = Some(dir.clone());
+                        // Freezing here, on a write no restore skips, keeps the snapshot on
+                        // disk even when the restore that follows saves nothing.
+                        if let Some(kept) = s.sessions.iter_mut().find(|k| k.workspace == real) {
+                            kept.pin_epoch = PIN_EPOCH;
+                            kept.legacy_baseline = frozen.clone();
+                        }
                     },
                     cx,
                 );
+                self.migration = self.start_legacy_pass(&opened, cx);
                 self.restore_tabs(window, cx);
                 // A rename made while this folder was not open moves its secrets now, unless
                 // the window is closing or the list is the one last installed.
@@ -3526,23 +3626,29 @@ impl Shell {
         let home = self.services.ssh.home().cloned();
         let store = Arc::clone(&self.services.store);
         let env = Arc::clone(&self.services.env);
-        // Resolving an SSH login reads ~/.ssh/config, so pairing the keys runs here too.
-        let probed = cx.background_spawn({
-            let store = Arc::clone(&store);
-            async move {
-                secret_renames(&old, &new)
-                    .into_iter()
-                    .map(|r| {
-                        let keys = rename_keys(&old, &new, &r, home.as_ref());
-                        let asked = new.declared(&r.to).cloned();
-                        let held = probe(&*store, &keys);
-                        (r, keys, asked, held)
-                    })
-                    .collect::<Vec<_>>()
-            }
-        });
+        let gate = self.migration.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let jobs = probed.await;
+            // The probe pairs pinned keys, so it waits for the open-time pass to pin legacy
+            // entries under the old name first. Resolving an SSH login reads ~/.ssh/config, so
+            // pairing the keys runs off the UI thread too.
+            if let Some(gate) = gate {
+                gate.await;
+            }
+            let probing = Arc::clone(&store);
+            let jobs = cx
+                .background_executor()
+                .spawn(async move {
+                    secret_renames(&old, &new)
+                        .into_iter()
+                        .map(|r| {
+                            let keys = rename_keys(&old, &new, &r, home.as_ref());
+                            let asked = new.declared(&r.to).cloned();
+                            let held = probe(&*probing, &keys);
+                            (r, keys, asked, held)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
             if jobs.is_empty() {
                 return;
             }
@@ -4220,7 +4326,11 @@ impl Shell {
                 }
             }
             // Dropping the task aborts the attempt made with the old values.
-            ConnectionFormEvent::Edited => this.connection_test = None,
+            ConnectionFormEvent::Edited => {
+                this.connection_test = None;
+                let moved = this.form_moves_pin(form, cx);
+                form.update(cx, |f, cx| f.set_pin_moved(moved, cx));
+            }
         });
         self.connection_form = Some((form.clone(), events));
         self.form_base = Some(Arc::clone(&ws));
@@ -4474,6 +4584,35 @@ impl Shell {
             f.rebase(loaded, folders, window, cx);
             f.set_error(error, false, cx);
         });
+        let moved = self.form_moves_pin(form, cx);
+        form.update(cx, |f, cx| f.set_pin_moved(moved, cx));
+    }
+
+    // True when the form's edit, planned against the file it was loaded from, points the
+    // edited name's saved password at another target. An empty name keeps the old one, as
+    // Test does; an edit that does not plan shows no note.
+    fn form_moves_pin(&self, form: &Entity<ConnectionForm>, cx: &App) -> bool {
+        let Some(base) = self.form_base.as_deref() else {
+            return false;
+        };
+        let f = form.read(cx);
+        let Some(old) = f.previous() else {
+            return false;
+        };
+        let Ok((name, spec)) = f.test_edit(cx) else {
+            return false;
+        };
+        let name = if name.is_empty() {
+            old.to_owned()
+        } else {
+            name
+        };
+        let edit = Edit::PutConnection {
+            previous: Some(old.to_owned()),
+            name: name.clone(),
+            spec,
+        };
+        plan_edit(base, &edit).is_ok_and(|plan| pin_moves(base, old, plan.workspace(), &name))
     }
 
     fn close_connection_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4609,7 +4748,7 @@ impl Shell {
                         // Only a keychain connection reads the old name's secret.
                         match (found, renamed) {
                             (None, Some(old)) if keychain_backed(&conn) => store
-                                .get(&SecretKey::new(ws.dir(), old))
+                                .get(&SecretKey::password(ws.dir(), old, &conn.secret_pin()))
                                 .map_err(|e| e.to_string()),
                             (found, _) => Ok(found),
                         }
@@ -4683,43 +4822,6 @@ impl Shell {
         }));
     }
 
-    // The typed password and where it goes, when the saved connection reads it from the
-    // keychain; any other source, or an empty field, keeps the store as it is.
-    fn password_to_store(
-        form: &Entity<ConnectionForm>,
-        plan: &EditPlan,
-        name: &str,
-        cx: &Context<Self>,
-    ) -> Option<(SecretKey, Secret)> {
-        let ws = plan.workspace();
-        if !keychain_backed(ws.declared(name)?) {
-            return None;
-        }
-        let typed = form.read(cx).password(cx)?;
-        Some((ws.secret_target(name)?, typed))
-    }
-
-    // Stores the password off the UI thread (a keychain call can take seconds); a failure
-    // shows once the dialog is gone, since the file is already written.
-    fn store_password(
-        &mut self,
-        key: SecretKey,
-        secret: Secret,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let store = Arc::clone(&self.services.store);
-        let stored = cx.background_spawn(async move { store.set(&key, &secret) });
-        cx.spawn_in(window, async move |_, cx| {
-            if let Err(e) = stored.await {
-                let _ = cx.update(|window, cx| {
-                    show_error("Password not saved", e.to_string(), window, cx)
-                });
-            }
-        })
-        .detach();
-    }
-
     // True when an open tab runs on `name`; such a connection cannot be renamed or deleted.
     fn connection_in_use(&self, name: &str, cx: &Context<Self>) -> bool {
         self.tabs
@@ -4781,7 +4883,7 @@ impl Shell {
             }
             Ok((name, plan)) => {
                 // Read before the form closes, which clears the password field.
-                let password = Self::password_to_store(&form, &plan, &name, cx);
+                let password = form.read(cx).password(cx);
                 let key_passphrase = form.read(cx).key_passphrase(cx);
                 let ssh_password = form.read(cx).ssh_password(cx);
                 let ssh_passphrase = form.read(cx).ssh_key_passphrase(cx);
@@ -4818,9 +4920,7 @@ impl Shell {
         let folder = renamed.as_ref().filter(|_| matches!(moved, Some(Err(_))));
         let folder =
             folder.map(|(old, new)| format!("Move queries/{old} to queries/{new} by hand."));
-        let old_keychain = base.declared(old_name).is_some_and(keychain_backed);
-        let new_keychain = plan.workspace().declared(name).is_some_and(keychain_backed);
-        let new_key = plan.workspace().secret_target(name);
+        let follow = password_follow(&base, old_name, plan.workspace(), name, password.is_some());
         // A new connection has no old passphrase slot, so its key comes from the written plan.
         let passphrase_from = base
             .key_passphrase_target(old_name)
@@ -4840,19 +4940,7 @@ impl Shell {
             self.save_session(cx);
         }
         self.close_connection_form(window, cx);
-        let old_key = base.secret_target(old_name).filter(|_| old_keychain);
-        match (old_key, new_keychain, renamed.and(new_key)) {
-            // The old entry has no reader any more.
-            (Some(old_key), false, _) => self.remove_secret(old_key, window, cx),
-            (Some(old_key), true, Some(new_key)) => {
-                self.move_password(old_key, new_key, password, window, cx)
-            }
-            _ => {
-                if let Some((key, secret)) = password {
-                    self.store_password(key, secret, window, cx);
-                }
-            }
-        }
+        self.follow_password(follow, password, name, window, cx);
         if let Some(from) = passphrase_from {
             self.follow_key_passphrase(
                 from,
@@ -4956,31 +5044,29 @@ impl Shell {
         .detach();
     }
 
-    // After a rename is written: moves the stored secret to the new name, then stores the
-    // typed password over it, both off the UI thread. A failure keeps the rename and asks
-    // for the password again.
-    fn move_password(
+    // Carries out the password follow off the UI thread (a keychain call can take seconds); a
+    // failure keeps the written file and asks for the password again.
+    fn follow_password(
         &mut self,
-        from: SecretKey,
-        to: SecretKey,
-        password: Option<(SecretKey, Secret)>,
+        follow: PasswordFollow,
+        password: Option<Secret>,
+        name: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if follow == PasswordFollow::default() {
+            return;
+        }
         let store = Arc::clone(&self.services.store);
-        let new = to.connection().to_owned();
-        let moved = cx.background_spawn(async move {
-            move_secret(&*store, &from, &to)?;
-            match password {
-                Some((key, secret)) => store.set(&key, &secret),
-                None => Ok(()),
-            }
+        let name = name.to_owned();
+        let applied = cx.background_spawn(async move {
+            apply_password_follow(&*store, &follow, password.as_ref())
         });
         cx.spawn_in(window, async move |_, cx| {
-            if let Err(e) = moved.await {
-                let detail = format!("{e}. Enter the password again for {new}.");
+            if let Err(e) = applied.await {
+                let detail = format!("{e}. Enter the password again for {name}.");
                 let _ =
-                    cx.update(|window, cx| show_error("Password not moved", detail, window, cx));
+                    cx.update(|window, cx| show_error("Password not saved", detail, window, cx));
             }
         })
         .detach();
@@ -5096,8 +5182,10 @@ impl Shell {
         let had_key = ws.declared(name).is_some_and(|c| c.tls_key().is_some());
         self.install_workspace(plan.into_workspace(), window, cx);
         self.close_connection_form(window, cx);
+        // The pre-pinning entry under the bare name goes too, as `dbento secret delete` does.
         if let Some(key) = ws.secret_target(name).filter(|_| had_keychain) {
             self.remove_secret(key, window, cx);
+            self.remove_secret(SecretKey::legacy_password(ws.dir(), name), window, cx);
         }
         if let Some(key) = ws.key_passphrase_target(name).filter(|_| had_key) {
             self.remove_secret(key, window, cx);
@@ -6863,11 +6951,6 @@ fn ask_discard(
         window,
         cx,
     )
-}
-
-// Only a connection whose engine takes a password and reads the keychain owns a stored secret.
-fn keychain_backed(conn: &dbento_core::ConnectionConfig) -> bool {
-    conn.engine().capabilities().password && matches!(conn.secret_source(), SecretSource::Keychain)
 }
 
 // How the connection dialog opens: blank, on an existing connection, or as a copy of one

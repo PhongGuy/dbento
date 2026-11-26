@@ -45,6 +45,7 @@ pub mod object_view;
 pub mod objects;
 pub mod palette;
 mod parks;
+pub mod password_follow;
 pub mod persist;
 pub mod pick_row;
 pub mod plan_view;

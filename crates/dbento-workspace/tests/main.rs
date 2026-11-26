@@ -11,6 +11,8 @@ mod duration;
 mod folder_path;
 mod same_login;
 mod secret_errors;
+mod secret_key;
+mod secret_pin;
 mod session_binding;
 mod ssh;
 mod workspace;
