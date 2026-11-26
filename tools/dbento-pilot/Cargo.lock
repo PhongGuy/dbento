@@ -2935,7 +2935,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3250,7 +3250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4383,8 +4383,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pilot-host"
-version = "0.9.3"
-source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.9.3#7bbdd5316537bd7322dd37beb1b3907078f881ec"
+version = "0.9.4"
+source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.9.4#f650d0eec0bdf78307f18d4df8c31b8de035d6ea"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4398,8 +4398,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-pilot-protocol"
-version = "0.9.3"
-source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.9.3#7bbdd5316537bd7322dd37beb1b3907078f881ec"
+version = "0.9.4"
+source = "git+https://github.com/PhongGuy/gpui-pilot?tag=v0.9.4#f650d0eec0bdf78307f18d4df8c31b8de035d6ea"
 dependencies = [
  "serde",
  "serde_json",
@@ -8644,7 +8644,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9469,7 +9469,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9536,7 +9536,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9816,7 +9816,7 @@ checksum = "609c5606d9d357b26e4ee1a7a01beac396628d0fa01ebbade2a09cefb88e65af"
 dependencies = [
  "fastrand",
  "tempfile",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10784,7 +10784,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12359,7 +12359,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -13006,7 +13006,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
