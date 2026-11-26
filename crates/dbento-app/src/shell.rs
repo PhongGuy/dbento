@@ -4609,7 +4609,7 @@ impl Shell {
                         // Only a keychain connection reads the old name's secret.
                         match (found, renamed) {
                             (None, Some(old)) if keychain_backed(&conn) => store
-                                .get(&SecretKey::new(ws.dir(), old))
+                                .get(&SecretKey::password(ws.dir(), old, &conn.secret_pin()))
                                 .map_err(|e| e.to_string()),
                             (found, _) => Ok(found),
                         }

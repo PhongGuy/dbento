@@ -187,11 +187,16 @@ fn the_key_names_the_canonical_workspace_dir_and_connection() {
 #[test]
 fn the_memory_store_round_trips_and_deletes() {
     let store = MemoryStore::new();
-    let key = SecretKey::new("/w", "c");
+    let key = SecretKey::legacy_password("/w", "c");
     assert!(store.get(&key).unwrap().is_none());
     store.set(&key, &Secret::new("pw")).unwrap();
     assert_eq!(store.get(&key).unwrap().unwrap().expose(), "pw");
-    assert!(store.get(&SecretKey::new("/other", "c")).unwrap().is_none());
+    assert!(
+        store
+            .get(&SecretKey::legacy_password("/other", "c"))
+            .unwrap()
+            .is_none()
+    );
     store.delete(&key).unwrap();
     store.delete(&key).unwrap();
     assert!(store.get(&key).unwrap().is_none());
@@ -200,7 +205,7 @@ fn the_memory_store_round_trips_and_deletes() {
 #[test]
 fn a_timed_store_passes_a_healthy_store_through() {
     let store = TimedStore::new(MemoryStore::new());
-    let key = SecretKey::new("/w", "c");
+    let key = SecretKey::legacy_password("/w", "c");
     store.set(&key, &Secret::new("pw")).unwrap();
     assert_eq!(store.get(&key).unwrap().unwrap().expose(), "pw");
     store.delete(&key).unwrap();
@@ -210,7 +215,7 @@ fn a_timed_store_passes_a_healthy_store_through() {
 #[test]
 fn a_hanging_store_times_out_then_fails_fast() {
     let store = TimedStore::with_timeout(Broken::Hanging, Duration::from_millis(100));
-    let key = SecretKey::new("/w", "c");
+    let key = SecretKey::legacy_password("/w", "c");
     let started = Instant::now();
     assert!(matches!(
         store.get(&key),
@@ -233,7 +238,7 @@ fn a_panicking_store_is_a_failure_not_a_timeout() {
     let store = TimedStore::with_timeout(Broken::Panicking, Duration::from_secs(5));
     let started = Instant::now();
     assert!(matches!(
-        store.get(&SecretKey::new("/w", "c")),
+        store.get(&SecretKey::legacy_password("/w", "c")),
         Err(SecretError::Failed { .. })
     ));
     assert!(

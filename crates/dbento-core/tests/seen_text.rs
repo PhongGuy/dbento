@@ -92,5 +92,9 @@ fn a_snapshot_reads_back_under_the_folder_being_opened() {
     let seen = seen_text(&at("/old", &format!("dbento = 1\n{}", pg("a", "d")))).unwrap();
     let back = seen_workspace(&seen, &at("/new", "dbento = 1\n")).unwrap();
     assert_eq!(back.dir(), Path::new("/new"));
-    assert_eq!(back.secret_target("a"), Some(SecretKey::new("/new", "a")));
+    let target = back.secret_target("a").unwrap();
+    assert_eq!(target.workspace_dir(), Path::new("/new"));
+    assert_eq!(target.connection(), "a");
+    let pin = back.declared("a").unwrap().secret_pin();
+    assert_eq!(target, SecretKey::password("/new", "a", &pin));
 }

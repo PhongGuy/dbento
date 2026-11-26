@@ -156,7 +156,7 @@ fn the_output_is_sorted_by_the_old_name() {
 }
 
 fn key(name: &str) -> SecretKey {
-    SecretKey::new("/w", name)
+    SecretKey::legacy_password("/w", name)
 }
 
 fn value(store: &dyn SecretStore, k: &SecretKey) -> Option<String> {

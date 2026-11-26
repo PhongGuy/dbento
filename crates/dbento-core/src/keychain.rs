@@ -1,12 +1,14 @@
 //! [`KeychainStore`]: secrets in the platform keychain through `keyring-core`, one entry per
-//! connection under service `dbento`, the account being [`SecretKey`]'s two parts. With the
-//! `team` feature, `KeychainTokenStore` keeps team session tokens under the same service.
+//! connection secret under service `dbento`, the account being a JSON array that names the
+//! workspace, the connection and the slot. With the `team` feature, `KeychainTokenStore` keeps
+//! team session tokens under the same service.
 
 use crate::secrets::{Secret, SecretError, SecretKey, SecretStore};
 #[cfg(feature = "team")]
 use crate::team::{TeamAccount, TeamToken, TokenStore};
 use dbento_workspace::Slot;
 use keyring_core::{CredentialStore, Entry, Error};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::sync::Arc;
 
@@ -78,12 +80,17 @@ impl SecretStore for KeychainStore {
 }
 
 /// The keychain account for `key`: a JSON array of workspace directory and connection, then the
-/// slot's tag and an SSH password's login, the path with forward slashes so one workspace has
-/// one account on every OS.
+/// slot's tag and its pin, the path with forward slashes so one workspace has one account on
+/// every OS. A password ends in a fixed-length digest of its pin; the legacy password has no tag.
 fn account(key: &SecretKey) -> String {
     let path = key.workspace_dir().to_string_lossy().replace('\\', "/");
     match key.slot() {
-        Slot::Password => serde_json::json!([path, key.connection()]).to_string(),
+        Slot::Password => {
+            let pin = key.pin().unwrap_or_default();
+            let digest = hex::encode(&Sha256::digest(pin.as_bytes())[..16]);
+            serde_json::json!([path, key.connection(), "password", digest]).to_string()
+        }
+        Slot::LegacyPassword => serde_json::json!([path, key.connection()]).to_string(),
         Slot::KeyPassphrase => serde_json::json!([path, key.connection(), "tls_key"]).to_string(),
         Slot::SshPassword => serde_json::json!([
             path,
@@ -202,20 +209,50 @@ fn token_account(account: &TeamAccount) -> String {
 mod tests {
     use super::*;
 
+    #[allow(clippy::unwrap_used)]
+    fn pg_at(dir: &str, name: &str, host: &str) -> SecretKey {
+        let text = format!(
+            "dbento = 1\n[connections.{name}]\nengine = \"postgres\"\nhost = \"{host}\"\ndatabase = \"d\"\nuser = \"ada\"\n"
+        );
+        let file = std::path::Path::new(dir).join("dbento.toml");
+        let ws = crate::Workspace::from_text(dir.into(), &file, &text).unwrap();
+        SecretKey::for_connection(&ws, ws.declared(name).unwrap())
+    }
+
     #[test]
-    fn the_account_is_a_json_array_with_forward_slashes() {
+    fn the_legacy_account_is_todays_two_part_array() {
         assert_eq!(
-            account(&SecretKey::new(r"C:\work\db", "prod")),
+            account(&SecretKey::legacy_password(r"C:\work\db", "prod")),
             r#"["C:/work/db","prod"]"#
         );
         assert_eq!(
-            account(&SecretKey::new("/home/u/w", "a-b")),
+            account(&SecretKey::legacy_password("/home/u/w", "a-b")),
             r#"["/home/u/w","a-b"]"#
         );
         assert_eq!(
             account(&SecretKey::key_passphrase("/home/u/w", "a-b")),
             r#"["/home/u/w","a-b","tls_key"]"#
         );
+    }
+
+    #[test]
+    fn the_password_account_ends_in_the_pin_digest() {
+        // The digest of {"v":1,"engine":"postgres","user":"ada","host":"db.example","port":5432}.
+        assert_eq!(
+            account(&pg_at("/home/u/w", "a-b", "db.example")),
+            r#"["/home/u/w","a-b","password","0a6763095d721239f90c46a71ec96629"]"#
+        );
+    }
+
+    #[test]
+    fn the_password_account_length_does_not_grow_with_the_target() {
+        let long_host = format!("{}.example", "h".repeat(2000));
+        let short = account(&pg_at("/home/u/w", "a-b", "db.example"));
+        let long = account(&pg_at("/home/u/w", "a-b", &long_host));
+        assert_eq!(short.len(), long.len(), "{long}");
+        let deep = format!("/{}", "d".repeat(299));
+        let deep_account = account(&pg_at(&deep, "a-b", &long_host));
+        assert!(deep_account.len() < 513, "{} bytes", deep_account.len());
     }
 
     #[test]
