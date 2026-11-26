@@ -4,7 +4,10 @@ use dbento_app::runner::{
     AppLimits, Command, Event, RunnerSpec, RunnerTuning, StatementEnd, guarded, spawn_on,
     spawn_tuned,
 };
-use dbento_core::{Engine, ExecuteError, MemoryStore, RelationRef, Unguarded, Workspace};
+use dbento_core::{
+    Engine, ExecuteError, MemoryStore, RelationRef, Secret, SecretKey, SecretStore, Unguarded,
+    Workspace,
+};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -559,10 +562,54 @@ async fn a_missing_keychain_secret_adds_the_hint() {
         Event::ConnectFailed { message, .. } => {
             assert!(message.starts_with("cannot open the database"), "{message}");
             assert!(
-                message.contains("\nhint: no secret was found for 'nopg'"),
+                message.contains("\nhint: no password is saved for 'nopg': edit the connection to enter it, or set DBENTO_SECRET_NOPG"),
                 "{message}"
             );
             assert!(message.contains("DBENTO_SECRET_NOPG"), "{message}");
+        }
+        other @ (Event::Connected { .. }
+        | Event::Executing { .. }
+        | Event::StatementStarted { .. }
+        | Event::NeedsConfirm { .. }
+        | Event::Planned { .. }
+        | Event::Batch { .. }
+        | Event::Paused { .. }
+        | Event::ParkedAtCap { .. }
+        | Event::ParkExpired { .. }
+        | Event::ParkReleased { .. }
+        | Event::StatementDone { .. }
+        | Event::RunDone { .. }
+        | Event::Stopped { .. }
+        | Event::SettingsChanged { .. }
+        | Event::SettingsLost { .. }
+        | Event::Disconnected { .. }
+        | Event::Target { .. }
+        | Event::Settling { .. }
+        | Event::SettleFailed { .. }) => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_password_gets_the_apps_confirm_hint() {
+    let fx = fixture("", "");
+    let mut s = spec(&fx, "nopg");
+    let store = MemoryStore::new();
+    let legacy = SecretKey::legacy_password(fx.ws.dir(), "nopg");
+    store.set(&legacy, &Secret::new("x")).unwrap();
+    s.store = Arc::new(store);
+    let r = spawn_on(&here(), s);
+    let ev = r.events();
+    r.send(run(1, "SELECT 1"));
+    match next(&ev).await {
+        Event::ConnectFailed { message, .. } => {
+            assert!(
+                message.contains("\nhint: the saved password for 'nopg' is not sent until you confirm this server: edit the connection to enter it"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("dbento secret"),
+                "the app names no CLI command: {message}"
+            );
         }
         other @ (Event::Connected { .. }
         | Event::Executing { .. }

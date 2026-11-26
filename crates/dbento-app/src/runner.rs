@@ -13,11 +13,11 @@ use dbento_core::message::{
 };
 use dbento_core::{
     CancelHandle, ColumnInfo, ConnectError, ConnectionConfig, EditTarget, Engine, ExecuteError,
-    ExplainMode, ExplainOutput, ExplainRequest, ForeignKey, KeyBrowseError, KeyRead, KeyValuePage,
-    Limits, ObjectKey, ObjectRead, OnTruncate, Outcome, ReadOnlyEnforcement, RelationRef,
-    ResultBatch, ResultStream, Secret, SecretError, SecretStore, Session, SessionOptions,
-    SshSecrets, TruncatedBy, Unguarded, ValueCursor, Workspace, Writes, connect,
-    resolve_key_passphrase, resolve_secret, secret_hint,
+    ExplainMode, ExplainOutput, ExplainRequest, ForeignKey, HintAudience, KeyBrowseError, KeyRead,
+    KeyValuePage, Limits, ObjectKey, ObjectRead, OnTruncate, Outcome, ReadOnlyEnforcement,
+    RelationRef, ResultBatch, ResultStream, Secret, SecretError, SecretStore, Session,
+    SessionOptions, SshSecrets, TruncatedBy, Unguarded, ValueCursor, Workspace, Writes, connect,
+    resolve_key_passphrase, resolve_secret, secret_hint_for,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, select};
@@ -849,7 +849,7 @@ async fn resolve_or_fix(spec: &RunnerSpec) -> Result<Resolved, ConnectFailure> {
         let ssh_secrets =
             ssh::ssh_secrets(&ws, &conn, &ssh, &*store, &|v| env(v)).map_err(plain)?;
         let hint = match secret {
-            None => secret_hint(&ws, &conn, &*store),
+            None => secret_hint_for(&ws, &conn, &*store, HintAudience::App),
             Some(_) => None,
         };
         Ok(Resolved {

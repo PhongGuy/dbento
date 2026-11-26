@@ -119,6 +119,14 @@ impl ToolError {
         }
     }
 
+    /// Sets `hint` on a `connect` failure; any other code keeps its own wording.
+    pub(crate) fn with_hint(mut self, hint: Option<String>) -> Self {
+        if self.code == "connect" {
+            self.hint = hint.map(String::into_boxed_str);
+        }
+        self
+    }
+
     /// A statement or catalog query failed; only a database error carries a SQLSTATE. An
     /// engine with its own SQLSTATE (MySQL) also reports its native code as `error_number`,
     /// and SQL Server, which has none, reports its number there with `class` and `state`.
@@ -261,6 +269,31 @@ impl IntoCallToolResult for ToolError {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_secret_hint_rides_on_a_connect_failure_and_never_on_an_ssh_one() {
+        let refused = ConnectError::Refused {
+            address: "h:9".into(),
+            message: "refused".into(),
+        };
+        let v = ToolError::from_connect(&refused)
+            .with_hint(Some("save it".to_owned()))
+            .to_value();
+        assert_eq!(v["error"]["hint"], "save it", "{v}");
+        let v = ToolError::from_connect(&refused).with_hint(None).to_value();
+        assert!(v["error"].get("hint").is_none(), "{v}");
+        let ssh = ConnectError::SshConnect {
+            address: "jump:22".into(),
+            message: "refused".into(),
+        };
+        let v = ToolError::from_connect(&ssh)
+            .with_hint(Some("save it".to_owned()))
+            .to_value();
+        assert!(
+            v["error"].get("hint").is_none(),
+            "an SSH failure keeps its own wording: {v}"
+        );
+    }
 
     #[test]
     fn every_core_error_maps_to_its_fixed_code() {
