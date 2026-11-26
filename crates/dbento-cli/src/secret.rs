@@ -1,4 +1,4 @@
-//! The keychain store and `dbento secret set|delete`. The secret never comes from argv.
+//! The keychain store and `dbento secret set|delete|pin`. The secret never comes from argv.
 
 use std::io::BufRead;
 use std::sync::OnceLock;
