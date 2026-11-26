@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, bail};
 use dbento_core::{
-    ConnectError, ConnectionConfig, KeychainStore, Secret, SecretError, SecretKey, SecretSource,
-    SecretStore, SshHome, TimedStore, Workspace, resolve_ssh,
+    Adopted, ConnectError, ConnectionConfig, KeychainStore, Secret, SecretError, SecretKey,
+    SecretSource, SecretStore, SshHome, TimedStore, Workspace, resolve_ssh,
 };
 
 /// The platform keychain, opened on first use so a SQLite run never touches it.
@@ -259,7 +259,8 @@ pub(crate) fn read_secret(input: &mut dyn BufRead) -> anyhow::Result<Secret> {
     Ok(Secret::new(line))
 }
 
-/// Stores `secret` for the keychain connection `name`.
+/// Stores `secret` for the keychain connection `name`, pinned to its current target, then
+/// drops any entry saved under the bare name so it can never be sent elsewhere.
 pub(crate) fn set(
     ws: &Workspace,
     name: &str,
@@ -267,18 +268,77 @@ pub(crate) fn set(
     secret: &Secret,
 ) -> anyhow::Result<()> {
     store.set(&secret_target(ws, name)?, secret)?;
+    store.delete(&SecretKey::legacy_password(ws.dir(), name))?;
     Ok(())
 }
 
-/// Removes the stored secret of the keychain connection `name`.
+/// Removes the stored secret of the keychain connection `name` for its current target and
+/// under the bare name. Both deletes are tried; the first failure is the error.
 pub(crate) fn delete(ws: &Workspace, name: &str, store: &dyn SecretStore) -> anyhow::Result<()> {
-    store.delete(&secret_target(ws, name)?)?;
+    let pinned = store.delete(&secret_target(ws, name)?);
+    let legacy = store.delete(&SecretKey::legacy_password(ws.dir(), name));
+    pinned?;
+    legacy?;
     Ok(())
+}
+
+/// What `secret pin` shows, and whether a person must still answer.
+#[derive(Debug)]
+pub(crate) struct PinPlan {
+    pub(crate) target: String,
+    pub(crate) ask: bool,
+}
+
+/// Refuses a name without a keychain password, a missing legacy entry, and (when neither
+/// `yes` nor `terminal`) any confirmation at all; never writes.
+pub(crate) fn plan_pin(
+    ws: &Workspace,
+    name: &str,
+    store: &dyn SecretStore,
+    yes: bool,
+    terminal: bool,
+) -> anyhow::Result<PinPlan> {
+    let conn = keychain_connection(ws, name)?;
+    let target = pin_target(conn);
+    if store
+        .get(&SecretKey::legacy_password(ws.dir(), name))?
+        .is_none()
+    {
+        bail!(
+            "connection {name:?} has no password saved before pinning, so there is nothing to pin"
+        );
+    }
+    if !yes && !terminal {
+        bail!(
+            "no terminal to confirm that the saved password of {name:?} may be sent to {target}; check the target, then pass --yes"
+        );
+    }
+    Ok(PinPlan { target, ask: !yes })
+}
+
+/// Moves the legacy password of `name` to the key of its current target.
+pub(crate) fn pin(ws: &Workspace, name: &str, store: &dyn SecretStore) -> anyhow::Result<Adopted> {
+    keychain_connection(ws, name)?;
+    Ok(dbento_core::adopt_legacy_password(store, ws, name)?)
+}
+
+/// `<engine> <target>`, plus ` via <ssh host>[:<port>]` with the port only when written.
+fn pin_target(conn: &ConnectionConfig) -> String {
+    let mut target = format!("{} {}", conn.engine_label(), conn.display_target());
+    if let Some(ssh) = conn.ssh() {
+        target.push_str(" via ");
+        target.push_str(ssh.host());
+        if let Some(port) = ssh.port() {
+            target.push_str(&format!(":{port}"));
+        }
+    }
+    target
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbento_core::Adopted;
     use dbento_core::{MemoryStore, SecretKey};
 
     const TOML: &str = "dbento = 1\n[connections.kc]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.none]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = \"none\"\n[connections.lite]\nengine = \"sqlite\"\npath = \"x.db\"\n";
@@ -562,5 +622,119 @@ mod tests {
         let pw = read_secret(&mut "sshpw\n".as_bytes()).unwrap();
         let e = set_ssh_password(&ws, "tun", &home, &Locked, &pw).unwrap_err();
         assert!(e.to_string().contains("ProxyJump"), "{e}");
+    }
+
+    fn legacy(ws: &Workspace, name: &str) -> SecretKey {
+        SecretKey::legacy_password(ws.dir(), name)
+    }
+
+    fn pinned(ws: &Workspace, name: &str) -> SecretKey {
+        SecretKey::for_connection(ws, ws.declared(name).unwrap())
+    }
+
+    #[test]
+    fn set_replaces_the_legacy_entry_and_delete_removes_both() {
+        let (_d, ws) = ws();
+        let store = MemoryStore::new();
+        store.set(&legacy(&ws, "kc"), &Secret::new("x")).unwrap();
+        set(&ws, "kc", &store, &Secret::new("x")).unwrap();
+        assert_eq!(
+            store.get(&pinned(&ws, "kc")).unwrap().unwrap().expose(),
+            "x"
+        );
+        assert!(
+            store.get(&legacy(&ws, "kc")).unwrap().is_none(),
+            "set drops the legacy entry"
+        );
+        store.set(&legacy(&ws, "kc"), &Secret::new("x")).unwrap();
+        delete(&ws, "kc", &store).unwrap();
+        assert!(
+            store.get(&pinned(&ws, "kc")).unwrap().is_none(),
+            "the pinned entry is gone"
+        );
+        assert!(
+            store.get(&legacy(&ws, "kc")).unwrap().is_none(),
+            "the legacy entry is gone"
+        );
+    }
+
+    #[test]
+    fn pin_without_a_terminal_or_yes_refuses_and_writes_nothing() {
+        let (_d, ws) = ws();
+        let store = MemoryStore::new();
+        store.set(&legacy(&ws, "kc"), &Secret::new("x")).unwrap();
+        let e = plan_pin(&ws, "kc", &store, false, false)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("--yes"), "{e}");
+        assert!(
+            e.contains("postgres u@h:5432/d"),
+            "the refusal names the target: {e}"
+        );
+        assert!(
+            store.get(&legacy(&ws, "kc")).unwrap().is_some(),
+            "the legacy entry stays"
+        );
+        assert!(
+            store.get(&pinned(&ws, "kc")).unwrap().is_none(),
+            "nothing was pinned"
+        );
+    }
+
+    #[test]
+    fn pin_asks_at_a_terminal_and_not_with_yes() {
+        let (_d, ws) = ws();
+        let store = MemoryStore::new();
+        store.set(&legacy(&ws, "kc"), &Secret::new("x")).unwrap();
+        let asked = plan_pin(&ws, "kc", &store, false, true).unwrap();
+        assert!(asked.ask, "a terminal is asked");
+        assert_eq!(asked.target, "postgres u@h:5432/d");
+        assert!(
+            !plan_pin(&ws, "kc", &store, true, false).unwrap().ask,
+            "--yes answers"
+        );
+    }
+
+    #[test]
+    fn pin_moves_the_legacy_entry_to_the_current_target() {
+        let (_d, ws) = ws();
+        let store = MemoryStore::new();
+        store.set(&legacy(&ws, "kc"), &Secret::new("x")).unwrap();
+        assert_eq!(pin(&ws, "kc", &store).unwrap(), Adopted::Moved);
+        assert_eq!(
+            store.get(&pinned(&ws, "kc")).unwrap().unwrap().expose(),
+            "x"
+        );
+        assert!(store.get(&legacy(&ws, "kc")).unwrap().is_none());
+    }
+
+    #[test]
+    fn pin_without_a_legacy_entry_says_so() {
+        let (_d, ws) = ws();
+        let e = plan_pin(&ws, "kc", &MemoryStore::new(), true, true)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("nothing to pin"), "{e}");
+    }
+
+    #[test]
+    fn pin_refuses_connections_without_a_keychain_password() {
+        let (_d, ws) = ws();
+        // `Locked` cannot set or delete, so each refusal provably wrote nothing.
+        for name in ["none", "lite", "missing"] {
+            assert!(plan_pin(&ws, name, &Locked, true, true).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_pin_target_names_the_tunnel() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = "dbento = 1\n[connections.tun]\nengine = \"postgres\"\nhost = \"db\"\ndatabase = \"d\"\nuser = \"u\"\n[connections.tun.ssh]\nhost = \"bastion\"\nport = 2222\n";
+        std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+        let ws = Workspace::open(dir.path()).unwrap();
+        let store = MemoryStore::new();
+        store.set(&legacy(&ws, "tun"), &Secret::new("x")).unwrap();
+        let plan = plan_pin(&ws, "tun", &store, true, false).unwrap();
+        assert_eq!(plan.target, "postgres u@db:5432/d via bastion:2222");
     }
 }
