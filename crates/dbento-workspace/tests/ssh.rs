@@ -80,18 +80,16 @@ fn the_tunnelled_engines_take_an_ssh_table() {
         "[connections.c]\nengine = \"surrealdb\"\nhost = \"db\"\nnamespace = \"n\"\ndatabase = \"d\"\n",
         "[connections.c]\nengine = \"redis\"\nhost = \"cache.internal\"\n",
         "[connections.c]\nengine = \"redis\"\nhost = \"cache\"\ntls = \"off\"\n",
+        "[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb://app@db:27017/shop\"\n",
+        "[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb+srv://cluster0.example.net/shop\"\n",
     ] {
         assert!(conn(&format!("{body}{SSH}")).ssh().is_some(), "{body}");
     }
 }
 
 #[test]
-fn mongodb_dynamodb_s3_and_file_engines_refuse_an_ssh_table() {
+fn dynamodb_s3_and_file_engines_refuse_an_ssh_table() {
     for (engine, body) in [
-        (
-            "mongodb",
-            "[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb://app@db:27017/shop\"\n",
-        ),
         (
             "dynamodb",
             "[connections.c]\nengine = \"dynamodb\"\nregion = \"eu-west-1\"\n",
@@ -115,6 +113,17 @@ fn mongodb_dynamodb_s3_and_file_engines_refuse_an_ssh_table() {
             "{e}"
         );
     }
+}
+
+#[test]
+fn a_mongodb_socket_cannot_be_tunnelled() {
+    let body = "[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb://db:27017,%2Ftmp%2Fm.sock/shop\"\n";
+    let e = refusal(&format!("{body}{SSH}"));
+    assert!(
+        e.contains("a mongodb socket cannot be reached over SSH"),
+        "{e}"
+    );
+    assert!(conn(body).ssh().is_none(), "the socket loads without ssh");
 }
 
 #[test]

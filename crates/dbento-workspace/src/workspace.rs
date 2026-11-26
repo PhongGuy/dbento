@@ -2095,11 +2095,7 @@ impl ConnectionConfig {
         // After the engine rules, so their messages win; a tunnel needs a TCP server host.
         if let Some(ssh) = raw.ssh {
             match engine {
-                Engine::Mongodb
-                | Engine::Dynamodb
-                | Engine::S3
-                | Engine::Sqlite
-                | Engine::Duckdb => {
+                Engine::Dynamodb | Engine::S3 | Engine::Sqlite | Engine::Duckdb => {
                     return Err(invalid(format!("`ssh` is not valid for {}", engine.name())));
                 }
                 Engine::Postgres if config.host.as_deref().is_some_and(|h| h.starts_with('/')) => {
@@ -2107,11 +2103,22 @@ impl ConnectionConfig {
                         "a postgres socket cannot be reached over SSH".to_owned(),
                     ));
                 }
+                Engine::Mongodb
+                    if config
+                        .uri
+                        .as_deref()
+                        .is_some_and(crate::mongo_uri::has_socket_host) =>
+                {
+                    return Err(invalid(
+                        "a mongodb socket cannot be reached over SSH".to_owned(),
+                    ));
+                }
                 Engine::Postgres
                 | Engine::Mysql
                 | Engine::Mssql
                 | Engine::Surrealdb
-                | Engine::Redis => {}
+                | Engine::Redis
+                | Engine::Mongodb => {}
             }
             config.ssh = Some(ssh_config(ssh).map_err(invalid)?);
         }

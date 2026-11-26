@@ -1,4 +1,4 @@
-use super::{BAD_PORT, PASSWORD_REFUSED, UriFault, check};
+use super::{BAD_PORT, PASSWORD_REFUSED, UriFault, check, has_socket_host};
 
 fn refused(uri: &str) -> String {
     match check(uri) {
@@ -200,4 +200,38 @@ fn ports_in_range_bracketed_ipv6_and_host_lists_are_accepted() {
     ] {
         check(uri).unwrap_or_else(|e| panic!("{uri}: {e:?}"));
     }
+}
+
+#[test]
+fn proxy_options_are_refused_because_dbento_sets_the_proxy() {
+    for (key, canonical) in [
+        ("proxyHost", "proxyHost"),
+        ("proxyport", "proxyPort"),
+        ("PROXYUSERNAME", "proxyUsername"),
+    ] {
+        let uri = format!("mongodb://h/?{key}=x");
+        match check(&uri) {
+            Err(UriFault::Invalid(m)) => {
+                assert!(m.contains(&format!("remove `{canonical}`")), "{m}");
+                assert!(m.contains("Dbento sets the proxy itself"), "{m}");
+            }
+            other => panic!("{uri}: {other:?}"),
+        }
+    }
+    assert!(matches!(
+        check("mongodb://h/?proxyPassword=x"),
+        Err(UriFault::Secret(_))
+    ));
+}
+
+#[test]
+fn a_socket_host_is_found_anywhere_in_the_seed_list() {
+    assert!(has_socket_host(
+        "mongodb://%2Ftmp%2Fmongodb-27017.sock/shop"
+    ));
+    assert!(has_socket_host(
+        "mongodb://app@db:27017,%2Ftmp%2Fm.sock/shop?tls=true"
+    ));
+    assert!(!has_socket_host("mongodb://db.sockets.internal:27017/shop"));
+    assert!(!has_socket_host("mongodb+srv://cluster0.example.net/shop"));
 }

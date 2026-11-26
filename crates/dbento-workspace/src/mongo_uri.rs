@@ -52,6 +52,11 @@ pub(crate) fn check(uri: &str) -> Result<UriInfo, UriFault> {
             "remove `{key}` from `uri`: it holds a secret"
         )));
     }
+    if let Some(key) = proxy_option(options) {
+        return Err(UriFault::Invalid(format!(
+            "remove `{key}` from `uri`: Dbento sets the proxy itself"
+        )));
+    }
 
     // Read in the driver's order: options off at the first `?`, then userinfo at the last `@`.
     let (userinfo, hosts_and_path) = before_options
@@ -118,6 +123,38 @@ fn secret_option(options: &str) -> Option<&'static str> {
             _ => None,
         }
     })
+}
+
+// The first proxy option, by its canonical key: a tunnelled connection's proxy is Dbento's own,
+// and a uri naming another would bypass the tunnel.
+fn proxy_option(options: &str) -> Option<&'static str> {
+    options.split('&').find_map(|pair| {
+        let (key, _) = pair.split_once('=')?;
+        match key.to_lowercase().as_str() {
+            "proxyhost" => Some("proxyHost"),
+            "proxyport" => Some("proxyPort"),
+            "proxyusername" => Some("proxyUsername"),
+            _ => None,
+        }
+    })
+}
+
+/// Whether a `mongodb://` uri names a unix socket host: one ending in `.sock`, the driver's rule.
+pub(crate) fn has_socket_host(uri: &str) -> bool {
+    let Some(after_scheme) = uri.strip_prefix("mongodb://") else {
+        return false;
+    };
+    // Cut the way `check` does: options at the first `?`, userinfo at the last `@`, path at `/`.
+    let before_options = after_scheme
+        .split_once('?')
+        .map_or(after_scheme, |(b, _)| b);
+    let hosts_and_path = before_options
+        .rsplit_once('@')
+        .map_or(before_options, |(_, h)| h);
+    let hosts = hosts_and_path
+        .split_once('/')
+        .map_or(hosts_and_path, |(h, _)| h);
+    hosts.split(',').any(|host| host.ends_with(".sock"))
 }
 
 #[cfg(test)]

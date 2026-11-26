@@ -90,8 +90,8 @@ Further rules:
 
 ## SSH tunnels
 
-A server connection (`postgres`, `mysql`, `mssql`, `surrealdb` or `redis`) may be reached through
-an SSH tunnel, written as a sub-table directly under its entry:
+A server connection (`postgres`, `mysql`, `mssql`, `surrealdb`, `redis` or `mongodb`) may be
+reached through an SSH tunnel, written as a sub-table directly under its entry:
 
 ```toml
 [connections.prod.ssh]
@@ -110,10 +110,14 @@ host = "bastion"
 The connection's own `host` and `port` are then resolved on the SSH host's side. Values written
 in `dbento.toml` win over `~/.ssh/config`. A derived child connection uses its parent's tunnel.
 
+For MongoDB, the hosts in `uri` and the members a replica set reports are resolved on the SSH
+host's side, while the SRV and TXT records of a `mongodb+srv` uri are resolved on this machine.
+
 Refused with `invalid` when the file is read:
 
-- `ssh` on `mongodb`, `dynamodb`, `s3`, `sqlite` or `duckdb`;
+- `ssh` on `dynamodb`, `s3`, `sqlite` or `duckdb`;
 - `ssh` on a Postgres connection whose `host` is a unix socket directory (starts with `/`);
+- `ssh` on a MongoDB connection whose `uri` names a unix socket host (ending in `.sock`);
 - an empty or blank `host`, a `port` of 0, or an `auth` word other than the three above;
 - `identity_file` together with `auth = "agent"` or `auth = "password"`;
 - any other key in the table, and a `password` key, which is refused as a secret.
@@ -145,6 +149,8 @@ No secret is ever written in `dbento.toml`.
   `host:port`, as in `mongodb://h:27017/db?appName=a@b`: write that `@` as `%40`. The uri is
   also refused when it holds the option `tlsCertificateKeyFilePassword`, `proxyPassword`,
   or `authMechanismProperties` holding `AWS_SESSION_TOKEN`. Option keys match in any case.
+- A MongoDB `uri` holding `proxyHost`, `proxyPort` or `proxyUsername` is refused with `invalid`
+  on every MongoDB connection, since Dbento sets the proxy itself.
 - A DynamoDB or S3 `endpoint` holding a user or password is refused with `secret` (key `endpoint`).
 - A MongoDB `uri` port, when written for a host, must be ASCII digits in 1-65535, bracketed IPv6
   hosts and `mongodb+srv://` included; otherwise `invalid`. The message never quotes the uri, so a
