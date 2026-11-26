@@ -6,9 +6,11 @@ use dbento_app::app::start;
 use dbento_app::connection_dialog::Field;
 use dbento_core::MemoryStore;
 use dbento_core::{Secret, SecretError, SecretKey, SecretStore};
+use gpui_kit::component::input::InputEvent;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// The app on a fixture with no tab open.
 fn idle_app(
@@ -492,5 +494,129 @@ fn a_rename_to_another_login_moves_nothing(cx: &mut TestAppContext) {
     assert!(
         store.get(&old.renamed("pg2")).unwrap().is_none(),
         "nor the old pin under the new name"
+    );
+}
+
+/// Sets `field` and reports the change as a keystroke does; `set_value` alone emits nothing.
+fn typed(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+    f: &Entity<dbento_app::connection_dialog::ConnectionForm>,
+    field: Field,
+    text: &str,
+) {
+    set(cx, win, f, field, text);
+    let state = f.read_with(cx, |f, _| f.input(field).clone());
+    state.update(cx, |_, cx| cx.emit(InputEvent::Change));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn the_form_says_the_saved_password_stays_behind_when_the_login_changes(cx: &mut TestAppContext) {
+    let (_fx, _files, win, shell) = idle_app(cx, Arc::new(MemoryStore::new()));
+    let f = edit_form(cx, win, &shell, "nopg");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "an untouched form has no note"
+    );
+    typed(cx, win, &f, Field::Database, "y");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "the database is not part of the target"
+    );
+    typed(cx, win, &f, Field::Name, "pg2");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "a rename alone keeps the password"
+    );
+    typed(cx, win, &f, Field::User, "y");
+    assert_eq!(
+        label_of(cx, win, "conn-pin-note").as_deref(),
+        Some(dbento_app::connection_dialog::PIN_NOTE),
+        "another login gets the note"
+    );
+    typed(cx, win, &f, Field::User, "x");
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "back on the saved login the note goes"
+    );
+}
+
+#[gpui_kit::test]
+fn a_new_connection_shows_no_pin_note(cx: &mut TestAppContext) {
+    let (_fx, _files, win, _shell) = idle_app(cx, Arc::new(MemoryStore::new()));
+    click_id(cx, win, "connection-new");
+    wait_real(cx, "the dialog", |cx| present(cx, win, "conn-name"));
+    assert!(
+        !present(cx, win, "conn-pin-note"),
+        "nothing is saved for a new connection"
+    );
+}
+
+/// A store that records every key read, so a test can prove a password was never sent.
+struct Reads {
+    inner: MemoryStore,
+    read: Mutex<Vec<SecretKey>>,
+}
+impl Reads {
+    fn new() -> Self {
+        Reads {
+            inner: MemoryStore::new(),
+            read: Mutex::new(Vec::new()),
+        }
+    }
+    fn saw(&self, k: &SecretKey) -> bool {
+        self.read.lock().unwrap().contains(k)
+    }
+}
+impl SecretStore for Reads {
+    fn get(&self, k: &SecretKey) -> Result<Option<Secret>, SecretError> {
+        self.read.lock().unwrap().push(k.clone());
+        self.inner.get(k)
+    }
+    fn set(&self, k: &SecretKey, s: &Secret) -> Result<(), SecretError> {
+        self.inner.set(k, s)
+    }
+    fn delete(&self, k: &SecretKey) -> Result<(), SecretError> {
+        self.inner.delete(k)
+    }
+}
+
+/// Renames `nopg` to `pg2` in the form, sets `user` when given, and runs Test connection;
+/// answers whether the old name's saved password was read.
+fn test_reads_old(cx: &mut TestAppContext, user: Option<&str>) -> bool {
+    let reads = Arc::new(Reads::new());
+    let store = Arc::clone(&reads) as Arc<dyn SecretStore>;
+    let (fx, _files, win, shell) = idle_app(cx, store);
+    let old = pinned(fx.ws.dir(), "nopg");
+    reads.inner.set(&old, &Secret::new("x")).unwrap();
+    let f = edit_form(cx, win, &shell, "nopg");
+    set(cx, win, &f, Field::Name, "pg2");
+    if let Some(user) = user {
+        set(cx, win, &f, Field::User, user);
+    }
+    reads.read.lock().unwrap().clear();
+    click_id(cx, win, "conn-test");
+    wait_real(cx, "the test result", |cx| {
+        label_of(cx, win, "conn-test-result").is_some_and(|l| l.starts_with("Failed: "))
+    });
+    reads.saw(&old)
+}
+
+#[gpui_kit::test]
+fn test_connection_during_a_rename_uses_the_saved_password_on_the_same_login(
+    cx: &mut TestAppContext,
+) {
+    assert!(
+        test_reads_old(cx, None),
+        "a rename alone tests with the saved password"
+    );
+}
+
+#[gpui_kit::test]
+fn test_connection_during_a_rename_to_another_login_never_reads_it(cx: &mut TestAppContext) {
+    assert!(
+        !test_reads_old(cx, Some("y")),
+        "the old login's password is never read"
     );
 }

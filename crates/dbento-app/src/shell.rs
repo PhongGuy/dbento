@@ -76,7 +76,7 @@ use crate::link::LinkState;
 use crate::nav::{Hop, NavHistory};
 use crate::palette::{self, Mode, PaletteCommand, PaletteEvent, PaletteInit, TableRef};
 use crate::password_follow::{
-    PasswordFollow, apply_password_follow, keychain_backed, password_follow,
+    PasswordFollow, apply_password_follow, keychain_backed, password_follow, pin_moves,
 };
 use crate::persist::ChangeQueue;
 use crate::pick_row::ConnectionPick;
@@ -4326,7 +4326,11 @@ impl Shell {
                 }
             }
             // Dropping the task aborts the attempt made with the old values.
-            ConnectionFormEvent::Edited => this.connection_test = None,
+            ConnectionFormEvent::Edited => {
+                this.connection_test = None;
+                let moved = this.form_moves_pin(form, cx);
+                form.update(cx, |f, cx| f.set_pin_moved(moved, cx));
+            }
         });
         self.connection_form = Some((form.clone(), events));
         self.form_base = Some(Arc::clone(&ws));
@@ -4580,6 +4584,35 @@ impl Shell {
             f.rebase(loaded, folders, window, cx);
             f.set_error(error, false, cx);
         });
+        let moved = self.form_moves_pin(form, cx);
+        form.update(cx, |f, cx| f.set_pin_moved(moved, cx));
+    }
+
+    // True when the form's edit, planned against the file it was loaded from, points the
+    // edited name's saved password at another target. An empty name keeps the old one, as
+    // Test does; an edit that does not plan shows no note.
+    fn form_moves_pin(&self, form: &Entity<ConnectionForm>, cx: &App) -> bool {
+        let Some(base) = self.form_base.as_deref() else {
+            return false;
+        };
+        let f = form.read(cx);
+        let Some(old) = f.previous() else {
+            return false;
+        };
+        let Ok((name, spec)) = f.test_edit(cx) else {
+            return false;
+        };
+        let name = if name.is_empty() {
+            old.to_owned()
+        } else {
+            name
+        };
+        let edit = Edit::PutConnection {
+            previous: Some(old.to_owned()),
+            name: name.clone(),
+            spec,
+        };
+        plan_edit(base, &edit).is_ok_and(|plan| pin_moves(base, old, plan.workspace(), &name))
     }
 
     fn close_connection_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
