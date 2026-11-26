@@ -62,9 +62,9 @@ pub use rename_secret::{
 
 mod secrets;
 pub use secrets::{
-    MemoryStore, Secret, SecretError, SecretKey, SecretStore, SshSecrets, TimedStore,
+    HintAudience, MemoryStore, Secret, SecretError, SecretKey, SecretStore, SshSecrets, TimedStore,
     key_passphrase_env_var, move_secret, resolve_key_passphrase, resolve_secret,
-    resolve_ssh_secrets, secret_env_var, secret_hint, ssh_key_passphrase_env_var,
+    resolve_ssh_secrets, secret_env_var, secret_hint, secret_hint_for, ssh_key_passphrase_env_var,
     ssh_password_env_var, tls_key_is_encrypted,
 };
 
