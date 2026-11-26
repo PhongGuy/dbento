@@ -1,18 +1,18 @@
 //! A password saved before pinning moves to its pinned key on the first open after the
 //! upgrade, and only on evidence a pre-upgrade app wrote.
-use crate::support::{self, fixture, present, wait_real};
+use crate::support::{self, fixture, label_of, present, wait_real};
 use dbento_app::app::{AppPaths, SavedState, WorkspaceSession, start};
 use dbento_app::persist::{load_json, save_json};
 use dbento_core::{MemoryStore, Secret, SecretError, SecretKey, SecretStore, seen_text};
 use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 
 struct Up {
     fx: support::Fx,
     files: tempfile::TempDir,
     win: AnyWindowHandle,
-    _shell: Entity<dbento_app::shell::Shell>,
+    shell: Entity<dbento_app::shell::Shell>,
     store: Arc<dyn SecretStore>,
 }
 
@@ -103,7 +103,7 @@ fn up(
         fx,
         files,
         win,
-        _shell: shell,
+        shell,
         store,
     }
 }
@@ -223,4 +223,148 @@ fn an_unreadable_baseline_is_dropped_and_moves_nothing(cx: &mut TestAppContext) 
         "nothing parsed, so nothing moved"
     );
     assert!(!u.holds(&u.pinned("nopg")), "nothing was pinned");
+}
+
+/// A store whose reads of `hold` wait until released, logging every key read.
+struct Latch {
+    inner: MemoryStore,
+    hold: SecretKey,
+    held: Mutex<bool>,
+    open: Condvar,
+    log: Mutex<Vec<SecretKey>>,
+}
+impl Latch {
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.open.notify_all();
+    }
+    fn reads(&self) -> Vec<SecretKey> {
+        self.log.lock().unwrap().clone()
+    }
+}
+impl SecretStore for Latch {
+    fn get(&self, k: &SecretKey) -> Result<Option<Secret>, SecretError> {
+        self.log.lock().unwrap().push(k.clone());
+        if *k == self.hold {
+            let mut held = self.held.lock().unwrap();
+            while *held {
+                held = self.open.wait(held).unwrap();
+            }
+        }
+        self.inner.get(k)
+    }
+    fn set(&self, k: &SecretKey, s: &Secret) -> Result<(), SecretError> {
+        self.inner.set(k, s)
+    }
+    fn delete(&self, k: &SecretKey) -> Result<(), SecretError> {
+        self.inner.delete(k)
+    }
+}
+/// Opens the latch when the test ends, pass or fail, so no keychain thread stays blocked.
+struct Release(Arc<Latch>);
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+/// A latch holding `nopg`'s legacy read, over a store that has the legacy password `x`.
+fn latched(fx: &support::Fx) -> Arc<Latch> {
+    let inner = MemoryStore::new();
+    let hold = SecretKey::legacy_password(fx.ws.dir(), "nopg");
+    inner.set(&hold, &Secret::new("x")).unwrap();
+    Arc::new(Latch {
+        inner,
+        hold,
+        held: Mutex::new(true),
+        open: Condvar::new(),
+        log: Mutex::default(),
+    })
+}
+
+#[gpui_kit::test]
+fn a_restored_tab_waits_for_the_pass_and_connects_with_the_migrated_password(
+    cx: &mut TestAppContext,
+) {
+    let fx = fixture("", "");
+    let latch = latched(&fx);
+    let _release = Release(Arc::clone(&latch));
+    let session = old_session(&fx, json!([{ "connection": "nopg", "draft": "d0" }]));
+    let u = up(
+        cx,
+        fx,
+        Some(session),
+        Arc::clone(&latch) as Arc<dyn SecretStore>,
+    );
+    wait_real(cx, "the pass at the latch", |_| {
+        latch.reads().contains(&latch.hold)
+    });
+    cx.run_until_parked();
+    let model = u
+        .shell
+        .read_with(cx, |s, cx| s.tabs()[0].read(cx).model().clone());
+    assert!(
+        model.read_with(cx, |m, _| m.events().is_none()),
+        "the restored tab must not connect while the pass runs"
+    );
+    latch.release();
+    wait_real(cx, "the restored tab's connect", |cx| {
+        label_of(cx, u.win, "connect-error-message").is_some()
+    });
+    // The closed port refuses either way; only a missed password adds a hint.
+    let message = label_of(cx, u.win, "connect-error-message").unwrap();
+    for hint in [
+        "saved password",
+        "no secret was found",
+        "no password is saved",
+    ] {
+        assert!(
+            !message.contains(hint),
+            "the connect had the password: {message}"
+        );
+    }
+    assert!(
+        u.holds(&u.pinned("nopg")),
+        "the pass pinned the legacy entry"
+    );
+}
+
+#[gpui_kit::test]
+fn a_rename_from_before_the_upgrade_waits_for_the_pass_then_carries(cx: &mut TestAppContext) {
+    let fx = fixture("", "");
+    let latch = latched(&fx);
+    let _release = Release(Arc::clone(&latch));
+    let old_pin = fx.ws.secret_target("nopg").unwrap();
+    let session = old_session(&fx, json!([]));
+    let toml = fx.dir.path().join("dbento.toml");
+    let renamed = std::fs::read_to_string(&toml)
+        .unwrap()
+        .replace("[connections.nopg]", "[connections.pg2]");
+    std::fs::write(&toml, renamed).unwrap();
+    let u = up(
+        cx,
+        fx,
+        Some(session),
+        Arc::clone(&latch) as Arc<dyn SecretStore>,
+    );
+    wait_real(cx, "the pass at the latch", |_| {
+        latch.reads().contains(&latch.hold)
+    });
+    cx.run_until_parked();
+    // The pass reads the pinned key, then the legacy one; an ungated probe adds its own reads.
+    let early = latch.reads();
+    assert_eq!(
+        early,
+        vec![old_pin.clone(), latch.hold.clone()],
+        "only the pass has read the keychain"
+    );
+    latch.release();
+    wait_real(cx, "the carried password", |_| u.holds(&u.pinned("pg2")));
+    assert!(
+        !u.holds(&u.legacy("nopg")),
+        "the legacy entry was pinned first"
+    );
+    assert!(
+        !u.holds(&old_pin),
+        "the pinned entry moved on to the new name"
+    );
 }

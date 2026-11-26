@@ -1403,14 +1403,14 @@ impl Shell {
 
     // Shows tab `ix` as `activate` does, leaving the recent order alone for a Ctrl+Tab walk.
     fn show(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(ix) else {
+        let Some(tab) = self.tabs.get(ix).cloned() else {
             return;
         };
         self.active = Some(ix);
         self.tab_scroll.scroll_to_item(ix);
         let model = tab.read(cx).model().clone();
         if model.read(cx).events().is_none() {
-            model.update(cx, |m, cx| m.connect(cx));
+            self.preconnect(&model, cx);
         }
         let editor = tab.read(cx).editor().clone();
         editor.update(cx, |e, cx| e.focus(window, cx));
@@ -1421,6 +1421,25 @@ impl Shell {
         self.follow_active(window, cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    // Connects `model` now, or once the open-time pass ends while one runs, so a restored tab
+    // reads its password only after legacy entries are pinned. A session started meanwhile wins.
+    fn preconnect(&mut self, model: &Entity<TabModel>, cx: &mut Context<Self>) {
+        let Some(gate) = self.migration.clone() else {
+            model.update(cx, |m, cx| m.connect(cx));
+            return;
+        };
+        let model = model.downgrade();
+        cx.spawn(async move |_, cx| {
+            gate.await;
+            let _ = model.update(cx, |m, cx| {
+                if m.events().is_none() {
+                    m.connect(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     // One Ctrl+Tab step: shows the next tab of the walk, back to older or forward to newer.
@@ -3605,23 +3624,29 @@ impl Shell {
         let home = self.services.ssh.home().cloned();
         let store = Arc::clone(&self.services.store);
         let env = Arc::clone(&self.services.env);
-        // Resolving an SSH login reads ~/.ssh/config, so pairing the keys runs here too.
-        let probed = cx.background_spawn({
-            let store = Arc::clone(&store);
-            async move {
-                secret_renames(&old, &new)
-                    .into_iter()
-                    .map(|r| {
-                        let keys = rename_keys(&old, &new, &r, home.as_ref());
-                        let asked = new.declared(&r.to).cloned();
-                        let held = probe(&*store, &keys);
-                        (r, keys, asked, held)
-                    })
-                    .collect::<Vec<_>>()
-            }
-        });
+        let gate = self.migration.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let jobs = probed.await;
+            // The probe pairs pinned keys, so it waits for the open-time pass to pin legacy
+            // entries under the old name first. Resolving an SSH login reads ~/.ssh/config, so
+            // pairing the keys runs off the UI thread too.
+            if let Some(gate) = gate {
+                gate.await;
+            }
+            let probing = Arc::clone(&store);
+            let jobs = cx
+                .background_executor()
+                .spawn(async move {
+                    secret_renames(&old, &new)
+                        .into_iter()
+                        .map(|r| {
+                            let keys = rename_keys(&old, &new, &r, home.as_ref());
+                            let asked = new.declared(&r.to).cloned();
+                            let held = probe(&*probing, &keys);
+                            (r, keys, asked, held)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
             if jobs.is_empty() {
                 return;
             }
