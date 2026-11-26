@@ -1,6 +1,6 @@
 # <img src="assets/icon/dbento-32.svg" alt="" width="40" height="40" align="top"> Dbento
 
-**A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client read-only access to your databases by default. It speaks SQL to Postgres, SQLite, MySQL, SQL Server and DuckDB, and each NoSQL store's own language to MongoDB, SurrealDB, Redis and DynamoDB, and it browses Amazon S3 and S3-compatible object stores read-only. The name is db + bento: data in neat compartments.
+**A fast, native database client.** Dbento is free and open source, written in Rust and drawn on the GPU: no Electron, no webview. It comes as a desktop app, a command line, and an MCP server that gives an AI client read-only access to your databases by default. It speaks SQL to Postgres, SQLite, MySQL, SQL Server and DuckDB, and each NoSQL store's own language to MongoDB, SurrealDB, Redis and DynamoDB, and it browses Amazon S3 and S3-compatible object stores read-only. Server connections can go through an SSH tunnel. The name is db + bento: data in neat compartments.
 
 ![Dbento with the demo shop open: the explorer on the left, a saved query in the editor and its result in the grid](assets/screenshots/hero.png)
 
@@ -175,11 +175,30 @@ auth_level = "database"
 
 A Postgres or SQL Server connection can also reach the other databases on its server. Set `databases` to a list of names, such as `databases = ["billing", "audit"]`, or to `"all"`, and each database becomes a child connection named `<parent>/<database>`, for example `app-dev/billing`. A child uses its parent's credentials and safety settings, and works anywhere a connection name does: the app's explorer, `dbento query`, `dbento run`, `dbento connections`, and the MCP server, where `list_databases` lists a parent's databases. In the app, the connection dialog's Databases field sets the same list.
 
+### SSH tunnels
+
+A Postgres, MySQL or MariaDB, SQL Server, SurrealDB or Redis connection can go through an SSH server, written as an `ssh` sub-table under the connection. `host` can be a `Host` alias from `~/.ssh/config`, which also supplies the port, user and key unless `dbento.toml` sets them. The connection's own `host` is then resolved on the SSH server's side, and TLS still checks the database's name, not the tunnel's.
+
+```toml
+[connections.app-prod.ssh]
+host = "bastion"
+user = "deploy"
+identity_file = "~/.ssh/id_ed25519"
+```
+
+`auth` can pin the sign-in to `"agent"`, `"key"` or `"password"`; without it Dbento tries the SSH agent, then key files, then a stored password. A `~/.ssh/config` that uses `Match`, `ProxyJump` or `ProxyCommand` for the host is refused; write the values in `dbento.toml` instead. All the keys are in [the workspace format](crates/dbento-workspace/FORMAT.md#ssh-tunnels).
+
+Dbento keeps its own `ssh_known_hosts` and also reads `~/.ssh/known_hosts`, but never writes to it. The first time the app meets an SSH server, it shows the key's fingerprint and asks whether to trust it, once for every tab on that server. A key that changed is never trusted from the dialog: it names the command that clears the old one. From the command line, `dbento ssh trust <connection>` checks and stores the key (pass `--fingerprint SHA256:...` when no terminal is attached), and `dbento ssh forget <connection>` removes it.
+
+In the app, the connection dialog's "Connect over SSH" section edits the same settings.
+
 ### Secrets stay out of files
 
 No password is ever written to `dbento.toml`. A server connection's secret is stored in the OS keychain (the Secret Service on Linux, Keychain on macOS, Credential Manager on Windows), and only the secret, never the whole connection URL. When the keychain has no entry, Dbento reads the environment variable `DBENTO_SECRET_<NAME>`, the connection name in upper case with `-` as `_` (so `app-prod` reads `DBENTO_SECRET_APP_PROD`). A connection can also name its own variable with `secret = { env = "PGPASSWORD" }`, or say it needs none with `secret = "none"`.
 
-When `dbento.toml` changes while the app is open (a `git pull`, another editor) and a connection was renamed, the app moves its keychain password and key passphrase to the new name. It does so without asking when only the name changed, asks first when the server and user stay the same but another setting changed, and never moves them when the server or user changed. A password kept in an environment variable such as `DBENTO_SECRET_<NAME>` cannot be moved, so the app names the variable to rename instead. A rename made while the app was closed, such as a pull before starting it, is caught the next time the app opens that workspace, as long as the app had opened it at least once before the change. The command line and the MCP server leave the move to the app: until the app has opened the workspace, `dbento` finds no password under the new name; store it with `dbento secret set`.
+An SSH tunnel's password and key passphrase are kept the same way. The connection dialog stores them on Save, `dbento secret set --ssh-password <connection>` and `--ssh-key-passphrase` store them from the command line, and without a keychain entry Dbento reads `DBENTO_SSH_PASSWORD_<NAME>` and `DBENTO_SSH_KEY_PASSPHRASE_<NAME>`.
+
+When `dbento.toml` changes while the app is open (a `git pull`, another editor) and a connection was renamed, the app moves its keychain password, key passphrase and SSH secrets to the new name. It does so without asking when only the name changed, asks first when the server and user stay the same but another setting changed, and never moves them when the server or user changed. A password kept in an environment variable such as `DBENTO_SECRET_<NAME>` cannot be moved, so the app names the variable to rename instead. A rename made while the app was closed, such as a pull before starting it, is caught the next time the app opens that workspace, as long as the app had opened it at least once before the change. The command line and the MCP server leave the move to the app: until the app has opened the workspace, `dbento` finds no password under the new name; store it with `dbento secret set`.
 
 ## Download
 
