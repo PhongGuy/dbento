@@ -6,6 +6,7 @@
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use testcontainers_modules::mssql_server::MssqlServer;
 use testcontainers_modules::testcontainers::{
@@ -271,14 +272,64 @@ fn config(host: &str, port: u16, user: &str, password: &str, database: &str) -> 
     config
 }
 
+/// SQL Server's "Login failed for user" error number.
+const LOGIN_FAILED: u32 = 18456;
+
+/// A failed login: the server's error number when it sent one, and the text to report.
+#[derive(Debug)]
+struct LoginError {
+    code: Option<u32>,
+    text: String,
+}
+
+/// How long a fresh container may keep refusing the `sa` login, and the pause between tries.
+const CONTAINER_LOGIN_WAIT: Duration = Duration::from_secs(60);
+const LOGIN_PAUSE: Duration = Duration::from_millis(500);
+
+/// Runs `login` until it succeeds, trying again only while the server refuses the login and
+/// `deadline` has not passed since the first try; otherwise the last error's text.
+async fn login_until<T, F, Fut>(
+    deadline: Duration,
+    pause: Duration,
+    mut login: F,
+) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, LoginError>>,
+{
+    let started = Instant::now();
+    loop {
+        match login().await {
+            Ok(client) => return Ok(client),
+            Err(e) if e.code == Some(LOGIN_FAILED) && started.elapsed() < deadline => {
+                tokio::time::sleep(pause).await;
+            }
+            Err(e) if e.code == Some(LOGIN_FAILED) && !deadline.is_zero() => {
+                return Err(format!("still refused after {deadline:?}: {}", e.text));
+            }
+            Err(e) => return Err(e.text),
+        }
+    }
+}
+
 async fn try_connect(config: Config) -> Result<Client<Compat<TcpStream>>, String> {
-    let tcp = TcpStream::connect(config.get_addr())
-        .await
-        .map_err(|e| e.to_string())?;
-    tcp.set_nodelay(true).map_err(|e| e.to_string())?;
+    try_login(config).await.map_err(|e| e.text)
+}
+
+/// [`try_connect`] keeping the server's error number, so a refused login can be told apart.
+async fn try_login(config: Config) -> Result<Client<Compat<TcpStream>>, LoginError> {
+    let io = |e: std::io::Error| LoginError {
+        code: None,
+        text: e.to_string(),
+    };
+    let tcp = TcpStream::connect(config.get_addr()).await.map_err(io)?;
+    tcp.set_nodelay(true).map_err(io)?;
     Client::connect(config, tcp.compat_write())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| LoginError {
+            code: e.code(),
+            text: e.to_string(),
+        })
 }
 
 async fn connect(config: Config) -> Client<Compat<TcpStream>> {
@@ -292,7 +343,7 @@ pub async fn mssql_db() -> MsDb {
     match ms_source(|k| std::env::var(k).ok()) {
         Ok(MsSource::Url(url)) => {
             let (host, port, user, password) = ms_url(&url).unwrap_or_else(|e| panic!("{e}"));
-            fresh_database(&host, port, &user, &password).await
+            fresh_database(&host, port, &user, &password, Duration::ZERO).await
         }
         Ok(MsSource::Container) => container(None).await,
         Err(e) => panic!("{e}"),
@@ -400,7 +451,7 @@ async fn launch(
         .get_host_port_ipv4(1433)
         .await
         .expect("no mapped SQL Server port");
-    let mut db = fresh_database(host, port, "sa", MS_SA_PASSWORD).await;
+    let mut db = fresh_database(host, port, "sa", MS_SA_PASSWORD, CONTAINER_LOGIN_WAIT).await;
     db.container = Some(c);
     db._permit = Some(permit);
     db
@@ -457,10 +508,20 @@ fn database_name() -> String {
     )
 }
 
-/// Creates a [`database_name`] database from a `master` login.
-async fn fresh_database(host: &str, port: u16, user: &str, password: &str) -> MsDb {
+/// Creates a [`database_name`] database from a `master` login, which may be refused for up to
+/// `login_wait` while a fresh container is still applying the `sa` password.
+async fn fresh_database(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    login_wait: Duration,
+) -> MsDb {
     let name = database_name();
-    let mut admin = connect(config(host, port, user, password, "master")).await;
+    let master = || try_login(config(host, port, user, password, "master"));
+    let mut admin = login_until(login_wait, LOGIN_PAUSE, master)
+        .await
+        .unwrap_or_else(|e| panic!("cannot connect to the SQL Server test server: {e}"));
     admin
         .simple_query(format!(
             "DROP DATABASE IF EXISTS [{name}]; CREATE DATABASE [{name}]"
@@ -492,6 +553,82 @@ mod tests {
                 .find(|(n, _)| *n == k)
                 .map(|(_, v)| (*v).to_owned())
         }
+    }
+
+    fn refused() -> LoginError {
+        LoginError {
+            code: Some(LOGIN_FAILED),
+            text: "Login failed for user 'sa'".to_owned(),
+        }
+    }
+
+    // A fake login that answers with `script` in order, counting its calls.
+    fn scripted(
+        script: Vec<Result<u8, LoginError>>,
+    ) -> (
+        impl FnMut() -> std::future::Ready<Result<u8, LoginError>>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let mut script = script.into_iter();
+        let login = move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            std::future::ready(script.next().expect("the login was tried too often"))
+        };
+        (login, calls)
+    }
+
+    const PAUSE: Duration = Duration::from_millis(1);
+
+    #[tokio::test]
+    async fn a_refused_login_is_tried_again_until_it_works() {
+        let (login, calls) = scripted(vec![Err(refused()), Err(refused()), Ok(7)]);
+        let got = login_until(Duration::from_secs(5), PAUSE, login).await;
+        assert_eq!(got, Ok(7));
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn any_other_error_fails_at_once() {
+        let other = LoginError {
+            code: Some(4060),
+            text: "Cannot open database".to_owned(),
+        };
+        let (login, calls) = scripted(vec![Err(other), Ok(7)]);
+        let got = login_until(Duration::from_secs(5), PAUSE, login).await;
+        assert_eq!(got, Err("Cannot open database".to_owned()));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let io = LoginError {
+            code: None,
+            text: "Connection refused".to_owned(),
+        };
+        let (login, calls) = scripted(vec![Err(io), Ok(7)]);
+        let got = login_until(Duration::from_secs(5), PAUSE, login).await;
+        assert_eq!(got, Err("Connection refused".to_owned()));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn a_login_refused_past_the_deadline_gives_up_with_the_last_error() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let login = move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            std::future::ready(Err::<u8, _>(refused()))
+        };
+        let got = login_until(Duration::from_millis(30), PAUSE, login).await;
+        let e = got.unwrap_err();
+        assert!(e.contains("Login failed for user 'sa'"), "{e}");
+        assert!(calls.load(Ordering::Relaxed) > 1);
+    }
+
+    #[tokio::test]
+    async fn no_deadline_means_one_try() {
+        let (login, calls) = scripted(vec![Err(refused()), Ok(7)]);
+        let got = login_until(Duration::ZERO, PAUSE, login).await;
+        assert!(got.unwrap_err().contains("Login failed"));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
