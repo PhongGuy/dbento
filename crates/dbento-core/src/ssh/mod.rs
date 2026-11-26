@@ -1,7 +1,7 @@
 //! SSH tunnels: how a connection's `ssh` table is resolved before a tunnel opens, and
 //! which host keys are trusted.
 
-use crate::{ConnectionConfig, SecretError, SecretStore, SshSecrets, Workspace};
+use crate::{ConnectionConfig, Engine, SecretError, SecretStore, SshSecrets, Workspace};
 
 mod auth;
 mod known_hosts;
@@ -15,6 +15,14 @@ pub use known_hosts::{
 pub(crate) use link::{Dialer, SshLink, SshStream, resolved, tunnel_target};
 pub use link::{SshEnv, probe_host_key, ssh_channel_check};
 pub use resolve::{ResolvedSsh, SshHome, SshResolveError, resolve_ssh, ssh_warnings};
+
+/// Whether a connection on `engine` can reach its server through SSH in this build:
+/// Postgres, MySQL/MariaDB and SQL Server always; Redis and SurrealDB with their features.
+pub fn ssh_tunnels(engine: Engine) -> bool {
+    [Engine::Postgres, Engine::Mssql, Engine::Mysql].contains(&engine)
+        || (cfg!(feature = "redis") && engine == Engine::Redis)
+        || (cfg!(feature = "surrealdb") && engine == Engine::Surrealdb)
+}
 
 /// The SSH secrets of `conn`: none without an `ssh` table or when it does not resolve
 /// against `env`'s home (connect then reports why); else [`crate::resolve_ssh_secrets`].
@@ -31,5 +39,29 @@ pub fn ssh_secrets_for(
     match resolve_ssh(conn, ws.dir(), env.home()) {
         Ok(resolved) => crate::resolve_ssh_secrets(ws, conn, &resolved, store, lookup),
         Err(_) => Ok(SshSecrets::default()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ssh_tunnels;
+    use crate::Engine;
+
+    #[test]
+    fn the_tunnelled_engines_follow_the_build() {
+        for e in [Engine::Postgres, Engine::Mysql, Engine::Mssql] {
+            assert!(ssh_tunnels(e), "{e:?}");
+        }
+        assert_eq!(ssh_tunnels(Engine::Redis), cfg!(feature = "redis"));
+        assert_eq!(ssh_tunnels(Engine::Surrealdb), cfg!(feature = "surrealdb"));
+        for e in [
+            Engine::Sqlite,
+            Engine::Duckdb,
+            Engine::Mongodb,
+            Engine::Dynamodb,
+            Engine::S3,
+        ] {
+            assert!(!ssh_tunnels(e), "{e:?}");
+        }
     }
 }

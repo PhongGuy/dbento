@@ -2,6 +2,7 @@
 use crate::support::{self, click_id, label_of, present, wait_real};
 use dbento_app::app::{AppPaths, EnvLookup, SavedState, start};
 use dbento_app::persist::{load_json, save_json};
+use dbento_app::rename_secret::not_moved_text;
 use dbento_app::rename_secret::{
     Held, RenameKeys, adopt_held, env_lines, env_notice, move_ask, probe, rename_keys, stays_line,
     still_renamed,
@@ -1094,4 +1095,39 @@ fn another_ssh_user_leaves_the_ssh_password_and_says_so(cx: &mut TestAppContext)
         "the dialog never shows the secret"
     );
     assert!(a.holds(&old), "the old entry stays");
+}
+
+#[test]
+fn a_failed_move_names_the_ssh_secrets_it_carried() {
+    let ssh = Held {
+        ssh_password: true,
+        ..Held::default()
+    };
+    let text = not_moved_text(&locked(), "pg2", Some(ssh));
+    assert!(
+        text.ends_with("Enter the SSH password for pg2 again in Edit connection."),
+        "{text}"
+    );
+    let both = Held {
+        password: true,
+        ssh_passphrase: true,
+        ..Held::default()
+    };
+    let text = not_moved_text(&locked(), "pg2", Some(both));
+    assert!(
+        text.ends_with(
+            "Enter the password and SSH key passphrase for pg2 again in Edit connection."
+        ),
+        "{text}"
+    );
+    let plain = Held {
+        password: true,
+        ..Held::default()
+    };
+    let text = not_moved_text(&locked(), "pg2", Some(plain));
+    assert!(
+        text.ends_with("Enter the password again for pg2."),
+        "{text}"
+    );
+    assert!(not_moved_text(&locked(), "pg2", None).ends_with("Enter the password again for pg2."));
 }

@@ -745,9 +745,7 @@ pub async fn connect(
     // A connection with an ssh table never connects directly: the link opens first. The workspace
     // already refuses engines without a TCP server, so this refuses only an engine this build
     // lacks, before anything is dialled.
-    let tunnelled = [Engine::Postgres, Engine::Mssql, Engine::Mysql].contains(&conn.engine())
-        || (cfg!(feature = "redis") && conn.engine() == Engine::Redis)
-        || (cfg!(feature = "surrealdb") && conn.engine() == Engine::Surrealdb);
+    let tunnelled = crate::ssh::ssh_tunnels(conn.engine());
     let ssh = match conn.ssh() {
         None => None,
         Some(_) if !tunnelled => {
