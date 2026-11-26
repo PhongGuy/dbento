@@ -51,6 +51,9 @@ pub use history::{
 pub mod paths;
 pub use paths::StatePaths;
 
+mod legacy_secret;
+pub use legacy_secret::{LegacyMigration, adopt_legacy_password, migrate_legacy_passwords};
+
 mod rename_secret;
 pub use rename_secret::{
     Adopted, RenameMatch, SEEN_TEXT_MAX, SecretRename, SshAdopted, SshPasswordMove, adopt_secret,

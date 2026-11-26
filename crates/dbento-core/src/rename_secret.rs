@@ -133,7 +133,7 @@ fn pair(a: &ConnectionConfig, b: &ConnectionConfig) -> Option<SecretRename> {
 }
 
 /// Whether the connection's password lives in the keychain.
-fn keychain_backed(c: &ConnectionConfig) -> bool {
+pub(crate) fn keychain_backed(c: &ConnectionConfig) -> bool {
     c.engine().capabilities().password && matches!(c.secret_source(), SecretSource::Keychain)
 }
 
