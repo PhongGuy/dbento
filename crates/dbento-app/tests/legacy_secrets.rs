@@ -3,7 +3,7 @@
 use crate::support::{self, fixture, present, wait_real};
 use dbento_app::app::{AppPaths, SavedState, WorkspaceSession, start};
 use dbento_app::persist::{load_json, save_json};
-use dbento_core::{Secret, SecretError, SecretKey, SecretStore, seen_text};
+use dbento_core::{MemoryStore, Secret, SecretError, SecretKey, SecretStore, seen_text};
 use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -23,6 +23,25 @@ impl Up {
     fn disk(&self) -> Option<WorkspaceSession> {
         self.saved().session(self.fx.ws.dir()).cloned()
     }
+    fn holds(&self, k: &SecretKey) -> bool {
+        self.store.get(k).is_ok_and(|s| s.is_some())
+    }
+    fn legacy(&self, name: &str) -> SecretKey {
+        SecretKey::legacy_password(self.fx.ws.dir(), name)
+    }
+    /// The pinned key for `name` as the file declares it now.
+    fn pinned(&self, name: &str) -> SecretKey {
+        let dir = self.fx.ws.dir();
+        SecretKey::password(dir, name, &support::pin_of(dir, name))
+    }
+}
+
+/// A memory keychain holding a legacy password for `name`.
+fn with_legacy(fx: &support::Fx, name: &str) -> Arc<dyn SecretStore> {
+    let store = MemoryStore::new();
+    let legacy = SecretKey::legacy_password(fx.ws.dir(), name);
+    store.set(&legacy, &Secret::new("x")).unwrap();
+    Arc::new(store)
 }
 
 /// A session as a pre-upgrade app wrote it: no `pin_epoch`, `seen` from the fixture's file.
@@ -152,4 +171,56 @@ fn a_failed_pass_keeps_the_frozen_snapshot_and_every_save_writes_it(cx: &mut Tes
         Some(old.as_str()),
         "save_session writes the in-memory baseline"
     );
+}
+
+#[gpui_kit::test]
+fn an_upgraded_session_moves_the_legacy_password_and_clears_the_baseline(cx: &mut TestAppContext) {
+    let fx = fixture("", "");
+    let store = with_legacy(&fx, "nopg");
+    let session = old_session(&fx, json!([]));
+    let u = up(cx, fx, Some(session), store);
+    wait_real(cx, "the pinned password", |_| u.holds(&u.pinned("nopg")));
+    let moved = u.store.get(&u.pinned("nopg")).unwrap().unwrap();
+    assert_eq!(moved.expose(), "x", "the legacy password moved unchanged");
+    assert!(!u.holds(&u.legacy("nopg")), "the legacy entry is gone");
+    // Epoch 1 is only ever written with the baseline until the pass clears it.
+    wait_real(cx, "the cleared baseline", |_| {
+        u.disk()
+            .is_some_and(|s| s.pin_epoch == 1 && s.legacy_baseline.is_none())
+    });
+}
+
+#[gpui_kit::test]
+fn a_session_the_new_app_wrote_never_migrates(cx: &mut TestAppContext) {
+    let fx = fixture("", "");
+    let store = with_legacy(&fx, "nopg");
+    let mut session = old_session(&fx, json!([]));
+    session["pin_epoch"] = json!(1);
+    let u = up(cx, fx, Some(session), store);
+    wait_real(cx, "the open's state write", |_| {
+        u.saved().last_workspace.is_some()
+    });
+    assert!(
+        u.holds(&u.legacy("nopg")),
+        "no pre-upgrade evidence, so the legacy entry stays"
+    );
+    assert!(!u.holds(&u.pinned("nopg")), "nothing was pinned");
+}
+
+#[gpui_kit::test]
+fn an_unreadable_baseline_is_dropped_and_moves_nothing(cx: &mut TestAppContext) {
+    let fx = fixture("", "");
+    let store = with_legacy(&fx, "nopg");
+    let mut session = old_session(&fx, json!([]));
+    session["seen"] = json!("dbento = 1\n[connections.\n");
+    let u = up(cx, fx, Some(session), store);
+    wait_real(cx, "the dropped baseline", |_| {
+        u.disk()
+            .is_some_and(|s| s.pin_epoch == 1 && s.legacy_baseline.is_none())
+    });
+    assert!(
+        u.holds(&u.legacy("nopg")),
+        "nothing parsed, so nothing moved"
+    );
+    assert!(!u.holds(&u.pinned("nopg")), "nothing was pinned");
 }

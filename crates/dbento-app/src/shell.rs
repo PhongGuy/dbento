@@ -15,11 +15,13 @@ use dbento_core::{
     EditError, EditPlan, Engine, FolderPath, GrantState, HostKey, LogoutError, ObjectKey,
     ObjectRef, OpenError, RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError,
     SecretKey, SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace,
-    WorkspaceItem, WorkspaceWatcher, WriteError, connect, display_key, move_secret, plan_edit,
-    resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames, seen_text,
-    seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted, trust_host_key,
+    WorkspaceItem, WorkspaceWatcher, WriteError, connect, display_key, migrate_legacy_passwords,
+    move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames,
+    seen_text, seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted,
+    trust_host_key,
 };
-use futures_util::future::{Either, join, join_all, select};
+use futures_util::FutureExt as _;
+use futures_util::future::{Either, Shared, join, join_all, select};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::ElementExt as _;
 use gpui_kit::base::{ObservedElement, ResizeHandleRenderer, ResizeHandleState};
@@ -437,6 +439,8 @@ pub struct Shell {
     seen: Option<String>,
     // The pre-upgrade connection list frozen at open, until a migration pass clears it.
     legacy_baseline: Option<String>,
+    // The open's legacy password pass while it runs, shared so a keychain reader can await it.
+    migration: Option<Shared<Task<()>>>,
     sidebar: Option<Entity<Sidebar>>,
     tabs: Vec<Entity<QueryTab>>,
     // Per tab, index for index: the model observation the status bar follows, the tab's own
@@ -676,6 +680,7 @@ impl Shell {
             workspace: None,
             seen: None,
             legacy_baseline: None,
+            migration: None,
             sidebar: None,
             tabs: Vec::new(),
             tab_observes: Vec::new(),
@@ -1022,6 +1027,58 @@ impl Shell {
     // about to close, which may end the process before a background write lands.
     fn flush_saved(&mut self) {
         save_state(&self.state_file);
+    }
+
+    // Moves legacy passwords under the pins the pre-upgrade file gave them, off the UI thread.
+    // The queued freeze is written first, so the baseline is on disk before the keychain is.
+    fn start_legacy_pass(
+        &mut self,
+        ws: &Arc<Workspace>,
+        cx: &mut Context<Self>,
+    ) -> Option<Shared<Task<()>>> {
+        let text = self.legacy_baseline.clone()?;
+        let (store, file, current) = (
+            Arc::clone(&self.services.store),
+            Arc::clone(&self.state_file),
+            Arc::clone(ws),
+        );
+        let (dir, generation) = (ws.dir().to_path_buf(), self.watch_generation);
+        // On the blocking pool, as the runner's lookups are, so a slow keychain holds no UI work.
+        let pass = crate::tokio_bridge::spawn(cx, async move {
+            tokio::task::spawn_blocking(move || {
+                save_state(&file);
+                let Some(baseline) = seen_workspace(&text, &current) else {
+                    return true;
+                };
+                migrate_legacy_passwords(&*store, &baseline)
+                    .iter()
+                    .all(|(_, r)| r.is_ok())
+            })
+            .await
+            .unwrap_or(false)
+        });
+        let task = cx.spawn(async move |this, cx| {
+            let clean = matches!(pass.await, Ok(true));
+            let _ = this.update(cx, |s, cx| {
+                if s.watch_generation == generation {
+                    s.migration = None;
+                    if clean {
+                        s.legacy_baseline = None;
+                    }
+                }
+                if clean {
+                    s.update_saved(
+                        move |st| {
+                            if let Some(x) = st.sessions.iter_mut().find(|x| x.workspace == dir) {
+                                x.legacy_baseline = None;
+                            }
+                        },
+                        cx,
+                    );
+                }
+            });
+        });
+        Some(task.shared())
     }
 
     // Records the open tabs as this workspace's session, so the next start reopens them.
@@ -2904,6 +2961,7 @@ impl Shell {
         self.workspace = None;
         self.seen = None;
         self.legacy_baseline = None;
+        self.migration = None;
         self.sidebar = None;
         self._sidebar_events = None;
         self._sidebar_notify = None;
@@ -3079,6 +3137,7 @@ impl Shell {
                     },
                     cx,
                 );
+                self.migration = self.start_legacy_pass(&opened, cx);
                 self.restore_tabs(window, cx);
                 // A rename made while this folder was not open moves its secrets now, unless
                 // the window is closing or the list is the one last installed.
