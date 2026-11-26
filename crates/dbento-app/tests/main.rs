@@ -164,6 +164,7 @@ mod palette_commands;
 mod palette_model;
 mod palette_rank;
 mod park_lock;
+mod password_follow;
 mod paths;
 mod plan_view;
 mod preconnect;

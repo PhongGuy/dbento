@@ -4,6 +4,7 @@ use dbento_app::explorer::connection_id;
 use crate::support::{click_id, label_of, present, wait_real};
 use dbento_app::app::start;
 use dbento_app::connection_dialog::Field;
+use dbento_core::MemoryStore;
 use dbento_core::{Secret, SecretError, SecretKey, SecretStore};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
@@ -431,4 +432,65 @@ fn save_refuses_a_form_older_than_the_workspace(cx: &mut TestAppContext) {
     );
     assert!(present(cx, win, "conn-reload"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+/// The pinned password key for `name` as the file declares it now.
+fn pinned(dir: &std::path::Path, name: &str) -> SecretKey {
+    SecretKey::password(dir, name, &support::pin_of(dir, name))
+}
+
+#[gpui_kit::test]
+fn a_changed_login_drops_the_saved_password_and_stores_a_typed_one_under_the_new(
+    cx: &mut TestAppContext,
+) {
+    let store: Arc<dyn SecretStore> = Arc::new(MemoryStore::new());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
+    let dir = fx.ws.dir().to_path_buf();
+    let (old, legacy) = (
+        pinned(&dir, "nopg"),
+        SecretKey::legacy_password(&dir, "nopg"),
+    );
+    store.set(&old, &Secret::new("x")).unwrap();
+    store.set(&legacy, &Secret::new("x")).unwrap();
+    let f = edit_form(cx, win, &shell, "nopg");
+    set(cx, win, &f, Field::User, "y");
+    set(cx, win, &f, Field::Password, "x");
+    click_id(cx, win, "conn-save");
+    let new = pinned(&dir, "nopg");
+    assert_ne!(new, old, "the user is part of the pin");
+    wait_real(cx, "the typed password", |_| {
+        store.get(&new).unwrap().is_some()
+    });
+    assert!(
+        store.get(&old).unwrap().is_none(),
+        "the old login's entry is dropped"
+    );
+    assert!(
+        store.get(&legacy).unwrap().is_none(),
+        "a typed password drops the legacy entry"
+    );
+}
+
+#[gpui_kit::test]
+fn a_rename_to_another_login_moves_nothing(cx: &mut TestAppContext) {
+    let store: Arc<dyn SecretStore> = Arc::new(MemoryStore::new());
+    let (fx, _files, win, shell) = idle_app(cx, Arc::clone(&store));
+    let dir = fx.ws.dir().to_path_buf();
+    let old = pinned(&dir, "nopg");
+    store.set(&old, &Secret::new("x")).unwrap();
+    let f = edit_form(cx, win, &shell, "nopg");
+    set(cx, win, &f, Field::Name, "pg2");
+    set(cx, win, &f, Field::User, "y");
+    click_id(cx, win, "conn-save");
+    wait_real(cx, "the dropped entry", |_| {
+        store.get(&old).unwrap().is_none()
+    });
+    assert!(
+        store.get(&pinned(&dir, "pg2")).unwrap().is_none(),
+        "nothing reaches the new login"
+    );
+    assert!(
+        store.get(&old.renamed("pg2")).unwrap().is_none(),
+        "nor the old pin under the new name"
+    );
 }

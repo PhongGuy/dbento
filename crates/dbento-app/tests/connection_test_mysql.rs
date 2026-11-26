@@ -80,11 +80,10 @@ fn a_new_mysql_connection_tests_saves_and_keeps_its_password_in_the_keychain(
     support::click_id(cx, win, "conn-save");
     let dir_now = shell.read_with(cx, |s, _| s.workspace().unwrap().dir().to_path_buf());
     // The key is pinned to the saved config, so it is built once the file declares `my`.
-    let key = |dir: &std::path::Path| SecretKey::password(dir, "my", &support::pin_of(dir, "my"));
+    let key = SecretKey::password(&dir_now, "my", &support::pin_of(&dir_now, "my"));
     support::wait_real(cx, "the stored secret", |_| {
-        store.get(&key(&dir_now)).unwrap().is_some()
+        store.get(&key).unwrap().is_some()
     });
-    let key = key(&dir_now);
     assert_eq!(store.get(&key).unwrap().unwrap().expose(), password);
     let text = std::fs::read_to_string(dir.path().join("dbento.toml")).unwrap();
     assert!(text.contains("engine = \"mysql\""), "{text}");

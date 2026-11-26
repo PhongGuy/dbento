@@ -14,11 +14,10 @@ use dbento_core::{
     ApprovalError, ApprovalRequest, ApprovalStore, Browse, Color, ConnectionSpec, Decision, Edit,
     EditError, EditPlan, Engine, FolderPath, GrantState, HostKey, LogoutError, ObjectKey,
     ObjectRef, OpenError, RelationKind, RelationRef, RenameMatch, SavedQuery, Secret, SecretError,
-    SecretKey, SecretSource, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace,
-    WorkspaceItem, WorkspaceWatcher, WriteError, connect, display_key, migrate_legacy_passwords,
-    move_secret, plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames,
-    seen_text, seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted,
-    trust_host_key,
+    SecretKey, ServerUrl, SessionOptions, Sort, SyncState, WatchEvent, Workspace, WorkspaceItem,
+    WorkspaceWatcher, WriteError, connect, display_key, migrate_legacy_passwords, move_secret,
+    plan_edit, resolve_key_passphrase, resolve_secret, secret_env_var, secret_renames, seen_text,
+    seen_workspace, suggested_file_name, team_logout, tls_key_is_encrypted, trust_host_key,
 };
 use futures_util::FutureExt as _;
 use futures_util::future::{Either, Shared, join, join_all, select};
@@ -76,6 +75,9 @@ use crate::keymap::{
 use crate::link::LinkState;
 use crate::nav::{Hop, NavHistory};
 use crate::palette::{self, Mode, PaletteCommand, PaletteEvent, PaletteInit, TableRef};
+use crate::password_follow::{
+    PasswordFollow, apply_password_follow, keychain_backed, password_follow,
+};
 use crate::persist::ChangeQueue;
 use crate::pick_row::ConnectionPick;
 use crate::query_files::{ask_name, name_problem, query_rel};
@@ -134,10 +136,10 @@ async fn listed_within<E>(
 // One open saved query's read in a reload pass: the tab, what it knew then, what was read.
 type TabRead = (WeakEntity<QueryTab>, TabDisk, DiskRead);
 
-/// The secrets a connection form typed: the database password at its entry, the client key's
-/// passphrase, the SSH password and the SSH key passphrase.
+/// The secrets a connection form typed: the database password, the client key's passphrase,
+/// the SSH password and the SSH key passphrase.
 type TypedSecrets = (
-    Option<(SecretKey, Secret)>,
+    Option<Secret>,
     Option<Secret>,
     Option<Secret>,
     Option<Secret>,
@@ -4787,43 +4789,6 @@ impl Shell {
         }));
     }
 
-    // The typed password and where it goes, when the saved connection reads it from the
-    // keychain; any other source, or an empty field, keeps the store as it is.
-    fn password_to_store(
-        form: &Entity<ConnectionForm>,
-        plan: &EditPlan,
-        name: &str,
-        cx: &Context<Self>,
-    ) -> Option<(SecretKey, Secret)> {
-        let ws = plan.workspace();
-        if !keychain_backed(ws.declared(name)?) {
-            return None;
-        }
-        let typed = form.read(cx).password(cx)?;
-        Some((ws.secret_target(name)?, typed))
-    }
-
-    // Stores the password off the UI thread (a keychain call can take seconds); a failure
-    // shows once the dialog is gone, since the file is already written.
-    fn store_password(
-        &mut self,
-        key: SecretKey,
-        secret: Secret,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let store = Arc::clone(&self.services.store);
-        let stored = cx.background_spawn(async move { store.set(&key, &secret) });
-        cx.spawn_in(window, async move |_, cx| {
-            if let Err(e) = stored.await {
-                let _ = cx.update(|window, cx| {
-                    show_error("Password not saved", e.to_string(), window, cx)
-                });
-            }
-        })
-        .detach();
-    }
-
     // True when an open tab runs on `name`; such a connection cannot be renamed or deleted.
     fn connection_in_use(&self, name: &str, cx: &Context<Self>) -> bool {
         self.tabs
@@ -4885,7 +4850,7 @@ impl Shell {
             }
             Ok((name, plan)) => {
                 // Read before the form closes, which clears the password field.
-                let password = Self::password_to_store(&form, &plan, &name, cx);
+                let password = form.read(cx).password(cx);
                 let key_passphrase = form.read(cx).key_passphrase(cx);
                 let ssh_password = form.read(cx).ssh_password(cx);
                 let ssh_passphrase = form.read(cx).ssh_key_passphrase(cx);
@@ -4922,9 +4887,7 @@ impl Shell {
         let folder = renamed.as_ref().filter(|_| matches!(moved, Some(Err(_))));
         let folder =
             folder.map(|(old, new)| format!("Move queries/{old} to queries/{new} by hand."));
-        let old_keychain = base.declared(old_name).is_some_and(keychain_backed);
-        let new_keychain = plan.workspace().declared(name).is_some_and(keychain_backed);
-        let new_key = plan.workspace().secret_target(name);
+        let follow = password_follow(&base, old_name, plan.workspace(), name, password.is_some());
         // A new connection has no old passphrase slot, so its key comes from the written plan.
         let passphrase_from = base
             .key_passphrase_target(old_name)
@@ -4944,19 +4907,7 @@ impl Shell {
             self.save_session(cx);
         }
         self.close_connection_form(window, cx);
-        let old_key = base.secret_target(old_name).filter(|_| old_keychain);
-        match (old_key, new_keychain, renamed.and(new_key)) {
-            // The old entry has no reader any more.
-            (Some(old_key), false, _) => self.remove_secret(old_key, window, cx),
-            (Some(old_key), true, Some(new_key)) => {
-                self.move_password(old_key, new_key, password, window, cx)
-            }
-            _ => {
-                if let Some((key, secret)) = password {
-                    self.store_password(key, secret, window, cx);
-                }
-            }
-        }
+        self.follow_password(follow, password, name, window, cx);
         if let Some(from) = passphrase_from {
             self.follow_key_passphrase(
                 from,
@@ -5060,31 +5011,29 @@ impl Shell {
         .detach();
     }
 
-    // After a rename is written: moves the stored secret to the new name, then stores the
-    // typed password over it, both off the UI thread. A failure keeps the rename and asks
-    // for the password again.
-    fn move_password(
+    // Carries out the password follow off the UI thread (a keychain call can take seconds); a
+    // failure keeps the written file and asks for the password again.
+    fn follow_password(
         &mut self,
-        from: SecretKey,
-        to: SecretKey,
-        password: Option<(SecretKey, Secret)>,
+        follow: PasswordFollow,
+        password: Option<Secret>,
+        name: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if follow == PasswordFollow::default() {
+            return;
+        }
         let store = Arc::clone(&self.services.store);
-        let new = to.connection().to_owned();
-        let moved = cx.background_spawn(async move {
-            move_secret(&*store, &from, &to)?;
-            match password {
-                Some((key, secret)) => store.set(&key, &secret),
-                None => Ok(()),
-            }
+        let name = name.to_owned();
+        let applied = cx.background_spawn(async move {
+            apply_password_follow(&*store, &follow, password.as_ref())
         });
         cx.spawn_in(window, async move |_, cx| {
-            if let Err(e) = moved.await {
-                let detail = format!("{e}. Enter the password again for {new}.");
+            if let Err(e) = applied.await {
+                let detail = format!("{e}. Enter the password again for {name}.");
                 let _ =
-                    cx.update(|window, cx| show_error("Password not moved", detail, window, cx));
+                    cx.update(|window, cx| show_error("Password not saved", detail, window, cx));
             }
         })
         .detach();
@@ -6967,11 +6916,6 @@ fn ask_discard(
         window,
         cx,
     )
-}
-
-// Only a connection whose engine takes a password and reads the keychain owns a stored secret.
-fn keychain_backed(conn: &dbento_core::ConnectionConfig) -> bool {
-    conn.engine().capabilities().password && matches!(conn.secret_source(), SecretSource::Keychain)
 }
 
 // How the connection dialog opens: blank, on an existing connection, or as a copy of one
