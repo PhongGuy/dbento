@@ -200,6 +200,7 @@ mod runner_explain;
 mod runner_lifecycle;
 mod runner_redis;
 mod runner_s3;
+mod runner_stop;
 mod runner_stream;
 mod runner_surreal;
 mod running_state;
