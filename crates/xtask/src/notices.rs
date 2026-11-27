@@ -6,10 +6,10 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 
-pub const ABOUT_VERSION: &str = "0.9.2";
-pub const INSTALL: &str = "cargo install --locked cargo-about --version 0.9.2 --features cli";
+pub const ABOUT_VERSION: &str = "0.9.3";
+pub const INSTALL: &str = "cargo install --locked cargo-about --version 0.9.3 --features cli";
 
-/// True when `cargo about --version` output, trimmed, is exactly "cargo-about 0.9.2".
+/// True when `cargo about --version` output, trimmed, is exactly "cargo-about 0.9.3".
 pub fn version_ok(version_output: &str) -> bool {
     version_output.trim() == format!("cargo-about {ABOUT_VERSION}")
 }

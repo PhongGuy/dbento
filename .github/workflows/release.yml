@@ -77,7 +77,7 @@ jobs:
       - name: Install cargo-packager
         run: cargo install --locked cargo-packager --version 0.11.8
       - name: Install cargo-about
-        run: cargo install --locked cargo-about --version 0.9.2 --features cli
+        run: cargo install --locked cargo-about --version 0.9.3 --features cli
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: make package

@@ -91,7 +91,7 @@ test_ci_accepts_the_mssql_licence_in_the_gate_only() {
 test_ci_installs_the_cross_and_notices_tools() {
   grep -qE '^[[:space:]]+targets: x86_64-pc-windows-gnu$' "$CI" || fail "no x86_64-pc-windows-gnu target"
   grep -qE 'apt-get install -y --no-install-recommends \$LINUX_BUILD_DEPS gcc-mingw-w64-x86-64$' "$CI" || fail "no mingw install"
-  grep -qE 'run: cargo install --locked cargo-about --version 0\.9\.2 --features cli$' "$CI" || fail "no cargo-about 0.9.2 install"
+  grep -qE 'run: cargo install --locked cargo-about --version 0\.9\.3 --features cli$' "$CI" || fail "no cargo-about 0.9.3 install"
   grep -q 'libclang-dev' "$CI" || fail "libclang-dev dropped from LINUX_BUILD_DEPS"
 }
 
@@ -226,7 +226,7 @@ test_release_guard_runs_the_script() {
 test_release_builds_with_the_packaging_tools() {
   [[ -f $RELEASE ]] || return 0
   grep -qF 'run: cargo install --locked cargo-packager --version 0.11.8' "$RELEASE" || fail "no cargo-packager 0.11.8"
-  grep -qF 'run: cargo install --locked cargo-about --version 0.9.2 --features cli' "$RELEASE" || fail "no cargo-about 0.9.2"
+  grep -qF 'run: cargo install --locked cargo-about --version 0.9.3 --features cli' "$RELEASE" || fail "no cargo-about 0.9.3"
   grep -qE '^        run: make package$' "$RELEASE" || fail "no Linux make package"
   grep -qE '^        run: bash scripts/release.sh package$' "$RELEASE" || fail "no macOS and Windows package step"
   grep -qF 'run: rm -f target/dist/*/SHA256SUMS target/dist/*/THIRD-PARTY-NOTICES.html' "$RELEASE" || fail "loose files not dropped"
