@@ -2,7 +2,9 @@
 use crate::support::{
     MANY, fixture, here, my_spec, next_event, pg_spec, run_cmd, spec, until_event,
 };
-use dbento_app::runner::{Command, Event, StatementEnd, spawn_on};
+use std::time::Duration;
+
+use dbento_app::runner::{Command, Event, RunnerTuning, StatementEnd, spawn_on, spawn_tuned};
 use dbento_core::{Engine, ExecuteError, ExplainMode, Unguarded, explain_request};
 
 fn explain(run_id: u64, engine: Engine, sql: &str, mode: ExplainMode) -> Command {
@@ -425,4 +427,56 @@ async fn an_edited_writing_analyze_is_refused_before_it_asks() {
         .unwrap()
         .get(0);
     assert_eq!(a, 1, "the edited request changed the row");
+}
+
+// With room for three, the quick plan's Executing, Planned and RunDone fill the channel, so the
+// runner parks sending the slow ANALYZE's Executing, past its last settle and before the
+// explain is called. A Stop's cancel fired there must still stop the ANALYZE.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_while_the_explain_waits_to_report_executing_still_stops_it() {
+    let (_db, _dir, spec) = pg_spec("read_only = true").await;
+    let tuning = RunnerTuning {
+        events_capacity: 3,
+        ..RunnerTuning::default()
+    };
+    let r = spawn_tuned(&here(), spec, tuning);
+    let ev = r.events();
+    r.send(Command::Connect);
+    let Event::Connected { cancel, .. } = next_event(&ev).await else {
+        panic!("the runner did not connect first");
+    };
+    r.send(explain(1, Engine::Postgres, "SELECT 1", ExplainMode::Plan));
+    r.send(explain(
+        2,
+        Engine::Postgres,
+        "SELECT pg_sleep(30)",
+        ExplainMode::Analyze,
+    ));
+    while !ev.is_full() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        ev.len(),
+        3,
+        "the runner is not parked on the Executing send"
+    );
+    cancel.cancel();
+    let (seen, _) = tokio::time::timeout(
+        Duration::from_secs(10),
+        until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 2 })),
+    )
+    .await
+    .expect("the cancel was dropped and the ANALYZE ran its full sleep");
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::Planned {
+                run_id: 2,
+                result: Err(ExecuteError::Cancelled),
+                ..
+            }
+        )),
+        "{seen:?}"
+    );
 }

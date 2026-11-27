@@ -1166,20 +1166,16 @@ async fn run_script(
 /// writable session, since it executes the statement; a read-only one lets the engine refuse.
 async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'_>) -> After {
     let run_id = cx.run_id;
-    // The session re-checks the request first, so a refused one sends nothing and asks
-    // nothing, and Executing reports the text the database actually receives.
-    let sql = match session.explain_sql(request) {
-        Ok(sql) => sql,
-        Err(e) => {
-            cx.send(Event::Planned {
-                run_id,
-                result: Err(e),
-                elapsed: Duration::ZERO,
-            })
-            .await;
-            return After::Idle;
-        }
-    };
+    // The session re-checks the request first, so a refused one sends nothing and asks nothing.
+    if let Err(e) = session.explain_sql(request) {
+        cx.send(Event::Planned {
+            run_id,
+            result: Err(e),
+            elapsed: Duration::ZERO,
+        })
+        .await;
+        return After::Idle;
+    }
     let writes = (request.classification.as_ref())
         .filter(|c| request.mode == ExplainMode::Analyze && c.writes != Writes::No);
     if let Some(c) = writes
@@ -1209,15 +1205,28 @@ async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'
             Answer::Hangup => return After::Hangup,
         }
     }
+    // Settle before reporting Executing: that settle spends earlier cancels, so a Stop fired
+    // from Executing onwards lands on the explain itself, even before its text is sent.
     let started = Instant::now();
+    let pending = match session.prepare_explain(request).await {
+        Ok(pending) => pending,
+        Err(e) => {
+            cx.send(Event::Planned {
+                run_id,
+                result: Err(e),
+                elapsed: started.elapsed(),
+            })
+            .await;
+            return After::Idle;
+        }
+    };
     cx.send(Event::Executing {
         run_id,
         stmt: 0,
-        sql,
+        sql: pending.sql().to_owned(),
     })
     .await;
-    // A Stop meanwhile cancels through the CancelHandle, so the explain itself ends early.
-    let result = session.explain(request).await;
+    let result = pending.run().await;
     cx.send(Event::Planned {
         run_id,
         result,
