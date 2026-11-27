@@ -436,7 +436,8 @@ user = "app"
 mod secrets {
     use super::open;
     use dbento_core::{
-        MemoryStore, Secret, SecretKey, SecretStore, resolve_secret, secret_env_var, secret_hint,
+        MemoryStore, Secret, SecretError, SecretKey, SecretStore, resolve_secret, secret_env_var,
+        secret_hint,
     };
 
     const PARENTS: &str = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = \"all\"\n[connections.my-srv]\nengine = \"mssql\"\nhost = \"h\"\nuser = \"u\"\ndatabases = [\"app\"]\n";
@@ -463,6 +464,21 @@ mod secrets {
         assert_eq!(
             SecretKey::for_connection(&ws, &child).connection(),
             "stayzy"
+        );
+    }
+
+    #[test]
+    fn a_child_of_a_refused_env_parent_is_told_the_parents_variable() {
+        let (_d, ws) = open(
+            "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = \"all\"\nsecret = { env = \"PGPASSWORD\" }\n",
+        );
+        let child = ws.connection("stayzy/booking").unwrap();
+        let env = |_: &str| -> Option<String> { panic!("a refused name is never read") };
+        let err = resolve_secret(&ws, &child, &MemoryStore::new(), &env).expect_err("refused");
+        assert!(
+            matches!(&err, SecretError::EnvNameRefused { connection, suggested }
+                if connection == "stayzy/booking" && *suggested == secret_env_var("stayzy")),
+            "{err:?}"
         );
     }
 
