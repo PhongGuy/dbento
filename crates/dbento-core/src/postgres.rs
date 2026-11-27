@@ -1618,16 +1618,25 @@ impl PgDriver {
         Ok(result?)
     }
 
+    /// Settles what earlier statements owe, spending every earlier cancel; only a lost
+    /// session fails it, since a drain error belongs to the statement that left it.
+    pub(crate) async fn prepare_explain(&self) -> Result<(), ExecuteError> {
+        match self.settle_session().await {
+            Err(e) if e.closes_session() => Err(ExecuteError::SessionClosed),
+            Ok(()) | Err(_) => Ok(()),
+        }
+    }
+
     /// Runs an EXPLAIN text in a block that is always rolled back and returns its one cell:
     /// the read-only wrapper, a `BEGIN` of its own, or a savepoint inside the user's block.
     /// The close is owed from before the open is sent, so a drop or cancel cannot skip it.
+    /// It runs on a session `prepare_explain` settled, and honours a cancel issued since.
     pub(crate) async fn explain(&mut self, sql: &str) -> Result<String, ExecuteError> {
-        if let Err(e) = self.settle_session().await
-            && e.closes_session()
-        {
-            return Err(ExecuteError::SessionClosed);
+        // The prepare was the fence: a cancel since then lands here, before any block opens.
+        self.cancel.spend().await;
+        if self.cancel.requested.swap(false, Ordering::SeqCst) {
+            return Err(ExecuteError::Cancelled);
         }
-        self.cancel.requested.store(false, Ordering::SeqCst);
         // An aborted block (probe None) counts as open: its SAVEPOINT fails and reports it.
         let block = if self.read_only {
             Block::ReadOnly
@@ -1650,7 +1659,12 @@ impl PgDriver {
             .block = block;
         let result = match self.client.batch_execute(block.open()).await {
             Err(e) => {
-                let err = execute_error(e, &self.cancel, None);
+                // A cancel that broke the probe or the open was aimed at this explain.
+                let err = if self.cancel.requested.load(Ordering::SeqCst) {
+                    ExecuteError::Cancelled
+                } else {
+                    execute_error(e, &self.cancel, None)
+                };
                 if block == Block::Savepoint {
                     // The savepoint may not exist, so its close is sent here and may fail
                     // harmlessly; it stays owed until that close is sent.

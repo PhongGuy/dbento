@@ -271,3 +271,58 @@ async fn a_settle_dropped_while_it_cancels_still_owes_the_close() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_cancel_after_prepare_stops_the_explain_before_it_is_sent() {
+    bounded(async {
+        let fx = pg_fixture("").await;
+        let mut s = fx.session(SessionOptions::default()).await;
+        let handle = s.cancel_handle();
+        let slow = req("SELECT pg_sleep(30)", ExplainMode::Analyze);
+        let pending = s.prepare_explain(&slow).await.unwrap();
+        handle.cancel();
+        let got = tokio::time::timeout(Duration::from_secs(5), pending.run())
+            .await
+            .expect("the cancelled ANALYZE ran on");
+        assert!(matches!(got, Err(ExecuteError::Cancelled)), "{got:?}");
+        assert_eq!(outside_block(&mut s).await, "true", "a block was left open");
+        let one = run(&mut s, "SELECT 1::text", Limits::default())
+            .await
+            .remove(0)
+            .unwrap();
+        assert_eq!(one.rows, vec![vec![text("1")]]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_cancel_before_prepare_is_spent_and_the_explain_runs() {
+    bounded(async {
+        let fx = pg_fixture("").await;
+        let mut s = fx.session(SessionOptions::default()).await;
+        s.cancel_handle().cancel();
+        let short = req("SELECT pg_sleep(0.1)", ExplainMode::Analyze);
+        let out = s
+            .prepare_explain(&short)
+            .await
+            .unwrap()
+            .run()
+            .await
+            .unwrap();
+        assert!(out.plan.as_ref().is_ok_and(|p| p.analyzed), "{}", out.raw);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_pending_explain_sends_exactly_its_explain_sql() {
+    bounded(async {
+        let fx = pg_fixture("").await;
+        let mut s = fx.session(SessionOptions::default()).await;
+        let r = req("SELECT 1", ExplainMode::Plan);
+        let expected = s.explain_sql(&r).unwrap();
+        let pending = s.prepare_explain(&r).await.unwrap();
+        assert_eq!(pending.sql(), expected);
+    })
+    .await;
+}

@@ -1647,38 +1647,33 @@ impl Session {
         }
     }
 
-    /// Runs `request` and returns its output. On Postgres every block it opens is rolled back,
-    /// also on error, cancel or drop; on SQLite the statement is only planned. On MySQL a plan
-    /// never runs the statement, while ANALYZE runs a confirmed read for real, on MariaDB
-    /// through `ANALYZE FORMAT=JSON`. A request that fails `explain_sql` is refused unsent,
-    /// as `ExecuteError::Unsupported`.
+    /// Runs `request` and returns its output: `prepare_explain` then `PendingExplain::run`.
     pub async fn explain(
         &mut self,
         request: &ExplainRequest,
     ) -> Result<ExplainOutput, ExecuteError> {
+        self.prepare_explain(request).await?.run().await
+    }
+
+    /// Re-checks `request` as `explain_sql` does and settles the session, which spends every
+    /// earlier cancel. A request that fails the check is refused unsent and settles nothing, as
+    /// `ExecuteError::Unsupported`; of the settle's errors only a lost session fails it.
+    pub async fn prepare_explain(
+        &mut self,
+        request: &ExplainRequest,
+    ) -> Result<PendingExplain<'_>, ExecuteError> {
         let (sql, form) = self.explain_form(request)?;
-        match (&mut self.inner, form) {
-            (SessionInner::Postgres(d), _) => {
-                d.explain(&sql).await.map(ExplainOutput::from_postgres)
-            }
-            (SessionInner::Sqlite(d), _) => {
-                let rows = d.explain(&sql).await?;
-                Ok(ExplainOutput::from_sqlite(&rows))
-            }
-            (SessionInner::Mysql(d), form) => {
-                // The parser follows the form matched, never the request's public `mode`.
-                let maria = d.server().flavor == Flavor::Mariadb;
-                // MySQL 9 sessions may print JSON v2, which the plan parser does not read.
-                let pin_v1 = form == ExplainMode::Plan && !maria;
-                let raw = d.explain(&sql, pin_v1).await?;
-                Ok(match (form, maria) {
-                    (_, true) => ExplainOutput::from_mariadb_json(raw),
-                    (ExplainMode::Plan, false) => ExplainOutput::from_mysql_json(raw),
-                    (ExplainMode::Analyze, false) => ExplainOutput::from_mysql_tree(raw),
-                })
-            }
-            _ => Err(another_engine()),
+        // SQLite only plans, and its worker settles before each request it runs.
+        if let SessionInner::Postgres(d) = &self.inner {
+            d.prepare_explain().await?;
+        } else if let SessionInner::Mysql(d) = &mut self.inner {
+            d.prepare_explain().await?;
         }
+        Ok(PendingExplain {
+            session: self,
+            sql,
+            form,
+        })
     }
 
     /// Re-checks `request` against this session and returns the exact text it sends.
@@ -2087,9 +2082,67 @@ impl ResultStream<'_> {
     }
 }
 
-/// Stops the session's running statement from any thread. Settle spends earlier cancels; one
-/// issued after a statement's settle stops that statement before it is sent. The fallback
-/// cancel paths and a cancel slower than the settle's wait are not fenced this way.
+/// An explain whose session `Session::prepare_explain` settled, ready to send its text.
+/// Dropped unrun it owes nothing: the next settle spends any cancel issued meanwhile.
+#[non_exhaustive]
+#[must_use = "a pending explain sends nothing until it runs"]
+pub struct PendingExplain<'a> {
+    session: &'a mut Session,
+    sql: String,
+    form: ExplainMode,
+}
+
+impl std::fmt::Debug for PendingExplain<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingExplain")
+            .field("sql", &self.sql)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingExplain<'_> {
+    /// The exact text `run` sends, the same as `explain_sql` returns.
+    pub fn sql(&self) -> &str {
+        &self.sql
+    }
+
+    /// Sends the explain and returns its output. On Postgres every block it opens is rolled
+    /// back, also on error, cancel or drop; on SQLite the statement is only planned. On MySQL a
+    /// plan never runs the statement, while ANALYZE runs a confirmed read for real, on MariaDB
+    /// through `ANALYZE FORMAT=JSON`. A cancel issued since `prepare_explain` returns
+    /// Cancelled; any block opened is rolled back, and a pinned version is restored (by the
+    /// next settle when a cancel stopped the SET before it was sent).
+    pub async fn run(self) -> Result<ExplainOutput, ExecuteError> {
+        let PendingExplain { session, sql, form } = self;
+        match (&mut session.inner, form) {
+            (SessionInner::Postgres(d), _) => {
+                d.explain(&sql).await.map(ExplainOutput::from_postgres)
+            }
+            (SessionInner::Sqlite(d), _) => {
+                let rows = d.explain(&sql).await?;
+                Ok(ExplainOutput::from_sqlite(&rows))
+            }
+            (SessionInner::Mysql(d), form) => {
+                // The parser follows the form matched, never the request's public `mode`.
+                let maria = d.server().flavor == Flavor::Mariadb;
+                // MySQL 9 sessions may print JSON v2, which the plan parser does not read.
+                let pin_v1 = form == ExplainMode::Plan && !maria;
+                let raw = d.explain(&sql, pin_v1).await?;
+                Ok(match (form, maria) {
+                    (_, true) => ExplainOutput::from_mariadb_json(raw),
+                    (ExplainMode::Plan, false) => ExplainOutput::from_mysql_json(raw),
+                    (ExplainMode::Analyze, false) => ExplainOutput::from_mysql_tree(raw),
+                })
+            }
+            _ => Err(another_engine()),
+        }
+    }
+}
+
+/// Stops the session's running statement from any thread. Settle, and the prepare step of a
+/// statement or an explain, spends earlier cancels; one issued after that stops the statement
+/// or explain before it is sent. The fallback cancel paths and a cancel slower than the
+/// settle's wait are not fenced this way.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CancelHandle {
