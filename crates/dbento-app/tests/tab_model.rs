@@ -436,3 +436,28 @@ fn the_current_database_follows_the_runner_and_clears_with_the_session(cx: &mut 
         assert_eq!(m.current_database(), None, "disconnect")
     });
 }
+
+#[gpui_kit::test]
+// The cut first statement's leftover drains in the next prepare, whose settle spends the
+// cancel; only the Stop sent with it can end the script there.
+fn a_cancel_while_the_next_statement_prepares_ends_the_script(cx: &mut TestAppContext) {
+    init_tokio(cx);
+    let rt = cx.update(|cx| dbento_app::tokio_bridge::handle(cx));
+    let _enter = rt.enter();
+    let (_db, _dir, spec) = rt.block_on(support::pg_spec("read_only = true"));
+    let m = cx.new(|_| TabModel::new(spec));
+    m.update(cx, |m, cx| {
+        m.set_max_rows(Some(1));
+        m.run(
+            "SELECT pg_sleep(0.2), repeat('x', 20000) FROM generate_series(1, 100); SELECT pg_sleep(30)".into(),
+            cx,
+        );
+    });
+    wait_real(cx, "the drain", |cx| m.read_with(cx, |m, _| m.settling()));
+    m.update(cx, |m, _| m.cancel());
+    m.read_with(cx, |m, _| assert_eq!(m.cancels_fired(), 1));
+    wait_real(cx, "the stop", |cx| m.read_with(cx, |m, _| !m.running()));
+    m.read_with(cx, |m, _| {
+        assert_eq!(m.results().len(), 1, "the second statement never started");
+    });
+}

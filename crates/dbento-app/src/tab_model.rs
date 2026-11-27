@@ -882,9 +882,17 @@ impl TabModel {
                     run_id: self.run_id,
                 });
             }
-            // Only an executing statement or a drain has anything to cancel; an idle fire
-            // would leave a Postgres cancel armed against the next statement.
-            _ if (self.running && !self.withdrawn) || self.settling => self.fire_cancel(),
+            // While a statement executes, the run gets a `Stop` and then the cancel, so a cancel
+            // spent between statements still ends the script. Only an executing statement or a
+            // drain has anything to cancel; an idle fire would leave a cancel armed.
+            _ if (self.running && !self.withdrawn) || self.settling => {
+                if let Some(r) = &self.runner {
+                    r.send(Command::Stop {
+                        run_id: self.run_id,
+                    });
+                }
+                self.fire_cancel();
+            }
             _ => {}
         }
     }
@@ -1901,18 +1909,6 @@ impl TabModel {
         // stopped as Cancel stops it, and the Target goes out once it has ended.
         let queued = self.running;
         if queued {
-            // A cancel landing between statements would let the script run on; a Stop ends
-            // it before the next one. Every other state gets its Stop from `stop_run`.
-            let executing = self.running() && self.confirm.is_none() && !self.withdrawn;
-            if let Some(r) = self
-                .runner
-                .as_ref()
-                .filter(|_| executing && self.cancel.is_some())
-            {
-                r.send(Command::Stop {
-                    run_id: self.run_id,
-                });
-            }
             self.stop_run();
         }
         if self.runner.is_none() {

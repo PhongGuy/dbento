@@ -736,6 +736,9 @@ async fn finish(
             }
             match s.settle().await {
                 Ok(()) => return,
+                // A user's Stop comes with a cancel; one that ends the cut's drain is that Stop
+                // landing late, not a failure.
+                Err(ExecuteError::Cancelled) if matches!(tail, Tail::Cut) => return,
                 Err(ExecuteError::SessionClosed) => LOST.to_owned(),
                 // A write stopped at the drain cap, or a session that ended: its own words say why.
                 Err(e @ (ExecuteError::StoppedAtDrainCap | ExecuteError::SessionEnded { .. })) => {
@@ -926,6 +929,20 @@ impl Ctx<'_> {
         self.events.send(event).await.is_ok()
     }
 
+    /// Reads one queued command without waiting. A new Run or Explain, a Close or this run's
+    /// Stop, read after a prepare as before one, abandons the prepared statement unsent; the tab
+    /// has already recorded it as replaced. A closed inbox hangs up; other commands are dropped.
+    fn interrupted(&self) -> Option<After> {
+        match self.inbox.try_recv() {
+            Ok(command @ (Command::Run { .. } | Command::Explain { .. } | Command::Close)) => {
+                Some(After::Next(command))
+            }
+            Ok(Command::Stop { run_id }) if run_id == self.run_id => Some(After::Idle),
+            Err(TryRecvError::Closed) => Some(After::Hangup),
+            Ok(_) | Err(TryRecvError::Empty) => None,
+        }
+    }
+
     /// Waits for a `Pull` or `Stop` of this run, a `Run`, an `Explain` or a `Close`, skipping anything
     /// else; None once the inbox closes.
     async fn wait_pull(&self) -> Option<Command> {
@@ -998,13 +1015,8 @@ async fn run_script(
     loop {
         // A new Run or Explain, a Close or this run's Stop sent mid-script abandons the
         // statements not yet begun.
-        match cx.inbox.try_recv() {
-            Ok(command @ (Command::Run { .. } | Command::Explain { .. } | Command::Close)) => {
-                return (After::Next(command), tail);
-            }
-            Ok(Command::Stop { run_id: r }) if r == run_id => return (After::Idle, tail),
-            Err(TryRecvError::Closed) => return (After::Hangup, tail),
-            Ok(_) | Err(TryRecvError::Empty) => {} // a stray Confirm, Skip, Pull, Fetch or Stop
+        if let Some(after) = cx.interrupted() {
+            return (after, tail);
         }
         // Core drains a cut leftover in its next prepare, so the drain is announced first and,
         // once over, leaves only its error for `finish` to settle and report.
@@ -1027,6 +1039,12 @@ async fn run_script(
                 p
             }
         };
+        // The prepare's settle may spend a Stop's cancel; its Stop is already queued, so it is
+        // read here, before the statement asks or executes.
+        if let Some(after) = cx.interrupted() {
+            pending.skip();
+            return (after, tail);
+        }
         let text = pending.sql().to_owned();
         let kinds = pending.classification().unguarded.clone();
         if ask && !kinds.is_empty() {
@@ -1220,6 +1238,24 @@ async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'
             return After::Idle;
         }
     };
+    // The prepare's settle may spend a Stop's cancel; its Stop is already queued, so it is
+    // read here. A stopped explain ends skipped, as one stopped at its confirm does. As a
+    // script's statement, a prepared explain yields to a newer run.
+    match cx.interrupted() {
+        None => {}
+        Some(After::Idle) => {
+            drop(pending);
+            cx.send(Event::StatementDone {
+                run_id,
+                stmt: 0,
+                end: StatementEnd::Skipped,
+                elapsed: Duration::ZERO,
+            })
+            .await;
+            return After::Idle;
+        }
+        Some(after) => return after,
+    }
     cx.send(Event::Executing {
         run_id,
         stmt: 0,
