@@ -6284,16 +6284,16 @@ impl Shell {
             .ghost()
             .small()
             .label(name)
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, cx| {
-                workspace_menu(
-                    menu,
-                    &shell,
-                    &others,
-                    [open_keys.clone(), close_keys.clone()],
-                    cx,
-                )
-            });
+            .dropdown_caret(true);
+        let button = ui::MenuButton::new(button).dropdown_menu(move |menu, _, cx| {
+            workspace_menu(
+                menu,
+                &shell,
+                &others,
+                [open_keys.clone(), close_keys.clone()],
+                cx,
+            )
+        });
         // The title bar starts a window move on a press, which a click here must not do.
         Some(
             div()

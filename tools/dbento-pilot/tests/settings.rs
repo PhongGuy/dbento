@@ -241,3 +241,91 @@ async fn a_stepped_and_clicked_size_field_is_the_one_focused_node() {
     pilot.ok("close", json!({})).await;
     pilot.assert_bus_untouched();
 }
+
+/// The bounds of every option the open UI family list shows, in list order.
+fn option_rows(tree: &Value) -> Vec<common::Rect> {
+    (0..)
+        .map(|n| format!("settings-ui-font-option-{n}"))
+        .take_while(|id| find_node(tree, id).is_some())
+        .map(|id| bounds(tree, &id))
+        .collect()
+}
+
+// The family list holds more rows than its 220 px fit; each row keeps its 22 px and the list
+// scrolls, at the smallest window and a large one. The host offers the machine's installed
+// families, so the list is full on any desktop with a dozen fonts.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_family_list_keeps_full_height_rows_and_scrolls() {
+    for (width, height) in [(480., 320.), (1280., 800.), (1920., 1200.)] {
+        let (ws, state) = (sqlite_workspace(), tempfile::tempdir().unwrap());
+        let pilot = Pilot::start().await;
+        let mut args = launch_args("headless", ws.path());
+        args["width"] = json!(width);
+        args["height"] = json!(height);
+        args["env"] = json!({ "DBENTO_STATE_DIR": state.path() });
+        pilot.ok("launch", args).await;
+        key(&pilot, "ctrl-,").await;
+        until(&pilot, "the dialog", |t| {
+            find_node(t, "settings-ui-font-family").is_some()
+        })
+        .await;
+        click(&pilot, "settings-ui-font-family").await;
+        until(
+            &pilot,
+            "a family list of 12 (it needs a dozen installed fonts)",
+            |t| find_node(t, "settings-ui-font-option-11").is_some(),
+        )
+        .await;
+        pilot.ok("wait", json!({ "ms": 200 })).await;
+        let tree = pilot.ok("tree", json!({})).await;
+        shot(&pilot, &format!("settings-font-list-{width}x{height}.png")).await;
+
+        let size = format!("{width}x{height}");
+        let rows = option_rows(&tree);
+        for (n, r) in rows.iter().enumerate() {
+            assert!(
+                (r.h - 22.).abs() < 0.5,
+                "{size}: option {n} is {r:?}, not 22 px tall"
+            );
+        }
+        for (n, pair) in rows.windows(2).enumerate() {
+            assert!(
+                pair[0].y + pair[0].h <= pair[1].y + 0.5,
+                "{size}: option {n} {:?} overlaps the next {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        let list = bounds(&tree, "settings-ui-font-list");
+        let (first, last) = (rows[0], rows[rows.len() - 1]);
+        assert!(
+            last.y + last.h > list.y + list.h,
+            "{size}: the rows end at {} inside the list {list:?}, so nothing scrolls",
+            last.y + last.h
+        );
+
+        // In the large windows the list is on screen, and wheeling over it brings its last
+        // option into view; the smallest window leaves it below the fold.
+        if height >= 800. {
+            assert!(
+                list.y + list.h <= height,
+                "{size}: the list {list:?} is off screen"
+            );
+            pilot
+                .ok(
+                    "scroll",
+                    json!({ "target": { "x": list.x + list.w / 2.0, "y": list.y + list.h / 2.0 }, "notches": 200, "settle_ms": 300 }),
+                )
+                .await;
+            let tree = pilot.ok("tree", json!({})).await;
+            let rows = option_rows(&tree);
+            let last = rows[rows.len() - 1];
+            assert!(
+                last.y + last.h <= list.y + list.h + 1.0 && rows[0].y < first.y,
+                "{size}: the last option {last:?} never scrolled into the list {list:?}"
+            );
+        }
+        pilot.ok("close", json!({})).await;
+        pilot.assert_bus_untouched();
+    }
+}

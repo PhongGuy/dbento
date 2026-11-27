@@ -75,6 +75,20 @@ pub fn label_of(
     })
     .unwrap()
 }
+/// The accessibility expanded state of `id` as last painted; `None` when absent or unset.
+pub fn expanded_of(
+    cx: &mut TestAppContext,
+    win: AnyWindowHandle,
+    id: impl Into<ElementId>,
+) -> Option<bool> {
+    let id = id.into();
+    cx.run_until_parked();
+    cx.update_window(win, |_, w, cx| {
+        w.render_frame(cx);
+        w.try_find(id).and_then(|e| e.expanded())
+    })
+    .unwrap()
+}
 /// The labels of the palette's rendered rows, in order.
 pub fn palette_rows(cx: &mut TestAppContext, win: AnyWindowHandle) -> Vec<String> {
     (0usize..)
