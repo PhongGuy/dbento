@@ -270,9 +270,11 @@ async fn the_family_list_keeps_full_height_rows_and_scrolls() {
         })
         .await;
         click(&pilot, "settings-ui-font-family").await;
-        until(&pilot, "a family list of 12 (it needs a dozen installed fonts)", |t| {
-            find_node(t, "settings-ui-font-option-11").is_some()
-        })
+        until(
+            &pilot,
+            "a family list of 12 (it needs a dozen installed fonts)",
+            |t| find_node(t, "settings-ui-font-option-11").is_some(),
+        )
         .await;
         pilot.ok("wait", json!({ "ms": 200 })).await;
         let tree = pilot.ok("tree", json!({})).await;
