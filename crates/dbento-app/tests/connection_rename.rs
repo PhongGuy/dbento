@@ -401,7 +401,11 @@ fn an_env_source_rename_makes_no_keychain_calls(cx: &mut TestAppContext) {
     let fx = support::fixture("", "");
     let path = fx.dir.path().join("dbento.toml");
     let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, format!("{text}secret = {{ env = \"NOPG_PW\" }}\n")).unwrap();
+    std::fs::write(
+        &path,
+        format!("{text}secret = {{ env = \"DBENTO_SECRET_NOPG_PW\" }}\n"),
+    )
+    .unwrap();
     let files = tempfile::tempdir().unwrap();
     let counting = Arc::new(Counting(
         dbento_core::MemoryStore::new(),

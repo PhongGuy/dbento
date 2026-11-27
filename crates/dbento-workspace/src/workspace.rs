@@ -566,7 +566,7 @@ dbento = 1
 # host = \"db.example.com\"
 # database = \"app\"
 # user = \"app\"
-# secret = { env = \"PROD_DB_PASSWORD\" }
+# secret = { env = \"DBENTO_SECRET_PROD\" }
 # color = \"red\"
 ";
 

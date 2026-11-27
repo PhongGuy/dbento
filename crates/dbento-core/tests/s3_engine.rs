@@ -69,10 +69,12 @@ fn a_bare_entry_takes_everything_from_the_environment() {
 #[test]
 fn an_access_key_takes_its_secret_from_the_keychain_or_a_variable_but_never_none() {
     let key = format!("{HEAD}access_key_id = \"AKIDTEST\"\n");
-    let (_d, ws) = open(&format!("{key}secret = {{ env = \"ASSETS_SECRET\" }}\n"));
+    let (_d, ws) = open(&format!(
+        "{key}secret = {{ env = \"DBENTO_SECRET_ASSETS_SECRET\" }}\n"
+    ));
     assert_eq!(
         ws.declared("assets").unwrap().secret_source(),
-        &SecretSource::Env("ASSETS_SECRET".into())
+        &SecretSource::Env("DBENTO_SECRET_ASSETS_SECRET".into())
     );
     let m = invalid(&format!("{key}secret = \"none\"\n"));
     assert!(
@@ -280,7 +282,7 @@ fn an_s3_entry_round_trips_through_a_save() {
     spec.region = Some("auto".into());
     spec.endpoint = Some("https://acct.r2.cloudflarestorage.com".into());
     spec.access_key_id = Some("AKIDTEST".into());
-    spec.secret = Some(SecretSource::Env("ASSETS_SECRET".into()));
+    spec.secret = Some(SecretSource::Env("DBENTO_SECRET_ASSETS_SECRET".into()));
     spec.read_only = Some(true);
     let edit = Edit::PutConnection {
         previous: None,

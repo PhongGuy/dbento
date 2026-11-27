@@ -69,12 +69,15 @@ fn an_environment_source_stores_nothing(cx: &mut TestAppContext) {
     cx.update_window(o.win, |_, w, cx| w.within("conn-secret").click(1usize, cx))
         .unwrap();
     cx.run_until_parked();
-    fill(cx, &o, Field::EnvVar, "PG_PW");
+    fill(cx, &o, Field::EnvVar, "DBENTO_SECRET_PG_PW");
     click_id(cx, o.win, "conn-save");
     cx.run_until_parked();
     assert!(store(cx, &o).get(&key(&o, cx, "pg")).unwrap().is_none());
     let text = std::fs::read_to_string(o.fx.dir.path().join("dbento.toml")).unwrap();
-    assert!(text.contains("secret = { env = \"PG_PW\" }"), "{text}");
+    assert!(
+        text.contains("secret = { env = \"DBENTO_SECRET_PG_PW\" }"),
+        "{text}"
+    );
 }
 
 #[gpui_kit::test]

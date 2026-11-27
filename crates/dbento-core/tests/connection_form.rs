@@ -51,7 +51,7 @@ fn line(key: &str, kind: Option<FieldKind>) -> String {
         (_, Some(FieldKind::Names)) | ("buckets", _) => "[\"logs\"]".to_owned(),
         ("port", _) => "1".to_owned(),
         // An env secret is valid with a user or an access key, where "none" may not be.
-        ("secret", _) => "{ env = \"DBENTO_FORM_SECRET\" }".to_owned(),
+        ("secret", _) => "{ env = \"DBENTO_SECRET_FORM\" }".to_owned(),
         ("tls", _) => "\"off\"".to_owned(),
         ("uri", _) => "\"mongodb://u@localhost/x\"".to_owned(),
         ("endpoint", _) => "\"http://127.0.0.1:5000\"".to_owned(),

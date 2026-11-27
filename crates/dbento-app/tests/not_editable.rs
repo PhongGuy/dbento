@@ -11,7 +11,7 @@ fn workspace() -> (tempfile::TempDir, dbento_core::Workspace) {
          [connections.maria]\nengine = \"mariadb\"\nhost = \"h\"\nuser = \"u\"\n\
          [connections.mg]\nengine = \"mongodb\"\nuri = \"mongodb://h/shop\"\n\
          [connections.dy]\nengine = \"dynamodb\"\nregion = \"eu-west-1\"\n\
-         access_key_id = \"AKIDEXAMPLE\"\nsecret = { env = \"X\" }\n\
+         access_key_id = \"AKIDEXAMPLE\"\nsecret = { env = \"DBENTO_SECRET_X\" }\n\
          [connections.pg]\nengine = \"postgres\"\nhost = \"h\"\nuser = \"u\"\ndatabase = \"d\"\n\
          [connections.lite]\nengine = \"sqlite\"\npath = \"app.db\"\n",
     )

@@ -4,7 +4,7 @@ use dbento_core::{
 };
 
 pub const BASE: &str = "dbento = 1 # format\n\n# The production database.\n[connections.prod] # main\nengine = \"postgres\"\nhost = \"db.example.com\"\nport = 5432 # default port\ndatabase = \"app\"\nuser = \"app_ro\"\ntls = \"verify\"\ncolor = \"red\"\n\n[folders.\"team/a b\"]\ncolor = \"blue\"\n\n[connections.lite]\npath = \"data/app.db\" # relative\nengine = \"sqlite\"\n";
-const FULL: &str = "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"localhost\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"PG_PW\" }\nread_only = true\nfolder = \"team/a b\"\nstatement_timeout = \"30s\"\n";
+const FULL: &str = "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"localhost\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_SECRET_PG_PW\" }\nread_only = true\nfolder = \"team/a b\"\nstatement_timeout = \"30s\"\n";
 const FOLDERS_LAST: &str = "dbento = 1\n\n[connections.a]\nengine = \"sqlite\"\npath = \"a.db\"\n\n[folders.f]\ncolor = \"red\"\n";
 pub const DOTTED: &str = "dbento = 1\n[connections]\na.engine = \"sqlite\"\na.path = \"a.db\"\nb.engine = \"sqlite\"\nb.path = \"b.db\"\n";
 const ROOT_DOTTED: &str = "dbento = 1\nconnections.a.engine = \"sqlite\"\nconnections.a.path = \"a.db\"\n\n[folders.f]\ncolor = \"red\"\n";
@@ -76,7 +76,10 @@ fn connection_spec_reads_the_keys_as_written() {
 
     let (_d, w) = ws(FULL);
     let pg = w.connection_spec("pg").unwrap();
-    assert_eq!(pg.secret, Some(SecretSource::Env("PG_PW".into())));
+    assert_eq!(
+        pg.secret,
+        Some(SecretSource::Env("DBENTO_SECRET_PG_PW".into()))
+    );
     assert_eq!(
         pg.tls, None,
         "absent, although it resolves to off on localhost"
@@ -155,7 +158,7 @@ fn a_new_connection_goes_after_the_last_table_in_key_order() {
     (s.read_only, s.tls, s.secret) = (
         Some(true),
         Some(TlsMode::Off),
-        Some(SecretSource::Env("PW".into())),
+        Some(SecretSource::Env("DBENTO_SECRET_PW".into())),
     );
     (s.user, s.database, s.port, s.host) = (
         Some("u".into()),
@@ -175,7 +178,7 @@ fn a_new_connection_goes_after_the_last_table_in_key_order() {
     assert_eq!(
         plan.new_text(),
         format!(
-            "{FOLDERS_LAST}\n[connections.pg2]\nengine = \"postgres\"\nhost = \"h\"\nport = 5433\ndatabase = \"d\"\nuser = \"u\"\nsecret = {{ env = \"PW\" }}\ntls = \"off\"\nread_only = true\ncolor = \"purple\"\nfolder = \"team/a b\"\nstatement_timeout = \"5s\"\n"
+            "{FOLDERS_LAST}\n[connections.pg2]\nengine = \"postgres\"\nhost = \"h\"\nport = 5433\ndatabase = \"d\"\nuser = \"u\"\nsecret = {{ env = \"DBENTO_SECRET_PW\" }}\ntls = \"off\"\nread_only = true\ncolor = \"purple\"\nfolder = \"team/a b\"\nstatement_timeout = \"5s\"\n"
         )
     );
     assert_eq!(plan.workspace().source_text(), plan.new_text());

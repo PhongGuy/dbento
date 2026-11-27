@@ -12,7 +12,7 @@ use dbento_core::{StatePaths, ssh_password_env_var};
 use dbento_testkit::{SSH_PASSWORD, SSH_USER, SshNet};
 use serde_json::{Map, Value, json};
 
-const PW_VAR: &str = "DBENTO_TEST_TUN_PW";
+const PW_VAR: &str = "DBENTO_SECRET_TEST_TUN_PW";
 /// A throwaway Ed25519 public key that is not the fixture's.
 const OTHER_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICqzCt/eLjiYnme5P1CYozYfgd3otQ6E+HI5N0RPYe4m";

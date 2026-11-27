@@ -17,7 +17,7 @@ fn the_badge_says_best_effort_and_the_residual_at_every_level() {
     std::fs::write(
         dir.path().join("dbento.toml"),
         "dbento = 1\n[connections.dy]\nengine = \"dynamodb\"\nregion = \"eu-west-1\"\n\
-         access_key_id = \"AKIDEXAMPLE\"\nsecret = { env = \"X\" }\nread_only = true\n",
+         access_key_id = \"AKIDEXAMPLE\"\nsecret = { env = \"DBENTO_SECRET_X\" }\nread_only = true\n",
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();

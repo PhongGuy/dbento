@@ -4,7 +4,7 @@ use crate::common::{dbento, write_tree};
 use dbento_testkit::{SrDb, surreal_db, surreal_server};
 use serde_json::{Value, json};
 
-const SECRET: &str = "DBENTO_TEST_SR_SECRET";
+const SECRET: &str = "DBENTO_SECRET_TEST_SR";
 
 fn workspace(db: &SrDb, files: &[(&str, &str)]) -> tempfile::TempDir {
     let secret = format!("secret = {{ env = \"{SECRET}\" }}");

@@ -18,7 +18,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const PW_VAR: &str = "DBENTO_TEST_TUN_PW";
+const PW_VAR: &str = "DBENTO_SECRET_TEST_TUN_PW";
 /// A throwaway Ed25519 public key that is not the fixture's.
 const OTHER_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICqzCt/eLjiYnme5P1CYozYfgd3otQ6E+HI5N0RPYe4m";

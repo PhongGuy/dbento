@@ -219,7 +219,7 @@ impl SecretStore for Counting {
 // Neither a SQLite file nor an env-sourced secret lives in the keychain.
 #[gpui_kit::test]
 fn a_menu_rename_without_a_keychain_secret_makes_no_keychain_calls(cx: &mut TestAppContext) {
-    let env_pg = format!("{PG}secret = {{ env = \"NOPG_PW\" }}\n");
+    let env_pg = format!("{PG}secret = {{ env = \"DBENTO_SECRET_NOPG_PW\" }}\n");
     let counting = Arc::new(Counting(
         dbento_core::MemoryStore::new(),
         Default::default(),

@@ -54,7 +54,7 @@ fn other_failures_have_no_hint() {
     );
 }
 
-const TOML: &str = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = 9\ndatabase = \"x\"\nuser = \"x\"\nsecret = { env = \"DBENTO_TEST_RETRY_PW\" }\n";
+const TOML: &str = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = 9\ndatabase = \"x\"\nuser = \"x\"\nsecret = { env = \"DBENTO_SECRET_TEST_RETRY_PW\" }\n";
 
 // A workspace whose one connection reads its secret from a variable the test sets later,
 // opened on that connection's tab.
@@ -74,7 +74,7 @@ fn opened_env(
     let mut svc = services(files.path());
     let flag = Arc::clone(&set);
     svc.env = Arc::new(move |v| {
-        (v == "DBENTO_TEST_RETRY_PW" && flag.load(Ordering::SeqCst)).then(|| "pw".to_owned())
+        (v == "DBENTO_SECRET_TEST_RETRY_PW" && flag.load(Ordering::SeqCst)).then(|| "pw".to_owned())
     });
     let (win, _shell) = cx
         .update(|cx| dbento_app::app::start(svc, Some(dir.path().into()), cx))
@@ -95,12 +95,14 @@ fn a_failed_connect_fills_the_result_area_with_the_error_and_its_fix(cx: &mut Te
     );
     assert_eq!(
         label_of(cx, win, "connect-error-message").as_deref(),
-        Some("the environment variable DBENTO_TEST_RETRY_PW is not set"),
+        Some("the environment variable DBENTO_SECRET_TEST_RETRY_PW is not set"),
         "the error"
     );
     assert_eq!(
         label_of(cx, win, "connect-error-hint").as_deref(),
-        Some("Set DBENTO_TEST_RETRY_PW or store the secret in the keychain from Edit connection."),
+        Some(
+            "Set DBENTO_SECRET_TEST_RETRY_PW or store the secret in the keychain from Edit connection."
+        ),
         "the fix"
     );
     assert!(present(cx, win, "connect-error-retry"), "Retry shows");

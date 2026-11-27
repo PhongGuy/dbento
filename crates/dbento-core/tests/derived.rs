@@ -297,7 +297,7 @@ engine = "postgres"
 host = "db.internal"
 database = "postgres"
 user = "app"
-secret = { env = "ALL_PW" }
+secret = { env = "DBENTO_SECRET_ALL_PW" }
 databases = "all"
 
 [connections.ms]
@@ -365,7 +365,10 @@ user = "app"
         let (_d, ws) = open(TREE);
         let child = ws.resolve("allpg/anything_at-all").unwrap();
         assert_eq!(child.database(), Some("anything_at-all"));
-        assert_eq!(child.secret_source(), &SecretSource::Env("ALL_PW".into()));
+        assert_eq!(
+            child.secret_source(),
+            &SecretSource::Env("DBENTO_SECRET_ALL_PW".into())
+        );
     }
 
     #[test]

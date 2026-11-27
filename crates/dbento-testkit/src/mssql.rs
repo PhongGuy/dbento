@@ -24,7 +24,7 @@ use super::{
 };
 
 /// The environment variable the generated connection reads its password from.
-pub const MS_SECRET_VAR: &str = "DBENTO_TEST_MS_SECRET";
+pub const MS_SECRET_VAR: &str = "DBENTO_SECRET_TEST_MS";
 
 /// The gate image's tag: SQL Server 2022 CU27 (16.0.4295.3).
 pub const MSSQL_TAG: &str = "2022-CU27-ubuntu-22.04";

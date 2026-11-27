@@ -25,7 +25,7 @@ use super::{
 };
 
 /// The environment variable the generated connection reads its password from.
-pub const MG_SECRET_VAR: &str = "DBENTO_TEST_MG_SECRET";
+pub const MG_SECRET_VAR: &str = "DBENTO_SECRET_TEST_MG";
 
 /// The gate image's tag.
 pub const MONGO_TAG: &str = "8.0";

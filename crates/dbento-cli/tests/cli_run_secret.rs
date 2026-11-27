@@ -83,7 +83,7 @@ fn run_reports_a_missing_file_or_unknown_conn_as_exit_3() {
     );
 }
 
-const PG: &str = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_TEST_UNSET_VAR\" }\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
+const PG: &str = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_SECRET_TEST_UNSET\" }\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
 
 #[test]
 fn secret_set_refuses_connections_without_a_keychain_secret() {
@@ -121,12 +121,12 @@ fn query_resolves_the_secret_before_connecting() {
     let ws = common::write_tree(&[("dbento.toml", PG)]);
     let out = dbento()
         .current_dir(ws.path())
-        .env_remove("DBENTO_TEST_UNSET_VAR")
+        .env_remove("DBENTO_SECRET_TEST_UNSET")
         .args(["query", "envpg", "select 1"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("DBENTO_TEST_UNSET_VAR"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("DBENTO_SECRET_TEST_UNSET"));
 }
 
 #[cfg(unix)]
@@ -235,7 +235,7 @@ fn secret_set_names_the_env_variable_or_sqlite_in_its_refusal() {
             .unwrap();
         String::from_utf8_lossy(&out.stderr).into_owned()
     };
-    assert!(refusal("envpg").contains("$DBENTO_TEST_UNSET_VAR"));
+    assert!(refusal("envpg").contains("$DBENTO_SECRET_TEST_UNSET"));
     assert!(
         refusal("lite").contains("has no secret: a sqlite connection opens without one"),
         "{}",

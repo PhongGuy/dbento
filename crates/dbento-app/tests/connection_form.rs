@@ -196,7 +196,10 @@ fn a_bad_folder_names_the_folder_once(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn switching_back_to_the_loaded_engine_restores_its_values(cx: &mut TestAppContext) {
     let mut loaded = nopg();
-    (loaded.secret, loaded.tls) = (Some(SecretSource::Env("PGPW".into())), Some(TlsMode::Off));
+    (loaded.secret, loaded.tls) = (
+        Some(SecretSource::Env("DBENTO_SECRET_PGPW".into())),
+        Some(TlsMode::Off),
+    );
     let (win, f) = open(cx, Some(("nopg", loaded.clone())));
     radio(cx, win, "conn-engine", 1);
     radio(cx, win, "conn-engine", 0);

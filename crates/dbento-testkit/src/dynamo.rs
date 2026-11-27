@@ -21,7 +21,7 @@ use aws_smithy_http_client::tls::{self, rustls_provider::CryptoMode};
 use crate::moto::{Moto, dy_source, moto};
 
 /// The environment variable the generated connection reads its secret key from.
-pub const DY_SECRET_VAR: &str = "DBENTO_TEST_DY_SECRET";
+pub const DY_SECRET_VAR: &str = "DBENTO_SECRET_TEST_DY";
 /// The access key and secret every handle signs with; Moto accepts any pair.
 pub const DY_ACCESS_KEY: &str = "AKIDDBENTOTEST";
 /// The secret key paired with `DY_ACCESS_KEY`; set it in `DY_SECRET_VAR` for a connection.

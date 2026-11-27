@@ -56,7 +56,10 @@ fn no_user_is_anonymous_and_reads_no_secret() {
     assert_eq!(c.display_target(), "h:8000/app/main");
     let (_d, ws) = ws_with(&format!("{ANON}secret = \"none\"\n"));
     ws.unwrap();
-    for line in ["secret = \"keychain\"\n", "secret = { env = \"X\" }\n"] {
+    for line in [
+        "secret = \"keychain\"\n",
+        "secret = { env = \"DBENTO_SECRET_X\" }\n",
+    ] {
         let m = invalid(&format!("{ANON}{line}"));
         assert!(m.contains("`secret` needs `user`"), "{line}: {m}");
     }

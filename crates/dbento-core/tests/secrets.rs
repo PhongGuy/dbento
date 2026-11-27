@@ -15,7 +15,7 @@ fn workspace() -> (tempfile::TempDir, Workspace) {
         "dbento = 1\n{}{}{}{}[connections.lite]\nengine = \"sqlite\"\npath = \"x.db\"\n",
         pg("kc", ""),
         pg("my-db", ""),
-        pg("byenv", "secret = { env = \"APP_PW\" }"),
+        pg("byenv", "secret = { env = \"DBENTO_SECRET_APP_PW\" }"),
         pg("nosecret", "secret = \"none\""),
     );
     let dir = tempfile::tempdir().unwrap();
@@ -134,14 +134,14 @@ fn an_env_secret_reads_only_its_variable() {
             &ws,
             conn,
             &store,
-            &env_of(&[("APP_PW", "pw")])
+            &env_of(&[("DBENTO_SECRET_APP_PW", "pw")])
         )),
         Some("pw".into())
     );
     let err = resolve_secret(&ws, conn, &store, &env_of(&[("DBENTO_SECRET_BYENV", "x")]))
         .expect_err("unset variable");
     assert!(
-        matches!(err, SecretError::Missing { ref variable } if variable == "APP_PW"),
+        matches!(err, SecretError::Missing { ref variable } if variable == "DBENTO_SECRET_APP_PW"),
         "{err:?}"
     );
 }

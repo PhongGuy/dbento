@@ -9,7 +9,7 @@ use dbento_app::runner::{Event, RunnerSpec, StatementEnd, spawn_on};
 use dbento_core::{Outcome, ReadOnlyEnforcement, Workspace};
 use dbento_testkit::{SrDb, surreal_db};
 
-const SR_SECRET_VAR: &str = "DBENTO_TEST_SR_SECRET";
+const SR_SECRET_VAR: &str = "DBENTO_SECRET_TEST_SR";
 
 /// A runner spec on `db` as connection `sr` for `login`, its password from the variable.
 fn sr_spec(db: &SrDb, login: (&str, &str), extra: &str) -> (tempfile::TempDir, RunnerSpec) {

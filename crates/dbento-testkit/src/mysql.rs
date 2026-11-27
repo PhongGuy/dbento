@@ -20,7 +20,7 @@ use super::{
 };
 
 /// The environment variable the generated connection reads its password from.
-pub const MY_SECRET_VAR: &str = "DBENTO_TEST_MY_SECRET";
+pub const MY_SECRET_VAR: &str = "DBENTO_SECRET_TEST_MY";
 
 /// The MySQL versions the opt-in matrix covers.
 pub const MYSQL_MATRIX: [&str; 2] = ["8.4", "9.7"];

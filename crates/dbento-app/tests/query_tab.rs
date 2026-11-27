@@ -475,7 +475,7 @@ fn a_mongodb_badge_names_the_level_its_users_privileges_give() {
     std::fs::write(
         dir.path().join("dbento.toml"),
         "dbento = 1\n[connections.mg]\nengine = \"mongodb\"\nuri = \"mongodb://reader@h/app\"\n\
-         secret = { env = \"X\" }\nread_only = true\n",
+         secret = { env = \"DBENTO_SECRET_X\" }\nread_only = true\n",
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
@@ -498,7 +498,7 @@ fn a_redis_badge_names_the_level_its_acl_gives_and_the_residual() {
     std::fs::write(
         dir.path().join("dbento.toml"),
         "dbento = 1\n[connections.rd]\nengine = \"redis\"\nhost = \"h\"\n\
-         secret = { env = \"X\" }\nread_only = true\n",
+         secret = { env = \"DBENTO_SECRET_X\" }\nread_only = true\n",
     )
     .unwrap();
     let ws = dbento_core::Workspace::open(dir.path()).unwrap();
