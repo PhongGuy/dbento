@@ -144,6 +144,10 @@ fn the_vendored_mongodb_keeps_its_licence_and_lists_its_patch() {
         patches.contains("P4") && patches.contains("ServerAddress::Unix"),
         "{patches}"
     );
+    assert!(
+        patches.contains("\nP5\n") && patches.contains("seed_sockets"),
+        "{patches}"
+    );
 }
 
 #[test]

@@ -53,6 +53,9 @@ impl TestTopologyDescription {
             heartbeat_freq: heartbeat_frequency,
             servers,
             srv_max_hosts: None,
+            // Dbento P5: no socket seeds and nothing refused.
+            seed_sockets: Default::default(),
+            refused_socket: false,
         }
     }
 }

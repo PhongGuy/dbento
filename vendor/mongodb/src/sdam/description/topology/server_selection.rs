@@ -414,6 +414,14 @@ impl fmt::Display for TopologyDescription {
             write!(f, " ]")?;
         }
 
+        // Dbento P5: say that an advertised socket was refused, without its path.
+        if self.refused_socket {
+            write!(
+                f,
+                ", Refused: a member advertised a local socket the connection does not name"
+            )?;
+        }
+
         write!(f, " }}")
     }
 }
