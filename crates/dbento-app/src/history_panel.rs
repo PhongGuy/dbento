@@ -486,21 +486,23 @@ impl Render for HistoryPanel {
         let (workspace, sidebar) = (Arc::clone(&self.workspace), self.sidebar.clone());
         let (panel, current) = (cx.entity().downgrade(), self.connection.clone());
         let header = ui::panel_header("History", cx).gap_2().child(
-            Button::new("history-connection")
-                .ghost()
-                .xsmall()
-                .label(filter_label)
-                .dropdown_caret(true)
-                .dropdown_menu(move |menu, _, cx| {
-                    let picks: Vec<Option<ConnectionPick>> = std::iter::once(None)
-                        .chain(
-                            pickable_connections(&workspace, sidebar.as_ref(), cx)
-                                .into_iter()
-                                .map(Some),
-                        )
-                        .collect();
-                    filter_menu(menu, &panel, &picks, current.as_deref())
-                }),
+            ui::MenuButton::new(
+                Button::new("history-connection")
+                    .ghost()
+                    .xsmall()
+                    .label(filter_label)
+                    .dropdown_caret(true),
+            )
+            .dropdown_menu(move |menu, _, cx| {
+                let picks: Vec<Option<ConnectionPick>> = std::iter::once(None)
+                    .chain(
+                        pickable_connections(&workspace, sidebar.as_ref(), cx)
+                            .into_iter()
+                            .map(Some),
+                    )
+                    .collect();
+                filter_menu(menu, &panel, &picks, current.as_deref())
+            }),
         );
         let header = header.child(
             ui::panel_close("history-close", cx)

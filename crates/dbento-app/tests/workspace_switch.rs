@@ -1,6 +1,8 @@
 //! Opening another workspace from inside the app, and closing back to the welcome view.
 use crate::support;
-use crate::support::{Opened, click_id, label_of, launched, opened, present, wait_real};
+use crate::support::{
+    Opened, click_id, expanded_of, label_of, launched, opened, present, wait_real,
+};
 use dbento_app::app::{AppPaths, SavedState, start};
 use dbento_app::keymap::{
     self, CLOSE_WORKSPACE_KEYS, CloseWorkspace, OPEN_WORKSPACE_KEYS, OpenWorkspace, Shortcut,
@@ -314,4 +316,24 @@ fn closing_the_workspace_with_staged_edits_asks_and_keep_keeps_it(cx: &mut TestA
     });
     click_id(cx, o.win, "discard-close");
     assert!(present(cx, o.win, "welcome-open"));
+}
+
+#[gpui_kit::test]
+fn the_title_pill_reports_its_menu_open_until_escape(cx: &mut TestAppContext) {
+    let o = launched(cx, "", "");
+    let state = |cx: &mut TestAppContext| expanded_of(cx, o.win, "title-workspace");
+    assert_eq!(state(cx), Some(false), "closed before the first open");
+    click_id(cx, o.win, "title-workspace");
+    assert!(
+        present(cx, o.win, "title-workspace-open"),
+        "the menu opened"
+    );
+    assert_eq!(state(cx), Some(true), "open while the menu shows");
+    cx.update_window(o.win, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    assert!(
+        !present(cx, o.win, "title-workspace-open"),
+        "Escape closed it"
+    );
+    assert_eq!(state(cx), Some(false), "closed after Escape");
 }

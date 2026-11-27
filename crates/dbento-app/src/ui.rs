@@ -5,10 +5,10 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use gpui_kit::assets::{Assets, IconName};
-use gpui_kit::base::ObservedElement;
+use gpui_kit::base::{ObservedElement, Selectable};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::{Notification, NotificationType};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, Size, ThemeStyled as _, WindowExt as _, h_flex, v_flex,
@@ -16,9 +16,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AssetSource, Div, ElementId, Entity, FocusHandle, FontWeight, Global, Hsla,
-    InteractiveElement, Interactivity, IntoElement as _, KeyDownEvent, ParentElement as _, Pixels,
-    Role, SharedString, Stateful, StatefulInteractiveElement, Styled as _, TestSupportExt as _,
-    Window, div, px,
+    InteractiveElement, Interactivity, IntoElement, KeyDownEvent, ParentElement as _, Pixels, Role,
+    SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled,
+    TestSupportExt as _, Window, div, px,
 };
 
 use crate::keymap::{CHORD_OR, chip_keys};
@@ -206,6 +206,54 @@ impl AssetSource for AppAssets {
         Ok(all)
     }
 }
+
+/// A [`Button`] that opens a dropdown menu and reports the menu's open state as its
+/// accessibility expanded state, so the popover's own state drives both the look and
+/// the tree.
+pub struct MenuButton(Button);
+
+impl MenuButton {
+    /// Wraps a button built as usual; follow with `.dropdown_menu(...)`.
+    pub fn new(button: Button) -> Self {
+        Self(button)
+    }
+}
+
+impl Selectable for MenuButton {
+    fn selected(self, selected: bool) -> Self {
+        Self(self.0.selected(selected))
+    }
+    fn is_selected(&self) -> bool {
+        self.0.is_selected()
+    }
+    fn open(self, open: bool) -> Self {
+        Self(self.0.open(open).aria_expanded(open))
+    }
+    fn is_open(&self) -> bool {
+        self.0.is_open()
+    }
+}
+
+impl Styled for MenuButton {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.0.style()
+    }
+}
+
+impl InteractiveElement for MenuButton {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.0.interactivity()
+    }
+}
+
+impl IntoElement for MenuButton {
+    type Element = <Button as IntoElement>::Element;
+    fn into_element(self) -> Self::Element {
+        self.0.into_element()
+    }
+}
+
+impl DropdownMenu for MenuButton {}
 
 /// A 22 px label chip on the raised fill with a hairline edge, named by its label for
 /// tests and assistive tech. Callers add icons with `.child`. The observed wrapper is the
