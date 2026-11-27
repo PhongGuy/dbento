@@ -1,6 +1,8 @@
 //! The connection chip leads the query toolbar, and its picker switches the tab's connection.
 use crate::support;
-use crate::support::{LONG, Opened, fixture, label_of, launched, opened, present, wait_real};
+use crate::support::{
+    LONG, Opened, expanded_of, fixture, label_of, launched, opened, present, wait_real,
+};
 use dbento_app::query_tab::connection_chip_text;
 use dbento_app::tab_model::{SWITCH_WHILE_RUNNING, SwitchBlocked};
 use dbento_core::RelationKind;
@@ -315,4 +317,24 @@ fn picker_rows_keep_the_dot_slot_and_lock_a_read_only_connection(cx: &mut TestAp
         Some("read-only")
     );
     assert!(!present(cx, o.win, ("query-connection-pick-lock", 1usize)));
+}
+
+#[gpui_kit::test]
+fn the_chip_reports_its_menu_open_until_escape_or_a_pick(cx: &mut TestAppContext) {
+    let o = opened(cx, "", "", 0);
+    let state = |cx: &mut TestAppContext| expanded_of(cx, o.win, "query-connection");
+    let pick = |n: usize| ("query-connection-pick", n);
+    assert_eq!(state(cx), Some(false), "closed before the first open");
+    click(cx, &o, "query-connection");
+    assert!(present(cx, o.win, pick(0)), "the menu opened");
+    assert_eq!(state(cx), Some(true), "open while the menu shows");
+    cx.update_window(o.win, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    assert!(!present(cx, o.win, pick(0)), "Escape closed it");
+    assert_eq!(state(cx), Some(false), "closed after Escape");
+    click(cx, &o, "query-connection");
+    assert_eq!(state(cx), Some(true), "open again");
+    click(cx, &o, pick(1));
+    assert!(!present(cx, o.win, pick(0)), "the pick closed it");
+    assert_eq!(state(cx), Some(false), "closed after a pick");
 }

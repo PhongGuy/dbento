@@ -1707,11 +1707,11 @@ impl QueryTab {
             .accessibility_label(text.clone())
             .children(dot)
             .child(label)
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, cx| {
-                let rows = pickable_connections(&workspace, sidebar.as_ref(), cx);
-                connection_menu(menu, &tab, &rows, &current)
-            });
+            .dropdown_caret(true);
+        let button = ui::MenuButton::new(button).dropdown_menu(move |menu, _, cx| {
+            let rows = pickable_connections(&workspace, sidebar.as_ref(), cx);
+            connection_menu(menu, &tab, &rows, &current)
+        });
         div()
             .flex_shrink(1.)
             .min_w(CHIP_MIN)
