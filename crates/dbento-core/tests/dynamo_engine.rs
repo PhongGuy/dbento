@@ -90,10 +90,12 @@ fn an_access_key_takes_its_secret_from_the_keychain_or_a_variable_but_never_none
         ws.declared("orders").unwrap().secret_source(),
         &SecretSource::Keychain
     );
-    let (_d, ws) = open(&format!("{key}secret = {{ env = \"ORDERS_SECRET\" }}\n"));
+    let (_d, ws) = open(&format!(
+        "{key}secret = {{ env = \"DBENTO_SECRET_ORDERS_SECRET\" }}\n"
+    ));
     assert_eq!(
         ws.declared("orders").unwrap().secret_source(),
-        &SecretSource::Env("ORDERS_SECRET".into())
+        &SecretSource::Env("DBENTO_SECRET_ORDERS_SECRET".into())
     );
     let m = invalid(&format!("{key}secret = \"none\"\n"));
     assert!(m.contains("unsigned"), "{m}");
@@ -363,7 +365,7 @@ fn a_dynamodb_entry_round_trips_through_a_save() {
     spec.region = Some("eu-west-1".into());
     spec.endpoint = Some("http://127.0.0.1:5000".into());
     spec.access_key_id = Some("AKIDTEST".into());
-    spec.secret = Some(SecretSource::Env("ORDERS_SECRET".into()));
+    spec.secret = Some(SecretSource::Env("DBENTO_SECRET_ORDERS_SECRET".into()));
     spec.consistent_read = Some(true);
     spec.read_only = Some(true);
     let edit = Edit::PutConnection {

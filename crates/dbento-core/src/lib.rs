@@ -17,7 +17,7 @@ pub use workspace::{
     AuthLevel, Color, ConnectionConfig, Databases, DurationError, Engine, Folder,
     FormattedDuration, InitError, MAX_QUERY_FILE_BYTES, OpenError, QueryFileError, ResolveError,
     SavedQuery, SecretPin, SecretSource, SshAuth, SshConfig, TlsMode, Workspace, format_duration,
-    parse_duration, valid_database_name,
+    is_env_secret_name, parse_duration, valid_database_name,
 };
 
 mod ssh;

@@ -37,4 +37,6 @@ pub use workspace::{
     TEMPLATE, TlsMode, Workspace, valid_database_name,
 };
 #[doc(hidden)]
-pub use workspace::{color_word, is_identifier, is_local_host, timeout_in_range, valid_name};
+pub use workspace::{
+    color_word, is_env_secret_name, is_identifier, is_local_host, timeout_in_range, valid_name,
+};

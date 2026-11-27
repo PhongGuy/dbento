@@ -135,9 +135,9 @@ fn a_secret_needs_a_user_in_the_uri() {
             SecretSource::None,
         ),
         (
-            format!("{MG}secret = {{ env = \"MG_PW\" }}\n"),
+            format!("{MG}secret = {{ env = \"DBENTO_SECRET_MG_PW\" }}\n"),
             "shop",
-            SecretSource::Env("MG_PW".into()),
+            SecretSource::Env("DBENTO_SECRET_MG_PW".into()),
         ),
         (
             format!("{anon}secret = \"none\"\n"),
@@ -152,7 +152,10 @@ fn a_secret_needs_a_user_in_the_uri() {
             "{toml}"
         );
     }
-    for line in ["secret = \"keychain\"\n", "secret = { env = \"X\" }\n"] {
+    for line in [
+        "secret = \"keychain\"\n",
+        "secret = { env = \"DBENTO_SECRET_X\" }\n",
+    ] {
         assert!(
             invalid(&format!("{anon}{line}")).contains("`secret` needs a user in `uri`"),
             "{line}"

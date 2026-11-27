@@ -974,7 +974,7 @@ fn a_request_file_keeps_the_binding_hashed() {
     let (d, store) = store();
     let pg = conn(
         "dbento = 1\n[connections.pg]\nengine = \"postgres\"\nhost = \"db.internal\"\n\
-                   database = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_T_PGPW\" }\n\
+                   database = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_SECRET_T_PGPW\" }\n\
                    settings = { search_path = \"app\" }\n",
         "pg",
     );
@@ -997,7 +997,12 @@ fn a_request_file_keeps_the_binding_hashed() {
         text.contains(r#""target_display":"u@db.internal:5432/d""#),
         "{text}"
     );
-    for hidden in ["DBENTO_T_PGPW", "search_path", "session_binding", "secret"] {
+    for hidden in [
+        "DBENTO_SECRET_T_PGPW",
+        "search_path",
+        "session_binding",
+        "secret",
+    ] {
         assert!(!text.contains(hidden), "{hidden} in {text}");
     }
 }

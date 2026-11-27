@@ -1,7 +1,7 @@
 //! Secret values that refuse to print themselves.
 
 use crate::ssh::ResolvedSsh;
-use crate::workspace::{ConnectionConfig, Engine, SecretSource, Workspace};
+use crate::workspace::{ConnectionConfig, Engine, SecretSource, Workspace, is_env_secret_name};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,6 +61,16 @@ pub enum SecretError {
     Failed {
         /// What went wrong.
         message: String,
+    },
+    /// `secret = { env }` names a variable outside `DBENTO_SECRET_*`; the name is not kept.
+    #[error(
+        "connection {connection:?}: secret = {{ env }} only reads variables named DBENTO_SECRET_*; export the password as {suggested} and write secret = {{ env = \"{suggested}\" }}"
+    )]
+    EnvNameRefused {
+        /// The connection whose secret was refused.
+        connection: String,
+        /// The variable to use instead, named after the secret's owner.
+        suggested: String,
     },
 }
 
@@ -262,6 +272,14 @@ pub fn resolve_secret(
     }
     match conn.secret_source() {
         SecretSource::None => Ok(None),
+        // A synced file must not choose an arbitrary variable to send as a password, so a name
+        // outside the reserved prefix fails before the environment is read.
+        SecretSource::Env(variable) if !is_env_secret_name(variable) => {
+            Err(SecretError::EnvNameRefused {
+                connection: conn.name().to_owned(),
+                suggested: secret_env_var(conn.secret_owner()),
+            })
+        }
         SecretSource::Env(variable) => {
             env(variable)
                 .map(|v| Some(Secret::new(v)))
@@ -319,7 +337,12 @@ pub fn secret_hint_for(
     // one is asked whether an unpinned password is waiting for confirmation.
     let unavailable = match store.get(&SecretKey::for_connection(ws, conn)) {
         Err(e @ SecretError::Unavailable { .. }) => Some(e),
-        Ok(_) | Err(SecretError::Missing { .. } | SecretError::Failed { .. }) => None,
+        Ok(_)
+        | Err(
+            SecretError::Missing { .. }
+            | SecretError::Failed { .. }
+            | SecretError::EnvNameRefused { .. },
+        ) => None,
     };
     let legacy = unavailable.is_none()
         && matches!(

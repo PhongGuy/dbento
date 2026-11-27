@@ -36,7 +36,7 @@ async fn each_database_is_fresh_and_on_sql_server_2022_or_later() {
         "{toml}"
     );
     assert!(
-        toml.contains("DBENTO_TEST_MS_SECRET") && toml.ends_with("tls = \"off\"\n"),
+        toml.contains("DBENTO_SECRET_TEST_MS") && toml.ends_with("tls = \"off\"\n"),
         "{toml}"
     );
 }

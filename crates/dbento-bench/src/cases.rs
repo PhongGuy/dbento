@@ -140,7 +140,7 @@ impl Targets {
                 bail!("the Postgres URL contains a quote or backslash");
             }
             toml += &format!(
-                "[connections.pg]\nengine = \"postgres\"\nhost = \"{}\"\nport = {}\ndatabase = \"{}\"\nuser = \"{}\"\nsecret = {{ env = \"DBENTO_BENCH_PG_PASSWORD\" }}\n",
+                "[connections.pg]\nengine = \"postgres\"\nhost = \"{}\"\nport = {}\ndatabase = \"{}\"\nuser = \"{}\"\nsecret = {{ env = \"DBENTO_SECRET_BENCH_PG\" }}\n",
                 p.host, p.port, p.database, p.user
             );
         }

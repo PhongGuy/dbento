@@ -109,7 +109,7 @@ fn a_mixed_level_ambiguity_drops_both_pairs() {
 fn file_engines_and_secretless_connections_pair_nothing() {
     let lite = |n: &str| format!("[connections.{n}]\nengine = \"sqlite\"\npath = \"a.db\"\n");
     assert!(renames(&lite("a"), &lite("b")).is_empty());
-    let env = "secret = { env = \"PGPW\" }\n";
+    let env = "secret = { env = \"DBENTO_SECRET_PGPW\" }\n";
     assert!(renames(&pg("a", "h", "u", "d", env), &pg("b", "h", "u", "d", env)).is_empty());
     let none = "secret = \"none\"\n";
     assert!(renames(&pg("a", "h", "u", "d", none), &pg("b", "h", "u", "d", none)).is_empty());

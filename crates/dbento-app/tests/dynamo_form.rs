@@ -202,7 +202,7 @@ fn an_empty_access_key_id_writes_no_secret_and_the_workspace_takes_it(cx: &mut T
 #[gpui_kit::test]
 fn clearing_a_loaded_access_key_id_drops_its_secret(cx: &mut TestAppContext) {
     let mut loaded = dy();
-    loaded.secret = Some(SecretSource::Env("ORDERS_SECRET".into()));
+    loaded.secret = Some(SecretSource::Env("DBENTO_SECRET_ORDERS_SECRET".into()));
     let (win, f) = open(cx, Some(("orders", loaded)));
     assert!(present(cx, win, "conn-secret"));
     set(cx, win, &f, Field::AccessKeyId, "");

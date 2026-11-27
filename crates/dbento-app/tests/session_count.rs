@@ -38,11 +38,11 @@ fn record_the_sessions_tabs_and_the_explorer_open_at_once(cx: &mut TestAppContex
     const TABS: usize = 3;
     let sink = sink();
     let toml = format!(
-        "dbento = 1\n[connections.hang]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\ndatabase = \"d\"\nuser = \"u\"\nsecret = {{ env = \"DBENTO_TEST_HANG_PW\" }}\n",
+        "dbento = 1\n[connections.hang]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\ndatabase = \"d\"\nuser = \"u\"\nsecret = {{ env = \"DBENTO_SECRET_TEST_HANG_PW\" }}\n",
         sink.port
     );
     let s = started_custom(cx, &toml, |svc| {
-        svc.env = Arc::new(|v| (v == "DBENTO_TEST_HANG_PW").then(|| "pw".to_owned()));
+        svc.env = Arc::new(|v| (v == "DBENTO_SECRET_TEST_HANG_PW").then(|| "pw".to_owned()));
     });
     // The row opens the first tab and selects the connection, so the explorer loads it too.
     open_connection_row(cx, s.win, "hang");

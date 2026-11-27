@@ -23,7 +23,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 /// The environment variable a SurrealDB test connection reads its secret from.
-pub const SR_SECRET_VAR: &str = "DBENTO_TEST_SR_SECRET";
+pub const SR_SECRET_VAR: &str = "DBENTO_SECRET_TEST_SR";
 
 /// A server on a temporary workspace and a connected client.
 pub struct TestServer {

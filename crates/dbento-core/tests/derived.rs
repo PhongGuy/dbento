@@ -297,7 +297,7 @@ engine = "postgres"
 host = "db.internal"
 database = "postgres"
 user = "app"
-secret = { env = "ALL_PW" }
+secret = { env = "DBENTO_SECRET_ALL_PW" }
 databases = "all"
 
 [connections.ms]
@@ -365,7 +365,10 @@ user = "app"
         let (_d, ws) = open(TREE);
         let child = ws.resolve("allpg/anything_at-all").unwrap();
         assert_eq!(child.database(), Some("anything_at-all"));
-        assert_eq!(child.secret_source(), &SecretSource::Env("ALL_PW".into()));
+        assert_eq!(
+            child.secret_source(),
+            &SecretSource::Env("DBENTO_SECRET_ALL_PW".into())
+        );
     }
 
     #[test]
@@ -433,7 +436,8 @@ user = "app"
 mod secrets {
     use super::open;
     use dbento_core::{
-        MemoryStore, Secret, SecretKey, SecretStore, resolve_secret, secret_env_var, secret_hint,
+        MemoryStore, Secret, SecretError, SecretKey, SecretStore, resolve_secret, secret_env_var,
+        secret_hint,
     };
 
     const PARENTS: &str = "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = \"all\"\n[connections.my-srv]\nengine = \"mssql\"\nhost = \"h\"\nuser = \"u\"\ndatabases = [\"app\"]\n";
@@ -460,6 +464,21 @@ mod secrets {
         assert_eq!(
             SecretKey::for_connection(&ws, &child).connection(),
             "stayzy"
+        );
+    }
+
+    #[test]
+    fn a_child_of_a_refused_env_parent_is_told_the_parents_variable() {
+        let (_d, ws) = open(
+            "dbento = 1\n[connections.stayzy]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\ndatabases = \"all\"\nsecret = { env = \"PGPASSWORD\" }\n",
+        );
+        let child = ws.connection("stayzy/booking").unwrap();
+        let env = |_: &str| -> Option<String> { panic!("a refused name is never read") };
+        let err = resolve_secret(&ws, &child, &MemoryStore::new(), &env).expect_err("refused");
+        assert!(
+            matches!(&err, SecretError::EnvNameRefused { connection, suggested }
+                if connection == "stayzy/booking" && *suggested == secret_env_var("stayzy")),
+            "{err:?}"
         );
     }
 

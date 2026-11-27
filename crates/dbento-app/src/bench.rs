@@ -47,7 +47,7 @@ pub fn main(config: PathBuf) -> ! {
         paths: AppPaths::in_dir(state_dir.path()),
         store: Arc::new(MemoryStore::new()),
         env: Arc::new(move |v| {
-            (v == "DBENTO_BENCH_PG_PASSWORD")
+            (v == "DBENTO_SECRET_BENCH_PG")
                 .then(|| password.clone())
                 .flatten()
         }),

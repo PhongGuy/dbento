@@ -63,8 +63,8 @@ fn every_bound_field_changes_the_binding_and_the_session() {
         ("secret kind", PG.into(), with(PG, "secret = \"none\"\n")),
         (
             "secret env name",
-            with(PG, "secret = { env = \"PGPW\" }\n"),
-            with(PG, "secret = { env = \"PGPW2\" }\n"),
+            with(PG, "secret = { env = \"DBENTO_SECRET_PGPW\" }\n"),
+            with(PG, "secret = { env = \"DBENTO_SECRET_PGPW2\" }\n"),
         ),
         (
             "file_path",
@@ -218,7 +218,9 @@ fn virtual_hosted_enters_the_binding_only_when_true() {
 
 #[test]
 fn the_binding_holds_only_the_bound_keys_and_the_secret_source_by_name() {
-    let c = conn(&format!("{PG}secret = {{ env = \"PGPW\" }}\n"));
+    let c = conn(&format!(
+        "{PG}secret = {{ env = \"DBENTO_SECRET_PGPW\" }}\n"
+    ));
     let v: serde_json::Value = serde_json::from_str(&c.session_binding()).unwrap();
     let mut got: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
     let mut want = vec![
@@ -249,7 +251,10 @@ fn the_binding_holds_only_the_bound_keys_and_the_secret_source_by_name() {
     got.sort_unstable();
     want.sort_unstable();
     assert_eq!(got, want);
-    assert_eq!(v["secret_source"], serde_json::json!({"env": "PGPW"}));
+    assert_eq!(
+        v["secret_source"],
+        serde_json::json!({"env": "DBENTO_SECRET_PGPW"})
+    );
     assert_eq!(v["statement_timeout_ns"], serde_json::Value::Null);
     let timed = conn(&format!("{SQL}statement_timeout = \"5s\"\n"));
     let t: serde_json::Value = serde_json::from_str(&timed.session_binding()).unwrap();

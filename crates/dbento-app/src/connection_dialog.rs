@@ -115,7 +115,7 @@ pub fn placeholder(field: Field) -> Option<&'static str> {
         Field::Database => Some("e.g. postgres"),
         Field::User => Some("e.g. postgres"),
         Field::Password => None,
-        Field::EnvVar => Some("e.g. SHOP_DB_PASSWORD"),
+        Field::EnvVar => Some("e.g. DBENTO_SECRET_SHOP"),
         Field::TlsCa => Some("e.g. certs/ca.pem"),
         Field::TlsCert => Some("e.g. certs/client.crt"),
         Field::TlsKey => Some("e.g. certs/client.key"),
@@ -1041,6 +1041,14 @@ impl ConnectionForm {
                             SecretChoice::Env if env.is_empty() => {
                                 return Err(at(Field::EnvVar)(
                                     "Enter an environment variable name".into(),
+                                ));
+                            }
+                            // Only a newly typed name is checked; the message leaves out
+                            // what was typed, since a pasted password can land here.
+                            SecretChoice::Env if !dbento_core::is_env_secret_name(&env) => {
+                                return Err(at(Field::EnvVar)(
+                                    "Use a variable named DBENTO_SECRET_..., such as DBENTO_SECRET_SHOP"
+                                        .into(),
                                 ));
                             }
                             SecretChoice::Env => SecretSource::Env(env),

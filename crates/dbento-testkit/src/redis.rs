@@ -20,7 +20,7 @@ use super::{
 };
 
 /// The environment variable the generated connection reads its password from.
-pub const RD_SECRET_VAR: &str = "DBENTO_TEST_RD_SECRET";
+pub const RD_SECRET_VAR: &str = "DBENTO_SECRET_TEST_RD";
 
 /// The gate image's tag.
 pub const VALKEY_TAG: &str = "9.0.7-alpine";

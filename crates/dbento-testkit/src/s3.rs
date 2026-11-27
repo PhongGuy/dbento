@@ -18,7 +18,7 @@ use tokio::task::JoinSet;
 use crate::moto::{DySource, Moto, dy_source, moto};
 
 /// The environment variable the generated connection reads its secret key from.
-pub const S3_SECRET_VAR: &str = "DBENTO_TEST_S3_SECRET";
+pub const S3_SECRET_VAR: &str = "DBENTO_SECRET_TEST_S3";
 /// The access key every handle signs with; Moto accepts any pair.
 pub const S3_ACCESS_KEY: &str = "AKIDDBENTOS3TEST";
 /// The secret key paired with `S3_ACCESS_KEY`; set it in `S3_SECRET_VAR` for a connection.

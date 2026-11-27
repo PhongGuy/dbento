@@ -236,7 +236,7 @@ fn only_keychain_password_connections_are_migrated() {
     let body = format!(
         "{}{}{}[connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n",
         pg("kc", "h", ""),
-        pg("byenv", "h", "secret = { env = \"PW\" }\n"),
+        pg("byenv", "h", "secret = { env = \"DBENTO_SECRET_PW\" }\n"),
         pg("nopw", "h", "secret = \"none\"\n"),
     );
     let names: Vec<String> = migrate_legacy_passwords(&MemoryStore::new(), &ws(&body))
@@ -291,7 +291,7 @@ fn adopt_leaves_a_taken_pin_and_the_legacy_entry_alone() {
 fn adopt_ignores_names_without_a_keychain_password_without_a_store_call() {
     let body = format!(
         "{}{}[connections.lite]\nengine = \"sqlite\"\npath = \"a.db\"\n",
-        pg("byenv", "h", "secret = { env = \"PW\" }\n"),
+        pg("byenv", "h", "secret = { env = \"DBENTO_SECRET_PW\" }\n"),
         pg("nopw", "h", "secret = \"none\"\n"),
     );
     let w = ws(&body);

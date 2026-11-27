@@ -292,7 +292,7 @@ fn explain_leaves_sql_server_alone() {
 fn sql_server_keys_parse_with_their_defaults() {
     let (_dir, ws) = ws_with(
         "dbento = 1\n[connections.ms]\nengine = \"mssql\"\nhost = \"127.0.0.1\"\nuser = \"app\"\n\
-         database = \"shop\"\ntls_ca = \"ca.pem\"\nread_only_user = \"dbento_reader\"\nsecret = { env = \"MS_PW\" }\n",
+         database = \"shop\"\ntls_ca = \"ca.pem\"\nread_only_user = \"dbento_reader\"\nsecret = { env = \"DBENTO_SECRET_MS_PW\" }\n",
     );
     let ws = ws.unwrap();
     let c = ws.declared("ms").unwrap();
@@ -304,7 +304,10 @@ fn sql_server_keys_parse_with_their_defaults() {
     );
     assert!(c.tls_ca().is_some_and(|p| p.ends_with("ca.pem")));
     assert_eq!(c.read_only_user(), Some("dbento_reader"));
-    assert_eq!(c.secret_source(), &SecretSource::Env("MS_PW".into()));
+    assert_eq!(
+        c.secret_source(),
+        &SecretSource::Env("DBENTO_SECRET_MS_PW".into())
+    );
     let (_d2, plain) = ws_with(MS);
     assert_eq!(
         plain.unwrap().declared("ms").unwrap().read_only_user(),

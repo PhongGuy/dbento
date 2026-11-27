@@ -62,7 +62,7 @@ pub use sshd::*;
 pub use surreal::*;
 
 /// The environment variable the generated connection reads its password from.
-pub const SECRET_VAR: &str = "DBENTO_TEST_PG_SECRET";
+pub const SECRET_VAR: &str = "DBENTO_SECRET_TEST_PG";
 
 /// The gate image's tag.
 pub const PG_TAG: &str = "17-alpine";

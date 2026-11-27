@@ -37,7 +37,7 @@ folder = "Prod/EU"
 | `folders` | table of tables | One table per folder path, holding only `color`. |
 
 Unknown keys are refused at every level: the root, a folder table, a connection table, and a
-`secret = { env = "..." }` table.
+`secret = { env = "..." }` table (see Secrets for the variable names it reads).
 
 A connection name matches `[A-Za-z0-9_-]+`.
 
@@ -144,6 +144,10 @@ No secret is ever written in `dbento.toml`.
 - `secret` says where the secret comes from: `"keychain"` (the default for server engines),
   `"none"`, or `{ env = "NAME" }`. Any other word is refused without quoting it, since it may be
   the password itself.
+- `{ env = "NAME" }` only reads a variable named `DBENTO_SECRET_` followed by one or more ASCII
+  letters, digits or `_`, such as `DBENTO_SECRET_SHARED`. Loading accepts any name; the refusal
+  happens when the secret is read, fails only that connection, and does not quote the refused
+  name. The message names the `DBENTO_SECRET_<NAME>` variable to export instead.
 - A MongoDB `uri` is refused with `secret` (key `uri`) when any `:` appears anywhere before its
   last `@`, since a password may hold `/` and `?`. This also refuses an `@` written after a
   `host:port`, as in `mongodb://h:27017/db?appName=a@b`: write that `@` as `%40`. The uri is

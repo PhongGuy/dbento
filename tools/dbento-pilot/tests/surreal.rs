@@ -12,7 +12,7 @@ use dbento_app::query_tab::{
 use dbento_core::{Engine, read_only_residual};
 use serde_json::{Value, json};
 
-const SR_SECRET_VAR: &str = "DBENTO_TEST_SR_SECRET";
+const SR_SECRET_VAR: &str = "DBENTO_SECRET_TEST_SR";
 
 async fn until(pilot: &Pilot, what: &str, done: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(60);

@@ -184,6 +184,22 @@ fn an_untouched_value_with_surrounding_spaces_is_unchanged(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn a_new_env_name_outside_dbento_secret_is_refused(cx: &mut TestAppContext) {
+    let mut loaded = nopg();
+    loaded.secret = Some(SecretSource::Env("DBENTO_SECRET_A".into()));
+    let (win, f) = open(cx, Some(("nopg", loaded.clone())));
+    set(cx, win, &f, Field::EnvVar, "PGPASSWORD");
+    let err = edit(cx, &f).expect_err("refused");
+    assert!(
+        err.contains("DBENTO_SECRET_") && !err.contains("PGPASSWORD"),
+        "{err}"
+    );
+    set(cx, win, &f, Field::EnvVar, "DBENTO_SECRET_SHOP");
+    loaded.secret = Some(SecretSource::Env("DBENTO_SECRET_SHOP".into()));
+    assert_eq!(edit(cx, &f), Ok(("nopg".into(), loaded)));
+}
+
+#[gpui_kit::test]
 fn a_bad_folder_names_the_folder_once(cx: &mut TestAppContext) {
     let (win, f) = open(cx, Some(("nopg", nopg())));
     set(cx, win, &f, Field::Folder, "a//b");
@@ -196,7 +212,10 @@ fn a_bad_folder_names_the_folder_once(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn switching_back_to_the_loaded_engine_restores_its_values(cx: &mut TestAppContext) {
     let mut loaded = nopg();
-    (loaded.secret, loaded.tls) = (Some(SecretSource::Env("PGPW".into())), Some(TlsMode::Off));
+    (loaded.secret, loaded.tls) = (
+        Some(SecretSource::Env("DBENTO_SECRET_PGPW".into())),
+        Some(TlsMode::Off),
+    );
     let (win, f) = open(cx, Some(("nopg", loaded.clone())));
     radio(cx, win, "conn-engine", 1);
     radio(cx, win, "conn-engine", 0);

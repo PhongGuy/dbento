@@ -29,7 +29,7 @@ fn ws() -> (tempfile::TempDir, Workspace) {
         pg("kc", ""),
         pg("my-db", ""),
         pg("none", "secret = \"none\""),
-        pg("byenv", "secret = { env = \"APP_PW\" }"),
+        pg("byenv", "secret = { env = \"DBENTO_SECRET_APP_PW\" }"),
     );
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();

@@ -83,7 +83,7 @@ fn run_reports_a_missing_file_or_unknown_conn_as_exit_3() {
     );
 }
 
-const PG: &str = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_TEST_UNSET_VAR\" }\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
+const PG: &str = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"DBENTO_SECRET_TEST_UNSET\" }\n[connections.lite]\nengine = \"sqlite\"\npath = \"data/app.db\"\n";
 
 #[test]
 fn secret_set_refuses_connections_without_a_keychain_secret() {
@@ -121,12 +121,12 @@ fn query_resolves_the_secret_before_connecting() {
     let ws = common::write_tree(&[("dbento.toml", PG)]);
     let out = dbento()
         .current_dir(ws.path())
-        .env_remove("DBENTO_TEST_UNSET_VAR")
+        .env_remove("DBENTO_SECRET_TEST_UNSET")
         .args(["query", "envpg", "select 1"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("DBENTO_TEST_UNSET_VAR"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("DBENTO_SECRET_TEST_UNSET"));
 }
 
 #[cfg(unix)]
@@ -235,7 +235,7 @@ fn secret_set_names_the_env_variable_or_sqlite_in_its_refusal() {
             .unwrap();
         String::from_utf8_lossy(&out.stderr).into_owned()
     };
-    assert!(refusal("envpg").contains("$DBENTO_TEST_UNSET_VAR"));
+    assert!(refusal("envpg").contains("$DBENTO_SECRET_TEST_UNSET"));
     assert!(
         refusal("lite").contains("has no secret: a sqlite connection opens without one"),
         "{}",
@@ -347,4 +347,32 @@ fn an_absolute_identity_file_outside_the_home_warns() {
         err.contains("warning: ") && err.contains("/opt/keys/id"),
         "{err}"
     );
+}
+
+#[test]
+fn a_refused_env_name_is_never_sent_or_printed() {
+    let toml = "dbento = 1\n[connections.envpg]\nengine = \"postgres\"\nhost = \"127.0.0.1\"\nport = 9\ndatabase = \"d\"\nuser = \"u\"\nsecret = { env = \"PGPASSWORD\" }\n";
+    let ws = common::write_tree(&[("dbento.toml", toml)]);
+    let out = dbento()
+        .current_dir(ws.path())
+        .env("PGPASSWORD", "leak-value-x")
+        .args(["query", "envpg", "select 1"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains("DBENTO_SECRET_ENVPG"), "{err}");
+    assert!(
+        !err.contains("PGPASSWORD") && !err.contains("leak-value-x"),
+        "{err}"
+    );
+    let set = dbento()
+        .current_dir(ws.path())
+        .args(["secret", "set", "envpg"])
+        .write_stdin("pw\n")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&set.stderr);
+    assert_eq!(set.status.code(), Some(3), "{err}");
+    assert!(!err.contains("PGPASSWORD"), "{err}");
 }
