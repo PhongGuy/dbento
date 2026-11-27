@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use super::bundle::{failed, install_bundle};
 use super::{InstallError, InstallKind, Reason, Relaunch, Staged};
@@ -49,8 +50,12 @@ pub fn install(kind: &InstallKind, staged: Staged) -> Result<Relaunch, InstallEr
     }
 }
 
-/// Removes the regular files and links in `dir` whose names start with `dbento-update-`,
-/// best effort; directories and every other name are left alone.
+/// A staged file younger than this may still be between its creation and its lock.
+const SWEEP_GRACE: Duration = Duration::from_secs(60);
+
+/// Removes the leftovers in `dir` whose names start with `dbento-update-`, best effort: links
+/// always, a regular file only when it is older than a minute and no running copy holds it.
+/// Directories and every other name are left alone.
 pub fn sweep_staged(dir: &Path) {
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let ours = entry
@@ -58,12 +63,38 @@ pub fn sweep_staged(dir: &Path) {
             .to_str()
             .is_some_and(|n| n.starts_with("dbento-update-"));
         // lstat, so a link is removed itself and never followed.
-        let plain =
-            std::fs::symlink_metadata(entry.path()).is_ok_and(|m| m.is_file() || m.is_symlink());
-        if ours && plain {
+        let Some(meta) = ours
+            .then(|| std::fs::symlink_metadata(entry.path()).ok())
+            .flatten()
+        else {
+            continue;
+        };
+        if meta.is_symlink() {
             let _ = std::fs::remove_file(entry.path());
+        } else if meta.is_file() && old_enough(&meta) {
+            remove_unheld(&entry.path());
         }
     }
+}
+
+// An unreadable or future mtime is not trusted, so such a file is kept.
+fn old_enough(meta: &std::fs::Metadata) -> bool {
+    meta.modified()
+        .ok()
+        .and_then(|m| SystemTime::now().duration_since(m).ok())
+        .is_some_and(|age| age >= SWEEP_GRACE)
+}
+
+// Only a file whose lock we can take is a crash leftover; the lock is held across the removal
+// so no other copy can claim it in between. A filesystem without locks keeps everything.
+fn remove_unheld(path: &Path) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    if file.try_lock().is_ok() {
+        let _ = std::fs::remove_file(path);
+    }
+    drop(file);
 }
 
 /// Swaps `staged` over `target`. Only a regular file beside the target is accepted, which
