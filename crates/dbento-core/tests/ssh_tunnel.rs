@@ -27,7 +27,7 @@ async fn a_trusted_tunnel_runs_a_query_and_closes_with_its_session() {
         scalar(&mut s, "SELECT current_database()").await,
         net.pg().database()
     );
-    assert!(net.ssh_sessions().await >= 1);
+    assert_eq!(net.ssh_sessions().await, 1);
     drop(s);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while net.ssh_sessions().await > 0 {

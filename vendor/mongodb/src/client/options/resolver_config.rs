@@ -72,4 +72,17 @@ impl ResolverConfig {
             inner: HickoryResolverConfig::udp_and_tcp(&hickory_resolver::config::QUAD9),
         }
     }
+
+    // Dbento P3: a single nameserver on any port, so tests answer SRV and TXT lookups locally.
+    /// Test-only: one UDP nameserver at `addr`, which may listen on any port.
+    #[doc(hidden)]
+    pub fn name_server(addr: std::net::SocketAddr) -> Self {
+        let mut server = hickory_resolver::config::NameServerConfig::udp(addr.ip());
+        for connection in &mut server.connections {
+            connection.port = addr.port();
+        }
+        ResolverConfig {
+            inner: HickoryResolverConfig::from_name_servers(vec![server]),
+        }
+    }
 }

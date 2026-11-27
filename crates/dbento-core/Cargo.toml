@@ -49,6 +49,8 @@ url.workspace = true
 dbento-workspace = { path = "../dbento-workspace" }
 duckdb = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
+subtle = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
 bson = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
@@ -86,7 +88,7 @@ default = ["keychain", "duckdb", "mongodb", "surrealdb", "redis", "dynamodb", "s
 # The DuckDB engine; it bundles libduckdb, so a build without it skips that C++ compile.
 duckdb = ["dep:duckdb"]
 # The MongoDB engine: the mongodb driver and bson.
-mongodb = ["dep:mongodb", "dep:bson", "dbento-testkit/mongodb"]
+mongodb = ["dep:mongodb", "dep:bson", "dep:subtle", "dep:getrandom", "dbento-testkit/mongodb"]
 # The SurrealDB engine: a WebSocket client and a CBOR reader, with no SurrealDB crate.
 surrealdb = ["dep:tokio-tungstenite", "dep:cbor4ii", "dep:half", "tokio/macros"]
 # The Redis and Valkey engine: redis-rs over tokio and rustls.
@@ -151,6 +153,8 @@ wiremock.workspace = true
 minisign.workspace = true
 tar.workspace = true
 flate2.workspace = true
+fast-socks5.workspace = true
+hickory-proto.workspace = true
 
 [[test]]
 name = "integration"

@@ -12,7 +12,7 @@ use bson::{Bson, Document, RawDocumentBuf, doc};
 use mongodb::Client;
 use mongodb::action::Action;
 use mongodb::error::{Error, ErrorKind};
-use mongodb::options::{ClientOptions, Tls};
+use mongodb::options::{ClientOptions, ResolverConfig, Socks5Proxy, Tls};
 use tokio::sync::watch;
 
 use super::catalog;
@@ -29,6 +29,8 @@ use crate::session::{
     CancelHandle, Classification, ConnectError, ConnectParams, DRAIN_CAP, Driver, ExecuteError,
     ExtendError, Flavor, Limits, Prepared, ReadOnlyEnforcement, ServerInfo, StreamItem, Writes,
 };
+use crate::ssh::Dialer;
+use crate::ssh::socks::SocksEndpoint;
 use crate::value::ColumnInfo;
 use crate::workspace::ConnectionConfig;
 
@@ -64,6 +66,9 @@ pub(crate) struct Shared {
 
 pub(crate) struct MongoDriver {
     pub(super) client: Client,
+    /// The loopback SOCKS5 server a tunnelled client dials through; declared after `client`
+    /// so the client shuts down before its proxy goes away.
+    pub(super) socks: Option<SocksEndpoint>,
     pub(super) server: ServerInfo,
     pub(super) uri_database: String,
     pub(super) shared: Arc<Shared>,
@@ -174,6 +179,11 @@ impl MongoDriver {
             .unwrap_or(ReadOnlyEnforcement::BestEffort)
     }
 
+    /// The SOCKS5 port a tunnelled session's client dials through.
+    pub(crate) fn proxy_port(&self) -> Option<u16> {
+        self.socks.as_ref().map(SocksEndpoint::port)
+    }
+
     pub(crate) fn settings_changed(&self) -> bool {
         self.shared.settings_changed.load(Ordering::Relaxed)
     }
@@ -191,20 +201,46 @@ impl Driver for MongoDriver {
 
     async fn connect(params: ConnectParams<'_>) -> Result<Self, ConnectError> {
         let conn = params.conn;
-        let fail = |e| open_error(conn, e);
         let uri = conn.uri().unwrap_or_default();
         driver_syntax(uri).map_err(|reason| ConnectError::Open {
             message: format!("connection `{}`: {reason}", conn.name()),
         })?;
+        // A tunnelled client reaches every member, seed or advertised, through a SOCKS5 server
+        // that dials over the SSH link, so member names resolve on the bastion's side.
+        let socks = match &params.dialer {
+            Dialer::Ssh(_) => Some(SocksEndpoint::start(params.dialer.clone()).await.map_err(
+                |e| ConnectError::SshTunnel {
+                    message: format!("cannot open the local SOCKS endpoint for MongoDB: {e}"),
+                },
+            )?),
+            Dialer::Direct => None,
+        };
+        // A failure reads the endpoint's refusal as it stands then, so the error names the
+        // member the bastion could not reach rather than the driver's selection timeout.
+        let refusal = || socks.as_ref().and_then(SocksEndpoint::last_refusal);
+        let fail = |e| connect_error(conn, refusal(), e);
         // Open refused a password and the syntax check just refused text the driver would quote,
         // so neither this text nor an error built from it carries one.
-        let mut options = ClientOptions::parse(uri).await.map_err(fail)?;
+        let mut parse = ClientOptions::parse(uri);
+        if let Some(addr) = params.mongo_dns {
+            parse = parse.resolver_config(ResolverConfig::name_server(addr));
+        }
+        let mut options = parse.await.map_err(|e| {
+            if socks.is_some() && matches!(*e.kind, ErrorKind::DnsResolve { .. }) {
+                srv_error(conn, &e.kind)
+            } else {
+                fail(e)
+            }
+        })?;
         options.app_name = Some("dbento".to_owned());
         let limit = fill_timeouts(&mut options);
         if let Some(credential) = &mut options.credential {
             credential.password = params.secret.map(|s| s.expose().to_owned());
         }
         resolve_tls_paths(&mut options, params.ws_dir);
+        if let Some(ep) = &socks {
+            options.socks5_proxy = Some(proxy_of(ep));
+        }
         let client = Client::with_options(options).map_err(fail)?;
 
         // These commands need no privileges, so an unauthenticated session gets this far and
@@ -227,7 +263,15 @@ impl Driver for MongoDriver {
             };
             Ok((build, enforcement))
         };
-        let (build, enforcement) = within(limit, conn.display_target(), handshake).await?;
+        // The handshake's own errors ride inside, so only `within`'s timeout can become the
+        // recorded refusal.
+        let (build, enforcement) =
+            within(limit, conn.display_target(), async { Ok(handshake.await) })
+                .await
+                .map_err(|timeout| match refusal() {
+                    Some(message) => ConnectError::SshTunnel { message },
+                    None => timeout,
+                })??;
 
         let text = build.get_str("version").ok();
         let version = text
@@ -241,6 +285,7 @@ impl Driver for MongoDriver {
         let database = conn.database().unwrap_or_default().to_owned();
         Ok(MongoDriver {
             client,
+            socks,
             server: ServerInfo {
                 flavor: Flavor::MongoDb,
                 version,
@@ -554,6 +599,56 @@ async fn within<T>(
                 limit.as_secs()
             ),
         })?
+}
+
+/// The driver's proxy settings for `ep`: its loopback port and its login.
+fn proxy_of(ep: &SocksEndpoint) -> Socks5Proxy {
+    let (user, pass) = ep.credentials();
+    Socks5Proxy::builder()
+        .host("127.0.0.1")
+        .port(ep.port())
+        .authentication((user.to_owned(), pass.to_owned()))
+        .build()
+}
+
+/// The vendored driver's refusal to dial a Unix-socket member while a proxy is set.
+const UNIX_UNDER_PROXY: &str = "a Unix socket address cannot be reached through the proxy";
+
+/// What a failed connect means: the endpoint's recorded SSH refusal when the driver saw only a
+/// selection timeout or a proxy error, the refused socket member when that error names one, else
+/// `open_error`.
+fn connect_error(conn: &ConnectionConfig, refusal: Option<String>, e: Error) -> ConnectError {
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "ErrorKind has too many variants to list; the rest share one arm"
+    )]
+    match (refusal, &*e.kind) {
+        (Some(message), ErrorKind::ServerSelection { .. } | ErrorKind::ProxyConnect { .. }) => {
+            ConnectError::SshTunnel { message }
+        }
+        // The refusal reaches here inside a selection timeout's topology text, or on its own.
+        (
+            None,
+            ErrorKind::ServerSelection { message, .. } | ErrorKind::ProxyConnect { message, .. },
+        ) if message.contains(UNIX_UNDER_PROXY) => ConnectError::SshTunnel {
+            message: "a member of this deployment advertised a local socket, which cannot \
+                          be reached over SSH; the SSH server reaches TCP members only"
+                .to_owned(),
+        },
+        _ => open_error(conn, e),
+    }
+}
+
+/// A tunnelled SRV or TXT lookup that failed: it ran on this machine, so a name only the
+/// bastion's DNS knows fails here, and the error says so.
+fn srv_error(conn: &ConnectionConfig, kind: &ErrorKind) -> ConnectError {
+    ConnectError::Open {
+        message: format!(
+            "{}: the SRV and TXT records of a mongodb+srv uri are resolved on this machine, \
+             not on the SSH server; list the hosts in a mongodb:// uri instead ({kind})",
+            conn.display_target()
+        ),
+    }
 }
 
 // Reads `e.kind`, not `e`, because `Error`'s `Display` dumps the server's reply as hex.

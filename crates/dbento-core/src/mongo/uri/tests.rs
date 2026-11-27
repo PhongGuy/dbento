@@ -66,3 +66,13 @@ fn a_driver_reason_that_can_quote_the_text_stays_hidden() {
         assert_eq!(driver_refused(uri), want, "{uri}");
     }
 }
+
+#[test]
+fn the_driver_reads_proxy_options_once_socks5_is_on() {
+    for uri in [
+        "mongodb://h/?proxyHost=127.0.0.1",
+        "mongodb://h/?proxyHost=127.0.0.1&proxyPort=1080&proxyUsername=u&proxyPassword=p",
+    ] {
+        assert_eq!(super::driver_syntax(uri), Ok(()), "{uri}");
+    }
+}

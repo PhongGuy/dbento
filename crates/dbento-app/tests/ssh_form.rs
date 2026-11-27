@@ -1,7 +1,7 @@
 //! The SSH section's values as dbento.toml gets them: untouched keys keep their spelling.
 use dbento_app::ssh_form::{
-    SshAuthChoice, SshField, SshTyped, identity_warning, shows_passphrase, shows_password,
-    ssh_shown, ssh_spec, takes_ssh,
+    SSH_HOST_NOTE, SSH_MONGO_HOST_NOTE, SshAuthChoice, SshField, SshTyped, identity_warning,
+    shows_passphrase, shows_password, ssh_host_note, ssh_shown, ssh_spec, takes_ssh,
 };
 use dbento_core::{Engine, SshAuth, SshSpec, ssh_tunnels};
 use std::path::Path;
@@ -120,17 +120,11 @@ fn ssh_is_offered_exactly_where_core_tunnels() {
     for e in [Engine::Postgres, Engine::Mysql, Engine::Mssql] {
         assert!(takes_ssh(e), "{e:?}");
     }
-    for e in [
-        Engine::Sqlite,
-        Engine::Duckdb,
-        Engine::Mongodb,
-        Engine::Dynamodb,
-        Engine::S3,
-    ] {
+    for e in [Engine::Sqlite, Engine::Duckdb, Engine::Dynamodb, Engine::S3] {
         assert!(!takes_ssh(e), "{e:?}");
     }
     // Feature-gated in core; the app follows whatever this build of core says.
-    for e in [Engine::Redis, Engine::Surrealdb] {
+    for e in [Engine::Redis, Engine::Surrealdb, Engine::Mongodb] {
         assert_eq!(takes_ssh(e), ssh_tunnels(e), "{e:?}");
     }
 }
@@ -169,4 +163,18 @@ fn only_an_absolute_identity_outside_home_warns() {
         identity_warning("/opt/keys/id", None).is_some(),
         "no home known"
     );
+}
+
+#[test]
+fn mongodb_gets_its_own_host_note() {
+    assert_eq!(ssh_host_note(Engine::Mongodb), SSH_MONGO_HOST_NOTE);
+    for e in [
+        Engine::Postgres,
+        Engine::Mysql,
+        Engine::Mssql,
+        Engine::Redis,
+        Engine::Surrealdb,
+    ] {
+        assert_eq!(ssh_host_note(e), SSH_HOST_NOTE, "{e:?}");
+    }
 }

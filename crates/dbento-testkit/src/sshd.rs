@@ -11,7 +11,7 @@ use testcontainers_modules::testcontainers::bollard::query_parameters::InspectCo
 use testcontainers_modules::testcontainers::core::{BuildImageOptions, ContainerPort, ExecCommand};
 use testcontainers_modules::testcontainers::runners::{AsyncBuilder, AsyncRunner};
 use testcontainers_modules::testcontainers::{
-    ContainerAsync, GenericBuildableImage, GenericImage, ImageExt,
+    ContainerAsync, GenericBuildableImage, GenericImage, Image, ImageExt,
 };
 use tokio::io::AsyncBufReadExt as _;
 
@@ -145,11 +145,16 @@ impl SshNet {
 
     /// How many TCP sessions on port 22 sshd holds established.
     pub async fn ssh_sessions(&self) -> usize {
-        // grep -c exits 1 on a zero count, so that code is a count too.
+        // Only sshd's own end counts: rootless podman forwards from the container's address,
+        // so the client end of the same connection is listed too.
         let out = exec_stdout(
             &self.sshd,
-            ["sh", "-c", "netstat -tn | grep -c ':22 .*ESTABLISHED'"],
-            &[0, 1],
+            [
+                "sh",
+                "-c",
+                "netstat -tn | awk '$4 ~ /:22$/ && $6 == \"ESTABLISHED\"' | wc -l",
+            ],
+            &[0],
         )
         .await;
         out.trim()
@@ -332,8 +337,8 @@ async fn ssh_banner(port: u16) -> Result<(), String> {
 
 /// Runs `cmd` in `container` and returns its stdout, panicking with its stderr when it exits
 /// with a code `ok` does not list.
-async fn exec_stdout<const N: usize>(
-    container: &ContainerAsync<GenericImage>,
+pub(crate) async fn exec_stdout<I: Image, const N: usize>(
+    container: &ContainerAsync<I>,
     cmd: [&str; N],
     ok: &[i64],
 ) -> String {
@@ -358,7 +363,7 @@ async fn exec_stdout<const N: usize>(
 
 /// Pins the container's OOM score to this process's own. Rootless podman otherwise records a
 /// lower value it cannot apply to an exec, which crun then refuses.
-fn own_oom_score(host: &mut HostConfig) {
+pub(crate) fn own_oom_score(host: &mut HostConfig) {
     if let Some(adj) = std::fs::read_to_string("/proc/self/oom_score_adj")
         .ok()
         .and_then(|s| s.trim().parse().ok())
