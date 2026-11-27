@@ -82,7 +82,7 @@ All of the logic lives in `dbento-core`, a library with no UI: the workspace for
 | `make each-feature` | Checks each engine feature of the core, the command line and the MCP server on its own, with `cargo hack`. |
 | `make script-test` | The bash suites under `scripts/tests`. |
 | `make workflows-lint` | actionlint over `.github/workflows`. |
-| `make icons-check`, `make notices-check`, `make windows-check` | The icon exports, the third-party notices (needs `cargo-about`), and a Windows type-check through mingw. |
+| `make icons-check`, `make notices-check`, `make windows-check` | The icon exports, the third-party notices (needs `cargo-about` 0.9.3: `cargo install --locked cargo-about --version 0.9.3 --features cli`), and a Windows type-check through mingw. |
 | `make xwin-check`, `make xwin-build` | An msvc check and release-style build from Linux through cargo-xwin; `xwin-build` compiles shaders at runtime, so it is not for shipping. |
 | `make package` | The Linux CLI archive, `.deb` and AppImage, verified, in `target/dist/linux`. |
 | `make screenshots` | Regenerates the README screenshots in `assets/screenshots` from the demo workspace under gpui-pilot. |
