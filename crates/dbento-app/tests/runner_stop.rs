@@ -6,7 +6,7 @@ use crate::support::{
 use std::time::Duration;
 
 use dbento_app::runner::{
-    Command, Event, RunnerSpec, RunnerTuning, StatementEnd, spawn_on, spawn_tuned,
+    Command, Event, RunnerSpec, RunnerTuning, StatementEnd, StopReason, spawn_on, spawn_tuned,
 };
 use dbento_core::{Engine, ExplainMode, explain_request};
 
@@ -242,4 +242,99 @@ async fn a_queued_stop_skips_a_mysql_explain() {
         eprintln!("{label}");
         a_queued_stop_skips_the_explain(spec, Engine::Mysql).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// The tab sends Stop and then the cancel; when the Stop cuts the stream first, the cancel
+// lands on the drain that settles the cut, which must not read as a failed statement.
+async fn a_cancel_on_the_drain_after_a_stop_settles_clean() {
+    let (_db, _dir, spec) = pg_spec("").await;
+    let r = spawn_on(&here(), spec);
+    let ev = r.events();
+    r.send(run_cmd(
+        1,
+        "SELECT pg_sleep(0.05), repeat('x', 20000) FROM generate_series(1, 400); SELECT 1",
+        None,
+    ));
+    let Event::Connected { cancel, .. } = next_event(&ev).await else {
+        panic!("the runner did not connect first");
+    };
+    let (mut seen, _) = until_event(&ev, |e| matches!(e, Event::Batch { run_id: 1, .. })).await;
+    r.send(Command::Stop { run_id: 1 });
+    let (more, _) = until_event(&ev, |e| matches!(e, Event::Settling { run_id: 1 })).await;
+    seen.extend(more);
+    cancel.cancel();
+    let (rest, _) = tokio::time::timeout(
+        Duration::from_secs(10),
+        until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 1 })),
+    )
+    .await
+    .expect("the drain outlived the cancel");
+    seen.extend(rest);
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::StatementDone {
+                run_id: 1,
+                stmt: 0,
+                end: StatementEnd::Stopped {
+                    reason: StopReason::User,
+                    ..
+                },
+                ..
+            }
+        )),
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|e| matches!(
+            e,
+            Event::SettleFailed { .. }
+                | Event::Disconnected { .. }
+                | Event::Executing { stmt: 1, .. }
+        )),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// Only a cut's own drain is excused: a cancel that fails a drain the next statement's prepare
+// ran, with no Stop, still reaches the run's end as a failed settle.
+async fn a_cancelled_drain_before_a_clean_end_still_reports() {
+    let (_db, _dir, spec) = pg_spec("").await;
+    let r = spawn_on(&here(), spec);
+    let ev = r.events();
+    r.send(run_cmd(
+        1,
+        "SELECT pg_sleep(0.05), repeat('x', 20000) FROM generate_series(1, 400); SELECT 1",
+        Some(1),
+    ));
+    let Event::Connected { cancel, .. } = next_event(&ev).await else {
+        panic!("the runner did not connect first");
+    };
+    let (mut seen, _) = until_event(&ev, |e| matches!(e, Event::Settling { run_id: 1 })).await;
+    cancel.cancel();
+    let (rest, _) = tokio::time::timeout(
+        Duration::from_secs(10),
+        until_event(&ev, |e| matches!(e, Event::RunDone { run_id: 1 })),
+    )
+    .await
+    .expect("the drain outlived the cancel");
+    seen.extend(rest);
+    assert!(
+        seen.iter().any(|e| matches!(
+            e,
+            Event::StatementDone {
+                run_id: 1,
+                stmt: 1,
+                end: StatementEnd::Complete(_),
+                ..
+            }
+        )),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|e| matches!(e, Event::SettleFailed { .. })),
+        "{seen:?}"
+    );
 }

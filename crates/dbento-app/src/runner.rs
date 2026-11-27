@@ -736,6 +736,9 @@ async fn finish(
             }
             match s.settle().await {
                 Ok(()) => return,
+                // A user's Stop comes with a cancel; one that ends the cut's drain is that Stop
+                // landing late, not a failure.
+                Err(ExecuteError::Cancelled) if matches!(tail, Tail::Cut) => return,
                 Err(ExecuteError::SessionClosed) => LOST.to_owned(),
                 // A write stopped at the drain cap, or a session that ended: its own words say why.
                 Err(e @ (ExecuteError::StoppedAtDrainCap | ExecuteError::SessionEnded { .. })) => {
