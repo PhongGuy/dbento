@@ -53,6 +53,8 @@ impl TestTopologyDescription {
             heartbeat_freq: heartbeat_frequency,
             servers,
             srv_max_hosts: None,
+            seed_sockets: Default::default(),
+            refused_socket: false,
         }
     }
 }

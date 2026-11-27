@@ -1,5 +1,5 @@
-//! A replica set that advertises a member as a local `*.sock` path: under the SSH proxy that
-//! member is never dialled on this machine, and without a proxy it is (the control).
+//! A replica set that advertises a member as a local `*.sock` path: the member is dialled only
+//! when the connection names that socket itself, with or without the SSH proxy.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -180,10 +180,11 @@ async fn an_advertised_socket_member_is_never_dialled_through_the_proxy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_a_proxy_the_advertised_socket_member_is_dialled() {
-    assert!(
-        socket_dials(false).await >= 1,
-        "the control client dials the advertised socket, so the proxied test can see a dial"
+async fn without_a_proxy_the_advertised_socket_member_is_not_dialled() {
+    assert_eq!(
+        socket_dials(false).await,
+        0,
+        "a direct client must not dial a local socket a member advertised and the uri does not name"
     );
 }
 
@@ -203,11 +204,35 @@ async fn a_set_left_with_only_a_socket_member_says_it_cannot_cross_ssh() {
         .await
         .unwrap_err();
     assert_eq!(accepts.load(Ordering::SeqCst), 0, "the socket was dialled");
-    let mapped = connect_error(&mongo_conn(), ep.last_refusal(), e);
+    let mapped = connect_error(&mongo_conn(), ep.last_refusal(), true, e);
     assert!(
         matches!(&mapped, ConnectError::SshTunnel { message }
             if message.contains("advertised a local socket")
                 && message.contains("cannot be reached over SSH")
+                && !message.contains("dbento-p4")),
+        "{mapped:?}"
+    );
+}
+
+// Without a proxy the same set fails as an Open error that says why, with no path in it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_set_left_with_only_an_advertised_socket_says_it_was_not_dialled() {
+    let dir = SocketDir::new();
+    let path = dir.0.join("dbento-p4.sock");
+    let accepts = counting_socket(&path);
+    let port = fake_primary(&path, false).await;
+    let client = Client::with_options(set_options(port, None).await).unwrap();
+    let e = client
+        .database("admin")
+        .run_command(bson::doc! { "ping": 1 })
+        .await
+        .unwrap_err();
+    assert_eq!(accepts.load(Ordering::SeqCst), 0, "the socket was dialled");
+    let mapped = connect_error(&mongo_conn(), None, false, e);
+    assert!(
+        matches!(&mapped, ConnectError::Open { message }
+            if message.contains("advertised a local socket")
+                && message.contains("does not name")
                 && !message.contains("dbento-p4")),
         "{mapped:?}"
     );
