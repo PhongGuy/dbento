@@ -929,9 +929,9 @@ impl Ctx<'_> {
         self.events.send(event).await.is_ok()
     }
 
-    /// Reads one queued command without waiting: a new Run or Explain, a Close, this run's Stop
-    /// or a closed inbox ends the run with that outcome; None (nothing queued or a stray
-    /// Confirm, Skip, Pull, Fetch or other run's Stop, which is dropped) carries on.
+    /// Reads one queued command without waiting. A new Run or Explain, a Close or this run's
+    /// Stop, read after a prepare as before one, abandons the prepared statement unsent; the tab
+    /// has already recorded it as replaced. A closed inbox hangs up; other commands are dropped.
     fn interrupted(&self) -> Option<After> {
         match self.inbox.try_recv() {
             Ok(command @ (Command::Run { .. } | Command::Explain { .. } | Command::Close)) => {
@@ -1239,7 +1239,8 @@ async fn run_explain(session: &mut Session, request: &ExplainRequest, cx: &Ctx<'
         }
     };
     // The prepare's settle may spend a Stop's cancel; its Stop is already queued, so it is
-    // read here. A stopped explain ends skipped, as one stopped at its confirm does.
+    // read here. A stopped explain ends skipped, as one stopped at its confirm does. As a
+    // script's statement, a prepared explain yields to a newer run.
     match cx.interrupted() {
         None => {}
         Some(After::Idle) => {

@@ -432,6 +432,8 @@ async fn an_edited_writing_analyze_is_refused_before_it_asks() {
 // With room for three, the quick plan's Executing, Planned and RunDone fill the channel, so the
 // runner parks sending the slow ANALYZE's Executing, past its last settle and before the
 // explain is called. A Stop's cancel fired there must still stop the ANALYZE.
+// A newer queued Explain replaces one that has prepared but not yet reported Executing (the tab
+// has already recorded it as replaced), so the slow one is queued only once the quick one ends.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_while_the_explain_waits_to_report_executing_still_stops_it() {
     let (_db, _dir, spec) = pg_spec("read_only = true").await;
@@ -446,6 +448,14 @@ async fn a_cancel_while_the_explain_waits_to_report_executing_still_stops_it() {
         panic!("the runner did not connect first");
     };
     r.send(explain(1, Engine::Postgres, "SELECT 1", ExplainMode::Plan));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while ev.len() < 3 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the quick explain never finished"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     r.send(explain(
         2,
         Engine::Postgres,
