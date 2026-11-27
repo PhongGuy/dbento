@@ -72,11 +72,11 @@ fn out_arg(path: &Path) -> Vec<OsString> {
 
 #[test]
 fn version_ok_wants_exactly_0_9_2() {
-    assert_eq!(ABOUT_VERSION, "0.9.2");
-    assert!(version_ok("cargo-about 0.9.2\n"));
+    assert_eq!(ABOUT_VERSION, "0.9.3");
+    assert!(version_ok("cargo-about 0.9.3\n"));
     assert!(!version_ok("cargo-about 0.8.4\n"));
     assert!(!version_ok("cargo-about 0.9.20"));
-    assert!(!version_ok("cargo-about 0.9.2-rc1"));
+    assert!(!version_ok("cargo-about 0.9.3-rc1"));
     assert!(!version_ok(""));
 }
 
@@ -119,7 +119,7 @@ fn an_old_cargo_about_is_refused_with_the_install_line() {
 #[test]
 fn out_receives_the_generated_page() {
     let fake = Fake::new();
-    let out = fake.run("0.9.2", false, &out_arg(&fake.out()));
+    let out = fake.run("0.9.3", false, &out_arg(&fake.out()));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(fake.out()).unwrap(),
@@ -149,7 +149,7 @@ fn a_relative_out_is_written_beside_the_caller() {
         .current_dir(fake.dir.path())
         .env("CARGO", fake.dir.path().join("cargo"))
         .env("FAKE_LOG", fake.dir.path().join("log"))
-        .env("FAKE_ABOUT_VERSION", "0.9.2")
+        .env("FAKE_ABOUT_VERSION", "0.9.3")
         .env_remove("FAKE_FAIL")
         .output()
         .unwrap();
@@ -166,7 +166,7 @@ fn a_relative_out_is_written_beside_the_caller() {
 #[test]
 fn check_generates_and_keeps_nothing() {
     let fake = Fake::new();
-    let out = fake.run("0.9.2", false, &["--check".into()]);
+    let out = fake.run("0.9.3", false, &["--check".into()]);
     assert!(out.status.success(), "{out:?}");
     let log = fake.log();
     let written = log[1]
@@ -184,7 +184,7 @@ fn check_generates_and_keeps_nothing() {
 #[test]
 fn an_unaccepted_licence_fails_and_names_the_crate() {
     let fake = Fake::new();
-    let out = fake.run("0.9.2", true, &["--check".into()]);
+    let out = fake.run("0.9.3", true, &["--check".into()]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("gplonly"));
 }
@@ -192,7 +192,7 @@ fn an_unaccepted_licence_fails_and_names_the_crate() {
 #[test]
 fn out_is_required_without_check() {
     let fake = Fake::new();
-    let out = fake.run("0.9.2", false, &[]);
+    let out = fake.run("0.9.3", false, &[]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     assert!(fake.log().is_empty());
 }
