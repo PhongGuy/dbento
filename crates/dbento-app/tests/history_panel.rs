@@ -1,5 +1,5 @@
 use crate::support;
-use crate::support::{label_of, opened, present, wait_real};
+use crate::support::{expanded_of, label_of, opened, present, wait_real};
 use dbento_app::app::{AppPaths, start};
 use dbento_app::history_panel::{
     TIME_REFRESH, one_line, outcome_label, outcome_mark, relative_time,
@@ -603,4 +603,28 @@ fn the_filter_menu_rows_carry_tag_dots_slots_and_locks(cx: &mut TestAppContext) 
         Some("read-only")
     );
     assert!(!present(cx, win, ("history-filter-lock", 2usize)));
+}
+
+#[gpui_kit::test]
+fn the_filter_reports_its_menu_open_until_escape_or_a_pick(cx: &mut TestAppContext) {
+    let (_fx, _files, win, _) = started(cx);
+    let state = |cx: &mut TestAppContext| expanded_of(cx, win, "history-connection");
+    let click = |cx: &mut TestAppContext, id: gpui_kit::ElementId| {
+        cx.update_window(win, |_, w, cx| w.click(id, cx)).unwrap();
+        cx.run_until_parked();
+    };
+    let row = |n: usize| gpui_kit::ElementId::from(("history-filter", n));
+    assert_eq!(state(cx), Some(false), "closed before the first open");
+    click(cx, "history-connection".into());
+    assert!(present(cx, win, row(0)), "the menu opened");
+    assert_eq!(state(cx), Some(true), "open while the menu shows");
+    cx.update_window(win, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    assert!(!present(cx, win, row(0)), "Escape closed it");
+    assert_eq!(state(cx), Some(false), "closed after Escape");
+    click(cx, "history-connection".into());
+    assert_eq!(state(cx), Some(true), "open again");
+    click(cx, row(1));
+    assert!(!present(cx, win, row(0)), "the pick closed it");
+    assert_eq!(state(cx), Some(false), "closed after a pick");
 }

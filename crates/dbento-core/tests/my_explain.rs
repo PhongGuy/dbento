@@ -211,3 +211,43 @@ async fn every_shape_parses_live_with_nothing_dropped() {
         s.close().await.unwrap();
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_after_prepare_stops_the_analyze_before_it_is_sent() {
+    for (label, fx) in my_fixtures("").await {
+        let mut s = fx.session(SessionOptions::default()).await;
+        let handle = s.cancel_handle();
+        let slow = req("SELECT SLEEP(30)", ExplainMode::Analyze);
+        let pending = s.prepare_explain(&slow).await.unwrap();
+        handle.cancel();
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), pending.run())
+            .await
+            .unwrap_or_else(|_| panic!("{label}: the cancelled ANALYZE ran on"));
+        assert!(
+            matches!(got, Err(ExecuteError::Cancelled)),
+            "{label}: {got:?}"
+        );
+        let out = s.explain(&req("SELECT 1", ExplainMode::Plan)).await;
+        assert!(out.is_ok(), "{label}: the session is unusable: {out:?}");
+        s.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_before_prepare_is_spent_and_the_analyze_runs() {
+    for (label, fx) in my_fixtures("").await {
+        fx.exec(SETUP).await;
+        let mut s = fx.session(SessionOptions::default()).await;
+        s.cancel_handle().cancel();
+        // A read of a table, so both flavors print an analyzed plan the parser reads.
+        let short = req(JOIN, ExplainMode::Analyze);
+        let got = s.prepare_explain(&short).await.unwrap().run().await;
+        let out = got.unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        assert!(
+            out.plan.as_ref().is_ok_and(|p| p.analyzed),
+            "{label}: {}",
+            out.raw
+        );
+        s.close().await.unwrap();
+    }
+}

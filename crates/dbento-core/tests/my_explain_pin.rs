@@ -201,3 +201,27 @@ async fn a_user_without_admin_privileges_gets_the_v1_pin_too() {
         fx.exec(&format!("DROP USER {who}")).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_after_prepare_stops_a_pinned_plan_at_its_version_read() {
+    for (label, fx) in my_fixtures("").await {
+        if fx.db.flavor() != MyFlavor::Mysql {
+            continue;
+        }
+        fx.exec(SETUP).await;
+        let mut s = on_v2(&fx, fx.session(SessionOptions::default()).await).await;
+        let handle = s.cancel_handle();
+        let plan = req(JOIN, ExplainMode::Plan);
+        let pending = s.prepare_explain(&plan).await.unwrap();
+        handle.cancel();
+        let got = tokio::time::timeout(Duration::from_secs(5), pending.run())
+            .await
+            .expect("the cancelled plan ran on");
+        assert!(
+            matches!(got, Err(ExecuteError::Cancelled)),
+            "{label}: {got:?}"
+        );
+        assert_eq!(json_version(&mut s).await, "2", "{label}: after a cancel");
+        s.close().await.unwrap();
+    }
+}
