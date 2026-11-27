@@ -116,7 +116,9 @@ pub(crate) struct TopologyDescription {
     pub(crate) srv_max_hosts: Option<u32>,
 
     /// Dbento P5: the socket paths among the seeds, the only sockets this client dials.
+    /// Read only by the unix-only filter in `add_new_servers`.
     #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) seed_sockets: HashSet<PathBuf>,
 
     /// Dbento P5: whether a member advertised a socket the seeds do not name.

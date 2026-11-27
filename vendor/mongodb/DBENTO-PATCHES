@@ -45,9 +45,32 @@ P3
 P4
   Change: AsyncStream::connect refuses a ServerAddress::Unix with
           ErrorKind::ProxyConnect when a SOCKS5 proxy is set, before any
-          local dial. The driver turns any member a server reports as
-          `*.sock` into a Unix address, so without this a server reached
-          through the proxy could make this machine dial a local socket.
-          The message leaves the path out. Without a proxy nothing changes.
+          local dial. The message leaves the path out. A socket the user
+          names never gets here under a proxy: the workspace refuses a
+          socket uri with an ssh table and Client::with_options refuses a
+          non-TCP seed with a proxy. P4 is defence in depth at dial time
+          for any Unix address that would still reach the stream under a
+          proxy. Without a proxy, P5 keeps an advertised socket from being
+          dialled.
   Files: src/runtime/stream.rs
+  Upstream: none filed (project rule: own issue and local workaround)
+
+P5
+  Change: TopologyDescription::initialize records the socket paths among
+          the seeds in seed_sockets, and add_new_servers, the one place
+          members a server advertises enter the topology, drops any
+          ServerAddress::Unix not in that set, with or without a proxy.
+          The driver turns any `*.sock` member a server reports into a
+          Unix address, so a server could otherwise make this machine dial
+          a local socket the connection never named; only seeds the uri
+          names are dialled. A dropped member sets refused_socket, which
+          adds a fixed, path-free "Refused:" note to the topology's
+          Display, so the selection-timeout error says why. Known gap: the
+          driver lowercases advertised host names but not seeds, so a seed
+          path with upper-case letters never matches its advertised twin
+          and is dropped; such a set fails closed (no primary). On non-unix
+          builds Unix addresses do not exist, so the filter is unix-only.
+  Files: src/sdam/description/topology.rs,
+         src/sdam/description/topology/server_selection.rs,
+         src/sdam/description/topology/server_selection/test.rs
   Upstream: none filed (project rule: own issue and local workaround)
