@@ -25,6 +25,9 @@ pub fn staging_dir(kind: &InstallKind) -> Result<PathBuf, InstallError> {
 /// Installs the verified `staged` release for `kind` and says how the new program starts.
 /// The install target is unchanged on every error, and the staged file is removed then.
 pub fn install(kind: &InstallKind, staged: Staged) -> Result<Relaunch, InstallError> {
+    // Windows locks are mandatory, so the hold goes before anything reads or moves the file.
+    let mut staged = staged;
+    drop(staged.hold.take());
     match kind {
         InstallKind::Standalone(target) => {
             replace_file(&staged, target)?;

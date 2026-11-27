@@ -168,7 +168,10 @@ impl Prepared {
     // A release that will not be installed leaves no staged file behind; failure is harmless.
     fn discard(self) {
         if let Install::Staged(_, staged) = self.how {
-            let _ = std::fs::remove_file(staged.path());
+            // Release the lock first, so no platform refuses to delete a file it still holds.
+            let path = staged.path().to_path_buf();
+            drop(staged);
+            let _ = std::fs::remove_file(path);
         }
     }
 }

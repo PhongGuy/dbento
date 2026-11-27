@@ -220,6 +220,8 @@ impl Available {
 pub struct Staged {
     path: PathBuf,
     version: String,
+    // The open handle whose exclusive lock marks the file as in use; dropping it releases it.
+    hold: Option<std::fs::File>,
 }
 
 impl Staged {
