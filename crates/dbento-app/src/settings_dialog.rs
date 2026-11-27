@@ -406,6 +406,9 @@ impl SettingsView {
                     .role(Role::ListBoxOption)
                     .aria_label(SharedString::from(family.clone()))
                     .test_support()
+                    // Truncation clips the row, which drops its content floor; without this
+                    // the capped list squeezes every row to fit instead of scrolling.
+                    .flex_shrink_0()
                     .h(px(22.))
                     .px_2()
                     .flex()
@@ -448,6 +451,9 @@ impl SettingsView {
                     .child(
                         v_flex()
                             .id(t.id("font-list"))
+                            .role(Role::ListBox)
+                            .aria_label(SharedString::from(format!("{} font families", t.label())))
+                            .test_support()
                             .max_h(px(220.))
                             .overflow_y_scroll()
                             .children(rows),
