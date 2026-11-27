@@ -152,7 +152,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends $LINUX_BUILD_DEPS mesa-vulkan-drivers fontconfig fonts-noto-core
       - name: Check that a dozen font families are installed
-        run: test "$(fc-list : family | sort -u | wc -l)" -ge 12
+        run: |
+          test "$(fc-list : family | sort -u | wc -l)" -ge 12
       - name: Check that lavapipe is installed
         run: |
           ls /usr/share/vulkan/icd.d/
