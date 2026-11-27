@@ -12,6 +12,8 @@ use notify_debouncer_full::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
@@ -62,6 +64,8 @@ enum Input {
 pub struct WorkspaceWatcher {
     inputs: Sender<Input>,
     stopped: Arc<AtomicBool>,
+    #[cfg(test)]
+    re_placed: Arc<AtomicUsize>,
 }
 
 impl WorkspaceWatcher {
@@ -92,6 +96,11 @@ impl WorkspaceWatcher {
         let mut placed = place(&mut debouncer, &queries)?;
         let stopped = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stopped);
+        // Tests count re-placements to pin that an idle watcher leaves its watch alone.
+        #[cfg(test)]
+        let re_placed = Arc::new(AtomicUsize::new(0));
+        #[cfg(test)]
+        let re_placing = Arc::clone(&re_placed);
         let shown = root.clone();
         std::thread::Builder::new()
             .name("workspace-watcher".into())
@@ -126,9 +135,11 @@ impl WorkspaceWatcher {
                             reason: "the workspace folder was removed or moved".to_owned(),
                         });
                     }
-                    // A replaced queries/ leaves a dead watch, so an event naming it, or a folder
+                    // A replaced queries/ leaves a dead watch, so a change naming it, or a folder
                     // that came or went, places the recursive watch afresh.
-                    if touches(&events, &queries) || placed != queries.is_dir() {
+                    if replaces_queries(&events, &queries) || placed != queries.is_dir() {
+                        #[cfg(test)]
+                        re_placing.fetch_add(1, Ordering::SeqCst);
                         // The old watch may already be gone with its folder (WatchNotFound).
                         if placed {
                             let _ = debouncer.unwatch(&queries);
@@ -151,7 +162,12 @@ impl WorkspaceWatcher {
                 path: shown,
                 message: e.to_string(),
             })?;
-        Ok(WorkspaceWatcher { inputs, stopped })
+        Ok(WorkspaceWatcher {
+            inputs,
+            stopped,
+            #[cfg(test)]
+            re_placed,
+        })
     }
 }
 
@@ -199,8 +215,12 @@ fn start_error(path: &Path, e: &NotifyError) -> WatchError {
     }
 }
 
-fn touches(events: &[DebouncedEvent], queries: &Path) -> bool {
-    events.iter().any(|e| e.paths.iter().any(|p| p == queries))
+// Only a non-access event naming queries/ can have replaced it. Reads of the folder, including
+// the walk that placing the watch does, must not ask again, or the watch is rebuilt forever.
+fn replaces_queries(events: &[DebouncedEvent], queries: &Path) -> bool {
+    events
+        .iter()
+        .any(|e| !matches!(e.kind, EventKind::Access(_)) && e.paths.iter().any(|p| p == queries))
 }
 
 // A rescan notice, or any non-access event on dbento.toml, the queries entry or below it.
@@ -216,7 +236,9 @@ fn batch_counts(root: &Path, queries: &Path, events: &[DebouncedEvent]) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify_debouncer_full::notify::event::{AccessKind, CreateKind, Event, Flag, ModifyKind};
+    use notify_debouncer_full::notify::event::{
+        AccessKind, AccessMode, CreateKind, Event, Flag, ModifyKind, RemoveKind, RenameMode,
+    };
     use std::time::Instant;
 
     fn ev(kind: EventKind, path: &Path) -> DebouncedEvent {
@@ -224,6 +246,63 @@ mod tests {
             Event::new(kind).add_path(path.to_path_buf()),
             Instant::now(),
         )
+    }
+
+    #[test]
+    fn only_a_change_to_queries_itself_re_places_its_watch() {
+        let q = Path::new("/w/queries");
+        let re_places = |kinds: &[EventKind]| {
+            let events: Vec<DebouncedEvent> = kinds.iter().map(|k| ev(*k, q)).collect();
+            replaces_queries(&events, q)
+        };
+        assert!(
+            !re_places(&[
+                EventKind::Access(AccessKind::Open(AccessMode::Any)),
+                EventKind::Access(AccessKind::Close(AccessMode::Read)),
+                EventKind::Access(AccessKind::Read),
+            ]),
+            "a read_dir of queries"
+        );
+        assert!(
+            re_places(&[EventKind::Create(CreateKind::Folder)]),
+            "queries created"
+        );
+        assert!(
+            re_places(&[EventKind::Remove(RemoveKind::Folder)]),
+            "queries removed"
+        );
+        assert!(
+            re_places(&[EventKind::Modify(ModifyKind::Name(RenameMode::To))]),
+            "queries renamed into place"
+        );
+        assert!(
+            re_places(&[
+                EventKind::Access(AccessKind::Open(AccessMode::Any)),
+                EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            ]),
+            "a rename among reads"
+        );
+        assert!(
+            !replaces_queries(
+                &[ev(EventKind::Create(CreateKind::File), &q.join("a.sql"))],
+                q
+            ),
+            "a file below queries"
+        );
+    }
+
+    #[test]
+    fn an_idle_watcher_keeps_its_queries_watch() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("queries/lite")).unwrap();
+        std::fs::write(tmp.path().join("queries/lite/a.sql"), "SELECT 1").unwrap();
+        let w = WorkspaceWatcher::start(tmp.path(), |_| {}).unwrap();
+        std::thread::sleep(WATCH_DEBOUNCE * 6);
+        assert_eq!(
+            w.re_placed.load(Ordering::SeqCst),
+            0,
+            "the watcher's own reads of queries/ must not tear its watch down"
+        );
     }
 
     #[test]
