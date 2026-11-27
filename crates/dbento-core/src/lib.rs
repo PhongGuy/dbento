@@ -150,9 +150,9 @@ mod split;
 mod surreal;
 pub use session::{
     CancelHandle, Capabilities, Classification, ConnectError, ExecuteError, ExtendError, Flavor,
-    Limits, OnTruncate, Outcome, Pending, QueryLanguage, ReadOnlyEnforcement, ResultStream, Script,
-    ServerInfo, Session, SessionOptions, TruncatedBy, Unguarded, Writes, connect,
-    read_only_residual,
+    Limits, OnTruncate, Outcome, Pending, PendingExplain, QueryLanguage, ReadOnlyEnforcement,
+    ResultStream, Script, ServerInfo, Session, SessionOptions, TruncatedBy, Unguarded, Writes,
+    connect, read_only_residual,
 };
 
 mod source;

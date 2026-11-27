@@ -609,8 +609,20 @@ impl MysqlDriver {
         Ok(self.ask(sql.to_owned(), Vec::new()).await?.rows)
     }
 
-    /// Runs one EXPLAIN as `catalog` does and returns the first cell of the single row it
-    /// prints: the JSON document or the ANALYZE tree. No row, or a NULL, is `Unsupported`.
+    /// Settles what earlier statements owe, spending every earlier cancel; as for `ask`, only
+    /// a lost session fails it.
+    pub(crate) async fn prepare_explain(&mut self) -> Result<(), ExecuteError> {
+        if let Err(e) = settle(&self.shared, &self.door, &self.cancel).await
+            && e.closes_session()
+        {
+            return Err(ExecuteError::SessionClosed);
+        }
+        Ok(())
+    }
+
+    /// Runs one EXPLAIN on a connection `prepare_explain` settled and returns the first cell of
+    /// the single row it prints: the JSON document or the ANALYZE tree. No row, or a NULL, is
+    /// `Unsupported`. Nothing in it settles, so a cancel since the prepare stops its next step.
     /// With `pin_v1` it runs under `explain_json_format_version` 1, and the session's own value
     /// is set back afterwards, also on error, cancel or drop; a failed restore is reported
     /// unless the EXPLAIN itself failed.
@@ -625,7 +637,7 @@ impl MysqlDriver {
             None
         };
         if owed.is_none() {
-            return first_cell(self.ask(sql.to_owned(), Vec::new()).await?);
+            return first_cell(self.ask_settled(sql.to_owned(), Vec::new()).await?);
         }
         let explained = self.ask_settled(sql.to_owned(), Vec::new()).await;
         // Isolate the restore's own outcome from any earlier drain error still waiting.
@@ -653,7 +665,7 @@ impl MysqlDriver {
     /// owed; `None` when nothing needs restoring, also on a server without the variable.
     async fn pin_json_v1(&mut self) -> Result<Option<u32>, ExecuteError> {
         let read = "SELECT @@session.explain_json_format_version".to_owned();
-        let answer = match self.ask(read, Vec::new()).await {
+        let answer = match self.ask_settled(read, Vec::new()).await {
             Ok(answer) => answer,
             Err(ExecuteError::Database { code, .. }) if code == "1193" => return Ok(None),
             Err(e) => return Err(e),
