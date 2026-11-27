@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use bson::{RawArrayBuf, RawDocument, RawDocumentBuf, rawdoc};
 use mongodb::Client;
@@ -67,14 +67,15 @@ pub(super) async fn serve<S>(socket: S, me: String, hosts: RawArrayBuf)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    serve_hello(socket, primary_hello(&me, &hosts)).await;
+    serve_hello(socket, move || primary_hello(&me, &hosts)).await;
 }
 
-// Reads OP_MSG requests until the client hangs up, answering a handshake with `hello` and any
-// other command with `ok`.
-async fn serve_hello<S>(mut socket: S, hello: RawDocumentBuf)
+// Reads OP_MSG requests until the client hangs up, answering a handshake with what `hello`
+// builds at that moment and any other command with `ok`.
+async fn serve_hello<S, H>(mut socket: S, hello: H)
 where
     S: AsyncRead + AsyncWrite + Unpin,
+    H: Fn() -> RawDocumentBuf,
 {
     let mut header = [0; 16];
     while socket.read_exact(&mut header).await.is_ok() {
@@ -93,7 +94,7 @@ where
             .key()
             .to_string();
         let reply = match name.as_str() {
-            "hello" | "isMaster" | "ismaster" => hello.clone(),
+            "hello" | "isMaster" | "ismaster" => hello(),
             _ => rawdoc! { "ok": 1.0 },
         };
         let total = 16 + 4 + 1 + reply.as_bytes().len();
@@ -272,8 +273,8 @@ async fn a_set_left_with_only_an_advertised_socket_says_it_was_not_dialled() {
     );
 }
 
-/// A server on a Unix listener at `path` that answers each connection's handshake with `hello`,
-/// counting the connections it accepts.
+// A server on a Unix listener at `path` that answers each connection's handshake with `hello`,
+// counting the connections it accepts.
 fn socket_server(path: &Path, hello: RawDocumentBuf) -> Arc<AtomicUsize> {
     let listener = UnixListener::bind(path).unwrap();
     let accepts = Arc::new(AtomicUsize::new(0));
@@ -281,21 +282,22 @@ fn socket_server(path: &Path, hello: RawDocumentBuf) -> Arc<AtomicUsize> {
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             counted.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(serve_hello(stream, hello.clone()));
+            let hello = hello.clone();
+            tokio::spawn(serve_hello(stream, move || hello.clone()));
         }
     });
     accepts
 }
 
-/// A uri whose only host is the socket at `path`, percent-encoded as the driver requires,
-/// followed by `query`.
+// A uri whose only host is the socket at `path`, percent-encoded as the driver requires,
+// followed by `query`.
 fn socket_uri(path: &Path, query: &str) -> String {
     let host = path.to_str().unwrap().replace('/', "%2F");
     format!("mongodb://{host}/?serverSelectionTimeoutMS=2000{query}")
 }
 
-/// Pings, without a proxy, a server answering `hello(path)` on a socket the uri names, and
-/// returns the ping with how many connections the socket accepted.
+// Pings, without a proxy, a server answering `hello(path)` on a socket the uri names, and
+// returns the ping with how many connections the socket accepted.
 async fn ping_named_socket(
     hello: fn(&str) -> RawDocumentBuf,
     query: &str,
@@ -358,5 +360,96 @@ async fn a_named_socket_is_never_dialled_through_the_proxy() {
         matches!(&mapped, ConnectError::Open { message }
             if message.contains("non-TCP address") && !message.contains("dbento-p5")),
         "{mapped:?}"
+    );
+}
+
+// A secondary of set `rs0` at `me` that reports `hosts` as the set's members.
+fn secondary_hello(me: &str, hosts: &RawArrayBuf) -> RawDocumentBuf {
+    rawdoc! {
+        "helloOk": true,
+        "isWritablePrimary": false,
+        "ismaster": false,
+        "secondary": true,
+        "setName": "rs0",
+        "hosts": hosts.clone(),
+        "me": me,
+        "maxBsonObjectSize": 16_777_216,
+        "maxMessageSizeBytes": 48_000_000,
+        "maxWriteBatchSize": 100_000,
+        "minWireVersion": 0,
+        "maxWireVersion": 21,
+        "ok": 1.0,
+    }
+}
+
+// Polls `accepts` until it exceeds `floor`, returning false once `deadline` passes first.
+async fn accepted_more_than(accepts: &AtomicUsize, floor: usize, deadline: Duration) -> bool {
+    let end = Instant::now() + deadline;
+    while Instant::now() < end {
+        if accepts.load(Ordering::SeqCst) > floor {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+// A socket seed the primary first leaves out is removed from the set; once the primary lists it
+// again it is the connection's own seed, so it is admitted and dialled anew.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_named_socket_seed_the_primary_lists_again_is_dialled_again() {
+    let dir = SocketDir::new();
+    let path = dir.0.join("dbento-p5.sock");
+    let sock = path.to_str().unwrap().to_owned();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let tcp = format!("127.0.0.1:{port}");
+    let mut both = RawArrayBuf::new();
+    both.push(tcp.as_str());
+    both.push(sock.as_str());
+    let accepts = socket_server(&path, secondary_hello(&sock, &both));
+
+    // The primary lists only itself until `lists_socket` is set, then the socket as well.
+    let lists_socket = Arc::new(AtomicBool::new(false));
+    let toggle = Arc::clone(&lists_socket);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (tcp, sock, toggle) = (tcp.clone(), sock.clone(), Arc::clone(&toggle));
+            tokio::spawn(serve_hello(stream, move || {
+                let mut hosts = RawArrayBuf::new();
+                hosts.push(tcp.as_str());
+                if toggle.load(Ordering::SeqCst) {
+                    hosts.push(sock.as_str());
+                }
+                primary_hello(&tcp, &hosts)
+            }));
+        }
+    });
+
+    let host = path.to_str().unwrap().replace('/', "%2F");
+    let uri = format!(
+        "mongodb://127.0.0.1:{port},{host}/?replicaSet=rs0&heartbeatFrequencyMS=500\
+         &serverSelectionTimeoutMS=5000"
+    );
+    let client = Client::with_options(ClientOptions::parse(uri).await.unwrap()).unwrap();
+    let ping = client
+        .database("admin")
+        .run_command(bson::doc! { "ping": 1 })
+        .await;
+    assert!(ping.is_ok(), "the primary answers a ping: {ping:?}");
+    assert!(
+        accepted_more_than(&accepts, 0, Duration::from_secs(10)).await,
+        "the seed socket was never dialled"
+    );
+    // The primary's reply removes the socket; its monitor is gone once the set has settled.
+    tokio::time::sleep(SETTLE).await;
+    let before = accepts.load(Ordering::SeqCst);
+
+    lists_socket.store(true, Ordering::SeqCst);
+    let again = accepted_more_than(&accepts, before, Duration::from_secs(10)).await;
+    client.shutdown().immediate(true).await;
+    assert!(
+        again,
+        "a seed socket the primary lists again was not dialled again"
     );
 }
