@@ -446,7 +446,7 @@ async fn wait_primary(port: u16) {
 }
 
 /// Two MongoDB containers at a time in this process; each takes 1 GB.
-fn slots() -> Arc<Semaphore> {
+pub(crate) fn slots() -> Arc<Semaphore> {
     static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
     Arc::clone(SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))))
 }
@@ -483,7 +483,7 @@ fn rooted(host_port: u16) -> ContainerRequest<Mongo> {
 }
 
 /// The gate image, memory-capped and on tmpfs, running mongod with `args`.
-fn capped(args: Vec<String>) -> ContainerRequest<Mongo> {
+pub(crate) fn capped(args: Vec<String>) -> ContainerRequest<Mongo> {
     Mongo::default()
         .with_tag(MONGO_TAG)
         // The image turns glibc's rseq off so TCMalloc takes it for per-CPU caches, which MongoDB
@@ -502,12 +502,14 @@ fn capped(args: Vec<String>) -> ContainerRequest<Mongo> {
         .with_ready_conditions(Vec::new())
 }
 
-fn cache_args() -> Vec<String> {
+pub(crate) fn cache_args() -> Vec<String> {
     vec!["--wiredTigerCacheSizeGB".to_owned(), "0.25".to_owned()]
 }
 
 /// Starts `request` labelled, retried when its host port turns out to be taken.
-async fn start(mut request: impl FnMut() -> ContainerRequest<Mongo>) -> ContainerAsync<Mongo> {
+pub(crate) async fn start(
+    mut request: impl FnMut() -> ContainerRequest<Mongo>,
+) -> ContainerAsync<Mongo> {
     retry_start(|_| {
         let attempt = format!(
             "{}-{}",

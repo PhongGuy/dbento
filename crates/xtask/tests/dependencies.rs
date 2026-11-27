@@ -136,6 +136,14 @@ fn the_vendored_mongodb_keeps_its_licence_and_lists_its_patch() {
             && patches.contains("MAX_BATCH_DEPTH"),
         "{patches}"
     );
+    assert!(
+        patches.contains("P3") && patches.contains("name_server"),
+        "{patches}"
+    );
+    assert!(
+        patches.contains("P4") && patches.contains("ServerAddress::Unix"),
+        "{patches}"
+    );
 }
 
 #[test]

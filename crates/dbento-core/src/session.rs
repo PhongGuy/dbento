@@ -67,6 +67,9 @@ pub struct SessionOptions {
     /// The session runs only SQL that Dbento generated, so a database may enforce read-only
     /// by transaction alone. Other engines ignore it.
     pub trusted_sql: bool,
+    /// A test seam: the one nameserver a MongoDB `mongodb+srv` uri is resolved against.
+    #[doc(hidden)]
+    pub mongo_dns: Option<std::net::SocketAddr>,
     /// A test seam: shorter bounds for a SurrealDB session.
     #[doc(hidden)]
     pub bounds: TestBounds,
@@ -625,6 +628,9 @@ pub(crate) struct ConnectParams<'a> {
     /// The workspace folder, which relative certificate paths in a MongoDB `uri` resolve from.
     #[cfg_attr(not(feature = "mongodb"), allow(dead_code))] // only MongoDB reads it
     pub(crate) ws_dir: &'a Path,
+    /// See [`SessionOptions::mongo_dns`].
+    #[cfg(feature = "mongodb")]
+    pub(crate) mongo_dns: Option<std::net::SocketAddr>,
 }
 
 /// The engine-specific half of a session. Each future it returns is `Send` because the
@@ -741,6 +747,8 @@ pub async fn connect(
         #[cfg(feature = "surrealdb")]
         bounds: opts.bounds,
         ws_dir: ws.dir(),
+        #[cfg(feature = "mongodb")]
+        mongo_dns: opts.mongo_dns,
     };
     // A connection with an ssh table never connects directly: the link opens first. The workspace
     // already refuses engines without a TCP server, so this refuses only an engine this build
@@ -757,7 +765,11 @@ pub async fn connect(
             });
         }
         Some(_) => {
-            tunnel_target(conn)?;
+            // MongoDB names its members in `uri` and reaches them through the SOCKS endpoint,
+            // so it has no single `host` to check.
+            if conn.engine() != Engine::Mongodb {
+                tunnel_target(conn)?;
+            }
             let env = match opts.ssh_env {
                 Some(env) => env,
                 None => crate::StatePaths::from_env()
@@ -967,6 +979,16 @@ impl Session {
             #[cfg(feature = "s3")]
             SessionInner::S3(_) => Engine::S3,
         }
+    }
+
+    /// The loopback SOCKS5 port a tunnelled MongoDB session dials through; `None` otherwise.
+    #[doc(hidden)]
+    pub fn mongo_proxy_port(&self) -> Option<u16> {
+        #[cfg(feature = "mongodb")]
+        if let SessionInner::Mongodb(d) = &self.inner {
+            return d.proxy_port();
+        }
+        None
     }
 
     /// The server this session talks to (MySQL, MariaDB, SQL Server, MongoDB, SurrealDB and Redis);

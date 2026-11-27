@@ -26,8 +26,8 @@ use crate::confirm::{self, ChoiceStyle, with_keys};
 use crate::keymap::{SaveConnection, chip_keys, keys_for};
 use crate::sidebar::{color_name, engine_icon, tag_color};
 use crate::ssh_form::{
-    SSH_HOST_NOTE, SSH_PLAINTEXT_NOTE, SshAuthChoice, SshField, SshTyped, identity_warning,
-    shows_passphrase, shows_password, ssh_shown, ssh_spec, takes_ssh,
+    SSH_PLAINTEXT_NOTE, SshAuthChoice, SshField, SshTyped, identity_warning, shows_passphrase,
+    shows_password, ssh_host_note, ssh_shown, ssh_spec, takes_ssh,
 };
 use crate::theme;
 use crate::ui::{self, Icons};
@@ -2031,8 +2031,10 @@ impl ConnectionForm {
                 this.untested(cx);
             }));
         rows.push(Self::row("", keepalive, cx));
-        rows.push(Self::help_line("conn-ssh-note".into(), SSH_HOST_NOTE, cx));
-        if self.tls == TlsChoice::Off {
+        let note = ssh_host_note(self.engine);
+        rows.push(Self::help_line("conn-ssh-note".into(), note, cx));
+        // MongoDB's TLS lives in its uri, so the form's TLS choice says nothing about it.
+        if self.tls == TlsChoice::Off && self.engine != Engine::Mongodb {
             let id = "conn-ssh-plaintext".into();
             rows.push(Self::help_line(id, SSH_PLAINTEXT_NOTE, cx));
         }

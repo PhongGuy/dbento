@@ -9,6 +9,8 @@ use mongodb::options::{ClientOptions, Tls};
 use super::*;
 use crate::session::{Unguarded, Writes};
 
+mod unix_member;
+
 fn set(actions: &[&str]) -> BTreeSet<String> {
     actions.iter().map(|a| (*a).to_owned()).collect()
 }
@@ -164,6 +166,7 @@ async fn lost_server() -> MongoDriver {
     let client = Client::with_options(ClientOptions::parse(uri).await.unwrap()).unwrap();
     MongoDriver {
         client,
+        socks: None,
         server: ServerInfo {
             flavor: Flavor::MongoDb,
             version: (8, 0, 0),
@@ -266,4 +269,135 @@ fn find_one_and_modify_shows_its_value_or_nothing() {
     assert_eq!(shown(&op, found).unwrap(), Some(doc! { "_id": 1 }));
     let missing = doc! { "lastErrorObject": { "n": 0 }, "value": null, "ok": 1 };
     assert_eq!(shown(&op, missing).unwrap(), None);
+}
+
+fn mongo_conn() -> ConnectionConfig {
+    let text =
+        "dbento = 1\n[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb://127.0.0.1:1/\"\n";
+    let ws = crate::workspace::Workspace::from_text(
+        std::path::PathBuf::from("/ws"),
+        Path::new("/ws/dbento.toml"),
+        text,
+    )
+    .unwrap();
+    ws.declared("c").unwrap().clone()
+}
+
+#[tokio::test]
+async fn a_recorded_ssh_refusal_replaces_a_selection_timeout_and_nothing_else() {
+    let driver = lost_server().await;
+    let e = driver
+        .client
+        .database("admin")
+        .run_command(doc! { "ping": 1 })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&*e.kind, ErrorKind::ServerSelection { .. }),
+        "{:?}",
+        e.kind
+    );
+    let refusal = "the SSH server would not open a channel to m9:27017 (resolved on the SSH server): it could not connect there";
+    let tunnelled = connect_error(&mongo_conn(), Some(refusal.to_owned()), e.clone());
+    assert!(
+        matches!(&tunnelled, ConnectError::SshTunnel { message } if message == refusal),
+        "{tunnelled:?}"
+    );
+    assert!(matches!(
+        connect_error(&mongo_conn(), None, e),
+        ConnectError::Open { .. }
+    ));
+}
+
+// The proxy reaches the server once: the monitor's connection is served, then the listener is
+// gone, so the command's own connection is refused by the endpoint, which records why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recorded_ssh_refusal_replaces_a_proxy_error() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let me = format!("127.0.0.1:{port}");
+    let mut hosts = bson::RawArrayBuf::new();
+    hosts.push(me.as_str());
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        drop(listener);
+        unix_member::serve(socket, me, hosts).await;
+    });
+    let ep = SocksEndpoint::start(Dialer::Direct).await.unwrap();
+    let uri = format!(
+        "mongodb://127.0.0.1:{port}/?directConnection=true&retryReads=false&serverSelectionTimeoutMS=2000"
+    );
+    let mut options = ClientOptions::parse(uri).await.unwrap();
+    options.socks5_proxy = Some(proxy_of(&ep));
+    let client = Client::with_options(options).unwrap();
+    let e = client
+        .database("admin")
+        .run_command(doc! { "ping": 1 })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&*e.kind, ErrorKind::ProxyConnect { .. }),
+        "{:?}",
+        e.kind
+    );
+    let refusal = ep.last_refusal().expect("the endpoint recorded no refusal");
+    let tunnelled = connect_error(&mongo_conn(), Some(refusal.clone()), e.clone());
+    assert!(
+        matches!(&tunnelled, ConnectError::SshTunnel { message } if *message == refusal),
+        "{tunnelled:?}"
+    );
+    assert!(matches!(
+        connect_error(&mongo_conn(), None, e),
+        ConnectError::Open { .. }
+    ));
+}
+
+/// A UDP nameserver on loopback that answers every question with NXDOMAIN.
+async fn nxdomain_server() -> std::net::SocketAddr {
+    let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        while let Ok((n, peer)) = socket.recv_from(&mut buf).await {
+            // The query echoed back as a response: QR set, recursion available, rcode 3.
+            let mut reply = buf[..n].to_vec();
+            if reply.len() < 12 {
+                continue;
+            }
+            reply[2] |= 0x80;
+            reply[3] = (reply[3] & 0x70) | 0x80 | 0x03;
+            let _ = socket.send_to(&reply, peer).await;
+        }
+    });
+    addr
+}
+
+// The SRV rewording names the SSH server, so a direct connection keeps the driver's own text.
+#[tokio::test]
+async fn a_direct_srv_lookup_that_fails_keeps_the_plain_open_error() {
+    let text = "dbento = 1\n[connections.c]\nengine = \"mongodb\"\nuri = \"mongodb+srv://gone.example.test/app\"\n";
+    let ws = crate::workspace::Workspace::from_text(
+        std::path::PathBuf::from("/ws"),
+        Path::new("/ws/dbento.toml"),
+        text,
+    )
+    .unwrap();
+    let conn = ws.declared("c").unwrap();
+    let opts = crate::session::SessionOptions {
+        mongo_dns: Some(nxdomain_server().await),
+        ..Default::default()
+    };
+    let err = crate::session::connect(&ws, conn, None, opts)
+        .await
+        .err()
+        .expect("an unresolvable SRV name connected");
+    let ConnectError::Open { message } = &err else {
+        panic!("{err:?}");
+    };
+    assert!(
+        message.starts_with(&format!("{}: ", conn.display_target()))
+            && message.contains("DNS resolution")
+            && !message.contains("SSH server"),
+        "{message}"
+    );
 }

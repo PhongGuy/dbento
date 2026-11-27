@@ -167,6 +167,8 @@ mod ssh_auth;
 mod ssh_host_keys;
 mod ssh_known_hosts;
 mod ssh_link;
+mod ssh_mongo;
+mod ssh_mongo_srv;
 mod ssh_mssql;
 mod ssh_mysql;
 mod ssh_postgres;

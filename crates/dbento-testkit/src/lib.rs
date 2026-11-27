@@ -29,6 +29,8 @@ mod duck;
 mod dynamo;
 #[cfg(feature = "mongodb")]
 mod mongo;
+#[cfg(feature = "mongodb")]
+mod mongo_net;
 #[cfg(any(feature = "dynamodb", feature = "s3"))]
 mod moto;
 mod mssql;
@@ -48,6 +50,8 @@ pub use duck::duckdb_file;
 pub use dynamo::*;
 #[cfg(feature = "mongodb")]
 pub use mongo::*;
+#[cfg(feature = "mongodb")]
+pub use mongo_net::*;
 #[cfg(any(feature = "dynamodb", feature = "s3"))]
 pub use moto::{DySource, MOTO_TAG, dy_source};
 pub use mssql::*;

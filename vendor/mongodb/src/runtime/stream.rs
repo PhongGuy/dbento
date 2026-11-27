@@ -138,9 +138,20 @@ impl AsyncStream {
                 }
             }
             #[cfg(unix)]
-            ServerAddress::Unix { path } => Ok(AsyncStream::Unix(
-                tokio::net::UnixStream::connect(path.as_path()).await?,
-            )),
+            ServerAddress::Unix { path } => {
+                // Dbento P4: a member a proxied server advertises as a socket path is never
+                // dialled on this machine; the message leaves the path out.
+                #[cfg(feature = "socks5-proxy")]
+                if proxy.is_some() {
+                    return Err(ErrorKind::ProxyConnect {
+                        message: "a Unix socket address cannot be reached through the proxy".into(),
+                    }
+                    .into());
+                }
+                Ok(AsyncStream::Unix(
+                    tokio::net::UnixStream::connect(path.as_path()).await?,
+                ))
+            }
         }
     }
 }
