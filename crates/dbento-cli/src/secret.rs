@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, bail};
 use dbento_core::{
     Adopted, ConnectError, ConnectionConfig, KeychainStore, Secret, SecretError, SecretKey,
-    SecretSource, SecretStore, SshHome, TimedStore, Workspace, resolve_ssh,
+    SecretSource, SecretStore, SshHome, TimedStore, Workspace, is_env_secret_name, resolve_ssh,
 };
 
 /// The platform keychain, opened on first use so a SQLite run never touches it.
@@ -78,8 +78,14 @@ pub(crate) fn keychain_connection<'w>(
     }
     match conn.secret_source() {
         SecretSource::Keychain => Ok(conn),
-        SecretSource::Env(variable) => {
+        // A refused name may be a pasted password, so only an accepted one is echoed.
+        SecretSource::Env(variable) if is_env_secret_name(variable) => {
             bail!("connection {name:?} reads its secret from ${variable}, not the keychain")
+        }
+        SecretSource::Env(_) => {
+            bail!(
+                "connection {name:?} reads its secret from an environment variable, not the keychain"
+            )
         }
         _ => bail!("connection {name:?} has secret = \"none\""),
     }

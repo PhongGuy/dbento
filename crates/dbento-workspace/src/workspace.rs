@@ -1488,6 +1488,14 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Whether `{ env = name }` may supply a secret: `DBENTO_SECRET_` then one or more ASCII
+/// letters, digits or `_`.
+pub fn is_env_secret_name(name: &str) -> bool {
+    name.strip_prefix("DBENTO_SECRET_").is_some_and(|rest| {
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    })
+}
+
 #[doc(hidden)]
 pub fn is_identifier(s: &str) -> bool {
     let mut chars = s.chars();

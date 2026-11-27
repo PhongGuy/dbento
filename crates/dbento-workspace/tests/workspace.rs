@@ -258,3 +258,31 @@ fn a_bad_statement_timeout_keeps_its_message() {
         "{text}"
     );
 }
+
+#[test]
+fn only_dbento_secret_names_supply_an_env_secret() {
+    for ok in [
+        "DBENTO_SECRET_X",
+        "DBENTO_SECRET_APP_PROD",
+        "DBENTO_SECRET_a1_",
+    ] {
+        assert!(dbento_workspace::is_env_secret_name(ok), "{ok}");
+    }
+    for bad in [
+        "PGPASSWORD",
+        "GITHUB_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "DBENTO_",
+        "DBENTO_SECRET_",
+        "DBENTO_KEY_PASSPHRASE_X",
+        "DBENTO_SSH_PASSWORD_X",
+        "dbento_secret_x",
+        "DBENTO_SECRET_A-B",
+        "DBENTO_SECRET_A B",
+        " DBENTO_SECRET_X",
+        "DBENTO_SECRET_É",
+        "",
+    ] {
+        assert!(!dbento_workspace::is_env_secret_name(bad), "{bad:?}");
+    }
+}

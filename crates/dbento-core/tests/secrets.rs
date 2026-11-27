@@ -2,6 +2,7 @@ use dbento_core::{
     MemoryStore, OpenError, Secret, SecretError, SecretKey, SecretStore, TimedStore, Workspace,
     resolve_secret,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -253,4 +254,68 @@ fn a_secret_never_prints_itself() {
     assert_eq!(s.expose(), "hunter2");
     assert!(!format!("{s:?}").contains("hunter2"));
     assert!(!format!("{s}").contains("hunter2"));
+}
+
+fn with_env(conn: &str, var: &str) -> (tempfile::TempDir, Workspace) {
+    let toml = format!(
+        "dbento = 1\n[connections.{conn}]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\nsecret = {{ env = \"{var}\" }}\n[connections.other]\nengine = \"postgres\"\nhost = \"h\"\ndatabase = \"d\"\nuser = \"u\"\n"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dbento.toml"), toml).unwrap();
+    let ws = Workspace::open(dir.path()).expect("a refused name still loads");
+    (dir, ws)
+}
+
+#[test]
+fn an_env_secret_outside_dbento_secret_is_refused_unread() {
+    let (_d, ws) = with_env("app-prod", "GITHUB_TOKEN");
+    let conn = ws.declared("app-prod").unwrap();
+    let asked = RefCell::new(Vec::<String>::new());
+    let env = |v: &str| {
+        asked.borrow_mut().push(v.to_owned());
+        Some("ghp-leak-value".to_owned())
+    };
+    let err = resolve_secret(&ws, conn, &MemoryStore::new(), &env).expect_err("refused");
+    assert!(
+        matches!(&err, SecretError::EnvNameRefused { connection, suggested }
+            if connection == "app-prod" && suggested == "DBENTO_SECRET_APP_PROD"),
+        "{err:?}"
+    );
+    assert!(asked.borrow().is_empty(), "read {:?}", asked.borrow());
+    let text = err.to_string();
+    assert!(
+        !text.contains("GITHUB_TOKEN") && !text.contains("ghp-leak-value"),
+        "{text}"
+    );
+    assert!(text.contains("DBENTO_SECRET_APP_PROD"), "{text}");
+    let other = ws.declared("other").unwrap();
+    let env = env_of(&[("DBENTO_SECRET_OTHER", "pw")]);
+    assert_eq!(
+        exposed(resolve_secret(&ws, other, &MemoryStore::new(), &env)),
+        Some("pw".into())
+    );
+}
+
+#[test]
+fn a_refused_env_name_never_falls_back_to_the_keychain() {
+    let (_d, ws) = with_env("app", "PGPASSWORD");
+    let conn = ws.declared("app").unwrap();
+    let store = MemoryStore::new();
+    store
+        .set(&SecretKey::for_connection(&ws, conn), &Secret::new("kc"))
+        .unwrap();
+    let env = env_of(&[("PGPASSWORD", "x"), ("DBENTO_SECRET_APP", "x")]);
+    let err = resolve_secret(&ws, conn, &store, &env).expect_err("refused");
+    assert!(matches!(err, SecretError::EnvNameRefused { .. }), "{err:?}");
+}
+
+#[test]
+fn an_accepted_env_name_is_read() {
+    let (_d, ws) = with_env("app", "DBENTO_SECRET_SHARED");
+    let conn = ws.declared("app").unwrap();
+    let env = env_of(&[("DBENTO_SECRET_SHARED", "pw")]);
+    assert_eq!(
+        exposed(resolve_secret(&ws, conn, &MemoryStore::new(), &env)),
+        Some("pw".into())
+    );
 }
