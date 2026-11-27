@@ -298,13 +298,13 @@ async fn a_recorded_ssh_refusal_replaces_a_selection_timeout_and_nothing_else() 
         e.kind
     );
     let refusal = "the SSH server would not open a channel to m9:27017 (resolved on the SSH server): it could not connect there";
-    let tunnelled = connect_error(&mongo_conn(), Some(refusal.to_owned()), e.clone());
+    let tunnelled = connect_error(&mongo_conn(), Some(refusal.to_owned()), true, e.clone());
     assert!(
         matches!(&tunnelled, ConnectError::SshTunnel { message } if message == refusal),
         "{tunnelled:?}"
     );
     assert!(matches!(
-        connect_error(&mongo_conn(), None, e),
+        connect_error(&mongo_conn(), None, false, e),
         ConnectError::Open { .. }
     ));
 }
@@ -341,13 +341,13 @@ async fn a_recorded_ssh_refusal_replaces_a_proxy_error() {
         e.kind
     );
     let refusal = ep.last_refusal().expect("the endpoint recorded no refusal");
-    let tunnelled = connect_error(&mongo_conn(), Some(refusal.clone()), e.clone());
+    let tunnelled = connect_error(&mongo_conn(), Some(refusal.clone()), true, e.clone());
     assert!(
         matches!(&tunnelled, ConnectError::SshTunnel { message } if *message == refusal),
         "{tunnelled:?}"
     );
     assert!(matches!(
-        connect_error(&mongo_conn(), None, e),
+        connect_error(&mongo_conn(), None, true, e),
         ConnectError::Open { .. }
     ));
 }

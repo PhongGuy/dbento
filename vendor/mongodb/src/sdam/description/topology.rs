@@ -4,6 +4,7 @@ pub(crate) mod test;
 
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -113,6 +114,16 @@ pub(crate) struct TopologyDescription {
 
     /// The maximum number of hosts.
     pub(crate) srv_max_hosts: Option<u32>,
+
+    /// Dbento P5: the socket paths among the seeds, the only sockets this client dials.
+    /// Read only by the unix-only filter in `add_new_servers`.
+    #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) seed_sockets: HashSet<PathBuf>,
+
+    /// Dbento P5: whether a member advertised a socket the seeds do not name.
+    #[serde(skip)]
+    pub(crate) refused_socket: bool,
 }
 
 impl PartialEq for TopologyDescription {
@@ -142,6 +153,8 @@ impl Default for TopologyDescription {
             heartbeat_freq: Default::default(),
             servers: Default::default(),
             srv_max_hosts: Default::default(),
+            seed_sockets: Default::default(),
+            refused_socket: false,
         }
     }
 }
@@ -172,6 +185,19 @@ impl TopologyDescription {
         for address in options.hosts.iter() {
             let description = ServerDescription::new(address);
             self.servers.insert(address.to_owned(), description);
+        }
+
+        // Dbento P5: remember which sockets the connection itself names.
+        #[cfg(unix)]
+        {
+            self.seed_sockets = options
+                .hosts
+                .iter()
+                .filter_map(|address| match address {
+                    ServerAddress::Unix { path } => Some(path.clone()),
+                    _ => None,
+                })
+                .collect();
         }
 
         self.single_seed = self.servers.len() == 1;
@@ -742,6 +768,15 @@ impl TopologyDescription {
     /// Create a new ServerDescription for each address and add it to the topology.
     fn add_new_servers(&mut self, addresses: impl IntoIterator<Item = ServerAddress>) {
         for address in addresses {
+            // Dbento P5: a member advertised as a socket path is dialled only when the seeds
+            // name that socket; any other is dropped and noted, path left out.
+            #[cfg(unix)]
+            if let ServerAddress::Unix { ref path } = address {
+                if !self.seed_sockets.contains(path) {
+                    self.refused_socket = true;
+                    continue;
+                }
+            }
             self.servers
                 .entry(address.clone())
                 .or_insert_with(|| ServerDescription::new(&address));
