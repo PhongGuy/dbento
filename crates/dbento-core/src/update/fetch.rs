@@ -5,7 +5,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest as _, Sha256};
 use ureq::tls::{RootCerts, TlsConfig};
@@ -63,12 +64,13 @@ fn check_blocking(cfg: &UpdateConfig) -> Result<Option<Available>, CheckError> {
 }
 
 /// Streams the artifact to `<name>.part` in `staging_dir`, then renames it to `<name>`:
-/// `dbento-update-<version>` plus the suffix its installer needs. The `.part` is created
-/// exclusively (mode 0600 on Unix) before any request, or the result is
-/// [`DownloadError::NotWritable`]. A body longer or shorter than listed is
-/// [`DownloadError::SizeMismatch`], a wrong digest [`DownloadError::HashMismatch`], a 404
-/// [`DownloadError::ArtifactMissing`] and any other non-success [`DownloadError::Http`]. Every
-/// failure removes the `.part`. `progress(received, size)` runs after each chunk is written.
+/// `dbento-update-<version>-<pid>-<nanos hex>-<sequence>` plus the suffix its installer needs,
+/// unique to this download. The `.part` is created exclusively (mode 0600 on Unix) and locked
+/// before any request, or the result is [`DownloadError::NotWritable`]; the returned
+/// [`Staged`] keeps that lock until it is dropped or installed. A body longer or shorter than
+/// listed is [`DownloadError::SizeMismatch`], a wrong digest [`DownloadError::HashMismatch`], a
+/// 404 [`DownloadError::ArtifactMissing`] and any other non-success [`DownloadError::Http`].
+/// Every failure removes the `.part`. `progress(received, size)` runs after each chunk is written.
 pub async fn download(
     a: &Available,
     staging_dir: &Path,
@@ -86,33 +88,49 @@ fn download_blocking(
     dir: &Path,
     progress: impl FnMut(u64, u64),
 ) -> Result<Staged, DownloadError> {
-    let name = staged_name(a);
-    let path = dir.join(&name);
+    download_to(a, dir, &staged_name(a), progress)
+}
+
+/// Downloads into `dir/name`, through `dir/name.part`.
+fn download_to(
+    a: &Available,
+    dir: &Path,
+    name: &str,
+    progress: impl FnMut(u64, u64),
+) -> Result<Staged, DownloadError> {
+    let path = dir.join(name);
     let part = dir.join(format!("{name}.part"));
-    // A `.part` left by an earlier crash is never resumed: its bytes were never verified.
-    let _ = std::fs::remove_file(&part);
-    // Create exclusively, so a link planted after the remove is refused rather than followed.
+    // Create exclusively, so a link planted at the `.part` is refused rather than followed.
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let file = options
+    let mut file = options
         .open(&part)
         .map_err(|_| DownloadError::NotWritable(dir.to_path_buf()))?;
-    let renamed = stream(a, file, &part, progress)
+    // The lock tells another copy's sweep this file is in use. A filesystem without locks
+    // proceeds unlocked, and that sweep then keeps the file, so nothing is lost.
+    let _ = file.try_lock();
+    let renamed = stream(a, &mut file, &part, progress)
         .and_then(|()| std::fs::rename(&part, &path).map_err(|e| io(&path, &e)));
     if let Err(e) = renamed {
+        // Close the locked handle first, so Windows removes the `.part` at once.
+        drop(file);
         let _ = std::fs::remove_file(&part);
         return Err(e);
     }
     Ok(Staged {
         path,
         version: a.version.clone(),
+        hold: Some(file),
     })
 }
 
-/// The staged file name; installers recognise an AppImage, app bundle or `.exe` by its suffix.
+/// The staged file name, unique per download so two running copies never share one; installers
+/// recognise an AppImage, app bundle or `.exe` by its suffix, so the suffix stays last.
 fn staged_name(a: &Available) -> String {
+    // Nanosecond clocks are coarser on some platforms, so a process-wide counter breaks ties.
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let suffix = match a.format {
         Format::AppImage => ".AppImage",
         Format::App => ".app.tar.gz",
@@ -120,13 +138,21 @@ fn staged_name(a: &Available) -> String {
         Format::Binary if cfg!(windows) => ".exe",
         Format::Binary => "",
     };
-    format!("dbento-update-{}{suffix}", a.version)
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "dbento-update-{}-{}-{nanos:x}-{seq}{suffix}",
+        a.version,
+        std::process::id()
+    )
 }
 
 /// Writes the body into `file`, never past `a.size` bytes, then checks its length and digest.
 fn stream(
     a: &Available,
-    mut file: File,
+    file: &mut File,
     part: &Path,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(), DownloadError> {
@@ -282,6 +308,48 @@ mod tests {
         assert!(
             s.received_requests().await.unwrap().is_empty(),
             "the request was sent"
+        );
+    }
+
+    // A link planted at the exact `.part` path is refused before any request, never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_link_at_the_part_is_refused_and_never_followed() {
+        use super::download_to;
+        use crate::update::{Available, DownloadError, Format};
+        let (dir, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let sentinel = outside.path().join("sentinel");
+        std::fs::write(&sentinel, b"keep me").unwrap();
+        let name = "dbento-update-99.0.0-1-ab-0";
+        let part = dir.path().join(format!("{name}.part"));
+        std::os::unix::fs::symlink(&sentinel, &part).unwrap();
+        // Port 9 on loopback is never reached: the create fails first.
+        let a = Available {
+            version: "99.0.0".into(),
+            pub_date: None,
+            format: Format::Binary,
+            url: "http://127.0.0.1:9/artifact".into(),
+            sha256: "0".repeat(64),
+            size: 10,
+            timeouts: Timeouts::default(),
+            notes_asset: None,
+        };
+        let got = download_to(&a, dir.path(), name, |_, _| {});
+        assert_eq!(
+            got.unwrap_err(),
+            DownloadError::NotWritable(dir.path().to_path_buf())
+        );
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep me");
+        assert!(
+            std::fs::symlink_metadata(&part)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the planted link was removed or replaced"
+        );
+        assert!(
+            !dir.path().join(name).exists(),
+            "a staged file appeared beside the refused part"
         );
     }
 }

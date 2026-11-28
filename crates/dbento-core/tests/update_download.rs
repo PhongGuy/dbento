@@ -3,16 +3,13 @@
 
 use crate::update_support::{TestKey, leftovers, offer, offer_as, offer_within, serve_artifact};
 use dbento_core::update::{DownloadError, download};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wiremock::{MockServer, ResponseTemplate};
 
 const BODY: &[u8] = b"new binary";
-const STAGED: &str = if cfg!(windows) {
-    "dbento-update-99.0.0.exe"
-} else {
-    "dbento-update-99.0.0"
-};
+const SUFFIX: &str = if cfg!(windows) { ".exe" } else { "" };
 
 async fn setup() -> (MockServer, TestKey, tempfile::TempDir) {
     (
@@ -32,6 +29,24 @@ fn recorder() -> (Seen, impl FnMut(u64, u64) + Send + 'static) {
     })
 }
 
+fn file_name(path: &Path) -> String {
+    path.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+// A staged file sits in `dir` under the version's prefix, a per-download stem, then `suffix`.
+fn assert_staged_as(path: &Path, dir: &Path, suffix: &str) {
+    assert_eq!(path.parent(), Some(dir), "{}", path.display());
+    let name = file_name(path);
+    let stem = name
+        .strip_prefix("dbento-update-99.0.0-")
+        .and_then(|rest| rest.strip_suffix(suffix));
+    assert!(
+        stem.is_some_and(|s| !s.is_empty() && !s.contains('.')),
+        "{name}"
+    );
+}
+
+// Windows locks are mandatory, so the staged bytes are read once the hold is gone.
 #[tokio::test]
 async fn a_verified_download_is_staged() {
     let (s, k, dir) = setup().await;
@@ -39,25 +54,35 @@ async fn a_verified_download_is_staged() {
     let a = offer(&s, &k, BODY).await;
     let (seen, progress) = recorder();
     let staged = download(&a, dir.path(), progress).await.unwrap();
-    assert_eq!(std::fs::read(staged.path()).unwrap(), BODY);
     assert_eq!(staged.version(), "99.0.0");
-    assert_eq!(staged.path(), dir.path().join(STAGED));
+    assert_staged_as(staged.path(), dir.path(), SUFFIX);
     assert_eq!(seen.lock().unwrap().last(), Some(&(10, 10)));
-    assert_eq!(leftovers(dir.path()), [STAGED]);
+    assert_eq!(leftovers(dir.path()), [file_name(staged.path())]);
+    // The staged file stays private to the user until it is installed.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let meta = std::fs::symlink_metadata(staged.path()).unwrap();
+        assert!(meta.file_type().is_file(), "{meta:?}");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+    }
+    let path = staged.path().to_path_buf();
+    drop(staged);
+    assert_eq!(std::fs::read(&path).unwrap(), BODY);
 }
 
 #[tokio::test]
 async fn each_format_keeps_the_suffix_its_installer_needs() {
-    for (format, name) in [
-        ("appimage", "dbento-update-99.0.0.AppImage"),
-        ("app", "dbento-update-99.0.0.app.tar.gz"),
-        ("nsis", "dbento-update-99.0.0.exe"),
+    for (format, suffix) in [
+        ("appimage", ".AppImage"),
+        ("app", ".app.tar.gz"),
+        ("nsis", ".exe"),
     ] {
         let s = MockServer::start().await;
         let dir = tempfile::tempdir().unwrap();
         let a = offer_as(&s, format, BODY).await;
         let staged = download(&a, dir.path(), |_, _| {}).await.unwrap();
-        assert_eq!(staged.path(), dir.path().join(name), "{format}");
+        assert_staged_as(staged.path(), dir.path(), suffix);
     }
 }
 
@@ -72,7 +97,9 @@ async fn an_encoded_body_is_kept_as_sent() {
     let staged = download(&offer(&s, &k, &gz).await, dir.path(), |_, _| {})
         .await
         .unwrap();
-    assert_eq!(std::fs::read(staged.path()).unwrap(), gz);
+    let path = staged.path().to_path_buf();
+    drop(staged);
+    assert_eq!(std::fs::read(&path).unwrap(), gz);
 }
 
 #[tokio::test]
@@ -143,40 +170,28 @@ async fn a_missing_artifact_and_a_server_error() {
     assert!(leftovers(dir.path()).is_empty());
 }
 
+// A crash's `.part` is never resumed or touched by a download; the app's sweep removes it.
 #[tokio::test]
-async fn a_stale_part_is_replaced() {
+async fn a_stale_part_is_left_alone_and_never_resumed() {
     let (s, k, dir) = setup().await;
-    std::fs::write(
-        dir.path().join(format!("{STAGED}.part")),
-        b"junk from a crash",
-    )
-    .unwrap();
+    let stale = dir
+        .path()
+        .join(format!("dbento-update-99.0.0{SUFFIX}.part"));
+    std::fs::write(&stale, b"junk from a crash").unwrap();
     serve_artifact(&s, ResponseTemplate::new(200).set_body_bytes(BODY)).await;
-    download(&offer(&s, &k, BODY).await, dir.path(), |_, _| {})
+    let staged = download(&offer(&s, &k, BODY).await, dir.path(), |_, _| {})
         .await
         .unwrap();
-    assert_eq!(leftovers(dir.path()), [STAGED]);
-}
-
-// A link planted at the staging name must never redirect the download's bytes elsewhere.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_planted_symlink_at_the_part_is_never_followed() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let (s, k, dir) = setup().await;
-    let outside = tempfile::tempdir().unwrap();
-    let sentinel = outside.path().join("sentinel");
-    std::fs::write(&sentinel, b"keep me").unwrap();
-    std::os::unix::fs::symlink(&sentinel, dir.path().join(format!("{STAGED}.part"))).unwrap();
-    serve_artifact(&s, ResponseTemplate::new(200).set_body_bytes(BODY)).await;
-    let got = download(&offer(&s, &k, BODY).await, dir.path(), |_, _| {}).await;
-    assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep me");
-    if let Ok(staged) = got {
-        let meta = std::fs::symlink_metadata(staged.path()).unwrap();
-        assert!(meta.file_type().is_file(), "{meta:?}");
-        // The staged file stays private to the user until it is installed.
-        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
-    }
+    let path = staged.path().to_path_buf();
+    drop(staged);
+    assert_eq!(std::fs::read(&path).unwrap(), BODY);
+    assert_eq!(std::fs::read(&stale).unwrap(), b"junk from a crash");
+    assert_eq!(
+        leftovers(dir.path()).len(),
+        2,
+        "{:?}",
+        leftovers(dir.path())
+    );
 }
 
 #[tokio::test]
@@ -212,4 +227,54 @@ async fn a_slow_artifact_times_out_and_leaves_nothing() {
         DownloadError::Timeout
     );
     assert!(leftovers(dir.path()).is_empty());
+}
+
+// The staged file stays locked while its `Staged` lives, so another copy can tell it is in use.
+#[tokio::test]
+async fn a_staged_download_stays_locked_until_dropped() {
+    let (s, k, dir) = setup().await;
+    serve_artifact(&s, ResponseTemplate::new(200).set_body_bytes(BODY)).await;
+    let staged = download(&offer(&s, &k, BODY).await, dir.path(), |_, _| {})
+        .await
+        .unwrap();
+    let probe = std::fs::File::open(staged.path()).unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "the staged file is not held"
+    );
+    let path = staged.path().to_path_buf();
+    drop(staged);
+    assert!(probe.try_lock().is_ok(), "the hold outlived its Staged");
+    drop(probe);
+    assert_eq!(std::fs::read(&path).unwrap(), BODY);
+}
+
+// Two copies downloading the same release, one after the other or at once, never collide.
+#[tokio::test]
+async fn downloads_of_one_release_into_one_dir_get_their_own_files() {
+    let (s, k, dir) = setup().await;
+    serve_artifact(&s, ResponseTemplate::new(200).set_body_bytes(BODY)).await;
+    let a = offer(&s, &k, BODY).await;
+    let first = download(&a, dir.path(), |_, _| {}).await.unwrap();
+    let second = download(&a, dir.path(), |_, _| {}).await.unwrap();
+    let (third, fourth) = tokio::join!(
+        download(&a, dir.path(), |_, _| {}),
+        download(&a, dir.path(), |_, _| {})
+    );
+    let all = [first, second, third.unwrap(), fourth.unwrap()];
+    let paths: Vec<_> = all.iter().map(|st| st.path().to_path_buf()).collect();
+    let mut distinct = paths.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 4, "{paths:?}");
+    drop(all);
+    for p in &paths {
+        assert_eq!(std::fs::read(p).unwrap(), BODY, "{}", p.display());
+    }
+    assert_eq!(
+        leftovers(dir.path()).len(),
+        4,
+        "{:?}",
+        leftovers(dir.path())
+    );
 }

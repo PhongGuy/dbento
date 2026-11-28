@@ -168,7 +168,10 @@ impl Prepared {
     // A release that will not be installed leaves no staged file behind; failure is harmless.
     fn discard(self) {
         if let Install::Staged(_, staged) = self.how {
-            let _ = std::fs::remove_file(staged.path());
+            // Release the lock first, so no platform refuses to delete a file it still holds.
+            let path = staged.path().to_path_buf();
+            drop(staged);
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -186,18 +189,18 @@ pub trait Launcher {
 pub struct SystemLauncher;
 
 impl Launcher for SystemLauncher {
-    // The waiting shell runs in its own process group with no stdio, so it outlives this
-    // process and the terminal it may have been started from.
+    // The waiting shell runs in its own process group with no stdin or stdout, so it outlives
+    // this process and its terminal; its stderr is the app's, where a give-up is reported.
     fn restart(&self, path: &Path) -> std::io::Result<()> {
         let os = Os::current().ok_or_else(|| std::io::Error::other("unsupported system"))?;
-        let mut command = relaunch_command(path, std::process::id(), os)
+        let mut command = relaunch_command(path, std::process::id(), os, RELAUNCH_WAIT)
             .ok_or_else(|| std::io::Error::other("this system relaunches through its installer"))?;
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .map(drop)
     }
@@ -219,19 +222,34 @@ impl Launcher for NoLauncher {
     }
 }
 
-/// A shell command that waits for process `pid` to exit, then starts the install at `path`:
-/// the AppImage itself on Linux, the bundle through `open` on macOS. `None` on Windows,
+// How long the relaunch shell waits for this process to exit before it gives up.
+const RELAUNCH_WAIT: Duration = Duration::from_secs(30);
+
+// The relaunch scripts are constants: the pid, the install path and the tick budget arrive
+// only as `$0`, `$1` and `$2`. Past the budget the shell reports on stderr and starts nothing.
+const LINUX_RELAUNCH: &str = r#"n=0; while kill -0 "$0" 2>/dev/null; do n=$((n+1)); if [ "$n" -gt "$2" ]; then echo "dbento: gave up waiting for process $0 to exit; start Dbento again to use the update" >&2; exit 1; fi; sleep 0.1; done; exec "$1" 2>/dev/null"#;
+const MACOS_RELAUNCH: &str = r#"n=0; while kill -0 "$0" 2>/dev/null; do n=$((n+1)); if [ "$n" -gt "$2" ]; then echo "dbento: gave up waiting for process $0 to exit; start Dbento again to use the update" >&2; exit 1; fi; sleep 0.1; done; exec /usr/bin/open "$1" 2>/dev/null"#;
+
+/// A shell command that waits up to `wait` for process `pid` to exit, then starts the install
+/// at `path`: the AppImage itself on Linux, the bundle through `open` on macOS. If the process
+/// outlives the wait, the shell exits 1 with a line on stderr instead. `None` on Windows,
 /// where the NSIS installer relaunches the app.
-pub fn relaunch_command(path: &Path, pid: u32, os: Os) -> Option<Command> {
-    let start = match os {
-        Os::Linux => "exec \"$1\"",
-        Os::Macos => "exec /usr/bin/open \"$1\"",
+pub fn relaunch_command(path: &Path, pid: u32, os: Os, wait: Duration) -> Option<Command> {
+    let script = match os {
+        Os::Linux => LINUX_RELAUNCH,
+        Os::Macos => MACOS_RELAUNCH,
         Os::Windows => return None,
         _ => return None,
     };
-    let script = format!("while kill -0 \"$0\" 2>/dev/null; do sleep 0.1; done; {start}");
+    // One tick per 0.1 s poll.
+    let ticks = wait.as_millis().div_ceil(100);
     let mut command = Command::new("/bin/sh");
-    command.arg("-c").arg(script).arg(pid.to_string()).arg(path);
+    command
+        .arg("-c")
+        .arg(script)
+        .arg(pid.to_string())
+        .arg(path)
+        .arg(ticks.to_string());
     Some(command)
 }
 

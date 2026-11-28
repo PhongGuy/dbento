@@ -7,6 +7,7 @@ use crate::update_support::ModeGuard;
 use crate::update_support::{leftovers, offer_as};
 use dbento_core::update::{
     Format, InstallError, InstallKind, Reason, Relaunch, Staged, download, install, staging_dir,
+    sweep_staged,
 };
 use std::ffi::OsString;
 #[cfg(unix)]
@@ -14,6 +15,7 @@ use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 use wiremock::MockServer;
 
 const NEW: &[u8] = b"new build";
@@ -210,6 +212,9 @@ fn stale_staged_files_are_swept_and_nothing_else() {
     ] {
         std::fs::write(dir.path().join(name), b"x").unwrap();
     }
+    for name in ["dbento-update-98.0.0", "dbento-update-98.0.0.AppImage.part"] {
+        set_mtime(&dir.path().join(name), an_hour(-1));
+    }
     std::os::unix::fs::symlink(&kept, dir.path().join("dbento-update-link")).unwrap();
     std::fs::create_dir(dir.path().join("dbento-update-dir")).unwrap();
     dbento_core::update::sweep_staged(dir.path());
@@ -303,4 +308,95 @@ fn a_running_cli_replaces_itself() {
         "{out:?}"
     );
     assert_eq!(std::fs::read(&copy).unwrap(), NEW);
+}
+
+// A time an hour from now; `-1` is an hour ago.
+fn an_hour(sign: i32) -> SystemTime {
+    let hour = Duration::from_secs(3600);
+    if sign < 0 {
+        SystemTime::now() - hour
+    } else {
+        SystemTime::now() + hour
+    }
+}
+
+// Ages or post-dates a file; a write handle is what Windows needs to set the time.
+fn set_mtime(path: &Path, at: SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(at)
+        .unwrap();
+}
+
+// A file another copy holds survives; an old unlocked leftover from a crash goes.
+#[test]
+fn a_locked_staged_file_survives_the_sweep() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = dir
+        .path()
+        .join("dbento-update-98.0.0-11-1a2b-0.AppImage.part");
+    let stale = dir
+        .path()
+        .join("dbento-update-98.0.0-12-3c4d-0.AppImage.part");
+    for p in [&held, &stale] {
+        std::fs::write(p, b"x").unwrap();
+        set_mtime(p, an_hour(-1));
+    }
+    let holder = std::fs::File::open(&held).unwrap();
+    holder.lock().unwrap();
+    sweep_staged(dir.path());
+    assert!(held.exists(), "the sweep removed a file another copy holds");
+    assert!(!stale.exists(), "the sweep kept an old unlocked leftover");
+    drop(holder);
+    sweep_staged(dir.path());
+    assert!(
+        leftovers(dir.path()).is_empty(),
+        "{:?}",
+        leftovers(dir.path())
+    );
+}
+
+// A file just created may not be locked yet, and a future time is not trusted: both stay.
+#[test]
+fn a_young_or_future_unlocked_file_survives_the_sweep() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("dbento-update-98.0.0-13-5e6f-0.part");
+    let future = dir.path().join("dbento-update-98.0.0-14-7a8b-0.part");
+    std::fs::write(&fresh, b"x").unwrap();
+    std::fs::write(&future, b"x").unwrap();
+    set_mtime(&future, an_hour(1));
+    sweep_staged(dir.path());
+    assert!(
+        fresh.exists(),
+        "the sweep removed a file inside the grace period"
+    );
+    assert!(
+        future.exists(),
+        "the sweep removed a file dated in the future"
+    );
+    set_mtime(&fresh, an_hour(-1));
+    sweep_staged(dir.path());
+    assert!(!fresh.exists(), "the sweep kept an old unlocked leftover");
+}
+
+#[tokio::test]
+async fn a_held_download_survives_the_sweep_until_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_s, st) = staged(dir.path(), "appimage", NEW).await;
+    let path = st.path().to_path_buf();
+    set_mtime(&path, an_hour(-1));
+    sweep_staged(dir.path());
+    assert!(
+        path.exists(),
+        "the sweep removed a staged release still held"
+    );
+    drop(st);
+    sweep_staged(dir.path());
+    assert!(
+        leftovers(dir.path()).is_empty(),
+        "{:?}",
+        leftovers(dir.path())
+    );
 }
