@@ -1,44 +1,69 @@
 //! Resolution of a connection's `ssh` table through the user's `~/.ssh/config`.
 //!
-//! `dbento.toml` fields win; the config fills the gaps. Constructs dbento cannot honour yet
-//! (`Match`, the proxies, `%` tokens) refuse the connection rather than being half-applied.
+//! `dbento.toml` fields win; the config fills the gaps. With an OpenSSH client set, `ssh -G`
+//! resolves the alias; without one a parser does, refusing `Match` and `%` tokens. Constructs
+//! dbento cannot honour (the proxies, host-key overrides) refuse rather than half-apply.
 
-use crate::workspace::{ConnectionConfig, SshAuth, Workspace};
+use super::{openssh, ssh_g};
+use crate::workspace::{ConnectionConfig, SshAuth, SshConfig, Workspace};
 use ssh2_config::{ParseRule, SshConfig as OpenSshConfig};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_PORT: u16 = 22;
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long one `ssh -G` call may take.
+const OPENSSH_LIMIT: Duration = Duration::from_secs(10);
+pub(super) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The keys OpenSSH tries when nothing names one, in its order.
-const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+pub(super) const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
-/// The home whose `.ssh/config` and default keys are read, and the OS user name.
+/// The home whose `.ssh/config` and default keys are read, the OS user name, and the
+/// OpenSSH client that resolves aliases, if any.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshHome {
-    dir: PathBuf,
-    user: String,
+    pub(super) dir: PathBuf,
+    pub(super) user: String,
+    /// The `ssh` program and the `-F` config it reads (`None`: its own defaults).
+    pub(super) openssh: Option<(PathBuf, Option<PathBuf>)>,
 }
 
 impl SshHome {
-    /// A home at `dir` whose OS user is `user`.
+    /// A home at `dir` whose OS user is `user`, resolved by the parser alone.
     pub fn new(dir: impl Into<PathBuf>, user: impl Into<String>) -> SshHome {
         SshHome {
             dir: dir.into(),
             user: user.into(),
+            openssh: None,
         }
     }
 
-    /// The running user's home and name (`$USER`, else `$USERNAME`); `None` when either is unknown.
+    /// This home resolved through `program -G`, reading `config` with `-F` when given.
+    #[must_use]
+    pub fn with_openssh(self, program: impl Into<PathBuf>, config: Option<PathBuf>) -> SshHome {
+        SshHome {
+            openssh: Some((program.into(), config)),
+            ..self
+        }
+    }
+
+    /// The running user's home and name (`$USER`, else `$USERNAME`), with the first `ssh` on
+    /// PATH; `None` when the home or name is unknown.
     pub fn from_env() -> Option<SshHome> {
         let dir = dirs::home_dir()?;
         let user = ["USER", "USERNAME"]
             .into_iter()
             .find_map(|var| std::env::var(var).ok().filter(|u| !u.is_empty()))?;
-        Some(SshHome::new(dir, user))
+        let home = SshHome::new(dir, user);
+        Some(
+            match openssh::discover(std::env::var_os("PATH").as_deref()) {
+                Some(program) => home.with_openssh(program, None),
+                None => home,
+            },
+        )
     }
 
     /// The home directory.
@@ -80,18 +105,22 @@ impl ResolvedSsh {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SshResolveError {
-    /// `~/.ssh/config` uses a construct dbento cannot honour yet.
+    /// The ssh config uses a construct dbento cannot honour yet.
     #[error(
-        "ssh host `{alias}`: {construct} in {} (or a file it includes) is not supported yet; set host, port, user and identity_file in dbento.toml instead",
-        file.display()
+        "ssh host `{alias}`: {construct} in {} (or a file it includes{}) is not supported yet; set host, port, user and identity_file in dbento.toml instead",
+        file.display(),
+        if *by_ssh { ", or the system ssh_config" } else { "" }
     )]
     Unsupported {
         /// `ssh.host` as written.
         alias: String,
-        /// "Match", "ProxyJump", "ProxyCommand" or "a % token".
+        /// "Match", "ProxyJump", "ProxyCommand", "a % token", or with `ssh -G` a host-key
+        /// override such as "HostKeyAlias".
         construct: &'static str,
         /// The main config file; the construct may be in a file it includes.
         file: PathBuf,
+        /// Whether `ssh -G` resolved the host, so the system ssh_config may hold the construct.
+        by_ssh: bool,
     },
     /// `~/.ssh/config` exists but could not be read or parsed.
     #[error("cannot read {}: {message}", path.display())]
@@ -104,6 +133,25 @@ pub enum SshResolveError {
     /// The connection is direct.
     #[error("the connection has no ssh table")]
     NoSsh,
+    /// The OpenSSH client failed or printed output that cannot be used; never retried with
+    /// the parser.
+    #[error("ssh host `{alias}`: {} -G failed: {message}", program.display())]
+    OpenSsh {
+        /// `ssh.host` as written.
+        alias: String,
+        /// The `ssh` program run.
+        program: PathBuf,
+        /// What went wrong, with ssh's stderr tail when it exited non-zero.
+        message: String,
+    },
+    /// `ssh.host` holds characters ssh would read as an option, a user or a port.
+    #[error(
+        "ssh host `{alias}` may hold only letters, digits, `.`, `-`, `_` and `:`, and must not start with `-`"
+    )]
+    BadHost {
+        /// `ssh.host` as written.
+        alias: String,
+    },
 }
 
 /// Merges `conn`'s `ssh` table with `home`'s `~/.ssh/config`, failing closed on any construct
@@ -114,6 +162,9 @@ pub fn resolve_ssh(
     home: &SshHome,
 ) -> Result<ResolvedSsh, SshResolveError> {
     let ssh = conn.ssh().ok_or(SshResolveError::NoSsh)?;
+    if let Some((program, config)) = &home.openssh {
+        return resolve_with_openssh(conn, ssh, ws_dir, home, program, config.as_deref());
+    }
     let alias = ssh.host();
     let file = home.dir.join(".ssh").join("config");
     let config = read_config(&file, home)?;
@@ -121,6 +172,7 @@ pub fn resolve_ssh(
         alias: alias.to_owned(),
         construct,
         file: file.clone(),
+        by_ssh: false,
     };
 
     // ssh2-config skips a Match block's condition, so its lines would leak into whichever Host
@@ -193,6 +245,61 @@ pub fn resolve_ssh(
     })
 }
 
+/// `conn` (whose ssh table is `ssh`) resolved by `program -G` against a `-F none` baseline,
+/// run in the SSH home so a relative key path means the same to ssh and to dbento. Every
+/// failure refuses.
+fn resolve_with_openssh(
+    conn: &ConnectionConfig,
+    ssh: &SshConfig,
+    ws_dir: &Path,
+    home: &SshHome,
+    program: &Path,
+    config: Option<&Path>,
+) -> Result<ResolvedSsh, SshResolveError> {
+    let alias = ssh.host();
+    if !openssh::valid_alias(alias) {
+        return Err(SshResolveError::BadHost {
+            alias: alias.to_owned(),
+        });
+    }
+    let failed = |message: String| SshResolveError::OpenSsh {
+        alias: alias.to_owned(),
+        program: program.to_path_buf(),
+        message,
+    };
+
+    // dbento.toml's user and port go in as flags, so `Match user` and `%r`/`%p` see them.
+    let mut overlay: Vec<OsString> = Vec::new();
+    if let Some(user) = ssh.user() {
+        overlay.extend(["-l".into(), user.into()]);
+    }
+    if let Some(port) = ssh.port() {
+        overlay.extend(["-p".into(), port.to_string().into()]);
+    }
+    let call = |file: Option<&std::ffi::OsStr>| {
+        let mut args: Vec<OsString> = vec!["-G".into()];
+        if let Some(file) = file {
+            args.extend(["-F".into(), file.to_owned()]);
+        }
+        args.extend(overlay.iter().cloned());
+        args.extend(["--".into(), alias.into()]);
+        let out = openssh::run(program, &args, &home.dir, OPENSSH_LIMIT).map_err(failed)?;
+        String::from_utf8(out).map_err(|_| failed("printed output that is not UTF-8".to_owned()))
+    };
+    let out = call(config.map(Path::as_os_str))?;
+    let baseline = call(Some("none".as_ref()))?;
+
+    ssh_g::from_ssh_g(&out, &baseline, conn, ws_dir, home).map_err(|refusal| match refusal {
+        ssh_g::Refusal::Unsupported(construct) => SshResolveError::Unsupported {
+            alias: alias.to_owned(),
+            construct,
+            file: config.map_or_else(|| home.dir.join(".ssh").join("config"), Path::to_path_buf),
+            by_ssh: true,
+        },
+        ssh_g::Refusal::Malformed(message) => failed(message),
+    })
+}
+
 /// One line per declared connection whose ssh identity_file is absolute and outside the home.
 pub fn ssh_warnings(ws: &Workspace, home: &SshHome) -> Vec<String> {
     ws.connections()
@@ -236,7 +343,7 @@ fn is_none(args: &[String]) -> bool {
 }
 
 /// A dbento.toml key path: `~/` against the home, relative against the workspace.
-fn expand_key(written: &str, home: &SshHome, ws_dir: &Path) -> PathBuf {
+pub(super) fn expand_key(written: &str, home: &SshHome, ws_dir: &Path) -> PathBuf {
     if written == "~" {
         return home.dir.clone();
     }

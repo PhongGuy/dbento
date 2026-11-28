@@ -1,7 +1,7 @@
 //! The SSH password and key passphrase: pinned keychain slots, env fallbacks and resolution.
 use dbento_core::{
     ConnectionConfig, MemoryStore, ResolvedSsh, Secret, SecretError, SecretKey, SecretStore,
-    SessionOptions, SshHome, Workspace, resolve_ssh, resolve_ssh_secrets,
+    SessionOptions, SshHome, SshSecrets, Workspace, resolve_ssh, resolve_ssh_secrets,
     ssh_key_passphrase_env_var, ssh_password_env_var,
 };
 use std::path::{Path, PathBuf};
@@ -285,4 +285,44 @@ fn ssh_secrets_for_reads_the_env_and_asks_nothing_when_the_table_does_not_resolv
     )
     .unwrap();
     assert!(none.password.is_none() && none.key_passphrase.is_none());
+}
+
+#[test]
+fn the_password_goes_only_to_the_login_it_was_read_for() {
+    let ws = ws();
+    let conn = ws.declared("tun").unwrap();
+    let pinned = resolved(conn);
+    let store = MemoryStore::new();
+    store
+        .set(
+            &SecretKey::ssh_password_for(&ws, conn, &pinned.login()),
+            &Secret::new("kc-pw"),
+        )
+        .unwrap();
+    let found = resolve_ssh_secrets(&ws, conn, &pinned, &store, &no_env).unwrap();
+    assert_eq!(
+        found.password_for(&pinned).map(Secret::expose),
+        Some("kc-pw"),
+        "the login it was read for gets it"
+    );
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+    std::fs::write(
+        home.path().join(".ssh/config"),
+        "Host jump\n  HostName 10.0.0.9\n",
+    )
+    .unwrap();
+    let moved = resolve_ssh(conn, Path::new("/w"), &SshHome::new(home.path(), "tester")).unwrap();
+    assert_ne!(moved.login(), pinned.login(), "the fixture moves the login");
+    assert!(
+        found.password_for(&moved).is_none(),
+        "a password pinned to one login is never sent to another"
+    );
+    let mut unpinned = SshSecrets::default();
+    unpinned.password = Some(Secret::new("pw"));
+    assert_eq!(
+        unpinned.password_for(&moved).map(Secret::expose),
+        Some("pw"),
+        "secrets built without resolution carry no pin"
+    );
 }

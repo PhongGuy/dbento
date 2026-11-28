@@ -174,11 +174,19 @@ impl<'h, H: Handler> Tries<'h, H> {
         false
     }
 
-    /// Sends the stored password, or records that none is stored.
+    /// Sends the stored password, or records that none is stored or that it belongs to
+    /// another login. Only the logins are named in the step; neither is secret.
     async fn password(&mut self, resolved: &ResolvedSsh, secrets: &SshSecrets) -> bool {
-        let Some(password) = &secrets.password else {
+        let Some(password) = secrets.password_for(resolved) else {
             self.want_password = true;
-            self.steps.push("password: not stored".to_owned());
+            let step = match secrets.withheld_from(resolved) {
+                Some(pinned) => format!(
+                    "password: stored for {pinned}, not sent to {}",
+                    resolved.login()
+                ),
+                None => "password: not stored".to_owned(),
+            };
+            self.steps.push(step);
             return false;
         };
         match self

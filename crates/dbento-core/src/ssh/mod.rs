@@ -6,9 +6,11 @@ use crate::{ConnectionConfig, Engine, SecretError, SecretStore, SshSecrets, Work
 mod auth;
 mod known_hosts;
 mod link;
+mod openssh;
 mod resolve;
 #[cfg(feature = "mongodb")]
 pub(crate) mod socks;
+mod ssh_g;
 pub(crate) mod stream;
 pub use known_hosts::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,

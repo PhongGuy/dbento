@@ -191,12 +191,12 @@ jobs:
       # The features scripts/release.sh ships on Windows.
       - name: Build the CLI and the app
         run: cargo build --locked -p dbento-cli -p dbento-app --no-default-features --features dbento-core/keychain
-      - name: Core updater tests
+      - name: Core updater and ssh -G tests
         run: >-
           cargo test --locked -p dbento-core --no-default-features --features keychain,update
           --lib --test integration --
           update:: update_check:: update_config:: update_download::
-          update_install:: update_install_kind:: update_manifest:: update_signature::
+          update_install:: update_install_kind:: update_manifest:: update_signature:: ssh_openssh_real::
       # The CLI and app test builds take the test kit's DuckDB, so libduckdb compiles here under cl.exe.
       - name: CLI self-update tests
         run: >-

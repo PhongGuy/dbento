@@ -251,7 +251,9 @@ pub(crate) fn resolved(
                 message: e.to_string(),
             }
         }
-        SshResolveError::Config { .. } => ConnectError::SshConnect {
+        SshResolveError::Config { .. }
+        | SshResolveError::OpenSsh { .. }
+        | SshResolveError::BadHost { .. } => ConnectError::SshConnect {
             address: conn.ssh().map(|s| s.host().to_owned()).unwrap_or_default(),
             message: e.to_string(),
         },
