@@ -403,6 +403,26 @@ pub struct SshSecrets {
     pub password: Option<Secret>,
     /// The passphrase of the SSH `identity_file`.
     pub key_passphrase: Option<Secret>,
+    /// The login the password was read for; `None` means no pin.
+    pub(crate) pinned_login: Option<String>,
+}
+
+impl SshSecrets {
+    /// The password, unless it was read for a different login than `resolved.login()`.
+    pub fn password_for(&self, resolved: &ResolvedSsh) -> Option<&Secret> {
+        match &self.pinned_login {
+            Some(pinned) if *pinned != resolved.login() => None,
+            Some(_) | None => self.password.as_ref(),
+        }
+    }
+
+    /// The login a stored password is pinned to, when `password_for` withholds it.
+    pub(crate) fn withheld_from(&self, resolved: &ResolvedSsh) -> Option<&str> {
+        match (&self.password, self.password_for(resolved)) {
+            (Some(_), None) => self.pinned_login.as_deref(),
+            (Some(_) | None, Some(_)) | (None, None) => None,
+        }
+    }
 }
 
 /// The SSH password and key passphrase for a connection with an `ssh` table: each from the
@@ -427,15 +447,17 @@ pub fn resolve_ssh_secrets(
         Ok(None) | Err(SecretError::Unavailable { .. }) => Ok(env(&variable).map(Secret::new)),
         Err(e) => Err(e),
     };
+    let login = resolved.login();
     Ok(SshSecrets {
         password: slot(
-            SecretKey::ssh_password_for(ws, conn, &resolved.login()),
+            SecretKey::ssh_password_for(ws, conn, &login),
             ssh_password_env_var(owner),
         )?,
         key_passphrase: slot(
             SecretKey::ssh_key_passphrase_for(ws, conn),
             ssh_key_passphrase_env_var(owner),
         )?,
+        pinned_login: Some(login),
     })
 }
 
