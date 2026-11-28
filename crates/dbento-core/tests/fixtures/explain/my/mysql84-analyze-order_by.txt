@@ -1,0 +1,7 @@
+-> Limit: 5 row(s)  (cost=20.2 rows=5) (actual time=105..105 rows=5 loops=1)
+    -> Sort: (select #2) DESC, limit input to 5 row(s) per chunk  (cost=20.2 rows=200) (actual time=105..105 rows=5 loops=1)
+        -> Covering index scan on c using region  (cost=20.2 rows=200) (actual time=0.0168..0.0265 rows=200 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: sum(b.amount)  (cost=105 rows=1) (actual time=0.527..0.527 rows=1 loops=200)
+        -> Filter: (b.cust_id = c.id)  (cost=54.8 rows=500) (actual time=0.0286..0.525 rows=25 loops=200)
+            -> Table scan on b  (cost=54.8 rows=5000) (actual time=0.0224..0.393 rows=5000 loops=200)

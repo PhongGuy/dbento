@@ -41,16 +41,63 @@ pub(super) fn parse(raw: &str) -> Result<Plan, PlanParseError> {
         nodes.push(node);
     }
     settle_self_time(&mut nodes);
-    let execution_ms = nodes
-        .first()
-        .and_then(|root| root.actual)
-        .map(|a| a.total_ms * a.loops as f64);
+    let execution_ms = execution_ms(&nodes);
     Ok(Plan {
         analyzed: nodes.iter().any(|n| n.actual.is_some()),
         nodes,
         planning_ms: None,
         execution_ms,
     })
+}
+
+/// A lower bound on the run: root 0 plus each `Select #N` root that no node outside its own
+/// subtree names as `(select #N)`, since a referenced one already runs inside that node.
+/// `None` when no counted node has an actual.
+fn execution_ms(nodes: &[PlanNode]) -> Option<f64> {
+    let labels: Vec<String> = nodes
+        .iter()
+        .map(|n| n.node_type.to_ascii_lowercase())
+        .collect();
+    let starts: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].depth == 0).collect();
+    let mut total = None;
+    for (k, &start) in starts.iter().enumerate() {
+        let tree = start..starts.get(k + 1).copied().unwrap_or(nodes.len());
+        let counted = start == 0
+            || select_number(&labels[start]).is_some_and(|n| {
+                let mention = format!("(select #{n})");
+                !labels
+                    .iter()
+                    .enumerate()
+                    .any(|(i, label)| !tree.contains(&i) && label.contains(mention.as_str()))
+            });
+        if let Some(ms) = counted.then(|| root_ms(&nodes[tree])).flatten() {
+            *total.get_or_insert(0.0) += ms;
+        }
+    }
+    total
+}
+
+/// The `N` of a label starting `select #N`, all its digits.
+fn select_number(label: &str) -> Option<&str> {
+    let rest = label.strip_prefix("select #")?;
+    let digits = &rest[..rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len())];
+    (!digits.is_empty()).then_some(digits)
+}
+
+/// A root's time: its own spent (a header's is its children's sum), raised to the largest
+/// spent in its subtree, since a parent can print less than one child ran.
+fn root_ms(tree: &[PlanNode]) -> Option<f64> {
+    let spent = |n: &PlanNode| n.actual.map(|a| a.total_ms * a.loops as f64);
+    let own = tree.first().and_then(spent).or_else(|| {
+        tree.iter()
+            .filter(|n| n.depth == 1)
+            .filter_map(spent)
+            .reduce(|a, b| a + b)
+    });
+    let largest = tree.iter().filter_map(spent).reduce(f64::max);
+    own.into_iter().chain(largest).reduce(f64::max)
 }
 
 /// The optimizer's estimate from `(cost=a..b rows=n)` or `(cost=b rows=n)`.
