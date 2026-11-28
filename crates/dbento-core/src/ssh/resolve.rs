@@ -107,8 +107,9 @@ impl ResolvedSsh {
 pub enum SshResolveError {
     /// The ssh config uses a construct dbento cannot honour yet.
     #[error(
-        "ssh host `{alias}`: {construct} in {} (or a file it includes, or the system ssh_config) is not supported yet; set host, port, user and identity_file in dbento.toml instead",
-        file.display()
+        "ssh host `{alias}`: {construct} in {} (or a file it includes{}) is not supported yet; set host, port, user and identity_file in dbento.toml instead",
+        file.display(),
+        if *by_ssh { ", or the system ssh_config" } else { "" }
     )]
     Unsupported {
         /// `ssh.host` as written.
@@ -118,6 +119,8 @@ pub enum SshResolveError {
         construct: &'static str,
         /// The main config file; the construct may be in a file it includes.
         file: PathBuf,
+        /// Whether `ssh -G` resolved the host, so the system ssh_config may hold the construct.
+        by_ssh: bool,
     },
     /// `~/.ssh/config` exists but could not be read or parsed.
     #[error("cannot read {}: {message}", path.display())]
@@ -169,6 +172,7 @@ pub fn resolve_ssh(
         alias: alias.to_owned(),
         construct,
         file: file.clone(),
+        by_ssh: false,
     };
 
     // ssh2-config skips a Match block's condition, so its lines would leak into whichever Host
@@ -241,8 +245,9 @@ pub fn resolve_ssh(
     })
 }
 
-/// `conn` (whose ssh table is `ssh`) resolved by `program -G` against a `-F none` baseline, run in the SSH home so a
-/// relative key path means the same to ssh and to dbento. Every failure refuses.
+/// `conn` (whose ssh table is `ssh`) resolved by `program -G` against a `-F none` baseline,
+/// run in the SSH home so a relative key path means the same to ssh and to dbento. Every
+/// failure refuses.
 fn resolve_with_openssh(
     conn: &ConnectionConfig,
     ssh: &SshConfig,
@@ -289,6 +294,7 @@ fn resolve_with_openssh(
             alias: alias.to_owned(),
             construct,
             file: config.map_or_else(|| home.dir.join(".ssh").join("config"), Path::to_path_buf),
+            by_ssh: true,
         },
         ssh_g::Refusal::Malformed(message) => failed(message),
     })

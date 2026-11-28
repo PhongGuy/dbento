@@ -56,6 +56,10 @@ fn refused_for(r: Result<ResolvedSsh, SshResolveError>, construct: &str) {
     assert!(text.contains("is not supported yet"), "{text}");
     assert!(text.contains("dbento.toml"), "{text}");
     assert!(text.contains("`jump`"), "the alias is named: {text}");
+    assert!(
+        !text.contains("system ssh_config"),
+        "the parser never reads the system config: {text}"
+    );
 }
 
 const JUMP: &str = "[connections.c.ssh]\nhost = \"jump\"\n";
