@@ -6,6 +6,11 @@ use crate::{ConnectionConfig, Engine, SecretError, SecretStore, SshSecrets, Work
 mod auth;
 mod known_hosts;
 mod link;
+#[cfg_attr(
+    not(all(test, unix)),
+    expect(dead_code, reason = "resolve_ssh calls it once wired")
+)]
+mod openssh;
 mod resolve;
 #[cfg(feature = "mongodb")]
 pub(crate) mod socks;
