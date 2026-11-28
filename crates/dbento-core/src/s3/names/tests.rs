@@ -118,17 +118,39 @@ fn superscript_and_console_device_names_are_reserved_too() {
 #[test]
 fn the_hidden_predicate_is_the_set_display_key_escapes() {
     for c in [
-        '\n', '\u{1b}', '\u{7f}', '\u{85}', '\u{9f}', '\u{61c}', '\u{200e}', '\u{2028}',
-        '\u{202e}', '\u{2066}', '\u{2069}',
+        '\n',
+        '\u{1b}',
+        '\u{7f}',
+        '\u{85}',
+        '\u{9f}',
+        '\u{61c}',
+        '\u{200e}',
+        '\u{2028}',
+        '\u{202e}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{ad}',
+        '\u{200b}',
+        '\u{200d}',
+        '\u{feff}',
+        '\u{2029}',
+        '\u{110bd}',
+        '\u{e0001}',
+        '\u{e0041}',
     ] {
         assert!(is_hidden_char(c), "{c:?} is hidden");
-        assert_ne!(
+        assert_eq!(
             display_key(&c.to_string()),
-            c.to_string(),
+            format!("\\u{{{:x}}}", u32::from(c)),
             "{c:?} is escaped"
         );
     }
     for c in ['a', 'é', '日', '🍱', ' ', '\\', '\''] {
         assert!(!is_hidden_char(c), "{c:?} is shown");
     }
+}
+
+#[test]
+fn a_zero_width_space_is_dropped_from_a_suggested_file_name() {
+    assert_eq!(suggested_file_name("x/a\u{200b}b.txt"), "ab.txt");
 }
