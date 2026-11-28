@@ -34,14 +34,17 @@ impl<T: Serialize> IntoCallToolResult for Fenced<T> {
 
 /// JSON `body` between tags carrying a fresh random nonce, so data cannot forge the closing tag.
 ///
-/// Hidden characters leave as `\uXXXX` escapes: they only occur inside JSON strings and all sit
-/// in the BMP, so the text stays valid JSON that parses back to the exact value.
+/// Hidden characters leave as `\uXXXX` escapes, one per UTF-16 code unit so those above the BMP
+/// become surrogate pairs: they only occur inside JSON strings, so the text stays valid JSON
+/// that parses back to the exact value.
 pub(crate) fn fence(body: &str) -> String {
     let nonce = nonce_from(|bytes| getrandom::fill(bytes).is_ok());
     let mut escaped = String::with_capacity(body.len());
     for c in body.chars() {
         if dbento_core::is_hidden_char(c) {
-            let _ = write!(escaped, "\\u{:04x}", u32::from(c));
+            for unit in c.encode_utf16(&mut [0; 2]) {
+                let _ = write!(escaped, "\\u{unit:04x}");
+            }
         } else {
             escaped.push(c);
         }
@@ -97,18 +100,31 @@ mod tests {
     #[test]
     fn hidden_characters_leave_the_fence_as_json_escapes_that_parse_back() {
         let value = serde_json::json!({
-            "key": "a\u{202e}b\u{85}c\u{7f}d\u{2028}e\u{61c}f\u{1}g",
+            "key": "a\u{202e}b\u{85}c\u{7f}d\u{2028}e\u{61c}f\u{1}g\u{200b}h",
+            "tags": "x\u{e0041}y\u{1d173}z",
             "plain": "日本 🍱 \\u{202e}",
         });
         let fenced = fence(&value.to_string());
         for raw in [
-            '\u{202e}', '\u{85}', '\u{7f}', '\u{2028}', '\u{61c}', '\u{1}',
+            '\u{202e}',
+            '\u{85}',
+            '\u{7f}',
+            '\u{2028}',
+            '\u{61c}',
+            '\u{1}',
+            '\u{200b}',
+            '\u{e0041}',
+            '\u{1d173}',
         ] {
             assert!(!fenced.contains(raw), "{raw:?} left raw: {fenced}");
         }
         assert!(
-            fenced.contains("\\u202e") && fenced.contains("\\u0085"),
+            fenced.contains("\\u202e") && fenced.contains("\\u0085") && fenced.contains("\\u200b"),
             "{fenced}"
+        );
+        assert!(
+            fenced.contains("\\udb40\\udc41") && fenced.contains("\\ud834\\udd73"),
+            "characters above the BMP leave as surrogate pairs: {fenced}"
         );
         assert!(
             fenced.contains("日本 🍱"),

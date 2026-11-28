@@ -215,11 +215,14 @@ impl Available {
 }
 
 /// A downloaded artifact whose size and SHA-256 matched the manifest, waiting to be installed.
+/// The file stays exclusively locked until the value is dropped or handed to `install`.
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct Staged {
     path: PathBuf,
     version: String,
+    // The open handle whose exclusive lock marks the file as in use; dropping it releases it.
+    hold: Option<std::fs::File>,
 }
 
 impl Staged {

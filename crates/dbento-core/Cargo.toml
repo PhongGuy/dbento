@@ -25,6 +25,7 @@ rustls.workspace = true
 rustls-platform-verifier.workspace = true
 futures-util.workspace = true
 thiserror.workspace = true
+unicode-properties.workspace = true
 unicode-width.workspace = true
 roxmltree.workspace = true
 percent-encoding.workspace = true

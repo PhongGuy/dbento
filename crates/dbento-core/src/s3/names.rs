@@ -2,25 +2,20 @@
 
 use std::fmt::Write as _;
 
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+
 /// Longest file name suggested, leaving room for a download's temporary suffix under NAME_MAX.
 const MAX_NAME_BYTES: usize = 200;
 
-/// Characters that can disguise or reorder text: controls, line separators and bidi controls.
+/// Characters that can disguise or reorder text: controls, every Unicode format character
+/// (bidi controls, zero-width characters, tags) and the line and paragraph separators.
 pub fn is_hidden_char(c: char) -> bool {
     c.is_control()
-        || matches!(
-            c,
-            '\u{61c}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2066}'..='\u{2069}'
-        )
+        || c.general_category() == GeneralCategory::Format
+        || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
-/// `key` safe to show: controls, line separators and bidi controls as `\u{hex}`, `\` doubled.
+/// `key` safe to show: every hidden character (see [`is_hidden_char`]) as `\u{hex}`, `\` doubled.
 pub fn display_key(key: &str) -> String {
     // Doubling the backslash keeps the escape unambiguous: a literal `\u{a}` in a key shows as `\\u{a}`.
     let mut shown = String::with_capacity(key.len());
