@@ -5,7 +5,7 @@
 //! dbento cannot honour (the proxies, host-key overrides) refuse rather than half-apply.
 
 use super::{openssh, ssh_g};
-use crate::workspace::{ConnectionConfig, SshAuth, Workspace};
+use crate::workspace::{ConnectionConfig, SshAuth, SshConfig, Workspace};
 use ssh2_config::{ParseRule, SshConfig as OpenSshConfig};
 use std::ffi::OsString;
 use std::fs::File;
@@ -160,7 +160,7 @@ pub fn resolve_ssh(
 ) -> Result<ResolvedSsh, SshResolveError> {
     let ssh = conn.ssh().ok_or(SshResolveError::NoSsh)?;
     if let Some((program, config)) = &home.openssh {
-        return resolve_with_openssh(conn, ws_dir, home, program, config.as_deref());
+        return resolve_with_openssh(conn, ssh, ws_dir, home, program, config.as_deref());
     }
     let alias = ssh.host();
     let file = home.dir.join(".ssh").join("config");
@@ -241,16 +241,16 @@ pub fn resolve_ssh(
     })
 }
 
-/// `conn` resolved by `program -G` against a `-F none` baseline, run in the SSH home so a
+/// `conn` (whose ssh table is `ssh`) resolved by `program -G` against a `-F none` baseline, run in the SSH home so a
 /// relative key path means the same to ssh and to dbento. Every failure refuses.
 fn resolve_with_openssh(
     conn: &ConnectionConfig,
+    ssh: &SshConfig,
     ws_dir: &Path,
     home: &SshHome,
     program: &Path,
     config: Option<&Path>,
 ) -> Result<ResolvedSsh, SshResolveError> {
-    let ssh = conn.ssh().ok_or(SshResolveError::NoSsh)?;
     let alias = ssh.host();
     if !openssh::valid_alias(alias) {
         return Err(SshResolveError::BadHost {

@@ -9,6 +9,7 @@ use common::{Pilot, find_node, launch_args};
 use dbento_app::ssh_form::SSH_HOST_NOTE;
 use dbento_core::paths::STATE_DIR_VAR;
 use dbento_core::{StatePaths, ssh_password_env_var};
+use dbento_pilot::SSH_HOME_VAR;
 use dbento_testkit::{SSH_PASSWORD, SSH_USER, SshNet};
 use serde_json::{Map, Value, json};
 
@@ -64,13 +65,15 @@ fn tunnel_toml(f: &SshNet) -> String {
     )
 }
 
-/// The app headless on `ws`, its state in `state`, both passwords in its environment.
+/// The app headless on `ws`, its state in `state` (also its SSH home, so the system ssh and
+/// `~/.ssh` stay out of it), both passwords in its environment.
 async fn launch(f: &SshNet, ws: &Path, state: &Path) -> Pilot {
     let pilot = Pilot::start().await;
     let mut env = Map::new();
     env.insert(PW_VAR.into(), f.pg().password().into());
     env.insert(ssh_password_env_var("tun"), SSH_PASSWORD.into());
     env.insert(STATE_DIR_VAR.into(), state.display().to_string().into());
+    env.insert(SSH_HOME_VAR.into(), state.display().to_string().into());
     env.insert("USER".into(), "tester".into());
     let mut args = launch_args("headless", ws);
     args["env"] = Value::Object(env);

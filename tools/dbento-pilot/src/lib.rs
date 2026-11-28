@@ -14,7 +14,7 @@ use dbento_app::theme::Appearance;
 use dbento_app::updates::{self, UpdateHooks};
 use dbento_core::paths::{STATE_DIR_VAR, StatePaths};
 use dbento_core::{
-    AccountRecord, MemoryStore, MemoryTokenStore, SshEnv, TeamFile, TeamToken, TokenStore,
+    AccountRecord, MemoryStore, MemoryTokenStore, SshEnv, SshHome, TeamFile, TeamToken, TokenStore,
 };
 use gpui_kit::{App, AssetSource};
 use gpui_pilot_host::{Launch, PilotApp};
@@ -27,6 +27,11 @@ pub const THEME_VAR: &str = "DBENTO_PILOT_THEME";
 /// A session token (through the launch call's `env`) the run starts signed in with, for every
 /// account the state folder's `team.json` records; the same variable the CLI's test store reads.
 pub const TEAM_TOKEN_VAR: &str = "DBENTO_TEST_TEAM_TOKEN";
+
+/// A folder (through the launch call's `env`) that stands in for the SSH home, read by the
+/// parser alone with no agent, so a scenario never runs the system ssh or reads `~/.ssh`;
+/// the same variable the CLI's debug builds read.
+pub const SSH_HOME_VAR: &str = "DBENTO_TEST_SSH_HOME";
 
 /// Dbento's own startup, run inside the host against the launch's fresh data directory.
 /// The one optional launch argument is the workspace folder (see [`workspace_arg`]).
@@ -49,14 +54,15 @@ impl PilotApp for Dbento {
         // Secrets stay in memory, so a piloted run never reaches the keychain. The state
         // folder follows DBENTO_STATE_DIR so a QA run shares it with `dbento mcp`.
         let dir = state_dir(&launch.data_dir, std::env::var_os(STATE_DIR_VAR));
-        // SSH reads the real home and agent, as a user's run would.
+        // SSH reads the real home and agent, as a user's run would, unless the launch env
+        // names a stand-in home.
         let state = StatePaths::in_dir(&dir);
         let services = Services {
             paths: AppPaths::in_dir(&dir),
             store: Arc::new(MemoryStore::new()),
             env: Arc::new(|v| std::env::var(v).ok()),
             secrets_in_memory: false,
-            ssh: SshContext::new(SshEnv::from_env(&state), Some(state)),
+            ssh: SshContext::new(ssh_env(&state, std::env::var_os(SSH_HOME_VAR)), Some(state)),
         };
         seed_appearance(&dir, std::env::var(THEME_VAR).ok().as_deref())?;
         let workspace = workspace_arg(&launch.args)?;
@@ -99,6 +105,18 @@ pub fn state_dir(data_dir: &Path, var: Option<OsString>) -> PathBuf {
     match var {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => data_dir.to_path_buf(),
+    }
+}
+
+/// The SSH environment: with `test_home` set and non-empty, that folder as a parser-only home
+/// (user `tester`, no agent) beside `state`'s known_hosts; else the real one.
+pub fn ssh_env(state: &StatePaths, test_home: Option<OsString>) -> Option<SshEnv> {
+    match test_home {
+        Some(dir) if !dir.is_empty() => Some(SshEnv::new(
+            SshHome::new(dir, "tester"),
+            state.ssh_known_hosts.clone(),
+        )),
+        _ => SshEnv::from_env(state),
     }
 }
 
