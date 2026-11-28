@@ -173,6 +173,7 @@ mod ssh_mssql;
 mod ssh_mysql;
 #[cfg(unix)]
 mod ssh_openssh;
+mod ssh_openssh_real;
 mod ssh_postgres;
 mod ssh_redis;
 mod ssh_resolve;
