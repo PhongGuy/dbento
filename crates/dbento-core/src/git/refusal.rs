@@ -1,6 +1,8 @@
 //! Reading a refused push's stderr as the Potluck hook's findings.
 
 /// What a Potluck server's hook said when it refused a push.
+///
+/// Fields hold the raw decoded text, hidden characters included; show it through [`Refusal::rows`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Refusal {
@@ -19,7 +21,8 @@ impl Refusal {
     }
 
     /// One line of text per finding, then `and N more` when more were counted, then each
-    /// `other` line as received.
+    /// `other` line as received. Every row goes through [`crate::display_key`], so a bidi
+    /// override or other hidden character shows as a `\u{hex}` escape instead of acting.
     pub fn rows(&self) -> Vec<String> {
         let findings = self.findings.iter().map(|f| {
             let place = if f.path == "/" { "no file" } else { &f.path };
@@ -33,11 +36,14 @@ impl Refusal {
         findings
             .chain(more)
             .chain(self.other.iter().cloned())
+            .map(|row| crate::display_key(&row))
             .collect()
     }
 }
 
 /// One thing the server's hook refused, as its `potluck-reject` line names it.
+///
+/// Fields hold the raw decoded text; [`Refusal::rows`] is the display form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Finding {

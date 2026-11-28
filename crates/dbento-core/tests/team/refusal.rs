@@ -149,3 +149,44 @@ fn rule_text_and_token_redaction() {
     );
     assert_eq!(redact_token("plk_ alone, no token"), "plk_ alone, no token");
 }
+
+#[test]
+fn a_right_to_left_override_in_a_path_shows_as_an_escape() {
+    let r =
+        parse(&["potluck-reject secret_value refs/heads/main queries/a%E2%80%AEtxt.sql password"]);
+    assert_eq!(
+        r.findings[0].path, "queries/a\u{202e}txt.sql",
+        "the data stays raw"
+    );
+    assert_eq!(
+        r.rows(),
+        ["queries/a\\u{202e}txt.sql on refs/heads/main: a password"]
+    );
+}
+
+#[test]
+fn ordinary_non_ascii_names_stay_readable() {
+    let r = parse(&["potluck-reject secret_value refs/heads/main queries/caf%C3%A9.sql password"]);
+    assert_eq!(
+        r.rows(),
+        ["queries/café.sql on refs/heads/main: a password"]
+    );
+}
+
+#[test]
+fn every_part_of_a_row_escapes_hidden_characters() {
+    let r = parse(&[
+        "potluck-reject secret_value refs/heads/m%E2%80%8Bain queries/a%C2%ADb%EF%BB%BFc%F3%A0%81%81d.sql password",
+        "potluck-reject-detail connections.a%E2%80%AEb",
+        "potluck-reject secret_value refs/heads/main queries/a%5Cu%7B202e%7D.sql password",
+        "potluck-error a\u{85}b\u{2028}c\u{202e}d",
+    ]);
+    assert_eq!(
+        r.rows(),
+        [
+            "queries/a\\u{ad}b\\u{feff}c\\u{e0041}d.sql on refs/heads/m\\u{200b}ain: a password (connections.a\\u{202e}b)",
+            "queries/a\\\\u{202e}.sql on refs/heads/main: a password",
+            "potluck-error a\\u{85}b\\u{2028}c\\u{202e}d",
+        ]
+    );
+}
