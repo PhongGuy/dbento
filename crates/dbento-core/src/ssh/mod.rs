@@ -9,6 +9,11 @@ mod link;
 mod resolve;
 #[cfg(feature = "mongodb")]
 pub(crate) mod socks;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "resolve_ssh calls it once the runner exists")
+)]
+mod ssh_g;
 pub(crate) mod stream;
 pub use known_hosts::{
     ForgetHostKeyError, HostKey, HostKeyProblem, HostKeyStatus, TrustHostKeyError, forget_host_key,

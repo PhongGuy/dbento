@@ -11,16 +11,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_PORT: u16 = 22;
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The keys OpenSSH tries when nothing names one, in its order.
-const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+pub(super) const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
 /// The home whose `.ssh/config` and default keys are read, and the OS user name.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshHome {
-    dir: PathBuf,
-    user: String,
+    pub(super) dir: PathBuf,
+    pub(super) user: String,
 }
 
 impl SshHome {
@@ -236,7 +236,7 @@ fn is_none(args: &[String]) -> bool {
 }
 
 /// A dbento.toml key path: `~/` against the home, relative against the workspace.
-fn expand_key(written: &str, home: &SshHome, ws_dir: &Path) -> PathBuf {
+pub(super) fn expand_key(written: &str, home: &SshHome, ws_dir: &Path) -> PathBuf {
     if written == "~" {
         return home.dir.clone();
     }
