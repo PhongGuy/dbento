@@ -171,6 +171,8 @@ mod ssh_mongo;
 mod ssh_mongo_srv;
 mod ssh_mssql;
 mod ssh_mysql;
+#[cfg(unix)]
+mod ssh_openssh;
 mod ssh_postgres;
 mod ssh_redis;
 mod ssh_resolve;
