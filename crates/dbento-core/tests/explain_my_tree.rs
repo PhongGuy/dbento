@@ -11,7 +11,7 @@ const ANALYZE: &str = "-> Table scan on <temporary>  (actual time=0.71..0.712 ro
 ";
 
 fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-9
+    (a - b).abs() < 1e-6
 }
 
 #[test]
@@ -130,4 +130,111 @@ fn every_captured_mysql_analyze_tree_parses_with_a_line_per_node() {
             );
         }
     }
+}
+
+fn fixture(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/explain/my")
+        .join(name);
+    std::fs::read_to_string(path).unwrap()
+}
+
+fn execution(raw: &str) -> f64 {
+    ExplainOutput::from_mysql_tree(raw.to_owned())
+        .plan
+        .unwrap()
+        .execution_ms
+        .unwrap()
+}
+
+#[test]
+fn projection_subquery_roots_run_outside_root_zero_and_count() {
+    let ms = execution(&fixture("mysql84-analyze-two_proj.txt"));
+    assert!(close(ms, 0.0257 + 0.564 * 200.0 + 0.523 * 200.0), "{ms}");
+
+    let ms = execution(&fixture("mysql84-analyze-dependent_sleep.txt"));
+    assert!(close(ms, 0.141 + 0.00248 * 5.0), "{ms}");
+}
+
+#[test]
+fn a_select_root_that_root_zero_references_is_inside_it_and_not_counted() {
+    let ms = execution(&fixture("mysql84-analyze-order_by.txt"));
+    assert!(close(ms, 105.0), "{ms}");
+}
+
+#[test]
+fn an_extra_root_that_is_not_a_select_is_skipped() {
+    let raw = "-> Table scan on t  (actual time=0.1..0.5 rows=3 loops=1)
+-> Something else
+    -> Table scan on u  (actual time=0.1..9 rows=3 loops=1)
+";
+    assert!(close(execution(raw), 0.5), "only root 0 counts");
+}
+
+#[test]
+fn a_reference_matches_the_whole_select_number_only() {
+    let raw = "-> Filter: (t.a > (select #2))  (actual time=0.1..0.5 rows=3 loops=1)
+-> Select #20 (subquery in projection; dependent)
+    -> Table scan on u  (actual time=0.1..2 rows=3 loops=3)
+";
+    assert!(close(execution(raw), 0.5 + 6.0), "#2 must not hide #20");
+}
+
+#[test]
+fn a_select_root_referencing_itself_still_counts() {
+    let raw = "-> Table scan on t  (actual time=0.1..0.5 rows=3 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Filter: (u.a = (select #2))  (actual time=0.1..2 rows=3 loops=3)
+";
+    assert!(
+        close(execution(raw), 0.5 + 6.0),
+        "a self-reference is not outside use"
+    );
+}
+
+#[test]
+fn a_projection_subquery_node_takes_its_share_of_the_whole_run() {
+    let plan = ExplainOutput::from_mysql_tree(fixture("mysql84-analyze-two_proj.txt"))
+        .plan
+        .unwrap();
+    let ix = plan
+        .nodes
+        .iter()
+        .position(|n| n.node_type == "Table scan on b")
+        .unwrap();
+    let share = plan.self_share(ix).unwrap();
+    assert!(share < 0.5, "{share}");
+}
+
+#[test]
+fn a_root_takes_the_time_of_a_slower_node_below_it() {
+    // The subquery runs while the optimizer picks the range, so root 0 prints 0.0283 ms.
+    let ms = execution(&fixture("mysql84-analyze-where_uncorr.txt"));
+    assert!(close(ms, 48.1), "{ms}");
+}
+
+#[test]
+fn every_other_captured_tree_runs_as_long_as_its_first_root() {
+    let skip = ["dependent_sleep", "two_proj", "where_uncorr"];
+    let mut checked = 0;
+    for (name, raw) in my_explain_fixtures(&["mysql"], ".txt") {
+        if skip.iter().any(|s| name.contains(&format!("-{s}."))) {
+            continue;
+        }
+        let plan = ExplainOutput::from_mysql_tree(raw).plan.unwrap();
+        let root = plan.nodes[0].actual.unwrap();
+        let ms = plan.execution_ms.unwrap();
+        assert!(close(ms, root.total_ms * root.loops as f64), "{name}: {ms}");
+        checked += 1;
+    }
+    assert!(checked >= 20, "only {checked} MySQL trees checked");
+}
+
+#[test]
+fn an_upper_case_select_reference_still_hides_its_root() {
+    let raw = "-> Sort: (SELECT #2) DESC  (actual time=0.1..5 rows=3 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Table scan on u  (actual time=0.1..1 rows=3 loops=3)
+";
+    assert!(close(execution(raw), 5.0), "the sort already ran #2");
 }

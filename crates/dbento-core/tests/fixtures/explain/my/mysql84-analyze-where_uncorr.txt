@@ -1,0 +1,12 @@
+-> Filter: (c.id > (select #2))  (cost=40.3 rows=200) (actual time=0.0108..0.0283 rows=200 loops=1)
+    -> Covering index range scan on c using PRIMARY over (0 < id)  (cost=40.3 rows=200) (actual time=0.0101..0.0181 rows=200 loops=1)
+    -> Select #2 (subquery in condition; run only once)
+        -> Aggregate: count(0)  (cost=100016 rows=1) (actual time=48.1..48.1 rows=1 loops=1)
+            -> Filter: (((b1.amount + x.i) + y.i) < 0)  (cost=50016 rows=500000) (actual time=48.1..48.1 rows=0 loops=1)
+                -> Inner hash join (no condition)  (cost=50016 rows=500000) (actual time=0.047..13.1 rows=500000 loops=1)
+                    -> Table scan on b1  (cost=5.05 rows=5000) (actual time=0.0211..0.365 rows=5000 loops=1)
+                    -> Hash
+                        -> Inner hash join (no condition)  (cost=11.5 rows=100) (actual time=0.0164..0.0202 rows=100 loops=1)
+                            -> Covering index scan on y using PRIMARY  (cost=0.125 rows=10) (actual time=0.00175..0.00235 rows=10 loops=1)
+                            -> Hash
+                                -> Covering index scan on x using PRIMARY  (cost=1.25 rows=10) (actual time=0.0085..0.0103 rows=10 loops=1)
