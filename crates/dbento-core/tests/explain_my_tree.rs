@@ -131,3 +131,81 @@ fn every_captured_mysql_analyze_tree_parses_with_a_line_per_node() {
         }
     }
 }
+
+fn fixture(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/explain/my")
+        .join(name);
+    std::fs::read_to_string(path).unwrap()
+}
+
+fn execution(raw: &str) -> f64 {
+    ExplainOutput::from_mysql_tree(raw.to_owned())
+        .plan
+        .unwrap()
+        .execution_ms
+        .unwrap()
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+#[test]
+fn projection_subquery_roots_run_outside_root_zero_and_count() {
+    let ms = execution(&fixture("mysql84-analyze-two_proj.txt"));
+    assert!(near(ms, 0.0257 + 0.564 * 200.0 + 0.523 * 200.0), "{ms}");
+
+    let ms = execution(&fixture("mysql84-analyze-dependent_sleep.txt"));
+    assert!(near(ms, 0.141 + 0.00248 * 5.0), "{ms}");
+}
+
+#[test]
+fn a_select_root_that_root_zero_references_is_inside_it_and_not_counted() {
+    let ms = execution(&fixture("mysql84-analyze-order_by.txt"));
+    assert!(near(ms, 105.0), "{ms}");
+}
+
+#[test]
+fn an_extra_root_that_is_not_a_select_is_skipped() {
+    let raw = "-> Table scan on t  (actual time=0.1..0.5 rows=3 loops=1)
+-> Something else
+    -> Table scan on u  (actual time=0.1..9 rows=3 loops=1)
+";
+    assert!(near(execution(raw), 0.5), "only root 0 counts");
+}
+
+#[test]
+fn a_reference_matches_the_whole_select_number_only() {
+    let raw = "-> Filter: (t.a > (select #2))  (actual time=0.1..0.5 rows=3 loops=1)
+-> Select #20 (subquery in projection; dependent)
+    -> Table scan on u  (actual time=0.1..2 rows=3 loops=3)
+";
+    assert!(near(execution(raw), 0.5 + 6.0), "#2 must not hide #20");
+}
+
+#[test]
+fn a_select_root_referencing_itself_still_counts() {
+    let raw = "-> Table scan on t  (actual time=0.1..0.5 rows=3 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Filter: (u.a = (select #2))  (actual time=0.1..2 rows=3 loops=3)
+";
+    assert!(
+        near(execution(raw), 0.5 + 6.0),
+        "a self-reference is not outside use"
+    );
+}
+
+#[test]
+fn a_projection_subquery_node_takes_its_share_of_the_whole_run() {
+    let plan = ExplainOutput::from_mysql_tree(fixture("mysql84-analyze-two_proj.txt"))
+        .plan
+        .unwrap();
+    let ix = plan
+        .nodes
+        .iter()
+        .position(|n| n.node_type == "Table scan on b")
+        .unwrap();
+    let share = plan.self_share(ix).unwrap();
+    assert!(share < 0.5, "{share}");
+}
