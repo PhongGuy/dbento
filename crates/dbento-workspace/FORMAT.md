@@ -122,7 +122,20 @@ Refused with `invalid` when the file is read:
 - `identity_file` together with `auth = "agent"` or `auth = "password"`;
 - any other key in the table, and a `password` key, which is refused as a secret.
 
-Refused when the connection is opened, since `~/.ssh/config` is read then, never at load:
+Refused when the connection is opened, since `~/.ssh/config` is read then, never at load.
+
+With `ssh` on the PATH, `host` is resolved by `ssh -G`, so `Match` blocks and `%` tokens work.
+Dbento then refuses:
+
+- a resolved `ProxyJump`, `ProxyCommand`, `HostKeyAlias`, `KnownHostsCommand`,
+  `UserKnownHostsFile`, `GlobalKnownHostsFile`, `RevokedHostKeys` or `CanonicalizeHostname`
+  that differs from OpenSSH's default;
+- an `IdentityFile` `%` token other than `%d`, `%u`, `%h`, `%r`, `%p` and `%%`, when
+  `dbento.toml` does not set `identity_file`;
+- a `host` holding anything but letters, digits, `.`, `-`, `_` and `:`, or starting with `-`;
+- any failure or timeout of `ssh`; the host is then never read another way.
+
+Without `ssh` on the PATH, Dbento reads `~/.ssh/config` itself and refuses:
 
 - a `Match` block anywhere in `~/.ssh/config` or a file it `Include`s;
 - `ProxyJump` or `ProxyCommand` (other than `none`) for the host;

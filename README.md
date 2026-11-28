@@ -186,7 +186,7 @@ user = "deploy"
 identity_file = "~/.ssh/id_ed25519"
 ```
 
-`auth` can pin the sign-in to `"agent"`, `"key"` or `"password"`; without it Dbento tries the SSH agent, then key files, then a stored password. A `~/.ssh/config` that uses `Match`, `ProxyJump` or `ProxyCommand` for the host is refused; write the values in `dbento.toml` instead. All the keys are in [the workspace format](crates/dbento-workspace/FORMAT.md#ssh-tunnels).
+`auth` can pin the sign-in to `"agent"`, `"key"` or `"password"`; without it Dbento tries the SSH agent, then key files, then a stored password. When OpenSSH's `ssh` is on the PATH, Dbento asks it to resolve the host (`ssh -G`), so `Match` blocks and `%` tokens in `~/.ssh/config` work. A host whose resolved settings use `ProxyJump`, `ProxyCommand`, `HostKeyAlias`, `CanonicalizeHostname` or a known-hosts setting of its own is still refused. Without `ssh` on the PATH, Dbento reads `~/.ssh/config` itself and refuses `Match`, `ProxyJump` and `ProxyCommand` for the host. Either way, the values can be written in `dbento.toml` instead. All the keys are in [the workspace format](crates/dbento-workspace/FORMAT.md#ssh-tunnels).
 
 Dbento keeps its own `ssh_known_hosts` and also reads `~/.ssh/known_hosts`, but never writes to it. The first time the app meets an SSH server, it shows the key's fingerprint and asks whether to trust it, once for every tab on that server. A key that changed is never trusted from the dialog: it names the command that clears the old one. From the command line, `dbento ssh trust <connection>` checks and stores the key (pass `--fingerprint SHA256:...` when no terminal is attached), and `dbento ssh forget <connection>` removes it.
 
