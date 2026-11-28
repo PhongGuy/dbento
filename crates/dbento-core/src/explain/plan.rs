@@ -88,7 +88,7 @@ pub struct Plan {
     /// Postgres's planning time, under ANALYZE.
     pub planning_ms: Option<f64>,
     /// Postgres's execution time, under ANALYZE. For MySQL tree text, the sum over the roots
-    /// that run on their own, a lower bound on the server's time.
+    /// that run on their own, each lifted to its slowest node; a lower bound on the server's time.
     pub execution_ms: Option<f64>,
     /// Some node carries actual timings.
     pub analyzed: bool,

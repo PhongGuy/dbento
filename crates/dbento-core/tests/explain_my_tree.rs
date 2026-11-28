@@ -216,6 +216,7 @@ fn a_root_takes_the_time_of_a_slower_node_below_it() {
 #[test]
 fn every_other_captured_tree_runs_as_long_as_its_first_root() {
     let skip = ["dependent_sleep", "two_proj", "where_uncorr"];
+    let mut checked = 0;
     for (name, raw) in my_explain_fixtures(&["mysql"], ".txt") {
         if skip.iter().any(|s| name.contains(&format!("-{s}."))) {
             continue;
@@ -224,7 +225,9 @@ fn every_other_captured_tree_runs_as_long_as_its_first_root() {
         let root = plan.nodes[0].actual.unwrap();
         let ms = plan.execution_ms.unwrap();
         assert!(close(ms, root.total_ms * root.loops as f64), "{name}: {ms}");
+        checked += 1;
     }
+    assert!(checked >= 20, "only {checked} MySQL trees checked");
 }
 
 #[test]
